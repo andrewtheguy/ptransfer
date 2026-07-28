@@ -242,9 +242,9 @@ Both sides then derive the session keys from `ECDH(shared secret)` via HKDF with
 #### `PinInput` (Receiver Side)
 The input component is designed for fast, error-proof manual entry:
 - **Single Native Input**: Entry uses one ungrouped 12-character text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior.
-- **Exact Entry**: PINs are case-sensitive. Characters outside the 69-character alphabet flash an error and are dropped.
+- **Exact Entry**: PINs are case-sensitive. During both ordinary entry and paste, characters outside the 69-character alphabet are filtered out and a brief error is shown; supported characters remain in their original order.
 - **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment the 12th character lands.
-- **Robust Pasting**: A pasted PIN is accepted exactly as written; unsupported characters are rejected rather than normalized.
+- **Robust Pasting**: A paste replaces the current entry with up to the first 12 supported characters. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
 - **No Plaintext Retention**: Once valid, the PIN is immediately stretched into its non-extractable root key and fingerprint (`importPinRoot`), the inputs are masked, and the plaintext is cleared.
 
 #### `PinDisplay` (Sender Side)

@@ -36,7 +36,7 @@ Sender and receiver should use the same app version for transfers.
 1. Select the "Files" or "Folder" tab
 2. Drag and drop files or click to select a file/folder. A single file, or the combined input for multiple files or a folder (zipped while sending), can be up to 2GB
 3. Choose Auto Exchange mode or Manual Exchange mode
-4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 12-character PIN with the receiver. The PIN rotates every 5 minutes; a countdown under the PIN shows when the next one appears, and "New PIN now" replaces it immediately (older PINs stop working)
+4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 12-character PIN with the receiver. The PIN rotates automatically every 5 minutes while keeping the immediately previous PIN bucket valid; a countdown under the PIN shows when the next one appears. Selecting "New PIN now" replaces it immediately and invalidates all retained older PIN generations.
 5. For Manual Exchange, click "Start Manual Exchange" and exchange the QR/copy-paste signaling payloads with the receiver
 
 ### Receiving
