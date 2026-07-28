@@ -75,11 +75,12 @@ export const MAX_MESSAGE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
 export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100MB
 
 // PIN hint length.
-// 16 hex chars = 64 bits. The hint is the Nostr `#h` filter tag. 64 bits is
-// birthday-collision-free at any realistic concurrent-transfer scale. Deriving
-// it requires the full PBKDF2 PIN-root stretch, so it cannot be reversed to a
-// PIN faster than brute-forcing the PIN space.
-export const PIN_HINT_LENGTH = 16; // hex characters
+// 8 hex chars = 32 bits. The hint is only the Nostr `#h` candidate-filtering
+// tag: collisions are expected at large global transfer volumes and are
+// disambiguated by authenticated rendezvous-payload decryption. Deriving it
+// requires the full PBKDF2 PIN-root stretch, so it cannot be reversed to a PIN
+// faster than brute-forcing the PIN space.
+export const PIN_HINT_LENGTH = 8; // hex characters
 
 // PIN fingerprint length.
 // 12 lowercase hex chars = 48 bits. The fingerprint is local-only and exists
