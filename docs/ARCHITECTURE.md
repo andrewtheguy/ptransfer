@@ -215,12 +215,12 @@ The Nostr-mode PIN is a short-lived pairing code, not an encryption root. It has
 
 | Derivation | HKDF info | Output | Purpose |
 |------------|-----------|--------|---------|
-| Wire hint | `hint:<bucket>` | 16 hex chars (64 bits) | `#h` lookup tag on the rendezvous event; `<bucket> = floor(now_ms / PIN_ROTATION_MS)` |
+| Wire hint | `hint:<bucket>` | 8 hex chars (32 bits) | `#h` lookup tag on the rendezvous event; `<bucket> = floor(now_ms / PIN_ROTATION_MS)` |
 | Auth key | `auth` | AES-256-GCM key | Seals the claim/confirm handshake payloads |
 | Rendezvous key | `rendezvous` | AES-256-GCM key | Encrypts the rendezvous payload (metadata, ECDH pubkey, nonce) |
 
 - **Receiver look-back**: the published hint is scoped to the rotation bucket it was minted in. The receiver mirrors the sender's rule by deriving its current and immediately previous bucket (`PIN_HINT_LOOKBACK_BUCKETS` = 1) and filtering `#h` on both. As with any wall-clock bucket protocol, clocks must not differ by more than the accepted look-back window.
-- **Hint properties**: at 64 bits, the birthday-collision probability among `n` transfers sharing a bucket is about `n²/2⁶⁵` — roughly 3×10⁻⁸ even at a million concurrent transfers — and a collision is tolerated rather than fatal: the receiver queries up to 10 candidates and tries to decrypt each. Per-bucket scoping means the tag rotates every 5 minutes and is never a stable cross-transfer correlator.
+- **Hint properties**: at 32 bits, collisions are expected at large global transfer volumes: a bucket containing one million transfers has about 116 colliding pairs. A particular receiver still has only about a 1-in-4,295 chance of one unrelated match in that bucket (about 1-in-2,148 across its current-and-previous-bucket query). Collisions are tolerated rather than fatal: the receiver queries up to 10 candidates and tries to authenticate and decrypt each. Per-bucket scoping means the tag rotates every 5 minutes and is never a stable cross-transfer correlator.
 - **Fingerprint**: derived independently as `PBKDF2-SHA256(pin, salt = "secure-send:pin-fingerprint:v2", 1,000 iterations)`, truncated to 48 bits, encoded as 12 lowercase hexadecimal characters, and displayed ungrouped on both ends. It is deliberately cheaper than the PIN root because it is local-only and never transmitted. It rotates with the sender's PIN — the receiver's fingerprint should match the one under the code currently (or very recently) shown by the sender.
 
 #### Claim / Confirm Handshake (mutual PIN proof, MITM-proof ECDH)
