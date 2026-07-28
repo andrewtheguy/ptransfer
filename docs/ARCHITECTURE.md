@@ -172,7 +172,7 @@ sequenceDiagram
 
 | Component | Description |
 |-----------|-------------|
-| `pin.ts` | Rotating 12-character PIN: generation, weighted checksum, validation, PBKDF2 root + HKDF derivations (hint, auth key, rendezvous key, fingerprint) |
+| `pin.ts` | Rotating 12-character PIN: generation, weighted checksum, validation, PBKDF2 root + HKDF derivations (hint, auth key, rendezvous key), and the independent local fingerprint derivation |
 | `kdf.ts` | ECDH session-key derivation (HKDF-SHA256, `signals`/`content` labels) and salt generation |
 | `ecdh.ts` | ECDH key agreement (non-extractable keys); authenticated by the PIN handshake in Nostr mode and by the QR/clipboard path in manual mode |
 | `aes-gcm.ts` | AES-256-GCM encryption/decryption |
@@ -211,18 +211,17 @@ The Nostr-mode PIN is a short-lived pairing code, not an encryption root. It has
 - The input UI rejects a mistyped code the moment the 12th character lands, before anything touches the network.
 
 #### Key Derivation (PBKDF2 root + HKDF fan-out)
-`importPinRoot` runs the single expensive stretch — `PBKDF2-SHA256(pin, salt = "secure-send:pin-root:v2", 600,000 iterations)` — and locks the result into a non-extractable HKDF key. Every PIN-scoped value is then a cheap HKDF-SHA256 derivation off that root with a distinct info label (shared salt `"secure-send:pin:v2"`), so brute-forcing any published value still costs the full PBKDF2 work factor per PIN guess:
+`importPinRoot` runs the single expensive stretch — `PBKDF2-SHA256(pin, salt = "secure-send:pin-root:v2", 600,000 iterations)` — and locks the result into a non-extractable HKDF key. Every wire-exposed PIN-scoped value is then a cheap HKDF-SHA256 derivation off that root with a distinct info label (shared salt `"secure-send:pin:v2"`), so brute-forcing any published value still costs the full PBKDF2 work factor per PIN guess:
 
 | Derivation | HKDF info | Output | Purpose |
 |------------|-----------|--------|---------|
 | Wire hint | `hint:<bucket>` | 16 hex chars (64 bits) | `#h` lookup tag on the rendezvous event; `<bucket> = floor(now_ms / PIN_ROTATION_MS)` |
 | Auth key | `auth` | AES-256-GCM key | Seals the claim/confirm handshake payloads |
 | Rendezvous key | `rendezvous` | AES-256-GCM key | Encrypts the rendezvous payload (metadata, ECDH pubkey, nonce) |
-| Fingerprint | `fingerprint` | 8 base32 chars (40 bits) | Local-only human comparison value; never published |
 
 - **Receiver look-back**: the published hint is scoped to the rotation bucket it was minted in. The receiver mirrors the sender's rule by deriving its current and immediately previous bucket (`PIN_HINT_LOOKBACK_BUCKETS` = 1) and filtering `#h` on both. As with any wall-clock bucket protocol, clocks must not differ by more than the accepted look-back window.
 - **Hint properties**: at 64 bits, the birthday-collision probability among `n` transfers sharing a bucket is about `n²/2⁶⁵` — roughly 3×10⁻⁸ even at a million concurrent transfers — and a collision is tolerated rather than fatal: the receiver queries up to 10 candidates and tries to decrypt each. Per-bucket scoping means the tag rotates every 5 minutes and is never a stable cross-transfer correlator.
-- **Fingerprint**: displayed grouped as `XXXX-XXXX` on both ends so humans can confirm they hold the same PIN. It rotates with the sender's PIN — the receiver's fingerprint should match the one under the code currently (or very recently) shown by the sender. Never transmitted.
+- **Fingerprint**: derived independently as `PBKDF2-SHA256(pin, salt = "secure-send:pin-fingerprint:v2", 1,000 iterations)`, truncated to 48 bits, encoded as 12 lowercase hexadecimal characters, and displayed ungrouped on both ends. It is deliberately cheaper than the PIN root because it is local-only and never transmitted. It rotates with the sender's PIN — the receiver's fingerprint should match the one under the code currently (or very recently) shown by the sender.
 
 #### Claim / Confirm Handshake (mutual PIN proof, MITM-proof ECDH)
 The rendezvous payload carries the sender's ephemeral P-256 public key and a fresh per-rotation nonce. The handshake then runs over kind-24242 events:
@@ -489,7 +488,7 @@ In Nostr mode, the entire rendezvous payload is encrypted with the PIN-derived `
 **Nostr Mode:**
 1. **PIN Generation**: fresh 12-character case-sensitive PIN every 5 minutes (11 random chars + check digit)
 2. **Salt Generation**: 16 random bytes (public, in the rendezvous event tags; HKDF salt for the session keys)
-3. **PIN Derivations**: PBKDF2-SHA256 (600,000 iterations) stretches the PIN into a root; HKDF fans out the hint, `auth`, `rendezvous`, and fingerprint values
+3. **PIN Derivations**: PBKDF2-SHA256 (600,000 iterations) stretches the PIN into a root; HKDF fans out the hint, `auth`, and `rendezvous` values. A separate PBKDF2-SHA256 derivation (1,000 iterations) produces the local-only 12-hex-character fingerprint
 4. **Session Key Derivation**: after the claim/confirm handshake, both sides derive `signals` and `content` AES-GCM keys from the ephemeral P-256 ECDH shared secret via HKDF with the transfer salt
 5. **Chunk Encryption**: AES-256-GCM with 12-byte nonce per 128KB chunk using the ECDH-derived `content` key
 
