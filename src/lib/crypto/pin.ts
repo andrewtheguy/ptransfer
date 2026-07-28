@@ -6,7 +6,6 @@ import {
   PIN_FINGERPRINT_ITERATIONS,
   PIN_FINGERPRINT_LENGTH,
   PIN_FINGERPRINT_SALT,
-  PIN_GROUP_LENGTH,
   PIN_HINT_LENGTH,
   PIN_HKDF_SALT,
   PIN_LENGTH,
@@ -18,16 +17,13 @@ import { wipeBufferSource } from './memory';
 /**
  * Compute the checksum character using a position-weighted sum.
  *
- * Weights are the odd numbers 1, 3, 5, ... — every weight is coprime with the
- * charset size (32), so any single-character substitution always changes the
- * checksum, and adjacent transpositions are detected unless the two characters
- * differ by exactly 16 positions in the alphabet.
+ * Each character's alphabet index is weighted by its one-based position.
  */
 function computeChecksum(data: string): string {
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
     const charIndex = PIN_CHARSET.indexOf(data[i]);
-    sum += charIndex * (2 * i + 1);
+    sum += charIndex * (i + 1);
   }
   return PIN_CHARSET[sum % PIN_CHARSET.length];
 }
@@ -35,9 +31,9 @@ function computeChecksum(data: string): string {
 /**
  * Generate a random PIN with checksum.
  *
- * PIN_LENGTH - 1 data characters are drawn from the Crockford base32 PIN_CHARSET
- * using rejection sampling to eliminate modulo bias; the final character is a
- * checksum for typo detection.
+ * PIN_LENGTH - 1 data characters are drawn from PIN_CHARSET using rejection
+ * sampling to eliminate modulo bias; the final character is a checksum for
+ * typo detection.
  */
 export function generatePin(): string {
   const dataLength = PIN_LENGTH - PIN_CHECKSUM_LENGTH;
@@ -61,31 +57,6 @@ export function generatePin(): string {
   const data = result.join('');
   const checksum = computeChecksum(data);
   return data + checksum;
-}
-
-/**
- * Canonicalize typed PIN characters: uppercase and map the Crockford base32
- * look-alikes (O -> 0, I/L -> 1). Separators (spaces, dashes) are dropped.
- * Characters outside the PIN charset are preserved so callers can detect and
- * surface invalid input.
- */
-export function normalizePinInput(raw: string): string {
-  return raw
-    .toUpperCase()
-    .replace(/[\s-]/g, '')
-    .replace(/O/g, '0')
-    .replace(/[IL]/g, '1');
-}
-
-/**
- * Format a PIN for display as symmetric groups (XXXXX-XXXXX).
- */
-export function formatPin(pin: string): string {
-  const groups: string[] = [];
-  for (let i = 0; i < pin.length; i += PIN_GROUP_LENGTH) {
-    groups.push(pin.slice(i, i + PIN_GROUP_LENGTH));
-  }
-  return groups.join('-');
 }
 
 /**

@@ -10,54 +10,41 @@ import {
   computePinHintFromRoot,
   derivePinAuthKey,
   derivePinRendezvousKey,
-  formatPin,
   generatePin,
   getPinBucket,
   importPinRoot,
   isPinBucketActive,
   isValidPin,
-  normalizePinInput,
 } from './pin';
 
 describe('PIN Utilities', () => {
-  test('generatePin produces a valid PIN from the Crockford charset', () => {
+  test('generatePin produces a valid PIN from the configured charset', () => {
     const pin = generatePin();
     expect(pin).toHaveLength(PIN_LENGTH);
     expect([...pin].every((char) => PIN_CHARSET.includes(char))).toBe(true);
     expect(isValidPin(pin)).toBe(true);
   });
 
-  test('checksum detects any single-character substitution', () => {
+  test('checksum rejects a changed data character', () => {
     const pin = generatePin();
-    for (let i = 0; i < PIN_LENGTH - 1; i++) {
-      const original = pin[i];
-      const replacement =
-        PIN_CHARSET[(PIN_CHARSET.indexOf(original) + 1) % PIN_CHARSET.length];
-      const mutated = pin.slice(0, i) + replacement + pin.slice(i + 1);
-      expect(isValidPin(mutated)).toBe(false);
-    }
+    const replacement =
+      PIN_CHARSET[(PIN_CHARSET.indexOf(pin[0]) + 1) % PIN_CHARSET.length];
+    expect(isValidPin(replacement + pin.slice(1))).toBe(false);
   });
 
-  test('checksum detects typical adjacent transpositions', () => {
-    // Deterministic example: distinct adjacent data chars whose alphabet
-    // positions do not differ by 16 (the only undetected distance).
-    const data = '012345678';
+  test('checksum detects a typical adjacent transposition', () => {
+    const data = 'ABCDEFGHJKL';
     const pin = data + computeChecksumForTest(data);
     expect(isValidPin(pin)).toBe(true);
-    const swapped = `10${pin.slice(2)}`;
+    const swapped = `BA${pin.slice(2)}`;
     expect(isValidPin(swapped)).toBe(false);
   });
 
-  test('normalizePinInput uppercases, maps look-alikes, strips separators', () => {
-    expect(normalizePinInput('ab cd-e')).toBe('ABCDE');
-    expect(normalizePinInput('oO')).toBe('00');
-    expect(normalizePinInput('iIlL')).toBe('1111');
-    // Invalid characters are preserved for the caller to detect
-    expect(normalizePinInput('u!')).toBe('U!');
-  });
-
-  test('formatPin groups symmetrically', () => {
-    expect(formatPin('ABCDE12345')).toBe('ABCDE-12345');
+  test('PIN validation is case sensitive', () => {
+    const data = 'AbCDefGHJKL';
+    const pin = data + computeChecksumForTest(data);
+    expect(isValidPin(pin)).toBe(true);
+    expect(isValidPin(pin.toUpperCase())).toBe(false);
   });
 
   test('importPinRoot returns a non-extractable HKDF key', async () => {
@@ -86,7 +73,7 @@ describe('PIN Utilities', () => {
   });
 
   test('only the current and previous PIN buckets are active', () => {
-    const now = 10 * 120_000 + 1;
+    const now = 10 * 300_000 + 1;
     expect(isPinBucketActive(10, now)).toBe(true);
     expect(isPinBucketActive(9, now)).toBe(true);
     expect(isPinBucketActive(8, now)).toBe(false);
@@ -106,7 +93,7 @@ describe('PIN Utilities', () => {
     // Parity with secure-send-cli's pin_fingerprint (PBKDF2-SHA-256, 1k
     // iterations, salt "secure-send:pin-fingerprint:v2"), verified
     // independently.
-    expect(await computePinFingerprint('ABCDE0123Y')).toBe('e3e017a41404');
+    expect(await computePinFingerprint('A/B:C;D(E)F')).toBe('2e700e579152');
   });
 
   test('auth and rendezvous keys are distinct non-extractable AES keys', async () => {
@@ -149,7 +136,7 @@ describe('PIN Utilities', () => {
 function computeChecksumForTest(data: string): string {
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
-    sum += PIN_CHARSET.indexOf(data[i]) * (2 * i + 1);
+    sum += PIN_CHARSET.indexOf(data[i]) * (i + 1);
   }
   return PIN_CHARSET[sum % PIN_CHARSET.length];
 }

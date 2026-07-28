@@ -1,19 +1,19 @@
 // PIN generation
-export const PIN_LENGTH = 10;
+export const PIN_LENGTH = 12;
 export const PIN_CHECKSUM_LENGTH = 1; // Last character is checksum
-export const PIN_GROUP_LENGTH = 5; // Displayed/entered as XXXXX-XXXXX
 
-// Crockford base32 alphabet: digits + uppercase letters, excluding I, L, O
-// (mapped from look-alikes on input: I/L -> 1, O -> 0) and U (excluded to avoid
-// accidental words). Case-insensitive on entry.
-export const PIN_CHARSET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+// The original case-sensitive PIN alphabet excludes ambiguous characters
+// (0, 1, I, O, i, l, o) and includes symbols available on the iOS "123"
+// keyboard.
+export const PIN_CHARSET =
+  'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789-/:;()$&@?!.,"';
 
 // PIN rotation. The sender mints a fresh PIN and publishes a new rendezvous
 // event every PIN_ROTATION_MS. Claims are honored only for PINs published in
 // the sender's current or immediately previous wall-clock rotation bucket.
 // PIN_TTL_MS is the maximum possible age of such a PIN; exact expiry occurs at
 // the end of its second bucket.
-export const PIN_ROTATION_MS = 120_000;
+export const PIN_ROTATION_MS = 300_000;
 export const PIN_ACTIVE_BUCKETS = 2;
 export const PIN_TTL_MS = PIN_ROTATION_MS * PIN_ACTIVE_BUCKETS;
 

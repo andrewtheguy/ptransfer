@@ -10,7 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatPin, PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
+import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
 
 interface PinDisplayProps {
   /** The currently active PIN; rotates every PIN_ROTATION_MS. */
@@ -108,8 +108,6 @@ export function PinDisplay({
     };
   }, []);
 
-  const formattedPin = formatPin(pin);
-
   const handleCopy = useCallback(async () => {
     // Clear any existing timeout
     if (timeoutRef.current) {
@@ -118,7 +116,7 @@ export function PinDisplay({
     }
 
     try {
-      await navigator.clipboard.writeText(formattedPin);
+      await navigator.clipboard.writeText(pin);
       if (!mountedRef.current) return;
 
       setError(false);
@@ -142,7 +140,7 @@ export function PinDisplay({
         }
       }, 2000);
     }
-  }, [formattedPin]);
+  }, [pin]);
 
   const toggleMask = useCallback(() => {
     setIsMasked((prev) => !prev);
@@ -162,8 +160,7 @@ export function PinDisplay({
     }
   }, [onRefresh, refreshing]);
 
-  // Mask PIN with bullet characters (dashes stay visible)
-  const maskedPin = formattedPin.replace(/[^-]/g, '•');
+  const maskedPin = '•'.repeat(pin.length);
 
   const rotationCountdown = `${Math.floor(rotationSecondsLeft / 60)}:${String(
     rotationSecondsLeft % 60,
@@ -176,7 +173,7 @@ export function PinDisplay({
       {/* PIN Display */}
       <div className="flex flex-col gap-2">
         <Input
-          value={isMasked ? maskedPin : formattedPin}
+          value={isMasked ? maskedPin : pin}
           readOnly
           aria-label="PIN"
           onFocus={(e) => e.currentTarget.select()}
@@ -250,8 +247,7 @@ export function PinDisplay({
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
-        Not case sensitive — easy to read over a call or type from another
-        screen. Share it over a channel you trust.
+        Case sensitive. Share it over a channel you trust.
       </p>
 
       {/* Quiet resource backstop, not a security deadline: rotation already
