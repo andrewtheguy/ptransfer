@@ -1,12 +1,4 @@
-import {
-  AlertCircle,
-  Check,
-  Copy,
-  Eye,
-  EyeOff,
-  Fingerprint,
-  RefreshCw,
-} from 'lucide-react';
+import { AlertCircle, Check, Copy, Fingerprint, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,8 +26,6 @@ export function PinDisplay({
 }: PinDisplayProps) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
-  const [isMasked, setIsMasked] = useState(false);
-  const [hasCopied, setHasCopied] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(
     Math.ceil(PIN_WAIT_TIMEOUT_MS / 1000),
   );
@@ -121,9 +111,6 @@ export function PinDisplay({
 
       setError(false);
       setCopied(true);
-      // Mask PIN after copying
-      setHasCopied(true);
-      setIsMasked(true);
       timeoutRef.current = setTimeout(() => {
         if (mountedRef.current) {
           setCopied(false);
@@ -142,10 +129,6 @@ export function PinDisplay({
     }
   }, [pin]);
 
-  const toggleMask = useCallback(() => {
-    setIsMasked((prev) => !prev);
-  }, []);
-
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = useCallback(async () => {
@@ -160,8 +143,6 @@ export function PinDisplay({
     }
   }, [onRefresh, refreshing]);
 
-  const maskedPin = '•'.repeat(pin.length);
-
   const rotationCountdown = `${Math.floor(rotationSecondsLeft / 60)}:${String(
     rotationSecondsLeft % 60,
   ).padStart(2, '0')}`;
@@ -173,12 +154,12 @@ export function PinDisplay({
       {/* PIN Display */}
       <div className="flex flex-col gap-2">
         <Input
-          value={isMasked ? maskedPin : pin}
+          type="text"
+          value={pin}
           readOnly
           aria-label="PIN"
-          onFocus={(e) => e.currentTarget.select()}
-          onClick={(e) => e.currentTarget.select()}
-          className="text-center font-mono text-xl tracking-wider h-12 bg-background cursor-default select-all border-green-500"
+          onFocus={(event) => event.currentTarget.select()}
+          onClick={(event) => event.currentTarget.select()}
         />
 
         {/* Rotation progress: time until a fresh PIN replaces this one */}
@@ -210,8 +191,8 @@ export function PinDisplay({
       </div>
 
       {/* Action buttons */}
-      <div className="flex gap-2">
-        <Button variant="default" className="flex-1" onClick={handleCopy}>
+      <div>
+        <Button variant="default" className="w-full" onClick={handleCopy}>
           {copied ? (
             <>
               <Check className="h-4 w-4 mr-2" />
@@ -229,21 +210,6 @@ export function PinDisplay({
             </>
           )}
         </Button>
-
-        {hasCopied && (
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={toggleMask}
-            title={isMasked ? 'Show PIN' : 'Hide PIN'}
-          >
-            {isMasked ? (
-              <Eye className="h-4 w-4" />
-            ) : (
-              <EyeOff className="h-4 w-4" />
-            )}
-          </Button>
-        )}
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
