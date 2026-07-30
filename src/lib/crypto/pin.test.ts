@@ -4,6 +4,7 @@ import {
   PIN_FINGERPRINT_LENGTH,
   PIN_HINT_LENGTH,
   PIN_LENGTH,
+  PIN_ROTATION_MS,
 } from './constants';
 import {
   computePinFingerprint,
@@ -73,7 +74,7 @@ describe('PIN Utilities', () => {
   });
 
   test('only the current and previous PIN buckets are active', () => {
-    const now = 10 * 300_000 + 1;
+    const now = 10 * PIN_ROTATION_MS + 1;
     expect(isPinBucketActive(10, now)).toBe(true);
     expect(isPinBucketActive(9, now)).toBe(true);
     expect(isPinBucketActive(8, now)).toBe(false);

@@ -169,29 +169,18 @@ export function PinDisplay({
             style={{ width: `${rotationPercentage}%` }}
           />
         </div>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <div className="flex items-center text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <RefreshCw
               className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`}
             />
             New PIN in <span className="font-mono">{rotationCountdown}</span>
           </span>
-          {onRefresh && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-auto px-2 py-1 text-xs"
-              onClick={handleRefresh}
-              disabled={refreshing}
-            >
-              New PIN now
-            </Button>
-          )}
         </div>
       </div>
 
       {/* Action buttons */}
-      <div>
+      <div className="flex flex-col gap-2">
         <Button variant="default" className="w-full" onClick={handleCopy}>
           {copied ? (
             <>
@@ -210,6 +199,24 @@ export function PinDisplay({
             </>
           )}
         </Button>
+        {onRefresh && (
+          <div className="space-y-1.5">
+            <Button
+              variant="outline"
+              size="lg"
+              className="w-full"
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              <RefreshCw className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Generating new PIN...' : 'Generate a new PIN'}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              Replaces this PIN immediately, invalidates previously shown PINs,
+              and restarts the 2-minute countdown.
+            </p>
+          </div>
+        )}
       </div>
 
       <p className="text-xs text-muted-foreground text-center">

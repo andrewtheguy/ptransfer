@@ -13,7 +13,7 @@ export const PIN_CHARSET =
 // the sender's current or immediately previous wall-clock rotation bucket.
 // PIN_TTL_MS is the maximum possible age of such a PIN; exact expiry occurs at
 // the end of its second bucket.
-export const PIN_ROTATION_MS = 300_000;
+export const PIN_ROTATION_MS = 120_000;
 export const PIN_ACTIVE_BUCKETS = 2;
 export const PIN_TTL_MS = PIN_ROTATION_MS * PIN_ACTIVE_BUCKETS;
 
