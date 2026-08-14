@@ -22,6 +22,7 @@ import {
   base64ToUint8Array,
   type ClaimPayload,
   type ConfirmPayload,
+  computeRendezvousTranscriptHash,
   createHandshakeEvent,
   createNostrClient,
   createSignalingEvent,
@@ -365,6 +366,15 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           senderEcdhPublicKey,
         );
 
+        // Hash the rendezvous we actually acted on. The sender compares it with
+        // the one it published and refuses the claim on any difference, so a
+        // republished rendezvous carrying rewritten file metadata never reaches
+        // the point where the two humans compare codes.
+        const transcriptHash = await computeRendezvousTranscriptHash(
+          payload,
+          salt,
+        );
+
         const claimPayload: ClaimPayload = {
           type: 'claim',
           transferId,
@@ -372,6 +382,9 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           receiverNonce,
           receiverEcdhPublicKey: receiverEcdhPublicKeyB64,
           senderEcdhPublicKey: payload.ecdhPublicKey,
+          senderPubkey,
+          receiverPubkey: publicKey,
+          transcriptHash,
         };
         const claimEvent = createHandshakeEvent(
           secretKey,
@@ -390,6 +403,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             transferId,
             senderNonce: payload.nonce,
             receiverNonce,
+            transcriptHash,
           }),
         );
 
@@ -471,7 +485,10 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                 p.transferId !== transferId ||
                 p.senderNonce !== payload.nonce ||
                 p.receiverNonce !== receiverNonce ||
-                p.receiverEcdhPublicKey !== receiverEcdhPublicKeyB64
+                p.receiverEcdhPublicKey !== receiverEcdhPublicKeyB64 ||
+                p.senderPubkey !== event.pubkey ||
+                p.receiverPubkey !== publicKey ||
+                p.transcriptHash !== transcriptHash
               ) {
                 return;
               }
