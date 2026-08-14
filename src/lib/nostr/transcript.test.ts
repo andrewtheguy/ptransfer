@@ -24,6 +24,14 @@ describe('Rendezvous transcript hash', () => {
 
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeRendezvousTranscriptHash(payload, SALT)).toBe(hash);
+
+    // Frozen v1 vector. Every other test here is relative — reordering the
+    // canonical array, dropping a field, or editing the version label would
+    // leave them all green. This pins the wire format itself, so any such
+    // change has to be a deliberate protocol bump rather than an accident.
+    expect(hash).toBe(
+      '87c2371953bb20ab03e79edc083f0033b6b739550155de7639d793ea48a3e818',
+    );
   });
 
   it('changes when any covered field changes', async () => {
