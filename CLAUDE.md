@@ -1,4 +1,4 @@
-No backward compatibility or legacy code path
+Strict no backward compatibility or legacy code path under any circumstances.
 
 Always use extractable: false for Web Crypto API keys even for asymmetric keys because public keys can always be exported
 
