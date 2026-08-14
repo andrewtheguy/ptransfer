@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Input } from '@/components/ui/input';
 import {
-  computePinFingerprint,
+  getPinLocator,
   importPinRoot,
   isValidPin,
   PIN_CHARSET,
@@ -20,7 +20,11 @@ const MASK_CHAR = '*';
 
 export interface PinChangePayload {
   key: CryptoKey | null;
-  fingerprint: string | null;
+  /**
+   * The PIN's public locator segment, needed to derive the rendezvous lookup
+   * hints. Public by design, so unlike `key` it is emitted as a plain string.
+   */
+  locator: string | null;
   isValid: boolean;
   length: number;
 }
@@ -51,7 +55,7 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const generationRef = useRef(0);
     const securedKeyRef = useRef<CryptoKey | null>(null);
-    const securedFingerprintRef = useRef<string | null>(null);
+    const securedLocatorRef = useRef<string | null>(null);
 
     useEffect(() => {
       return () => {
@@ -63,7 +67,7 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
       (valid: boolean, length: number) => {
         onPinChange({
           key: valid ? securedKeyRef.current : null,
-          fingerprint: valid ? securedFingerprintRef.current : null,
+          locator: valid ? securedLocatorRef.current : null,
           isValid: valid,
           length,
         });
@@ -74,7 +78,7 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
     const clearAll = useCallback(() => {
       generationRef.current++;
       securedKeyRef.current = null;
-      securedFingerprintRef.current = null;
+      securedLocatorRef.current = null;
       setPin('');
       setIsSecured(false);
       setError(null);
@@ -93,14 +97,11 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
       async (candidate: string) => {
         const generation = generationRef.current;
         try {
-          const [root, fingerprint] = await Promise.all([
-            importPinRoot(candidate),
-            computePinFingerprint(candidate),
-          ]);
+          const root = await importPinRoot(candidate);
           if (generationRef.current !== generation) return;
 
           securedKeyRef.current = root;
-          securedFingerprintRef.current = fingerprint;
+          securedLocatorRef.current = getPinLocator(candidate);
           setPin('');
           setIsSecured(true);
           setError(null);
@@ -109,7 +110,7 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
           if (generationRef.current !== generation) return;
           console.error('Failed to secure PIN', err);
           securedKeyRef.current = null;
-          securedFingerprintRef.current = null;
+          securedLocatorRef.current = null;
           emitChange(false, candidate.length);
           setError('Failed to secure PIN');
         }
@@ -120,7 +121,7 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
     const commitPin = (value: string, invalid: boolean) => {
       generationRef.current++;
       securedKeyRef.current = null;
-      securedFingerprintRef.current = null;
+      securedLocatorRef.current = null;
       setIsSecured(false);
       setPin(value);
       if (inputRef.current) {

@@ -136,8 +136,9 @@ export async function importECDHPublicKey(
  * The raw shared secret bytes are never exposed to JavaScript - they remain
  * inside the crypto module.
  *
- * The returned key can be used with deriveAESKeyFromSecretKey() and
- * deriveKeyConfirmationFromSecretKey() to derive further keys.
+ * The returned key can be used with deriveAESKeyFromSecretKey(),
+ * deriveNostrSessionKeys(), and deriveConfirmationCode() (kdf.ts) to derive
+ * further values.
  *
  * SECURITY: The shared secret never leaves the Web Crypto module as raw bytes,
  * preventing exfiltration via XSS or memory inspection.
@@ -193,69 +194,6 @@ export async function deriveAESKeyFromSecretKey(
     false,
     ['encrypt', 'decrypt'],
   );
-}
-
-/**
- * Derive key confirmation value from HKDF CryptoKey (from deriveSharedSecretKey).
- * This is the secure version that never exposes raw shared secret bytes.
- *
- * @param sharedSecretKey - Non-extractable HKDF CryptoKey from deriveSharedSecretKey()
- * @param salt - Per-transfer salt for key derivation (at least 16 bytes)
- */
-export async function deriveKeyConfirmationFromSecretKey(
-  sharedSecretKey: CryptoKey,
-  salt: Uint8Array,
-): Promise<Uint8Array> {
-  if (salt.length < 16) {
-    throw new Error(
-      `Salt too short: expected at least 16 bytes, got ${salt.length}`,
-    );
-  }
-
-  // Derive 16 bytes using HKDF with key-confirm label
-  const confirmBits = await crypto.subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: toArrayBuffer(salt),
-      info: new TextEncoder().encode('secure-send-key-confirm'),
-    },
-    sharedSecretKey,
-    128, // 16 bytes = 128 bits
-  );
-
-  return new Uint8Array(confirmBits);
-}
-
-/**
- * Compute hash of key confirmation value for commitment.
- * Returns hex-encoded SHA-256 hash truncated to 32 chars (16 bytes).
- * @param confirmValue - 16-byte key confirmation value from deriveKeyConfirmation
- * @throws TypeError if input is not a 16-byte Uint8Array
- */
-export async function hashKeyConfirmation(
-  confirmValue: Uint8Array,
-): Promise<string> {
-  if (!(confirmValue instanceof Uint8Array)) {
-    throw new TypeError(
-      `Invalid key confirmation value: expected Uint8Array, got ${typeof confirmValue}`,
-    );
-  }
-  if (confirmValue.length !== 16) {
-    throw new TypeError(
-      `Invalid key confirmation value length: expected 16 bytes, got ${confirmValue.length}`,
-    );
-  }
-
-  const hash = await crypto.subtle.digest(
-    'SHA-256',
-    confirmValue as BufferSource,
-  );
-  const hashArray = new Uint8Array(hash);
-  // Take first 16 bytes (32 hex chars) for the commitment
-  return Array.from(hashArray.slice(0, 16), (b) =>
-    b.toString(16).padStart(2, '0'),
-  ).join('');
 }
 
 /**

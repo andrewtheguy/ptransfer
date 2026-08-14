@@ -1,8 +1,9 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useRef, useState } from 'react';
 import {
-  computePinHintFromRoot,
+  computePinHintFromLocator,
   decrypt,
+  deriveConfirmationCode,
   deriveNostrSessionKeys,
   derivePinAuthKey,
   derivePinRendezvousKey,
@@ -58,11 +59,18 @@ import { getWebRTCConfig } from '@/lib/webrtc-config';
 const P2P_CONNECTION_TIMEOUT_MS = 30000;
 
 /**
- * Time to wait for the sender's confirm after publishing the claim. The
- * sender confirms immediately upon verifying a claim, so a missing confirm
- * means the sender is gone or the transfer was claimed by someone else.
+ * Time to wait for the sender's confirm after publishing the claim.
+ *
+ * Generous because a human is in the loop: the sender does not confirm on
+ * verifying a claim any more, it waits for its operator to type the
+ * confirmation code this side is displaying. The budget has to cover reading
+ * eight characters aloud over a phone call and someone typing them back.
+ *
+ * The sender's own entry deadline is deliberately shorter than this window, so
+ * a slow typist makes the sender report the timeout rather than this side
+ * giving up on a confirm that is still coming.
  */
-const CONFIRM_TIMEOUT_MS = 30000;
+const CONFIRM_TIMEOUT_MS = 180000;
 
 /**
  * How long to keep the peer connection alive after sending the final ACK.
@@ -87,6 +95,11 @@ function decodeEcdhPublicKey(b64: string): Uint8Array | null {
 export interface UseNostrReceiveReturn {
   state: TransferState;
   receivedContent: ReceivedContent | null;
+  /**
+   * The confirmation code to read aloud to the sender, available from the
+   * moment the rendezvous payload opens until the sender's confirm arrives.
+   */
+  confirmationCode: string | null;
   receive: (pinMaterial: PinKeyMaterial) => Promise<void>;
   cancel: () => void;
   reset: () => void;
@@ -96,6 +109,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
   const [receivedContent, setReceivedContent] =
     useState<ReceivedContent | null>(null);
+  const [confirmationCode, setConfirmationCode] = useState<string | null>(null);
 
   const clientRef = useRef<NostrClient | null>(null);
   const cancelledRef = useRef(false);
@@ -117,6 +131,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
     if (receivingRef.current) discardSink();
     cancelledRef.current = true;
     receivingRef.current = false;
+    setConfirmationCode(null);
     if (clientRef.current) {
       clientRef.current.close();
       clientRef.current = null;
@@ -137,11 +152,12 @@ export function useNostrReceive(): UseNostrReceiveReturn {
       receivingRef.current = true;
       cancelledRef.current = false;
       setReceivedContent(null);
+      setConfirmationCode(null);
       // The previous transfer's payload (if any) is gone from the UI now.
       discardSink();
 
       try {
-        if (!pinMaterial.key || !pinMaterial.fingerprint) {
+        if (!pinMaterial.key || !pinMaterial.locator) {
           setState({
             status: 'error',
             message: 'PIN unavailable. Please re-enter.',
@@ -162,7 +178,10 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         const [hints, rendezvousKey, authKey] = await Promise.all([
           Promise.all(
             Array.from({ length: PIN_HINT_LOOKBACK_BUCKETS + 1 }, (_, offset) =>
-              computePinHintFromRoot(root, currentBucket - offset),
+              computePinHintFromLocator(
+                pinMaterial.locator,
+                currentBucket - offset,
+              ),
             ),
           ),
           derivePinRendezvousKey(root),
@@ -181,11 +200,24 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         // Search for the rendezvous event
         setState({ status: 'receiving', message: 'Searching for sender...' });
 
+        // The hint is derived from the PIN's public locator segment, so it
+        // carries only ~18 bits and unrelated transfers sharing a bucket do
+        // collide. The loop below authenticates each candidate, but a tight
+        // limit could truncate the real event away before it gets there.
+        //
+        // A flood of forged events sharing the tag can still push the real one
+        // out of this page. That is a stall, not a compromise — every candidate
+        // below must decrypt under the PIN rendezvous key and name its own
+        // author and transfer id, so truncation ends in "no transfer found",
+        // never in the wrong event being accepted. Paginating instead would not
+        // fix it: whoever can forge 50 events can forge 50,000, and chasing
+        // pages would hand an attacker an unbounded loop. See
+        // docs/ARCHITECTURE.md, "Availability Is a Non-Goal".
         const events = await client.query([
           {
             kinds: [EVENT_KIND_RENDEZVOUS],
             '#h': hints,
-            limit: 10,
+            limit: 50,
           },
         ]);
 
@@ -321,6 +353,18 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         );
         const receiverNonce = generateHandshakeNonce();
 
+        // Derived before the claim goes out, not after the confirm comes back.
+        // Opening the rendezvous payload already proved we knew the PIN, and
+        // the sender's ECDH key came out of that same authenticated payload —
+        // bound to the event author and transfer id — so agreeing on the shared
+        // secret now discloses nothing and commits to nothing the claim below
+        // does not already commit to. It buys the confirmation code, which the
+        // sender needs from us before it will confirm at all.
+        const sharedSecret = await deriveSharedSecretKey(
+          ecdh.privateKey,
+          senderEcdhPublicKey,
+        );
+
         const claimPayload: ClaimPayload = {
           type: 'claim',
           transferId,
@@ -337,9 +381,21 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           await sealHandshakePayload(authKey, claimPayload),
         );
 
+        // The sender will not confirm — and will not send a byte — until its
+        // operator types this code. Someone who front-ran us with a stolen PIN
+        // holds a different ECDH key, so the code on their screen is not the
+        // one the sender is about to be told.
+        setConfirmationCode(
+          await deriveConfirmationCode(sharedSecret, salt, {
+            transferId,
+            senderNonce: payload.nonce,
+            receiverNonce,
+          }),
+        );
+
         setState({
-          status: 'connecting',
-          message: 'Waiting for sender confirmation...',
+          status: 'showing_confirmation_code',
+          message: 'Read the confirmation code to the sender to start.',
         });
 
         // Subscribe for the confirm before publishing the claim so the response
@@ -476,12 +532,12 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
         if (cancelledRef.current) return;
 
+        // The confirm proves the sender matched our code and locked onto us;
+        // the code has done its job and should not linger on screen.
+        setConfirmationCode(null);
+
         // Session keys come from the ephemeral ECDH exchange the PIN just
         // authenticated — the PIN derives no content or signaling keys.
-        const sharedSecret = await deriveSharedSecretKey(
-          ecdh.privateKey,
-          senderEcdhPublicKey,
-        );
         const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
           sharedSecret,
           salt,
@@ -755,6 +811,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
       } catch (error) {
         // Nothing downloadable survives a failed transfer; drop its storage.
         discardSink();
+        setConfirmationCode(null);
         if (!cancelledRef.current) {
           setState((prevState) => ({
             ...prevState,
@@ -775,5 +832,5 @@ export function useNostrReceive(): UseNostrReceiveReturn {
     [discardSink],
   );
 
-  return { state, receivedContent, receive, cancel, reset };
+  return { state, receivedContent, confirmationCode, receive, cancel, reset };
 }

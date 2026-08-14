@@ -38,6 +38,11 @@ const PIN_DETAILS = [
       'Fresh PIN every 2 minutes; only the current and previous time buckets work',
   },
   {
+    label: 'Confirmation code:',
+    value:
+      'The receiver shows an 8-character code the sender must enter; nothing is sent until it matches, so a copied PIN alone cannot pull the file',
+  },
+  {
     label: 'Sender wait window:',
     value: '30 minutes before an unclaimed transfer gives up',
   },

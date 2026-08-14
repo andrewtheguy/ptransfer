@@ -1,18 +1,18 @@
 import { describe, expect, test } from 'vitest';
 import {
   PIN_CHARSET,
-  PIN_FINGERPRINT_LENGTH,
   PIN_HINT_LENGTH,
   PIN_LENGTH,
+  PIN_LOCATOR_LENGTH,
   PIN_ROTATION_MS,
 } from './constants';
 import {
-  computePinFingerprint,
-  computePinHintFromRoot,
+  computePinHintFromLocator,
   derivePinAuthKey,
   derivePinRendezvousKey,
   generatePin,
   getPinBucket,
+  getPinLocator,
   importPinRoot,
   isPinBucketActive,
   isValidPin,
@@ -54,22 +54,53 @@ describe('PIN Utilities', () => {
     expect(root.algorithm.name).toBe('HKDF');
   });
 
-  test('hint is deterministic per bucket and differs across buckets and PINs', async () => {
+  test('getPinLocator returns the leading locator segment', () => {
     const pin = generatePin();
-    const root = await importPinRoot(pin);
+    const locator = getPinLocator(pin);
+    expect(locator).toHaveLength(PIN_LOCATOR_LENGTH);
+    expect(pin.startsWith(locator)).toBe(true);
+  });
+
+  test('hint is deterministic per bucket and differs across buckets and locators', async () => {
+    const locator = getPinLocator(generatePin());
 
     const currentBucket = getPinBucket();
-    const current = await computePinHintFromRoot(root, currentBucket);
+    const current = await computePinHintFromLocator(locator, currentBucket);
     expect(current).toMatch(new RegExp(`^[0-9a-f]{${PIN_HINT_LENGTH}}$`));
-    expect(await computePinHintFromRoot(root, currentBucket)).toBe(current);
+    expect(await computePinHintFromLocator(locator, currentBucket)).toBe(
+      current,
+    );
 
-    const previous = await computePinHintFromRoot(root, currentBucket - 1);
+    const previous = await computePinHintFromLocator(
+      locator,
+      currentBucket - 1,
+    );
     expect(previous).toMatch(new RegExp(`^[0-9a-f]{${PIN_HINT_LENGTH}}$`));
     expect(previous).not.toBe(current);
 
-    const otherRoot = await importPinRoot(generatePin());
-    expect(await computePinHintFromRoot(otherRoot, currentBucket)).not.toBe(
-      current,
+    let otherLocator = getPinLocator(generatePin());
+    while (otherLocator === locator)
+      otherLocator = getPinLocator(generatePin());
+    expect(
+      await computePinHintFromLocator(otherLocator, currentBucket),
+    ).not.toBe(current);
+  });
+
+  test('hint depends only on the locator, not the rest of the PIN', async () => {
+    // The property the whole split rests on: the published tag is a function of
+    // the public locator alone, so it cannot confirm a guess at the secret
+    // characters. Two PINs sharing a locator are indistinguishable by hint.
+    const bucket = getPinBucket();
+    const first = generatePin();
+    const locator = getPinLocator(first);
+
+    let second = generatePin();
+    while (second === first) second = generatePin();
+    const shared = locator + second.slice(PIN_LOCATOR_LENGTH);
+
+    expect(shared).not.toBe(first);
+    expect(await computePinHintFromLocator(getPinLocator(shared), bucket)).toBe(
+      await computePinHintFromLocator(locator, bucket),
     );
   });
 
@@ -79,22 +110,6 @@ describe('PIN Utilities', () => {
     expect(isPinBucketActive(9, now)).toBe(true);
     expect(isPinBucketActive(8, now)).toBe(false);
     expect(isPinBucketActive(11, now)).toBe(false);
-  });
-
-  test('fingerprint is stable and domain-separated from the hint', async () => {
-    const pin = generatePin();
-    const fp = await computePinFingerprint(pin);
-    expect(fp).toMatch(new RegExp(`^[0-9a-f]{${PIN_FINGERPRINT_LENGTH}}$`));
-    expect(await computePinFingerprint(pin)).toBe(fp);
-    const root = await importPinRoot(pin);
-    expect(fp).not.toBe(await computePinHintFromRoot(root, getPinBucket()));
-  });
-
-  test('fingerprint matches the cross-implementation vector', async () => {
-    // Parity with secure-send-cli's pin_fingerprint (PBKDF2-SHA-256, 1k
-    // iterations, salt "secure-send:pin-fingerprint:v2"), verified
-    // independently.
-    expect(await computePinFingerprint('A/B:C;D(E)F')).toBe('2e700e579152');
   });
 
   test('auth and rendezvous keys are distinct non-extractable AES keys', async () => {
@@ -120,8 +135,8 @@ describe('PIN Utilities', () => {
     const receiverRoot = await importPinRoot(pin);
 
     const bucket = getPinBucket();
-    expect(await computePinHintFromRoot(receiverRoot, bucket)).toBe(
-      await computePinHintFromRoot(senderRoot, bucket),
+    expect(await computePinHintFromLocator(getPinLocator(pin), bucket)).toBe(
+      await computePinHintFromLocator(getPinLocator(pin), bucket),
     );
     const { encrypt, decrypt } = await import('./aes-gcm');
     const sealed = await encrypt(

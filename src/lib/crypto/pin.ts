@@ -3,12 +3,10 @@ import {
   PBKDF2_ITERATIONS,
   PIN_CHARSET,
   PIN_CHECKSUM_LENGTH,
-  PIN_FINGERPRINT_ITERATIONS,
-  PIN_FINGERPRINT_LENGTH,
-  PIN_FINGERPRINT_SALT,
   PIN_HINT_LENGTH,
   PIN_HKDF_SALT,
   PIN_LENGTH,
+  PIN_LOCATOR_LENGTH,
   PIN_ROOT_SALT,
   PIN_ROTATION_MS,
 } from './constants';
@@ -74,15 +72,33 @@ export function isValidPin(pin: string): boolean {
 }
 
 /**
+ * Extract the PIN's locator segment: the leading PIN_LOCATOR_LENGTH characters,
+ * the only part of the PIN that feeds the published rendezvous hint.
+ *
+ * Treat the return value as public. It is recoverable from any relay event the
+ * sender published (see computePinHintFromLocator), so it is carried alongside
+ * the PIN root in PinKeyMaterial rather than guarded like one.
+ */
+export function getPinLocator(pin: string): string {
+  return pin.slice(0, PIN_LOCATOR_LENGTH);
+}
+
+/**
  * Derive the PIN root: a non-extractable HKDF key produced by the full
  * PBKDF2-SHA-256 stretch of the PIN with the public PIN_ROOT_SALT.
  *
- * Every wire-exposed PIN-scoped value (per-bucket rendezvous hint,
- * claim/confirm auth key, rendezvous payload key) is a cheap HKDF derivation
- * off this root with a distinct info label, so the expensive stretch runs
- * exactly once per PIN while brute-forcing any derived value still costs the
- * full PBKDF2 work factor per PIN guess. The on-screen fingerprint is never
- * transmitted and uses its own light stretch (computePinFingerprint).
+ * The two secret PIN-scoped values — the claim/confirm auth key and the
+ * rendezvous payload key — are cheap HKDF derivations off this root with
+ * distinct info labels, so the expensive stretch runs exactly once per PIN
+ * while brute-forcing either published ciphertext still costs the full PBKDF2
+ * work factor per PIN guess. The rendezvous hint is deliberately *not* one of
+ * them: it hangs off the public locator segment instead, so the lookup tag can
+ * never be used to confirm a guess at the rest of the PIN.
+ *
+ * The whole PIN is stretched, locator included. That adds no real strength —
+ * the locator is recoverable from the published hint, which is why the honest
+ * accounting in constants.ts counts only the remaining characters — but it
+ * costs nothing and keeps a wrong locator from producing working seals.
  *
  * The PIN root derives no content-encryption keys — file content and WebRTC
  * signaling are protected by keys from the ephemeral ECDH exchange that the
@@ -138,19 +154,6 @@ function hkdfParams(info: string): HkdfParams {
   };
 }
 
-async function deriveRootBytes(
-  root: CryptoKey,
-  info: string,
-  byteCount: number,
-): Promise<Uint8Array> {
-  const bits = await crypto.subtle.deriveBits(
-    hkdfParams(info),
-    root,
-    byteCount * 8,
-  );
-  return new Uint8Array(bits);
-}
-
 async function deriveRootAesKey(
   root: CryptoKey,
   info: string,
@@ -181,23 +184,50 @@ export function isPinBucketActive(bucket: number, now = Date.now()): boolean {
 /**
  * Compute the PIN hint (PIN_HINT_LENGTH hex chars) for a rotation bucket.
  * Published as the Nostr `#h` tag so the receiver can locate the rendezvous
- * event without revealing the PIN. Scoping the info label to the rotation
- * bucket means the published tag is never a stable cross-transfer correlator
- * and pins down which rotation generation an event belongs to.
+ * event. Scoping the info label to the rotation bucket means the published tag
+ * is never a stable cross-transfer correlator and pins down which rotation
+ * generation an event belongs to.
+ *
+ * Keyed by the locator segment alone, never by the PIN root. That is the whole
+ * point: the tag is public and enumerable either way, so deriving it from the
+ * full PIN would only hand an attacker a cheap oracle for confirming guesses at
+ * the secret characters. Keying it off the segment that is already public
+ * leaves the rest of the PIN reachable only through the AES-GCM seals.
+ *
+ * A consequence worth remembering at the call site: with roughly 18 bits behind
+ * it the hint is a filter, not an identifier. Unrelated transfers in the same
+ * bucket do collide, and callers must be prepared to walk several candidates.
+ *
+ * PBKDF2 is deliberately absent. Stretching a value with 328,509 possible
+ * inputs buys nothing, and skipping it lets both sides derive hints without
+ * waiting on the PIN root.
  *
  * Callers pass the absolute bucket explicitly so the hint and the sender's
  * recorded acceptance bucket cannot disagree across a boundary.
  */
-export async function computePinHintFromRoot(
-  root: CryptoKey,
+export async function computePinHintFromLocator(
+  locator: string,
   bucket: number,
 ): Promise<string> {
-  const bytes = await deriveRootBytes(
-    root,
-    `hint:${bucket}`,
-    Math.ceil(PIN_HINT_LENGTH / 2),
+  const encoder = new TextEncoder();
+  const locatorData = encoder.encode(locator);
+
+  let hkdfKey: CryptoKey;
+  try {
+    hkdfKey = await crypto.subtle.importKey('raw', locatorData, 'HKDF', false, [
+      'deriveBits',
+    ]);
+  } finally {
+    wipeBufferSource(locatorData);
+  }
+
+  const bits = await crypto.subtle.deriveBits(
+    hkdfParams(`hint:${bucket}`),
+    hkdfKey,
+    Math.ceil(PIN_HINT_LENGTH / 2) * 8,
   );
-  return Array.from(bytes)
+
+  return Array.from(new Uint8Array(bits))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, PIN_HINT_LENGTH);
@@ -224,56 +254,6 @@ export async function derivePinRendezvousKey(
   root: CryptoKey,
 ): Promise<CryptoKey> {
   return deriveRootAesKey(root, 'rendezvous');
-}
-
-/**
- * Compute the PIN fingerprint: a stable one-way derivation of the PIN,
- * displayed to both sender and receiver so they can visually confirm they
- * entered the same PIN. Never published to relays — it exists only for human
- * visual comparison, so it carries no rotation-bucket scoping and only a
- * light stretch (PIN_FINGERPRINT_ITERATIONS, independent of the PIN root) —
- * cheap enough to show the moment the PIN is typed.
- *
- * Encoded as PIN_FINGERPRINT_LENGTH lowercase hex chars.
- */
-export async function computePinFingerprint(pin: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const pinData = encoder.encode(pin);
-
-  let pbkdf2Key: CryptoKey;
-  try {
-    pbkdf2Key = await crypto.subtle.importKey('raw', pinData, 'PBKDF2', false, [
-      'deriveBits',
-    ]);
-  } finally {
-    wipeBufferSource(pinData);
-  }
-
-  const bytes = new Uint8Array(
-    await crypto.subtle.deriveBits(
-      {
-        name: 'PBKDF2',
-        salt: encoder.encode(PIN_FINGERPRINT_SALT),
-        iterations: PIN_FINGERPRINT_ITERATIONS,
-        hash: PBKDF2_HASH,
-      },
-      pbkdf2Key,
-      Math.ceil(PIN_FINGERPRINT_LENGTH / 2) * 8,
-    ),
-  );
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-    .slice(0, PIN_FINGERPRINT_LENGTH);
-}
-
-/**
- * Format a PIN fingerprint for display: the plain lowercase hex value,
- * ungrouped, so the sender and receiver can visually confirm they derived
- * the same PIN.
- */
-export function formatPinHint(hint: string): string {
-  return hint.toLowerCase();
 }
 
 /**

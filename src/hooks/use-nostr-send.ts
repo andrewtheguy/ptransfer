@@ -1,24 +1,26 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  computePinFingerprint,
-  computePinHintFromRoot,
+  computePinHintFromLocator,
+  constantTimeEqual,
   decrypt,
+  deriveConfirmationCode,
   deriveNostrSessionKeys,
   derivePinAuthKey,
   derivePinRendezvousKey,
   deriveSharedSecretKey,
   encrypt,
-  formatPinHint,
   generateECDHKeyPair,
   generatePin,
   generateSalt,
   generateTransferId,
   getPinBucket,
+  getPinLocator,
   importPinRoot,
   isPinBucketActive,
   MAX_MESSAGE_SIZE,
   type NostrSessionKeys,
+  normalizeCrockfordBase32,
   PIN_ROTATION_MS,
   PIN_WAIT_TIMEOUT_MS,
 } from '@/lib/crypto';
@@ -80,11 +82,20 @@ function decodeEcdhPublicKey(b64: string): Uint8Array | null {
   }
 }
 
+/**
+ * Time the sender waits for its operator to type the receiver's confirmation
+ * code before giving up on the locked claim.
+ *
+ * Deliberately shorter than the receiver's confirm timeout: if the human is
+ * too slow, the side with a person in front of it should be the one that
+ * reports it, rather than publishing a confirm to a receiver that already
+ * stopped listening.
+ */
+const CONFIRM_CODE_ENTRY_TIMEOUT_MS = 150000;
+
 export interface UseNostrSendReturn {
   state: TransferState;
   pin: string | null;
-  /** Fingerprint of the currently displayed PIN, formatted for display. */
-  pinFingerprint: string | null;
   send: (content: TransferSource) => Promise<void>;
   cancel: () => void;
   /**
@@ -93,33 +104,57 @@ export interface UseNostrSendReturn {
    * No-op unless a transfer is waiting for a receiver.
    */
   refreshPin: () => Promise<void>;
+  /**
+   * Submit the confirmation code the receiver read out. Returns whether it
+   * matched; a mismatch leaves the transfer parked so typos are retryable.
+   *
+   * Note there is no getter for the expected code. The sender must learn it
+   * from the receiver over a channel an attacker who stole the PIN does not
+   * control — showing it here would defeat the entire mechanism.
+   */
+  submitConfirmationCode: (code: string) => boolean;
 }
 
 export function useNostrSend(): UseNostrSendReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
   const [pin, setPin] = useState<string | null>(null);
-  const [pinFingerprint, setPinFingerprint] = useState<string | null>(null);
 
   const clientRef = useRef<NostrClient | null>(null);
   const cancelledRef = useRef(false);
   const sendingRef = useRef(false);
   // Set while a transfer is waiting for a receiver; null otherwise.
   const refreshPinRef = useRef<(() => Promise<void>) | null>(null);
+  // Both set only while the send is parked on the confirmation code: the value
+  // to match, and the resolver that releases the gate once it does. Kept in
+  // refs rather than state so the expected code never reaches a render tree.
+  const expectedConfirmationCodeRef = useRef<string | null>(null);
+  const confirmationCodeAcceptRef = useRef<(() => void) | null>(null);
 
   const refreshPin = useCallback(async () => {
     await refreshPinRef.current?.();
+  }, []);
+
+  const submitConfirmationCode = useCallback((code: string): boolean => {
+    const expected = expectedConfirmationCodeRef.current;
+    if (!expected) return false;
+    if (!constantTimeEqual(normalizeCrockfordBase32(code), expected)) {
+      return false;
+    }
+    confirmationCodeAcceptRef.current?.();
+    return true;
   }, []);
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
     sendingRef.current = false;
     refreshPinRef.current = null;
+    expectedConfirmationCodeRef.current = null;
+    confirmationCodeAcceptRef.current = null;
     if (clientRef.current) {
       clientRef.current.close();
       clientRef.current = null;
     }
     setPin(null);
-    setPinFingerprint(null);
     setState({ status: 'idle' });
   }, []);
 
@@ -217,13 +252,16 @@ export function useNostrSend(): UseNostrSendReturn {
       const publishRendezvous = async () => {
         const epoch = pinEpoch;
         const newPin = generatePin();
-        const root = await importPinRoot(newPin);
         const bucket = getPinBucket();
-        const [hint, authKey, rendezvousKey, fingerprint] = await Promise.all([
-          computePinHintFromRoot(root, bucket),
+        // The hint hangs off the public locator segment, so it needs no PBKDF2
+        // and does not wait on the root — only the two seals do.
+        const [hint, root] = await Promise.all([
+          computePinHintFromLocator(getPinLocator(newPin), bucket),
+          importPinRoot(newPin),
+        ]);
+        const [authKey, rendezvousKey] = await Promise.all([
           derivePinAuthKey(root),
           derivePinRendezvousKey(root),
-          computePinFingerprint(newPin),
         ]);
         const nonce = generateHandshakeNonce();
 
@@ -267,7 +305,6 @@ export function useNostrSend(): UseNostrSendReturn {
 
         if (!cancelledRef.current && epoch === pinEpoch) {
           setPin(newPin);
-          setPinFingerprint(formatPinHint(fingerprint));
         }
       };
 
@@ -429,7 +466,96 @@ export function useNostrSend(): UseNostrSendReturn {
       // dropped with this scope, and only this receiver's events are processed
       // from here on. The PIN is no longer needed for display.
       setPin(null);
-      setPinFingerprint(null);
+
+      // Session keys come from the ephemeral ECDH exchange the PIN just
+      // authenticated — the PIN derives no content or signaling keys.
+      const sharedSecret = await deriveSharedSecretKey(
+        ecdh.privateKey,
+        claim.receiverEcdhPublicKey,
+      );
+      const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
+        sharedSecret,
+        salt,
+      );
+
+      // The claim proves whoever sent it knew a live PIN. That is exactly the
+      // thing a shoulder-surfer or a screen-share viewer also knows, and the
+      // lock above hands the transfer to whoever got here first. So stop: the
+      // confirm and every WebRTC signal stay unpublished until a human vouches
+      // that the peer we locked onto is the peer they meant. The code below is
+      // keyed by the ECDH shared secret, so only the holder of the matching
+      // private key can recite it — a front-runner has nothing to say.
+      //
+      // Note what this deliberately does not do: the front-runner still holds
+      // the lock, so it can stall this transfer. Stopping that is out of scope
+      // — availability is a non-goal system-wide, not just here (see
+      // docs/ARCHITECTURE.md, "Availability Is a Non-Goal"). Not leaking the
+      // file is the property worth defending; uninterruptible delivery is not
+      // one this architecture can offer in the first place.
+      const expectedCode = await deriveConfirmationCode(sharedSecret, salt, {
+        transferId,
+        senderNonce: claim.payload.senderNonce,
+        receiverNonce: claim.payload.receiverNonce,
+      });
+
+      if (cancelledRef.current) return;
+
+      setState((prevState) => ({
+        ...prevState,
+        status: 'awaiting_confirmation_code',
+        message:
+          'Ask your receiver for the confirmation code shown on their screen.',
+      }));
+
+      expectedConfirmationCodeRef.current = expectedCode;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          let cancelPoll: ReturnType<typeof setInterval> | null = null;
+          let timeout: ReturnType<typeof setTimeout> | null = null;
+
+          const cleanup = () => {
+            if (cancelPoll) clearInterval(cancelPoll);
+            if (timeout) clearTimeout(timeout);
+            cancelPoll = null;
+            timeout = null;
+            confirmationCodeAcceptRef.current = null;
+          };
+
+          timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(
+              new Error(
+                'Confirmation code was not entered in time. Start a new transfer.',
+              ),
+            );
+          }, CONFIRM_CODE_ENTRY_TIMEOUT_MS);
+
+          cancelPoll = setInterval(() => {
+            if (cancelledRef.current && !settled) {
+              settled = true;
+              cleanup();
+              reject(new Error('Cancelled'));
+            }
+          }, 250);
+
+          // Only a match calls this. A wrong code never settles the promise, so
+          // a typo costs a retry rather than the transfer.
+          confirmationCodeAcceptRef.current = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+          };
+        });
+      } finally {
+        expectedConfirmationCodeRef.current = null;
+        confirmationCodeAcceptRef.current = null;
+      }
+
+      if (cancelledRef.current) return;
 
       // Mutual proof: confirm under the same PIN-derived auth key that sealed
       // the claim, echoing both nonces and the receiver key we locked onto.
@@ -448,17 +574,6 @@ export function useNostrSend(): UseNostrSendReturn {
         await sealHandshakePayload(claim.authKey, confirmPayload),
       );
       await client.publish(confirmEvent);
-
-      // Session keys come from the ephemeral ECDH exchange the PIN just
-      // authenticated — the PIN derives no content or signaling keys.
-      const sharedSecret = await deriveSharedSecretKey(
-        ecdh.privateKey,
-        claim.receiverEcdhPublicKey,
-      );
-      const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
-        sharedSecret,
-        salt,
-      );
 
       if (cancelledRef.current) return;
 
@@ -675,7 +790,6 @@ export function useNostrSend(): UseNostrSendReturn {
     } catch (error) {
       if (!cancelledRef.current) {
         setPin(null);
-        setPinFingerprint(null);
         setState((prevState) => ({
           ...prevState,
           status: 'error',
@@ -685,6 +799,8 @@ export function useNostrSend(): UseNostrSendReturn {
       }
     } finally {
       sendingRef.current = false;
+      expectedConfirmationCodeRef.current = null;
+      confirmationCodeAcceptRef.current = null;
       if (clientRef.current) {
         clientRef.current.close();
         clientRef.current = null;
@@ -694,7 +810,7 @@ export function useNostrSend(): UseNostrSendReturn {
 
   // Memoize return object to prevent unnecessary re-renders in consumers
   return useMemo(
-    () => ({ state, pin, pinFingerprint, send, cancel, refreshPin }),
-    [state, pin, pinFingerprint, send, cancel, refreshPin],
+    () => ({ state, pin, send, cancel, refreshPin, submitConfirmationCode }),
+    [state, pin, send, cancel, refreshPin, submitConfirmationCode],
   );
 }

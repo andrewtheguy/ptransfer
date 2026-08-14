@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ConfirmationCodeInput } from '@/components/secure-send/confirmation-code-input';
 import { MultiQRDisplay } from '@/components/secure-send/multi-qr-display';
 import { PinDisplay } from '@/components/secure-send/pin-display';
 import { QRInput } from '@/components/secure-send/qr-input';
@@ -74,10 +75,12 @@ export function SendTransferPage() {
 
   // Online-specific properties (type-safe access)
   const pin = activeHook.type === 'online' ? activeHook.hook.pin : null;
-  const pinFingerprint =
-    activeHook.type === 'online' ? activeHook.hook.pinFingerprint : null;
   const refreshPin =
     activeHook.type === 'online' ? activeHook.hook.refreshPin : undefined;
+  const submitConfirmationCode =
+    activeHook.type === 'online'
+      ? activeHook.hook.submitConfirmationCode
+      : undefined;
 
   // Offline-specific properties (type-safe access via discriminated union)
   const manualState =
@@ -347,10 +350,12 @@ export function SendTransferPage() {
                 pin && state.status === 'waiting_for_receiver' ? (
                   <PinDisplay
                     pin={pin}
-                    fingerprint={pinFingerprint}
                     onExpire={handleCancel}
                     onRefresh={refreshPin}
                   />
+                ) : state.status === 'awaiting_confirmation_code' &&
+                  submitConfirmationCode ? (
+                  <ConfirmationCodeInput onSubmit={submitConfirmationCode} />
                 ) : undefined
               }
             />

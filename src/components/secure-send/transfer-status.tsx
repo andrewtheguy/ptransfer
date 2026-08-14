@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
+  KeyRound,
   Loader2,
   Radio,
   XCircle,
@@ -34,6 +35,12 @@ export function TransferStatus({
       case 'transferring':
       case 'receiving':
         return <Loader2 className="h-4 w-4 animate-spin" />;
+      // Both sides of the confirmation-code step are blocked on a human
+      // reading a code aloud, not on the network — a spinner would misreport
+      // that as progress.
+      case 'showing_confirmation_code':
+      case 'awaiting_confirmation_code':
+        return <KeyRound className="h-4 w-4" />;
       case 'complete':
         return <CheckCircle2 className="h-4 w-4 text-green-500" />;
       case 'error':

@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Copy, Fingerprint, RefreshCw } from 'lucide-react';
+import { AlertCircle, Check, Copy, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,8 +7,6 @@ import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
 interface PinDisplayProps {
   /** The currently active PIN; rotates every PIN_ROTATION_MS. */
   pin: string;
-  /** Fingerprint of the current PIN (already display-formatted), if derived. */
-  fingerprint: string | null;
   /** Called when the wait backstop (PIN_WAIT_TIMEOUT_MS) elapses. */
   onExpire: () => void;
   /**
@@ -18,12 +16,7 @@ interface PinDisplayProps {
   onRefresh?: () => Promise<void> | void;
 }
 
-export function PinDisplay({
-  pin,
-  fingerprint,
-  onExpire,
-  onRefresh,
-}: PinDisplayProps) {
+export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(
@@ -233,23 +226,10 @@ export function PinDisplay({
         if no one connects.
       </p>
 
-      {fingerprint && (
-        <div className="space-y-1 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2 font-mono">
-            <Fingerprint className="h-3 w-3" />
-            PIN Fingerprint: {fingerprint}
-          </div>
-          <p>
-            - The receiver sees the same fingerprint after entering this PIN —
-            compare them to confirm they typed it correctly. It changes whenever
-            the PIN rotates.
-          </p>
-          <p>
-            - For human comparison only; it cannot be reversed to recover the
-            PIN or decrypt any data.
-          </p>
-        </div>
-      )}
+      <p className="text-xs text-muted-foreground">
+        After the receiver enters this PIN they will see a confirmation code.
+        Ask them for it — nothing is sent until you enter it here.
+      </p>
     </div>
   );
 }

@@ -2,7 +2,6 @@ import {
   ArrowLeftRight,
   Download,
   FileDown,
-  Fingerprint,
   KeyRound,
   RotateCcw,
   X,
@@ -12,13 +11,13 @@ import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useManualReceive } from '@/hooks/use-manual-receive';
 import { useNostrReceive } from '@/hooks/use-nostr-receive';
-import { formatPinHint } from '@/lib/crypto';
 import {
   downloadFile,
   formatFileSize,
   getMimeTypeDescription,
 } from '@/lib/file-utils';
 import type { PinKeyMaterial } from '@/lib/types';
+import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { type PinChangePayload, PinInput, type PinInputRef } from './pin-input';
 import { QRDisplay } from './qr-display';
 import { QRInput } from './qr-input';
@@ -42,7 +41,6 @@ export function ReceiveTab() {
   const [isPinValid, setIsPinValid] = useState(false);
   const [pinExpired, setPinExpired] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(0);
-  const [pinFingerprint, setPinFingerprint] = useState<string | null>(null);
 
   // All hooks must be called unconditionally (React rules)
   const nostrHook = useNostrReceive();
@@ -64,6 +62,9 @@ export function ReceiveTab() {
       ? activeHook.receive
       : undefined;
   const { startReceive, submitOffer } = manualHook;
+
+  // Auto Exchange only: the code the receiver reads out to the sender.
+  const confirmationCode = isManualMode ? null : nostrHook.confirmationCode;
 
   // Use rawState directly for common properties
   const state = rawState;
@@ -208,17 +209,15 @@ export function ReceiveTab() {
 
   const handlePinChange = useCallback(
     (payload: PinChangePayload) => {
-      const { key, fingerprint, isValid, length } = payload;
+      const { key, locator, isValid, length } = payload;
       pinInputLengthRef.current = length;
 
-      if (isValid && key && fingerprint) {
-        pinSecretRef.current = { key, fingerprint };
+      if (isValid && key && locator) {
+        pinSecretRef.current = { key, locator };
         setIsPinValid(true);
-        setPinFingerprint(formatPinHint(fingerprint));
       } else {
         pinSecretRef.current = null;
         setIsPinValid(false);
-        setPinFingerprint(null);
       }
 
       resetPinInactivityTimeout(length > 0);
@@ -327,22 +326,11 @@ export function ReceiveTab() {
                 )}
               </div>
 
-              {isPinValid && pinFingerprint && (
-                <div className="space-y-1 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2 font-mono">
-                    <Fingerprint className="h-3 w-3" />
-                    PIN Fingerprint: {pinFingerprint}
-                  </div>
-                  <p>
-                    - The sender sees the same fingerprint while this PIN is on
-                    their screen — compare them to confirm you typed it
-                    correctly.
-                  </p>
-                  <p>
-                    - For human comparison only; it cannot be reversed to
-                    recover the PIN or decrypt any data.
-                  </p>
-                </div>
+              {isPinValid && (
+                <p className="text-xs text-muted-foreground">
+                  After you receive, a confirmation code appears here. Read it
+                  to the sender — the transfer only starts once they enter it.
+                </p>
               )}
 
               <div className="text-xs text-muted-foreground text-center pb-2">
@@ -386,7 +374,15 @@ export function ReceiveTab() {
         </>
       ) : (
         <>
-          <TransferStatus state={state} />
+          <TransferStatus
+            state={state}
+            betweenProgressAndChunks={
+              state.status === 'showing_confirmation_code' &&
+              confirmationCode ? (
+                <ConfirmationCodeDisplay code={confirmationCode} />
+              ) : undefined
+            }
+          />
 
           {/* QR Input for receiving offer */}
           {showQRInput && (

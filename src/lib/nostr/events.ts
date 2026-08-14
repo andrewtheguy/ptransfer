@@ -37,7 +37,9 @@ export function generateHandshakeNonce(): string {
  * Contains the payload encrypted with the PIN-derived rendezvous key.
  *
  * @param hint - Rotation-bucket-scoped event-filtering tag: an HKDF derivation
- * off the PBKDF2 PIN root (see computePinHintFromRoot)
+ * off the PIN's public locator segment (see computePinHintFromLocator). It is a
+ * filter, not an identifier — unrelated transfers in the same bucket collide,
+ * and the receiver disambiguates by decrypting candidates.
  *
  * TTL behavior:
  * - The 'expiration' tag is the end of the PIN's immediately following bucket

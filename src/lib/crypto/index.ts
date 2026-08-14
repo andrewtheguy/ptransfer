@@ -1,4 +1,5 @@
 export * from './aes-gcm';
+export * from './base32';
 export * from './constants';
 export * from './ecdh';
 export * from './kdf';
