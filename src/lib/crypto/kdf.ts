@@ -78,6 +78,13 @@ export interface ConfirmationCodeBinding {
   senderNonce: string;
   /** Receiver's per-claim nonce. */
   receiverNonce: string;
+  /**
+   * Digest of the rendezvous both peers believe they are acting on — sender
+   * identity, ECDH key, salt, and all file metadata (see nostr/transcript.ts).
+   * Without it the code proves only that no ECDH key was substituted, which is
+   * exactly the attack that leaves both keys alone and rewrites the metadata.
+   */
+  transcriptHash: string;
 }
 
 /**
@@ -98,7 +105,10 @@ export interface ConfirmationCodeBinding {
  * different code on each side.
  *
  * Binding in the transfer id and both nonces stops a code captured from one
- * rotation, transfer, or direction from being replayed into another.
+ * rotation, transfer, or direction from being replayed into another. Binding in
+ * the rendezvous transcript extends the guarantee past the ECDH keys to *what*
+ * is being transferred and *who* published it, which a shared secret alone
+ * says nothing about.
  */
 export async function deriveConfirmationCode(
   sharedSecretKey: CryptoKey,
@@ -111,13 +121,14 @@ export async function deriveConfirmationCode(
     );
   }
 
-  // transferId is hex and both nonces are fixed-length base64, so '|' cannot
-  // appear inside a field and the joined string is unambiguous.
+  // transferId and transcriptHash are hex and both nonces are fixed-length
+  // base64, so '|' cannot appear inside a field and the join is unambiguous.
   const info = [
     CONFIRMATION_CODE_LABEL,
     binding.transferId,
     binding.senderNonce,
     binding.receiverNonce,
+    binding.transcriptHash,
   ].join('|');
 
   const bits = await crypto.subtle.deriveBits(

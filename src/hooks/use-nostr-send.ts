@@ -31,6 +31,7 @@ import {
   type ClaimPayload,
   type ConfirmPayload,
   type ContentType,
+  computeRendezvousTranscriptHash,
   createHandshakeEvent,
   createNostrClient,
   createRendezvousEvent,
@@ -62,6 +63,8 @@ interface PinGeneration {
   authKey: CryptoKey;
   nonce: string;
   bucket: number;
+  /** Digest of the rendezvous published for this generation; see transcript.ts. */
+  transcriptHash: string;
 }
 
 /** A verified receiver claim: the transfer is locked to this peer. */
@@ -278,6 +281,13 @@ export function useNostrSend(): UseNostrSendReturn {
           fileSizeExact,
           mimeType,
         };
+        // Hash what we are about to publish, so a claim can be checked against
+        // the rendezvous we actually sent rather than the one the claimant says
+        // it saw. Per generation, since the nonce is fresh on every rotation.
+        const transcriptHash = await computeRendezvousTranscriptHash(
+          payload,
+          salt,
+        );
         const encryptedPayload = await encrypt(
           rendezvousKey,
           new TextEncoder().encode(JSON.stringify(payload)),
@@ -295,7 +305,7 @@ export function useNostrSend(): UseNostrSendReturn {
 
         // Register the generation before publishing so a fast claim can never
         // race ahead of the retained-keys list.
-        generations.unshift({ authKey, nonce, bucket });
+        generations.unshift({ authKey, nonce, bucket, transcriptHash });
         const activeGenerations = generations.filter((generation) =>
           isPinBucketActive(generation.bucket),
         );
@@ -392,6 +402,13 @@ export function useNostrSend(): UseNostrSendReturn {
 
                 // Invalid claims are ignored, never fatal: transfer tags are
                 // public, so aborting here would let anyone deny the transfer.
+                // senderPubkey/receiverPubkey tie the sealed claim to the
+                // envelope that carried it, and transcriptHash ties it to the
+                // rendezvous we published. Together they stop a live-PIN
+                // attacker from republishing our rendezvous with rewritten
+                // metadata under its own identity and forwarding the real
+                // receiver's claim to us: both ECDH keys would survive intact,
+                // so the confirmation codes would still have matched.
                 if (
                   p.type !== 'claim' ||
                   p.transferId !== transferId ||
@@ -399,6 +416,9 @@ export function useNostrSend(): UseNostrSendReturn {
                   typeof p.receiverNonce !== 'string' ||
                   !p.receiverNonce ||
                   p.senderEcdhPublicKey !== ecdhPublicKeyB64 ||
+                  p.senderPubkey !== publicKey ||
+                  p.receiverPubkey !== event.pubkey ||
+                  p.transcriptHash !== generation.transcriptHash ||
                   !receiverEcdhPublicKey ||
                   !isPinBucketActive(generation.bucket)
                 ) {
@@ -496,6 +516,7 @@ export function useNostrSend(): UseNostrSendReturn {
         transferId,
         senderNonce: claim.payload.senderNonce,
         receiverNonce: claim.payload.receiverNonce,
+        transcriptHash: claim.payload.transcriptHash,
       });
 
       if (cancelledRef.current) return;
@@ -565,6 +586,9 @@ export function useNostrSend(): UseNostrSendReturn {
         senderNonce: claim.payload.senderNonce,
         receiverNonce: claim.payload.receiverNonce,
         receiverEcdhPublicKey: claim.payload.receiverEcdhPublicKey,
+        senderPubkey: publicKey,
+        receiverPubkey: claim.receiverPubkey,
+        transcriptHash: claim.payload.transcriptHash,
       };
       const confirmEvent = createHandshakeEvent(
         secretKey,

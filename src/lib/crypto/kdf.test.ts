@@ -59,6 +59,7 @@ describe('Confirmation code', () => {
     transferId: 'a1b2c3d4e5f60718',
     senderNonce: 'c2VuZGVyLW5vbmNlLTAwMDAwMDA=',
     receiverNonce: 'cmVjZWl2ZXItbm9uY2UtMDAwMDA=',
+    transcriptHash: 'f'.repeat(64),
   };
 
   it('both ECDH peers derive the same code', async () => {
@@ -102,6 +103,28 @@ describe('Confirmation code', () => {
     );
 
     expect(forAttacker).not.toBe(forReceiver);
+  });
+
+  it('a substituted rendezvous transcript yields a different code', async () => {
+    // The attack this closes: a live-PIN attacker republishes the rendezvous
+    // with rewritten file metadata but passes both ECDH keys through untouched,
+    // so the shared secret — and every other binding value — is unchanged.
+    // Only the transcript differs, and it has to be enough on its own.
+    const sender = await generateECDHKeyPair();
+    const receiver = await generateECDHKeyPair();
+    const salt = generateSalt();
+    const shared = await deriveSharedSecretKey(
+      sender.privateKey,
+      receiver.publicKeyBytes,
+    );
+
+    const honest = await deriveConfirmationCode(shared, salt, binding);
+    const tampered = await deriveConfirmationCode(shared, salt, {
+      ...binding,
+      transcriptHash: `${'f'.repeat(63)}e`,
+    });
+
+    expect(tampered).not.toBe(honest);
   });
 
   it('the code is bound to the transfer id and both nonces', async () => {

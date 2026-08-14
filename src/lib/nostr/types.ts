@@ -108,6 +108,24 @@ export interface ClaimPayload {
   receiverEcdhPublicKey: string;
   /** Echo of the sender's ECDH public key the receiver will run ECDH against. */
   senderEcdhPublicKey: string;
+  /**
+   * Nostr pubkey of the sender the receiver is answering — the author of the
+   * rendezvous event it opened. The sender rejects a claim naming anyone else,
+   * so a relay cannot interpose its own identity between the two.
+   */
+  senderPubkey: string;
+  /**
+   * Receiver's own Nostr pubkey. Verified against this claim event's author,
+   * which is what stops a sealed claim from being rewrapped and forwarded
+   * under a third party's identity.
+   */
+  receiverPubkey: string;
+  /**
+   * Digest of the rendezvous the receiver acted on (see transcript.ts). The
+   * sender compares it with the one it published, so substituted file metadata
+   * is rejected outright rather than left for the humans to notice.
+   */
+  transcriptHash: string;
 }
 
 /**
@@ -122,6 +140,12 @@ export interface ConfirmPayload {
   receiverNonce: string;
   /** Echo of the receiver ECDH public key the sender locked the transfer to. */
   receiverEcdhPublicKey: string;
+  /** Sender's own Nostr pubkey; verified against this confirm event's author. */
+  senderPubkey: string;
+  /** Echo of the receiver pubkey the sender locked onto. */
+  receiverPubkey: string;
+  /** Echo of the rendezvous transcript digest both sides agreed on. */
+  transcriptHash: string;
 }
 
 // Re-export shared received-content types
