@@ -57,6 +57,23 @@ import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
 /**
+ * One published SPAKE2 run: the ephemeral scalar x, its blinded element pA,
+ * and the rendezvous fields it rode on. Strictly single-use (RFC 9382 §7): the
+ * first claim targeting it consumes it — verified or not — and a consumed run
+ * is replaced by publishing a replacement rendezvous with a fresh scalar,
+ * never finished a second time.
+ */
+interface PakeRunState {
+  /** SPAKE2 ephemeral scalar x behind the published element. */
+  pakeEphemeral: bigint;
+  /** The published SPAKE2 element pA (33-byte compressed point). */
+  pakeMessage: Uint8Array;
+  nonce: string;
+  /** Digest of the published rendezvous; claims name it as their target. */
+  transcriptHash: string;
+}
+
+/**
  * One rotation generation of the displayed PIN. Its absolute bucket lets the
  * sender reject it as soon as it is older than the immediately previous
  * bucket, regardless of timer delays or how many generations are retained.
@@ -64,20 +81,22 @@ import { getWebRTCConfig } from '@/lib/webrtc-config';
 interface PinGeneration {
   /** SPAKE2 password scalar w for this generation's PIN (32 BE bytes). */
   pakeSecret: Uint8Array;
-  /** SPAKE2 ephemeral scalar x behind this generation's published element. */
-  pakeEphemeral: bigint;
-  /** The published SPAKE2 element pA (33-byte compressed point). */
-  pakeMessage: Uint8Array;
-  nonce: string;
   bucket: number;
-  /** Digest of the rendezvous published for this generation; see transcript.ts. */
-  transcriptHash: string;
+  /** Rendezvous hint for this generation's locator and bucket; fixed, so
+   * replacement publications stay discoverable by the same receiver query. */
+  hint: string;
+  /**
+   * The currently claimable run, or null after a claim consumed it while its
+   * replacement publish is still in flight (or the budget is exhausted).
+   */
+  run: PakeRunState | null;
   /**
    * Remaining SPAKE2 claim verifications this generation will run. With a
    * PAKE, every verification attempt is exactly one online PIN guess for
    * whoever authored the claim, so this budget — not any key-stretching — is
-   * the online guessing bound. Exhaustion stalls the generation (rotation
-   * mints a fresh budget); see CLAIM_VERIFY_LIMIT.
+   * the online guessing bound; it also caps the replacement publishes a claim
+   * flood can force. Exhaustion stalls the generation (rotation mints a fresh
+   * budget); see CLAIM_VERIFY_LIMIT.
    */
   verifyBudget: number;
 }
@@ -282,6 +301,49 @@ export function useNostrSend(): UseNostrSendReturn {
         generations.splice(0, generations.length, ...kept);
       };
 
+      // Start a fresh single-use SPAKE2 run and build the rendezvous event
+      // that publishes its element. Plaintext by design: the element is
+      // blinded, and nothing here may be PIN-testable offline. File metadata
+      // deliberately stays out — it is delivered inside the sealed confirm,
+      // after the handshake. The transcript hash covers what we are about to
+      // publish, so a claim can be checked against the rendezvous we actually
+      // sent rather than the one the claimant says it saw — fresh per
+      // publication, since the nonce and element are.
+      const startRun = async (
+        pakeSecret: Uint8Array,
+        hint: string,
+        bucket: number,
+      ): Promise<{ run: PakeRunState; event: Event }> => {
+        const { message: pakeMessage, secret: pakeEphemeral } = startPake(
+          'sender',
+          pakeSecret,
+        );
+        const nonce = generateHandshakeNonce();
+        const payload: RendezvousPayload = {
+          type: 'rendezvous',
+          transferId,
+          senderPubkey: publicKey,
+          pakeMessage: uint8ArrayToBase64(pakeMessage),
+          nonce,
+          relays: [...DEFAULT_RELAYS],
+        };
+        const transcriptHash = await computeRendezvousTranscriptHash(
+          payload,
+          salt,
+        );
+        const event = createRendezvousEvent(
+          secretKey,
+          payload,
+          salt,
+          hint,
+          bucket,
+        );
+        return {
+          run: { pakeEphemeral, pakeMessage, nonce, transcriptHash },
+          event,
+        };
+      };
+
       const publishRendezvous = async () => {
         const epoch = pinEpoch;
         const newPin = generatePin();
@@ -295,41 +357,7 @@ export function useNostrSend(): UseNostrSendReturn {
         // throw anywhere between derivation and registration.
         let registered = false;
         try {
-          // Fresh SPAKE2 run per generation: a new ephemeral scalar behind a
-          // new password-blinded element, so no published element ever
-          // replays.
-          const { message: pakeMessage, secret: pakeEphemeral } = startPake(
-            'sender',
-            pakeSecret,
-          );
-          const nonce = generateHandshakeNonce();
-
-          // Plaintext by design: the element is blinded, and nothing here may
-          // be PIN-testable offline. File metadata deliberately stays out — it
-          // is delivered inside the sealed confirm, after the handshake.
-          const payload: RendezvousPayload = {
-            type: 'rendezvous',
-            transferId,
-            senderPubkey: publicKey,
-            pakeMessage: uint8ArrayToBase64(pakeMessage),
-            nonce,
-            relays: [...DEFAULT_RELAYS],
-          };
-          // Hash what we are about to publish, so a claim can be checked
-          // against the rendezvous we actually sent rather than the one the
-          // claimant says it saw. Per generation, since the nonce is fresh on
-          // every rotation.
-          const transcriptHash = await computeRendezvousTranscriptHash(
-            payload,
-            salt,
-          );
-          const event = createRendezvousEvent(
-            secretKey,
-            payload,
-            salt,
-            hint,
-            bucket,
-          );
+          const { run, event } = await startRun(pakeSecret, hint, bucket);
 
           if (cancelledRef.current || epoch !== pinEpoch) return;
 
@@ -337,11 +365,9 @@ export function useNostrSend(): UseNostrSendReturn {
           // never race ahead of the retained-keys list.
           generations.unshift({
             pakeSecret,
-            pakeEphemeral,
-            pakeMessage,
-            nonce,
             bucket,
-            transcriptHash,
+            hint,
+            run,
             verifyBudget: CLAIM_VERIFY_LIMIT,
           });
           registered = true;
@@ -357,6 +383,36 @@ export function useNostrSend(): UseNostrSendReturn {
         } finally {
           if (!registered) wipeBufferSource(pakeSecret);
         }
+      };
+
+      // Replace a consumed element: same PIN, same bucket and hint, fresh
+      // ephemeral scalar behind a fresh blinded element. Published after every
+      // failed claim verification so the generation stays claimable — the
+      // honest receiver that lost the race to a junk claim re-claims against
+      // this replacement. Skipped once the budget is exhausted or the bucket
+      // has expired, which is what stalls a flooded generation.
+      const publishReplacement = async (generation: PinGeneration) => {
+        const epoch = pinEpoch;
+        if (
+          generation.verifyBudget <= 0 ||
+          !isPinBucketActive(generation.bucket)
+        ) {
+          return;
+        }
+        const { run, event } = await startRun(
+          generation.pakeSecret,
+          generation.hint,
+          generation.bucket,
+        );
+        if (
+          cancelledRef.current ||
+          epoch !== pinEpoch ||
+          !generations.includes(generation)
+        ) {
+          return;
+        }
+        generation.run = run;
+        await client.publish(event);
       };
 
       const claim = await new Promise<VerifiedClaim>((resolve, reject) => {
@@ -420,88 +476,107 @@ export function useNostrSend(): UseNostrSendReturn {
               !handshake ||
               handshake.type !== 'claim' ||
               handshake.transferId !== transferId ||
-              !handshake.pakeMessage
+              !handshake.pakeMessage ||
+              !handshake.target
             ) {
               return;
             }
             const claimPakeMessage = handshake.pakeMessage;
 
+            // Route by the claim's plaintext target: it names the exact
+            // published element the claim was derived against, so a claim
+            // whose target is spent, expired, or was never ours costs
+            // nothing. A retained generation has no authority outside the
+            // sender's current and immediately previous wall-clock buckets,
+            // and each one runs at most CLAIM_VERIFY_LIMIT verifications —
+            // every attempt is one online PIN guess for the claim's author,
+            // and this counter is the only thing bounding those guesses.
+            const generation = generations.find(
+              (candidate) =>
+                isPinBucketActive(candidate.bucket) &&
+                candidate.verifyBudget > 0 &&
+                candidate.run?.transcriptHash === handshake.target,
+            );
+            const run = generation?.run;
+            if (!generation || !run) return;
+            // Consume the run before any await: the element is single-use,
+            // and a concurrent claim naming the same target must find it
+            // already spent, never finish the same scalar twice.
+            generation.run = null;
+            generation.verifyBudget -= 1;
+
             void (async () => {
-              // A retained generation has no authority outside the sender's
-              // current and immediately previous wall-clock buckets, and each
-              // one runs at most CLAIM_VERIFY_LIMIT verifications — every
-              // attempt is one online PIN guess for the claim's author, and
-              // this counter is the only thing bounding those guesses.
-              for (const generation of generations.filter(
-                (candidate) =>
-                  isPinBucketActive(candidate.bucket) &&
-                  candidate.verifyBudget > 0,
-              )) {
-                generation.verifyBudget -= 1;
+              // Finish our side of the SPAKE2 run against the claimant's
+              // element, then try the claim seal. A wrong PIN lands on a
+              // different root key and the seal simply refuses to open.
+              let verified: VerifiedClaim | null = null;
+              try {
+                const rootKey = await finishPake(
+                  'sender',
+                  run.pakeEphemeral,
+                  generation.pakeSecret,
+                  run.pakeMessage,
+                  claimPakeMessage,
+                  {
+                    transferId,
+                    senderPubkey: publicKey,
+                    receiverPubkey: event.pubkey,
+                  },
+                );
+                const sealKeys = await deriveHandshakeSealKeys(rootKey, salt);
 
-                // Finish our side of the SPAKE2 run against the claimant's
-                // element, then try the claim seal. A wrong PIN (or a
-                // different generation) lands on a different root key and the
-                // seal simply refuses to open.
-                try {
-                  const rootKey = await finishPake(
-                    'sender',
-                    generation.pakeEphemeral,
-                    generation.pakeSecret,
-                    generation.pakeMessage,
-                    claimPakeMessage,
-                    {
-                      transferId,
-                      senderPubkey: publicKey,
-                      receiverPubkey: event.pubkey,
-                    },
-                  );
-                  const sealKeys = await deriveHandshakeSealKeys(rootKey, salt);
+                const opened = await openHandshakePayload(
+                  sealKeys.claimKey,
+                  handshake.sealedPayload,
+                );
 
-                  const opened = await openHandshakePayload(
-                    sealKeys.claimKey,
-                    handshake.sealedPayload,
-                  );
+                const p = opened as Partial<ClaimPayload>;
 
-                  const p = opened as Partial<ClaimPayload>;
-
-                  // Invalid claims are ignored, never fatal: transfer tags are
-                  // public, so aborting here would let anyone deny the
-                  // transfer. The SPAKE2 transcript already keys the seal to
-                  // both Nostr identities and this transfer; the echoes below
-                  // tie it to this exact generation and to the rendezvous we
-                  // actually published, so a live-PIN attacker cannot
-                  // republish our rendezvous with altered fields under its
-                  // own identity and relay the real receiver's claim to us.
-                  if (
-                    p.type !== 'claim' ||
-                    p.transferId !== transferId ||
-                    p.senderNonce !== generation.nonce ||
-                    typeof p.receiverNonce !== 'string' ||
-                    !p.receiverNonce ||
-                    p.senderPubkey !== publicKey ||
-                    p.receiverPubkey !== event.pubkey ||
-                    p.transcriptHash !== generation.transcriptHash ||
-                    !isPinBucketActive(generation.bucket)
-                  ) {
-                    return;
-                  }
-
-                  if (settled) return;
-                  settled = true;
-                  cleanup();
-                  resolve({
+                // Invalid claims are ignored, never fatal: transfer tags are
+                // public, so aborting here would let anyone deny the
+                // transfer. The SPAKE2 transcript already keys the seal to
+                // both Nostr identities and this transfer; the echoes below
+                // tie it to this exact publication and to the rendezvous we
+                // actually sent, so a live-PIN attacker cannot republish our
+                // rendezvous with altered fields under its own identity and
+                // relay the real receiver's claim to us. The plaintext
+                // target is deliberately not trusted here — the sealed
+                // transcript hash is what carries authority.
+                if (
+                  p.type === 'claim' &&
+                  p.transferId === transferId &&
+                  p.senderNonce === run.nonce &&
+                  typeof p.receiverNonce === 'string' &&
+                  p.receiverNonce &&
+                  p.senderPubkey === publicKey &&
+                  p.receiverPubkey === event.pubkey &&
+                  p.transcriptHash === run.transcriptHash &&
+                  isPinBucketActive(generation.bucket)
+                ) {
+                  verified = {
                     receiverPubkey: event.pubkey,
                     payload: p as ClaimPayload,
                     rootKey,
                     confirmKey: sealKeys.confirmKey,
-                  });
-                  return;
-                } catch {
-                  // Different PIN/generation, or an invalid element — try the
-                  // next retained generation.
+                  };
                 }
+              } catch {
+                // Wrong PIN or invalid element: fall through to replacement.
               }
+
+              if (settled || cancelledRef.current) return;
+              if (verified) {
+                settled = true;
+                cleanup();
+                resolve(verified);
+                return;
+              }
+
+              // The failed claim consumed this generation's element; publish
+              // a replacement so the generation stays claimable.
+              void publishReplacement(generation).catch((err) => {
+                console.error('Failed to publish replacement rendezvous:', err);
+              });
             })();
           },
         );

@@ -49,16 +49,18 @@ export const PIN_HINT_LOOKBACK_BUCKETS = PIN_ACTIVE_BUCKETS - 1;
 // HKDF salt for the locator-keyed rendezvous hint derivation
 // ('hint:<bucket>'). Public constant for domain separation only: the hint is
 // keyed by the public locator segment and never by any PIN secret.
-export const PIN_HINT_HKDF_SALT = 'secure-send:pin:v3';
+export const PIN_HINT_HKDF_SALT = 'secure-send:pin:v4';
 
 // How many SPAKE2 claim verifications the sender will run per PIN generation.
 // With a balanced PAKE the only way to test a PIN guess is to publish a claim
 // and have the sender try to verify it, so this cap is the online guessing
 // bound: at most CLAIM_VERIFY_LIMIT stretched-by-nothing guesses per
-// generation against a 55^8 ~= 8.4e13 space. Exhausting the budget stalls that
-// generation's transfer (a nuisance, not a compromise — see "Availability Is a
-// Non-Goal" in docs/ARCHITECTURE.md); rotation mints a fresh budget with the
-// next PIN.
+// generation against a 55^8 ~= 8.4e13 space. Every element is single-use, so
+// each failed verification also costs the sender one replacement rendezvous
+// publish; this budget therefore bounds the republish churn too. Exhausting
+// the budget stalls that generation's transfer (a nuisance, not a compromise —
+// see "Availability Is a Non-Goal" in docs/ARCHITECTURE.md); rotation mints a
+// fresh budget with the next PIN.
 export const CLAIM_VERIFY_LIMIT = 100;
 
 // How many rendezvous candidates the receiver will claim per attempt. The
@@ -67,8 +69,17 @@ export const CLAIM_VERIFY_LIMIT = 100;
 // sender until a confirm verifies — so it claims several. Each claim hands
 // whoever published that candidate one online guess at our PIN (that is
 // inherent to any PAKE), so the cap also bounds what a flood of forged
-// rendezvous events can extract: MAX_CLAIM_CANDIDATES guesses against 2^46.3.
+// rendezvous events can extract.
 export const MAX_CLAIM_CANDIDATES = 8;
+
+// Total claims one receive attempt may publish, initial candidates plus
+// re-claims against replacement rendezvous events (the sender's elements are
+// single-use, so a claim that lost the race to a spent element must be redone
+// against the replacement). The cap is what bounds the online guesses a
+// claimed candidate's author can milk by rotating replacement elements at us:
+// MAX_CLAIM_ATTEMPTS guesses against 2^46.3, spread over however many
+// publishers we claimed from.
+export const MAX_CLAIM_ATTEMPTS = 16;
 
 // Confirmation code: the short authentication string both peers derive from
 // the SPAKE2 shared secret once a claim is on the table. The receiver

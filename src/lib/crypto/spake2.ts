@@ -44,8 +44,8 @@ const N = Point.fromHex(
 );
 
 /** Versioned domain separators. Bump with any change to the TT layout. */
-const PAKE_CONTEXT = 'secure-send:spake2-p256:v3';
-const PAKE_SECRET_SALT = 'secure-send:spake2-w:v3';
+const PAKE_CONTEXT = 'secure-send:spake2-p256:v4';
+const PAKE_SECRET_SALT = 'secure-send:spake2-w:v4';
 
 export type PakeRole = 'sender' | 'receiver';
 
@@ -132,19 +132,13 @@ export interface PakeStart {
  * blinded element (pA = x·G + w·M for the sender, pB = y·G + w·N for the
  * receiver).
  *
- * The receiver runs this once per rendezvous candidate it claims, so its y and
- * pB really are single-use. The sender runs it once per PIN generation and
- * feeds the resulting scalar to finishPake for *every* claim that generation
- * sees, so its x and pA are reused up to CLAIM_VERIFY_LIMIT times inside one
- * rotation bucket.
- *
- * That reuse is a deliberate deviation from RFC 9382 §7 ("Randomly generated
- * values, e.g., x and y, MUST NOT be reused"). It is forced by the rendezvous
- * shape: pA is published before any claimant exists, and each claim is sealed
- * under a transcript committing to the pA its author saw, so a fresh scalar per
- * claim would need a third round trip. See "SPAKE2 scalar reuse" in
- * docs/ARCHITECTURE.md for why it does not hand an attacker more than the
- * metered one guess per claim — and for the limits of that argument.
+ * Every run is single-use on both sides, per RFC 9382 §7 ("Randomly generated
+ * values, e.g., x and y, MUST NOT be reused"): the receiver runs this once per
+ * claim it publishes, and the sender runs it once per rendezvous element it
+ * publishes — a claim consumes the element it targets, and a failed
+ * verification makes the sender publish a replacement element rather than
+ * reuse the scalar. See "Single-use rendezvous elements" in
+ * docs/ARCHITECTURE.md.
  */
 export function startPake(role: PakeRole, pakeSecret: Uint8Array): PakeStart {
   const w = readPakeScalar(pakeSecret, 'PAKE secret');
