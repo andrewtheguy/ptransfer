@@ -132,10 +132,19 @@ export interface PakeStart {
  * blinded element (pA = x·G + w·M for the sender, pB = y·G + w·N for the
  * receiver).
  *
- * The sender runs this once per PIN generation; the receiver runs it once per
- * rendezvous candidate it claims. Fresh scalars per run are what make every
- * published element single-use — nothing replays across rotations, transfers,
- * or candidates.
+ * The receiver runs this once per rendezvous candidate it claims, so its y and
+ * pB really are single-use. The sender runs it once per PIN generation and
+ * feeds the resulting scalar to finishPake for *every* claim that generation
+ * sees, so its x and pA are reused up to CLAIM_VERIFY_LIMIT times inside one
+ * rotation bucket.
+ *
+ * That reuse is a deliberate deviation from RFC 9382 §6 ("Randomly generated
+ * values, e.g., x and y, MUST NOT be reused"). It is forced by the rendezvous
+ * shape: pA is published before any claimant exists, and each claim is sealed
+ * under a transcript committing to the pA its author saw, so a fresh scalar per
+ * claim would need a third round trip. See "SPAKE2 scalar reuse" in
+ * docs/ARCHITECTURE.md for why it does not hand an attacker more than the
+ * metered one guess per claim — and for the limits of that argument.
  */
 export function startPake(role: PakeRole, pakeSecret: Uint8Array): PakeStart {
   const w = readPakeScalar(pakeSecret, 'PAKE secret');
