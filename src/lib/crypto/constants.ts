@@ -1,30 +1,30 @@
 // PIN generation
-export const PIN_LENGTH = 8;
+export const PIN_LENGTH = 12;
 export const PIN_CHECKSUM_LENGTH = 1; // Last character is checksum
 
 // The leading PIN_LOCATOR_LENGTH characters are the PIN's *locator* segment.
 // They are the only input to the published rendezvous hint, which makes them
-// public by construction: a hint has at most PIN_CHARSET.length ** 2 = 3,025
+// public by construction: a hint has at most PIN_CHARSET.length ** 3 = 166,375
 // preimages per rotation bucket, so anyone can enumerate locator -> hint and
 // read the locator straight off a relay event.
 //
 // Splitting the PIN this way is deliberate. The remaining data characters are
 // the only entropy the SPAKE2 handshake rests on, so the published tag can
 // never be used to chip away at them; conversely the locator alone opens
-// nothing. Effective PIN strength is PIN_CHARSET.length ** 5 (about 2^28.9),
-// not ** 7 (2^40.5).
+// nothing. Effective PIN strength is PIN_CHARSET.length ** 8 (about 2^46.3),
+// not ** 11 (2^63.6).
 //
-// 2^28.9 would be hopeless against an offline attack, and that is the point of
-// the SPAKE2 handshake: there is no offline attack. Every published value —
-// the blinded SPAKE2 elements, the sealed claim/confirm payloads — is useless
-// for verifying a PIN guess without a live protocol run, so the only way to
-// test a guess is to publish a claim and have the sender verify it online.
-// The sender caps those verifications (CLAIM_VERIFY_LIMIT per generation), so
-// an attacker gets at most a few hundred guesses against a space of half a
-// billion during the 2-4 minutes a PIN lives. The confirmation code (see
+// 2^46.3 would fall to an offline attack, and that is the point of the SPAKE2
+// handshake: there is no offline attack. Every published value — the blinded
+// SPAKE2 elements, the sealed claim/confirm payloads — is useless for
+// verifying a PIN guess without a live protocol run, so the only way to test
+// a guess is to publish a claim and have the sender verify it online. The
+// sender caps those verifications (CLAIM_VERIFY_LIMIT per generation), so an
+// attacker gets at most a few hundred guesses against a space of ~8.4e13
+// during the 2-4 minutes a PIN lives. The confirmation code (see
 // CONFIRMATION_CODE_LENGTH) remains the control that a PIN read off the
 // sender's screen cannot defeat at all.
-export const PIN_LOCATOR_LENGTH = 2;
+export const PIN_LOCATOR_LENGTH = 3;
 
 // Case-sensitive PIN alphabet: letters and digits excluding ambiguous
 // characters (0, 1, I, O, i, l, o). 55 characters, no symbols, so the PIN
@@ -55,19 +55,19 @@ export const PIN_HINT_HKDF_SALT = 'secure-send:pin:v3';
 // With a balanced PAKE the only way to test a PIN guess is to publish a claim
 // and have the sender try to verify it, so this cap is the online guessing
 // bound: at most CLAIM_VERIFY_LIMIT stretched-by-nothing guesses per
-// generation against a 55^5 ~= 5.0e8 space. Exhausting the budget stalls that
+// generation against a 55^8 ~= 8.4e13 space. Exhausting the budget stalls that
 // generation's transfer (a nuisance, not a compromise — see "Availability Is a
 // Non-Goal" in docs/ARCHITECTURE.md); rotation mints a fresh budget with the
 // next PIN.
 export const CLAIM_VERIFY_LIMIT = 100;
 
 // How many rendezvous candidates the receiver will claim per attempt. The
-// hint carries only ~11.6 bits, so unrelated transfers can collide on it, and
+// hint carries only ~17.3 bits, so unrelated transfers can collide on it, and
 // with a plaintext rendezvous the receiver cannot tell which candidate is its
 // sender until a confirm verifies — so it claims several. Each claim hands
 // whoever published that candidate one online guess at our PIN (that is
 // inherent to any PAKE), so the cap also bounds what a flood of forged
-// rendezvous events can extract: MAX_CLAIM_CANDIDATES guesses against 2^28.9.
+// rendezvous events can extract: MAX_CLAIM_CANDIDATES guesses against 2^46.3.
 export const MAX_CLAIM_CANDIDATES = 8;
 
 // Confirmation code: the short authentication string both peers derive from
@@ -116,12 +116,12 @@ export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100MB
 // PIN hint length.
 // 8 hex chars of output, but the hint is derived from the locator segment
 // alone, so it carries at most log2(PIN_CHARSET.length ** PIN_LOCATOR_LENGTH)
-// ~= 11.6 bits and is enumerable by design — it is a public candidate-filtering
+// ~= 17.3 bits and is enumerable by design — it is a public candidate-filtering
 // tag, nothing more. The tag width stays at 8 characters because widening it
 // costs nothing; the locator caps the real entropy either way.
 //
 // The practical consequence is collisions: unrelated transfers sharing a bucket
-// collide on `#h` at roughly 1 in 3,025 per pair rather than 1 in 2^32, so a
+// collide on `#h` at roughly 1 in 166,375 per pair rather than 1 in 2^32, so a
 // receiver must expect unrelated candidates. It cannot disambiguate them
 // locally (the rendezvous is plaintext and the PAKE only settles who knew the
 // PIN at confirm time), so it claims up to MAX_CLAIM_CANDIDATES of them and

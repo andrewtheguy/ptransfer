@@ -212,21 +212,21 @@ The previous protocol sealed the handshake under a PBKDF2 stretch of the PIN, wh
 The cost is that Web Crypto cannot express the group math, so the SPAKE2 arithmetic runs in @noble/curves and the shared secret transits JavaScript memory briefly before being locked into a non-extractable HKDF `CryptoKey` (intermediate bytes wiped, bigint scalars dropped). That trade is acceptable here because every secret involved is transfer-scoped and dead minutes later — there are no long-lived secrets in this protocol at all.
 
 #### Format
-- **Length**: 8 ungrouped characters.
+- **Length**: 12 ungrouped characters.
 - **Charset**: 55 case-sensitive letters and digits, excluding ambiguous `0`, `1`, `I`, `O`, `i`, `l`, and `o`. No symbols — the code types cleanly on any mobile keyboard.
-- **Segments**: the first `PIN_LOCATOR_LENGTH` (2) characters are the **locator**, the next 5 are the **secret** data characters, and the 8th is a checksum over all 7 data characters.
-- **Entropy**: the locator is public by construction (see below), so effective strength is 55⁵ ≈ **28.9 bits** — deliberately sized for a threat model with *no offline attack*, where the only guessing channel is metered online claims.
+- **Segments**: the first `PIN_LOCATOR_LENGTH` (3) characters are the **locator**, the next 8 are the **secret** data characters, and the 12th is a checksum over all 11 data characters.
+- **Entropy**: the locator is public by construction (see below), so effective strength is 55⁸ ≈ **46.3 bits** — deliberately sized for a threat model with *no offline attack*, where the only guessing channel is metered online claims.
 - **Rotation**: the sender mints a fresh PIN (and a fresh SPAKE2 run) and publishes a new rendezvous event every `PIN_ROTATION_MS` (2 minutes). When verifying a claim, it honors only PINs minted in its current or immediately previous bucket (`PIN_ACTIVE_BUCKETS` = 2), so a PIN is usable for roughly 2–4 minutes and is dead at the end of its second bucket.
 
 #### Why the PIN is split
 The `#h` lookup tag is published to public relays. Deriving it from the whole PIN would make every rendezvous event a cheap oracle for confirming PIN guesses — the one offline foothold the PAKE otherwise eliminates. Carving out an explicitly public locator confines the tag to a segment that opens nothing on its own, and leaves the secret characters testable only through live claims the sender counts.
 
-An attacker enumerates all 55² = 3,025 locators against a published hint, learns the locator, and is left with 55⁵ ≈ 5.0×10⁸ possibilities reachable *only* by publishing claims — at most `CLAIM_VERIFY_LIMIT` (100) of which the sender will verify per generation. The control that defends against a PIN someone *read* rather than guessed is the confirmation code, and its strength does not depend on the PIN at all.
+An attacker enumerates all 55³ = 166,375 locators against a published hint, learns the locator, and is left with 55⁸ ≈ 8.4×10¹³ possibilities reachable *only* by publishing claims — at most `CLAIM_VERIFY_LIMIT` (100) of which the sender will verify per generation. The control that defends against a PIN someone *read* rather than guessed is the confirmation code, and its strength does not depend on the PIN at all.
 
 #### Typo Detection (Weighted Checksum)
 - **Algorithm**: `sum(char_index * one_based_position) % 55`.
 - **Detection**: catches common substitutions and adjacent transpositions before a network request is made.
-- The input UI rejects a mistyped code the moment the 8th character lands, before anything touches the network.
+- The input UI rejects a mistyped code the moment the 12th character lands, before anything touches the network.
 
 #### Key Derivation (SPAKE2 root + HKDF fan-out)
 `derivePakeSecret` reduces the PIN to the SPAKE2 password scalar `w` (HKDF-SHA256 widened to 384 bits, reduced mod the P-256 order). There is deliberately no expensive KDF: stretching only helps when something permits offline guessing, and nothing here does. The whole PIN goes in, locator included — it adds no strength (the locator is public) but costs nothing and keeps a wrong locator from producing a working handshake.
@@ -244,7 +244,7 @@ Each side blinds a fresh ephemeral scalar with the RFC 9382 constants (`pA = x·
 Successfully sealing or opening under the claim/confirm keys *is* the PAKE's key confirmation: only a peer that ran the same session — same PIN, same elements, same identities, same transfer — holds them.
 
 - **Receiver look-back**: the published hint is scoped to the rotation bucket it was minted in. The receiver mirrors the sender's rule by deriving its current and immediately previous bucket (`PIN_HINT_LOOKBACK_BUCKETS` = 1) and filtering `#h` on both. As with any wall-clock bucket protocol, clocks must not differ by more than the accepted look-back window.
-- **Hint properties**: the tag is 8 hex characters wide but carries at most log2(55²) ≈ **11.6 bits**, because it is a function of the locator alone. Collisions are therefore routine rather than exotic, and — unlike the previous protocol — the receiver cannot disambiguate candidates locally, because the rendezvous is plaintext and proves nothing. It claims up to `MAX_CLAIM_CANDIDATES` (8) structurally valid candidates and lets the handshake decide: only the true sender's confirm can open under one of the claimed sessions' keys. The `#h` query limit (50) leaves headroom for collision walking.
+- **Hint properties**: the tag is 8 hex characters wide but carries at most log2(55³) ≈ **17.3 bits**, because it is a function of the locator alone. Collisions are therefore expected rather than exotic, and — unlike the previous protocol — the receiver cannot disambiguate candidates locally, because the rendezvous is plaintext and proves nothing. It claims up to `MAX_CLAIM_CANDIDATES` (8) structurally valid candidates and lets the handshake decide: only the true sender's confirm can open under one of the claimed sessions' keys. The `#h` query limit (50) leaves headroom for collision walking.
 
 #### Claim / Confirm Handshake (mutual PIN proof via PAKE key confirmation)
 The rendezvous event is **plaintext**: `transferId`, the sender's Nostr pubkey (checked against the event author), the blinded SPAKE2 element `pA`, a fresh per-rotation nonce, and relay hints. Nothing in it is PIN-testable, and the file metadata is deliberately absent (see below). The handshake then runs over kind-24242 events:
@@ -284,7 +284,7 @@ The SPAKE2 transcript keys every session to the transfer id, both Nostr identiti
 
 #### `PinInput` (Receiver Side)
 The input component is designed for fast, error-proof manual entry:
-- **Single Native Input**: Entry uses one ungrouped 8-character text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior.
+- **Single Native Input**: Entry uses one ungrouped 12-character text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior.
 - **Exact Entry**: PINs are case-sensitive. During both ordinary entry and paste, characters outside the 55-character alphabet are filtered out and a brief error is shown; supported characters remain in their original order.
 - **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment the 8th character lands.
 - **Robust Pasting**: A paste replaces the current entry with up to the first 8 supported characters. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
@@ -308,7 +308,7 @@ The display component focuses on secure and clear communication:
 - `PIN_ROTATION_MS`: 2 minutes (fresh PIN + SPAKE2 run + rendezvous event cadence)
 - `PIN_ACTIVE_BUCKETS`: 2 (only the sender's current and immediately previous buckets are honored; `PIN_TTL_MS` = 4 minutes is the maximum possible age)
 - `PIN_WAIT_TIMEOUT_MS`: 30 minutes (sender rotation/wait backstop — a resource bound, not a security control; rotation already caps each PIN's exposure)
-- `PIN_LOCATOR_LENGTH`: 2 (public prefix characters; the sole input to the `#h` hint)
+- `PIN_LOCATOR_LENGTH`: 3 (public prefix characters; the sole input to the `#h` hint)
 - `CLAIM_VERIFY_LIMIT`: 100 (SPAKE2 claim verifications per PIN generation — the online-guessing meter)
 - `MAX_CLAIM_CANDIDATES`: 8 (rendezvous candidates the receiver will claim per attempt)
 - `CONFIRMATION_CODE_LENGTH`: 8 Crockford Base32 characters (40 bits)
@@ -540,7 +540,7 @@ In Nostr mode, the rendezvous payload is published as plaintext JSON — deliber
 ### Encryption Flow
 
 **Nostr Mode:**
-1. **PIN Generation**: fresh 8-character case-sensitive PIN every 2 minutes (7 random chars + check digit)
+1. **PIN Generation**: fresh 12-character case-sensitive PIN every 2 minutes (11 random chars + check digit)
 2. **Salt Generation**: 16 random bytes (public, in the rendezvous event tags; HKDF salt for the session keys)
 3. **SPAKE2 Run**: the PIN reduces to the password scalar `w` (no key stretching — there is nothing to stretch against); each side blinds a fresh ephemeral scalar and the transcript hash becomes the non-extractable session root. The `#h` hint is a separate HKDF keyed by the public locator segment
 4. **Handshake Seal Keys**: HKDF off the root (`claim` and `confirm` labels) — opening either seal is the PAKE's key confirmation
@@ -605,7 +605,7 @@ Both receive modes reject extra, duplicate, out-of-range, malformed, and oversiz
 |-------|-------|-----------|
 | Max transferred payload size | 2GB (`MAX_MESSAGE_SIZE`) | Bounded by the application limit and disk quota, not RAM: multi-file/folder sends are zipped directly into the encrypted data channel, and the receiver writes decrypted chunks to an adaptive memory/OPFS sink. Payloads at or below 100MB (`MEMORY_SINK_MAX_BYTES`) are buffered in memory; larger received payloads require OPFS. `FileSystemFileHandle.createWritable` is feature-detected at runtime, so unsupported receivers fail with a clear error only if the payload crosses the threshold. |
 | Encryption chunk size | 128KB | Balance of encryption overhead and streaming efficiency |
-| PIN length | 8 chars (2 public locator + 5 secret data + check digit, ~28.9 effective bits) | Sized for online-only guessing: the SPAKE2 handshake leaves no offline target, the sender meters claim verifications (`CLAIM_VERIFY_LIMIT`), and the locator is spent on the public `#h` tag so no published value commits to the secret characters. Front-running is handled by the confirmation code rather than by PIN entropy |
+| PIN length | 12 chars (3 public locator + 8 secret data + check digit, ~46.3 effective bits) | Sized for online-only guessing: the SPAKE2 handshake leaves no offline target, the sender meters claim verifications (`CLAIM_VERIFY_LIMIT`), and the locator is spent on the public `#h` tag so no published value commits to the secret characters. Front-running is handled by the confirmation code rather than by PIN entropy |
 | Confirmation code | 8 Crockford Base32 chars (40 bits) | Short enough to dictate over a phone call, long enough that a blind guess inside the entry window is hopeless |
 
 ## Timeout Configuration
@@ -679,7 +679,7 @@ The practical consequence is that the client does not attempt anti-DoS measures 
 1. **Ephemeral Keys**: New Nostr keypair and fresh SPAKE2 ephemeral scalars generated for each transfer (and each rotation); the PAKE gives per-transfer session keys that no long-lived secret — the PIN included — can later reconstruct (a recovered PIN never decrypts content, or anything else retained on relays)
 2. **PIN Role — Locate and Authenticate Only**: The Nostr PIN's public locator segment derives the rendezvous lookup hint; the rest of it is the SPAKE2 password. It derives **no** keys on its own — every key is an HKDF derivation off the PAKE root, which requires the discarded ephemeral scalars. It also does not decide *who* receives the file — that is the confirmation code.
 3. **No Server Trust for File Content**: Relays see routing tags, a blinded group element, and session-sealed handshake ciphertext; file plaintext (and even file *metadata*) never leaves the device unprotected and content is transferred directly peer-to-peer
-4. **PIN Entropy and Windows**: about 28.9 effective bits (5 secret characters from the 55-character alphabet; the 2-character locator is public by construction and the check digit is deterministic). That is deliberately small, because the only guessing channel is online: the PAKE leaves nothing to grind offline, the sender verifies at most `CLAIM_VERIFY_LIMIT` claims per 2-minute generation with no failure feedback, first-claim lockout makes any later recovery worthless, and the confirmation code makes a *live* leak worthless too.
+4. **PIN Entropy and Windows**: about 46.3 effective bits (8 secret characters from the 55-character alphabet; the 3-character locator is public by construction and the check digit is deterministic). That is deliberately small, because the only guessing channel is online: the PAKE leaves nothing to grind offline, the sender verifies at most `CLAIM_VERIFY_LIMIT` claims per 2-minute generation with no failure feedback, first-claim lockout makes any later recovery worthless, and the confirmation code makes a *live* leak worthless too.
 5. **Relay MITM Resistance**: Neither SPAKE2 element can be substituted without the PIN — an attacker cannot unblind or re-blind an element, so any tampering lands the two sides on different roots and every seal fails. The SPAKE2 transcript additionally keys each session to both Nostr identities and the transfer id, and the sealed payloads echo a hash of the full rendezvous record and (in the code KDF) the file metadata — see *Transcript Binding*. The confirmation code is an independent human-level check on the same properties.
 6. **Denial-of-Service Posture**: Invalid claims are ignored rather than fatal — transfer tags are public, so failing hard on a bad claim would let any observer kill transfers. The cost is that the attacker gets online guesses, which is why they are metered (`CLAIM_VERIFY_LIMIT`) rather than unlimited; exhausting the budget stalls a generation, which is a nuisance, not a compromise. Note the deliberate scope limit: an attacker who repeatedly wins the first-claim race can stall a transfer. Preventing data theft is in scope; preventing nuisance is not. The same holds for the relays themselves — they are third-party infrastructure, and knocking them over blocks transfers without reaching the participants' devices or their data. See *Availability Is a Non-Goal*.
 7. **Transport Security**: All P2P transfers (Nostr, Manual Exchange) use both AES-256-GCM encryption (128KB chunks) and WebRTC DTLS

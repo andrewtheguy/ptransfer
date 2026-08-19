@@ -42,7 +42,7 @@ export interface PinInputRef {
 }
 
 /**
- * A single native input for the case-sensitive 8-character PIN.
+ * A single native input for the case-sensitive 12-character PIN.
  *
  * Once a complete, valid PIN is entered, the plaintext is reduced to its
  * SPAKE2 password scalar and removed from component state. Editing the

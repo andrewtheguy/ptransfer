@@ -225,7 +225,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         setState({ status: 'receiving', message: 'Searching for sender...' });
 
         // The hint is derived from the PIN's public locator segment, so it
-        // carries only ~11.6 bits and unrelated transfers sharing a bucket do
+        // carries only ~17.3 bits and unrelated transfers sharing a bucket do
         // collide. The rendezvous is plaintext, so nothing here can tell
         // which candidate is our sender — the loop below claims several and
         // lets the handshake decide, but a tight limit could truncate the
@@ -343,7 +343,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         //
         // Each claim hands whoever authored that candidate one online PIN
         // guess — an unavoidable property of any PAKE, bounded here by
-        // MAX_CLAIM_CANDIDATES against a 2^28.9 space.
+        // MAX_CLAIM_CANDIDATES against a 2^46.3 space.
         const { secretKey, publicKey } = generateEphemeralKeys();
 
         setState({

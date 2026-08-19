@@ -39,7 +39,7 @@ describe('PIN Utilities', () => {
   });
 
   test('checksum detects a typical adjacent transposition', () => {
-    const data = 'ABCDEFG';
+    const data = 'ABCDEFGHJKL';
     const pin = data + computeChecksumForTest(data);
     expect(isValidPin(pin)).toBe(true);
     const swapped = `BA${pin.slice(2)}`;
@@ -47,7 +47,7 @@ describe('PIN Utilities', () => {
   });
 
   test('PIN validation is case sensitive', () => {
-    const data = 'AbCDefG';
+    const data = 'AbCDefGhjkm';
     const pin = data + computeChecksumForTest(data);
     expect(isValidPin(pin)).toBe(true);
     expect(isValidPin(pin.toUpperCase())).toBe(false);

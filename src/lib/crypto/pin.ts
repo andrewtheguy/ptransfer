@@ -119,7 +119,7 @@ export function isPinBucketActive(bucket: number, now = Date.now()): boolean {
  * public leaves the secret characters testable only through live claims the
  * sender counts.
  *
- * A consequence worth remembering at the call site: with roughly 11.6 bits
+ * A consequence worth remembering at the call site: with roughly 17.3 bits
  * behind it the hint is a filter, not an identifier. Unrelated transfers in
  * the same bucket do collide, and callers must be prepared to walk several
  * candidates.

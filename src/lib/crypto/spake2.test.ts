@@ -94,8 +94,8 @@ describe('SPAKE2 PIN handshake', () => {
     expect(secret).toHaveLength(32);
     expect(secret.some((b) => b !== 0)).toBe(true);
     // Deterministic across the two peers entering the same PIN.
-    const again = await derivePakeSecret('AbCDefG2');
-    expect(await derivePakeSecret('AbCDefG2')).toEqual(again);
+    const again = await derivePakeSecret('AbCDefG23hjk');
+    expect(await derivePakeSecret('AbCDefG23hjk')).toEqual(again);
   });
 
   it('both peers derive the same root key from the same PIN', async () => {
