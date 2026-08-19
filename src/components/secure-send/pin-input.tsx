@@ -9,20 +9,23 @@ import {
 } from 'react';
 import { Input } from '@/components/ui/input';
 import {
+  derivePakeSecret,
   getPinLocator,
-  importPinRoot,
   isValidPin,
   PIN_CHARSET,
   PIN_LENGTH,
+  wipeBufferSource,
 } from '@/lib/crypto';
 
 const MASK_CHAR = '*';
 
 export interface PinChangePayload {
-  key: CryptoKey | null;
+  /** SPAKE2 password scalar derived from the PIN (see derivePakeSecret). */
+  pakeSecret: Uint8Array | null;
   /**
    * The PIN's public locator segment, needed to derive the rendezvous lookup
-   * hints. Public by design, so unlike `key` it is emitted as a plain string.
+   * hints. Public by design, so unlike `pakeSecret` it is emitted as a plain
+   * string.
    */
   locator: string | null;
   isValid: boolean;
@@ -41,8 +44,8 @@ export interface PinInputRef {
 /**
  * A single native input for the case-sensitive 12-character PIN.
  *
- * Once a complete, valid PIN is entered, the plaintext is stretched into a
- * non-extractable CryptoKey and removed from component state. Editing the
+ * Once a complete, valid PIN is entered, the plaintext is reduced to its
+ * SPAKE2 password scalar and removed from component state. Editing the
  * masked value starts a fresh entry.
  */
 export const PinInput = forwardRef<PinInputRef, PinInputProps>(
@@ -54,19 +57,29 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
     const inputRef = useRef<HTMLInputElement>(null);
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const generationRef = useRef(0);
-    const securedKeyRef = useRef<CryptoKey | null>(null);
+    const securedSecretRef = useRef<Uint8Array | null>(null);
     const securedLocatorRef = useRef<string | null>(null);
 
     useEffect(() => {
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        // Invalidate any in-flight securePin derivation so it cannot store or
+        // emit a secret after unmount — it wipes its own result instead.
+        generationRef.current++;
+        // Wipe the secured scalar on unmount. Inlined rather than calling
+        // dropSecuredSecret so this cleanup stays free of callback deps.
+        if (securedSecretRef.current) {
+          wipeBufferSource(securedSecretRef.current);
+          securedSecretRef.current = null;
+        }
+        securedLocatorRef.current = null;
       };
     }, []);
 
     const emitChange = useCallback(
       (valid: boolean, length: number) => {
         onPinChange({
-          key: valid ? securedKeyRef.current : null,
+          pakeSecret: valid ? securedSecretRef.current : null,
           locator: valid ? securedLocatorRef.current : null,
           isValid: valid,
           length,
@@ -75,15 +88,22 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
       [onPinChange],
     );
 
+    const dropSecuredSecret = useCallback(() => {
+      if (securedSecretRef.current) {
+        wipeBufferSource(securedSecretRef.current);
+      }
+      securedSecretRef.current = null;
+      securedLocatorRef.current = null;
+    }, []);
+
     const clearAll = useCallback(() => {
       generationRef.current++;
-      securedKeyRef.current = null;
-      securedLocatorRef.current = null;
+      dropSecuredSecret();
       setPin('');
       setIsSecured(false);
       setError(null);
       emitChange(false, 0);
-    }, [emitChange]);
+    }, [dropSecuredSecret, emitChange]);
 
     useImperativeHandle(ref, () => ({ clear: clearAll }));
 
@@ -97,10 +117,13 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
       async (candidate: string) => {
         const generation = generationRef.current;
         try {
-          const root = await importPinRoot(candidate);
-          if (generationRef.current !== generation) return;
+          const pakeSecret = await derivePakeSecret(candidate);
+          if (generationRef.current !== generation) {
+            wipeBufferSource(pakeSecret);
+            return;
+          }
 
-          securedKeyRef.current = root;
+          securedSecretRef.current = pakeSecret;
           securedLocatorRef.current = getPinLocator(candidate);
           setPin('');
           setIsSecured(true);
@@ -109,19 +132,17 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
         } catch (err) {
           if (generationRef.current !== generation) return;
           console.error('Failed to secure PIN', err);
-          securedKeyRef.current = null;
-          securedLocatorRef.current = null;
+          dropSecuredSecret();
           emitChange(false, candidate.length);
           setError('Failed to secure PIN');
         }
       },
-      [emitChange],
+      [dropSecuredSecret, emitChange],
     );
 
     const commitPin = (value: string, invalid: boolean) => {
       generationRef.current++;
-      securedKeyRef.current = null;
-      securedLocatorRef.current = null;
+      dropSecuredSecret();
       setIsSecured(false);
       setPin(value);
       if (inputRef.current) {

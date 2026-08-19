@@ -5,4 +5,5 @@ export * from './ecdh';
 export * from './kdf';
 export * from './memory';
 export * from './pin';
+export * from './spake2';
 export * from './stream-crypto';

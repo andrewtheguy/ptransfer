@@ -1,23 +1,41 @@
 import { describe, expect, it } from 'vitest';
 import { decrypt, encrypt } from './aes-gcm';
 import { CONFIRMATION_CODE_LENGTH } from './constants';
-import { deriveSharedSecretKey, generateECDHKeyPair } from './ecdh';
 import {
   type ConfirmationCodeBinding,
   deriveConfirmationCode,
+  deriveHandshakeSealKeys,
   deriveNostrSessionKeys,
   generateSalt,
 } from './kdf';
+import { generatePin } from './pin';
+import { derivePakeSecret, finishPake, startPake } from './spake2';
+
+const IDENTITIES = {
+  transferId: 'a1b2c3d4e5f60718',
+  senderPubkey: 'a'.repeat(64),
+  receiverPubkey: 'b'.repeat(64),
+};
+
+/** Complete a SPAKE2 exchange with a shared PIN; both sides' root keys. */
+async function pakeRoots(): Promise<{
+  sender: CryptoKey;
+  receiver: CryptoKey;
+}> {
+  const secret = await derivePakeSecret(generatePin());
+  const a = startPake('sender', secret);
+  const b = startPake('receiver', secret);
+  const [sender, receiver] = await Promise.all([
+    finishPake('sender', a.secret, secret, a.message, b.message, IDENTITIES),
+    finishPake('receiver', b.secret, secret, b.message, a.message, IDENTITIES),
+  ]);
+  return { sender, receiver };
+}
 
 describe('Nostr session KDF', () => {
   it('derives non-extractable session keys that are not interchangeable', async () => {
-    const alice = await generateECDHKeyPair();
-    const bob = await generateECDHKeyPair();
-    const shared = await deriveSharedSecretKey(
-      alice.privateKey,
-      bob.publicKeyBytes,
-    );
-    const keys = await deriveNostrSessionKeys(shared, generateSalt());
+    const { sender } = await pakeRoots();
+    const keys = await deriveNostrSessionKeys(sender, generateSalt());
 
     for (const key of [keys.signals, keys.content]) {
       expect(key.extractable).toBe(false);
@@ -32,25 +50,35 @@ describe('Nostr session KDF', () => {
     await expect(decrypt(keys.content, encrypted)).rejects.toThrow();
   });
 
-  it('both ECDH peers derive the same session keys', async () => {
-    const alice = await generateECDHKeyPair();
-    const bob = await generateECDHKeyPair();
+  it('both PAKE peers derive the same session keys', async () => {
+    const { sender, receiver } = await pakeRoots();
     const salt = generateSalt();
 
-    const aliceKeys = await deriveNostrSessionKeys(
-      await deriveSharedSecretKey(alice.privateKey, bob.publicKeyBytes),
-      salt,
-    );
-    const bobKeys = await deriveNostrSessionKeys(
-      await deriveSharedSecretKey(bob.privateKey, alice.publicKeyBytes),
-      salt,
-    );
+    const senderKeys = await deriveNostrSessionKeys(sender, salt);
+    const receiverKeys = await deriveNostrSessionKeys(receiver, salt);
 
     const plaintext = new TextEncoder().encode('cross-peer check');
-    const encrypted = await encrypt(aliceKeys.content, plaintext);
-    await expect(decrypt(bobKeys.content, encrypted)).resolves.toEqual(
+    const encrypted = await encrypt(senderKeys.content, plaintext);
+    await expect(decrypt(receiverKeys.content, encrypted)).resolves.toEqual(
       plaintext,
     );
+  });
+
+  it('claim and confirm seal keys are distinct and shared across peers', async () => {
+    const { sender, receiver } = await pakeRoots();
+    const salt = generateSalt();
+
+    const senderSeals = await deriveHandshakeSealKeys(sender, salt);
+    const receiverSeals = await deriveHandshakeSealKeys(receiver, salt);
+
+    const plaintext = new TextEncoder().encode('claim body');
+    const sealed = await encrypt(receiverSeals.claimKey, plaintext);
+    // The sender opens the receiver's claim with its own derived claim key…
+    await expect(decrypt(senderSeals.claimKey, sealed)).resolves.toEqual(
+      plaintext,
+    );
+    // …and a claim can never be reflected back as a confirm.
+    await expect(decrypt(senderSeals.confirmKey, sealed)).rejects.toThrow();
   });
 });
 
@@ -60,110 +88,65 @@ describe('Confirmation code', () => {
     senderNonce: 'c2VuZGVyLW5vbmNlLTAwMDAwMDA=',
     receiverNonce: 'cmVjZWl2ZXItbm9uY2UtMDAwMDA=',
     transcriptHash: 'f'.repeat(64),
+    metadataHash: 'e'.repeat(64),
   };
 
-  it('both ECDH peers derive the same code', async () => {
-    const sender = await generateECDHKeyPair();
-    const receiver = await generateECDHKeyPair();
+  it('both PAKE peers derive the same code', async () => {
+    const { sender, receiver } = await pakeRoots();
     const salt = generateSalt();
 
-    const senderCode = await deriveConfirmationCode(
-      await deriveSharedSecretKey(sender.privateKey, receiver.publicKeyBytes),
-      salt,
-      binding,
-    );
-    const receiverCode = await deriveConfirmationCode(
-      await deriveSharedSecretKey(receiver.privateKey, sender.publicKeyBytes),
-      salt,
-      binding,
-    );
+    const senderCode = await deriveConfirmationCode(sender, salt, binding);
+    const receiverCode = await deriveConfirmationCode(receiver, salt, binding);
 
     expect(senderCode).toBe(receiverCode);
     expect(senderCode).toHaveLength(CONFIRMATION_CODE_LENGTH);
     expect(senderCode).toMatch(/^[0-9A-HJKMNP-TV-Z]+$/);
   });
 
-  it('a different peer key yields a different code', async () => {
-    // This is what stops a front-runner: they hold a different ECDH key, so
-    // the code their browser shows is not the one the sender is expecting.
-    const sender = await generateECDHKeyPair();
-    const receiver = await generateECDHKeyPair();
-    const attacker = await generateECDHKeyPair();
+  it('a different PAKE session yields a different code', async () => {
+    // This is what stops a front-runner: they ran their own SPAKE2 session,
+    // so the code their browser shows is not the one the sender is expecting.
+    const { sender } = await pakeRoots();
+    const { receiver: attacker } = await pakeRoots();
     const salt = generateSalt();
 
-    const forReceiver = await deriveConfirmationCode(
-      await deriveSharedSecretKey(sender.privateKey, receiver.publicKeyBytes),
-      salt,
-      binding,
-    );
-    const forAttacker = await deriveConfirmationCode(
-      await deriveSharedSecretKey(sender.privateKey, attacker.publicKeyBytes),
-      salt,
-      binding,
-    );
+    const forReceiver = await deriveConfirmationCode(sender, salt, binding);
+    const forAttacker = await deriveConfirmationCode(attacker, salt, binding);
 
     expect(forAttacker).not.toBe(forReceiver);
   });
 
-  it('a substituted rendezvous transcript yields a different code', async () => {
-    // The attack this closes: a live-PIN attacker republishes the rendezvous
-    // with rewritten file metadata but passes both ECDH keys through untouched,
-    // so the shared secret — and every other binding value — is unchanged.
-    // Only the transcript differs, and it has to be enough on its own.
-    const sender = await generateECDHKeyPair();
-    const receiver = await generateECDHKeyPair();
+  it('the code is bound to every handshake value', async () => {
+    const { sender } = await pakeRoots();
     const salt = generateSalt();
-    const shared = await deriveSharedSecretKey(
-      sender.privateKey,
-      receiver.publicKeyBytes,
-    );
 
-    const honest = await deriveConfirmationCode(shared, salt, binding);
-    const tampered = await deriveConfirmationCode(shared, salt, {
-      ...binding,
-      transcriptHash: `${'f'.repeat(63)}e`,
-    });
-
-    expect(tampered).not.toBe(honest);
-  });
-
-  it('the code is bound to the transfer id and both nonces', async () => {
-    const sender = await generateECDHKeyPair();
-    const receiver = await generateECDHKeyPair();
-    const salt = generateSalt();
-    const shared = await deriveSharedSecretKey(
-      sender.privateKey,
-      receiver.publicKeyBytes,
-    );
-
-    const base = await deriveConfirmationCode(shared, salt, binding);
+    const base = await deriveConfirmationCode(sender, salt, binding);
 
     for (const changed of [
       { ...binding, transferId: '0000000000000000' },
       { ...binding, senderNonce: 'b3RoZXItc2VuZGVyLW5vbmNlLTA=' },
       { ...binding, receiverNonce: 'b3RoZXItcmVjZWl2ZXItbm9uY2U=' },
+      // A republished rendezvous with any altered field.
+      { ...binding, transcriptHash: `${'f'.repeat(63)}e` },
+      // Substituted file metadata, which travels post-handshake and is bound
+      // through its own digest.
+      { ...binding, metadataHash: `${'e'.repeat(63)}f` },
     ]) {
-      expect(await deriveConfirmationCode(shared, salt, changed)).not.toBe(
+      expect(await deriveConfirmationCode(sender, salt, changed)).not.toBe(
         base,
       );
     }
 
     // A different transfer salt separates it too.
     expect(
-      await deriveConfirmationCode(shared, generateSalt(), binding),
+      await deriveConfirmationCode(sender, generateSalt(), binding),
     ).not.toBe(base);
   });
 
   it('rejects a salt shorter than the transfer salt', async () => {
-    const sender = await generateECDHKeyPair();
-    const receiver = await generateECDHKeyPair();
-    const shared = await deriveSharedSecretKey(
-      sender.privateKey,
-      receiver.publicKeyBytes,
-    );
-
+    const { sender } = await pakeRoots();
     await expect(
-      deriveConfirmationCode(shared, new Uint8Array(8), binding),
+      deriveConfirmationCode(sender, new Uint8Array(8), binding),
     ).rejects.toThrow(/Salt too short/);
   });
 });

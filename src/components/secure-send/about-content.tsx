@@ -25,12 +25,12 @@ const COMMON_DETAILS = [
 const PIN_DETAILS = [
   {
     label: 'Key exchange:',
-    value: 'ECDH, authenticated by a PIN-sealed handshake',
+    value: 'SPAKE2 password-authenticated key exchange over the PIN',
   },
   {
     label: 'PIN format:',
     value:
-      '12 case-sensitive characters with built-in checksum for typo detection',
+      '8 case-sensitive letters and digits with built-in checksum for typo detection',
   },
   {
     label: 'PIN rotation:',
@@ -195,8 +195,9 @@ export function AboutContent() {
                 <li>
                   PIN is shared out-of-band (chat, voice, etc.), then receiver
                   enters it to find and authenticate the sender — the actual
-                  decryption key comes from an ephemeral key exchange between
-                  the two devices, never from the PIN itself.
+                  decryption key comes from a password-authenticated key
+                  exchange (SPAKE2) with fresh ephemeral keys on both devices,
+                  so the PIN alone unlocks nothing after the fact.
                 </li>
                 <li>
                   Relay servers coordinate signaling only; they do not get

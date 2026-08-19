@@ -10,7 +10,9 @@ import {
   parseHandshakeEvent,
   parseRendezvousEvent,
   sealHandshakePayload,
+  uint8ArrayToBase64,
 } from './events';
+import type { RendezvousPayload } from './types';
 
 async function generateAesKey(): Promise<CryptoKey> {
   return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
@@ -20,17 +22,23 @@ async function generateAesKey(): Promise<CryptoKey> {
 }
 
 describe('Nostr events', () => {
-  it('round-trips rendezvous event tags and payload', () => {
-    const { secretKey } = generateEphemeralKeys();
-    const encryptedPayload = new Uint8Array([1, 2, 3, 4]);
+  it('round-trips rendezvous event tags and plaintext payload', () => {
+    const { secretKey, publicKey } = generateEphemeralKeys();
     const salt = crypto.getRandomValues(new Uint8Array(16));
+    const payload: RendezvousPayload = {
+      type: 'rendezvous',
+      transferId: 'transfer-id',
+      senderPubkey: publicKey,
+      pakeMessage: uint8ArrayToBase64(new Uint8Array(33).fill(2)),
+      nonce: generateHandshakeNonce(),
+      relays: ['wss://relay.example'],
+    };
 
     const pinBucket = getPinBucket();
     const event = createRendezvousEvent(
       secretKey,
-      encryptedPayload,
+      payload,
       salt,
-      'transfer-id',
       'hint',
       pinBucket,
     );
@@ -40,7 +48,7 @@ describe('Nostr events', () => {
     expect(parsed?.hint).toBe('hint');
     expect(parsed?.transferId).toBe('transfer-id');
     expect(parsed?.salt).toEqual(salt);
-    expect(parsed?.encryptedPayload).toEqual(encryptedPayload);
+    expect(parsed?.payload).toEqual(payload);
 
     // NIP-40 expiration tag is present and in the future
     const expiration = event.tags.find((t) => t[0] === 'expiration')?.[1];
@@ -49,22 +57,55 @@ describe('Nostr events', () => {
     );
   });
 
-  it('seals and opens handshake payloads with the auth key', async () => {
+  it('rejects malformed rendezvous events', () => {
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const payload: RendezvousPayload = {
+      type: 'rendezvous',
+      transferId: 'transfer-id',
+      senderPubkey: publicKey,
+      pakeMessage: uint8ArrayToBase64(new Uint8Array(33).fill(2)),
+      nonce: generateHandshakeNonce(),
+    };
+    const event = createRendezvousEvent(
+      secretKey,
+      payload,
+      salt,
+      'hint',
+      getPinBucket(),
+    );
+    expect(parseRendezvousEvent(event)).not.toBeNull();
+
+    // Payload that parses but is not a plain object
+    expect(parseRendezvousEvent({ ...event, content: 'null' })).toBeNull();
+    expect(parseRendezvousEvent({ ...event, content: '[1,2]' })).toBeNull();
+    // Missing transfer-id tag
+    expect(
+      parseRendezvousEvent({
+        ...event,
+        tags: event.tags.filter((tag) => tag[0] !== 't'),
+      }),
+    ).toBeNull();
+  });
+
+  it('seals and opens handshake payloads with the session seal key', async () => {
     const { secretKey } = generateEphemeralKeys();
-    const authKey = await generateAesKey();
+    const sealKey = await generateAesKey();
     const payload = {
       type: 'claim',
       transferId: 'transfer-id',
       senderNonce: generateHandshakeNonce(),
       receiverNonce: generateHandshakeNonce(),
     };
+    const pakeMessage = new Uint8Array(33).fill(3);
 
     const event = createHandshakeEvent(
       secretKey,
       'sender-pubkey',
       'transfer-id',
       'claim',
-      await sealHandshakePayload(authKey, payload),
+      await sealHandshakePayload(sealKey, payload),
+      pakeMessage,
     );
 
     const parsed = parseHandshakeEvent(event);
@@ -73,15 +114,31 @@ describe('Nostr events', () => {
       transferId: 'transfer-id',
       type: 'claim',
     });
+    expect(parsed?.pakeMessage).toEqual(pakeMessage);
 
     const opened = await openHandshakePayload(
-      authKey,
+      sealKey,
       parsed?.sealedPayload ?? new Uint8Array(),
     );
     expect(opened).toEqual(payload);
   });
 
-  it('rejects handshake payloads sealed with a different PIN key', async () => {
+  it('confirm events carry no PAKE element', async () => {
+    const { secretKey } = generateEphemeralKeys();
+    const sealKey = await generateAesKey();
+    const event = createHandshakeEvent(
+      secretKey,
+      'receiver-pubkey',
+      'transfer-id',
+      'confirm',
+      await sealHandshakePayload(sealKey, { type: 'confirm' }),
+    );
+    const parsed = parseHandshakeEvent(event);
+    expect(parsed?.type).toBe('confirm');
+    expect(parsed?.pakeMessage).toBeNull();
+  });
+
+  it('rejects handshake payloads sealed with a different session key', async () => {
     const { secretKey } = generateEphemeralKeys();
     const rightKey = await generateAesKey();
     const wrongKey = await generateAesKey();
