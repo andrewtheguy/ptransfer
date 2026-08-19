@@ -173,8 +173,15 @@ export function ReceiveTab() {
   const canReceiveScan = state.status === 'idle';
 
   const handleReceivePin = async () => {
-    const secret = pinSecretRef.current;
-    if (canReceivePin && secret && pinReceive) {
+    const stored = pinSecretRef.current;
+    if (canReceivePin && stored && pinReceive) {
+      // PinInput still owns the emitted buffer and wipes it when cleared
+      // below, so hand the receive flow its own copy. The hook wipes the
+      // copy once its PAKE runs are done.
+      const secret: PinKeyMaterial = {
+        pakeSecret: new Uint8Array(stored.pakeSecret),
+        locator: stored.locator,
+      };
       clearPinInactivityTimeout();
       // Clear stored material immediately after retrieving it
       pinSecretRef.current = null;

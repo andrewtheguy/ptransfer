@@ -17,6 +17,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0'),
     __GIT_COMMIT_HASH__: JSON.stringify(getGitCommitHash()),
   },
+  server: {
+    allowedHosts: ['.trycloudflare.com'],
+  },
   plugins: [
     tailwindcss(),
     react(),
