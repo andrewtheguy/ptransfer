@@ -522,50 +522,57 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
             const handshake = parseHandshakeEvent(event);
             if (!handshake || handshake.type !== 'confirm') return;
-            const candidate = candidates.find(
+            // A re-claim shares its transfer id and author with the claim it
+            // replaced, so several claimed candidates can match one confirm —
+            // only the session the sender actually verified holds the key that
+            // opens it, so every match must be tried, not just the first.
+            const matching = candidates.filter(
               (c) =>
                 c.transferId === handshake.transferId &&
                 c.senderPubkey === event.pubkey,
             );
-            if (!candidate) return;
+            if (matching.length === 0) return;
 
             void (async () => {
-              let opened: unknown;
-              try {
-                opened = await openHandshakePayload(
-                  candidate.confirmKey,
-                  handshake.sealedPayload,
-                );
-              } catch {
-                return; // Not sealed by our PAKE peer for this candidate
-              }
+              for (const candidate of matching) {
+                let opened: unknown;
+                try {
+                  opened = await openHandshakePayload(
+                    candidate.confirmKey,
+                    handshake.sealedPayload,
+                  );
+                } catch {
+                  continue; // Not sealed by our PAKE peer for this candidate
+                }
 
-              const p = opened as Partial<ConfirmPayload>;
-              const m = p.metadata as Partial<TransferMetadata> | undefined;
-              if (
-                p.type !== 'confirm' ||
-                p.transferId !== candidate.transferId ||
-                p.senderNonce !== candidate.senderNonce ||
-                p.receiverNonce !== candidate.receiverNonce ||
-                p.senderPubkey !== event.pubkey ||
-                p.receiverPubkey !== publicKey ||
-                p.transcriptHash !== candidate.transcriptHash ||
-                !m ||
-                m.contentType !== 'file' ||
-                typeof m.fileName !== 'string' ||
-                typeof m.mimeType !== 'string' ||
-                typeof m.fileSize !== 'number' ||
-                !Number.isFinite(m.fileSize) ||
-                m.fileSize < 0 ||
-                typeof m.fileSizeExact !== 'boolean'
-              ) {
+                const p = opened as Partial<ConfirmPayload>;
+                const m = p.metadata as Partial<TransferMetadata> | undefined;
+                if (
+                  p.type !== 'confirm' ||
+                  p.transferId !== candidate.transferId ||
+                  p.senderNonce !== candidate.senderNonce ||
+                  p.receiverNonce !== candidate.receiverNonce ||
+                  p.senderPubkey !== event.pubkey ||
+                  p.receiverPubkey !== publicKey ||
+                  p.transcriptHash !== candidate.transcriptHash ||
+                  !m ||
+                  m.contentType !== 'file' ||
+                  typeof m.fileName !== 'string' ||
+                  typeof m.mimeType !== 'string' ||
+                  typeof m.fileSize !== 'number' ||
+                  !Number.isFinite(m.fileSize) ||
+                  m.fileSize < 0 ||
+                  typeof m.fileSizeExact !== 'boolean'
+                ) {
+                  continue;
+                }
+
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve({ candidate, metadata: m as TransferMetadata });
                 return;
               }
-
-              if (settled) return;
-              settled = true;
-              cleanup();
-              resolve({ candidate, metadata: m as TransferMetadata });
             })();
           };
 
