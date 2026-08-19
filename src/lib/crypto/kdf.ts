@@ -33,13 +33,13 @@ export interface HandshakeSealKeys {
 }
 
 const SESSION_KEY_LABELS = {
-  signals: 'secure-send:nostr-session:v3:signals',
-  content: 'secure-send:nostr-session:v3:content',
+  signals: 'secure-send:nostr-session:v4:signals',
+  content: 'secure-send:nostr-session:v4:content',
 } as const satisfies Record<keyof NostrSessionKeys, string>;
 
 const HANDSHAKE_KEY_LABELS = {
-  claimKey: 'secure-send:nostr-session:v3:claim',
-  confirmKey: 'secure-send:nostr-session:v3:confirm',
+  claimKey: 'secure-send:nostr-session:v4:claim',
+  confirmKey: 'secure-send:nostr-session:v4:confirm',
 } as const satisfies Record<keyof HandshakeSealKeys, string>;
 
 async function deriveSessionKey(
@@ -103,7 +103,7 @@ export async function deriveHandshakeSealKeys(
   return { claimKey, confirmKey };
 }
 
-const CONFIRMATION_CODE_LABEL = 'secure-send:nostr-session:v3:confirmation';
+const CONFIRMATION_CODE_LABEL = 'secure-send:nostr-session:v4:confirmation';
 
 /**
  * The handshake values a confirmation code is bound to, so that a code proves

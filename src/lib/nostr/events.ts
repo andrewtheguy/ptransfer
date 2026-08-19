@@ -135,11 +135,15 @@ export type HandshakeType = 'claim' | 'confirm';
  *
  * The content is a JSON envelope: the sealed body, plus — for claims — the
  * receiver's SPAKE2 element in plaintext, since the sender must finish its
- * side of the PAKE before it can derive the key that opens the seal. Tags
- * stay plaintext so relays can route by transfer and recipient, but neither
- * they nor the element carry authority: the sealed body must decrypt under
- * the session's seal key and repeat the transfer/nonces before either side
- * acts on it.
+ * side of the PAKE before it can derive the key that opens the seal, and the
+ * plaintext transcript hash of the rendezvous being claimed (`target`), since
+ * the sender's elements are single-use and it must know which one a claim
+ * spends before doing any curve work. Tags stay plaintext so relays can route
+ * by transfer and recipient, but neither they, the element, nor the target
+ * carry authority: the sealed body must decrypt under the session's seal key
+ * and repeat the transfer/nonces/transcript hash before either side acts on
+ * it — the target only routes, and it is a hash of already-public rendezvous
+ * data.
  */
 export function createHandshakeEvent(
   secretKey: Uint8Array,
@@ -148,12 +152,16 @@ export function createHandshakeEvent(
   type: HandshakeType,
   sealedPayload: Uint8Array,
   pakeMessage?: Uint8Array,
+  target?: string,
 ): Event {
-  const envelope: { sealed: string; pake?: string } = {
+  const envelope: { sealed: string; pake?: string; target?: string } = {
     sealed: uint8ArrayToBase64(sealedPayload),
   };
   if (pakeMessage) {
     envelope.pake = uint8ArrayToBase64(pakeMessage);
+  }
+  if (target) {
+    envelope.target = target;
   }
 
   const event = finalizeEvent(
@@ -183,6 +191,8 @@ export function parseHandshakeEvent(event: Event): {
   sealedPayload: Uint8Array;
   /** The claimant's SPAKE2 element, when the envelope carries one. */
   pakeMessage: Uint8Array | null;
+  /** Transcript hash of the rendezvous a claim targets, when carried. */
+  target: string | null;
 } | null {
   if (event.kind !== EVENT_KIND_DATA_TRANSFER) return null;
 
@@ -198,9 +208,13 @@ export function parseHandshakeEvent(event: Event): {
     const envelope = JSON.parse(event.content) as {
       sealed?: unknown;
       pake?: unknown;
+      target?: unknown;
     };
     if (typeof envelope.sealed !== 'string') return null;
     if (envelope.pake !== undefined && typeof envelope.pake !== 'string') {
+      return null;
+    }
+    if (envelope.target !== undefined && typeof envelope.target !== 'string') {
       return null;
     }
     return {
@@ -212,6 +226,7 @@ export function parseHandshakeEvent(event: Event): {
         typeof envelope.pake === 'string'
           ? base64ToUint8Array(envelope.pake)
           : null,
+      target: typeof envelope.target === 'string' ? envelope.target : null,
     };
   } catch {
     return null;

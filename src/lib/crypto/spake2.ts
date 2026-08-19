@@ -44,8 +44,8 @@ const N = Point.fromHex(
 );
 
 /** Versioned domain separators. Bump with any change to the TT layout. */
-const PAKE_CONTEXT = 'secure-send:spake2-p256:v3';
-const PAKE_SECRET_SALT = 'secure-send:spake2-w:v3';
+const PAKE_CONTEXT = 'secure-send:spake2-p256:v4';
+const PAKE_SECRET_SALT = 'secure-send:spake2-w:v4';
 
 export type PakeRole = 'sender' | 'receiver';
 
@@ -132,10 +132,13 @@ export interface PakeStart {
  * blinded element (pA = x·G + w·M for the sender, pB = y·G + w·N for the
  * receiver).
  *
- * The sender runs this once per PIN generation; the receiver runs it once per
- * rendezvous candidate it claims. Fresh scalars per run are what make every
- * published element single-use — nothing replays across rotations, transfers,
- * or candidates.
+ * Every run is single-use on both sides, per RFC 9382 §7 ("Randomly generated
+ * values, e.g., x and y, MUST NOT be reused"): the receiver runs this once per
+ * claim it publishes, and the sender runs it once per rendezvous element it
+ * publishes — a claim consumes the element it targets, and a failed
+ * verification makes the sender publish a replacement element rather than
+ * reuse the scalar. See "Single-use rendezvous elements" in
+ * docs/ARCHITECTURE.md.
  */
 export function startPake(role: PakeRole, pakeSecret: Uint8Array): PakeStart {
   const w = readPakeScalar(pakeSecret, 'PAKE secret');

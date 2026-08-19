@@ -10,6 +10,7 @@ import {
   finishPake,
   getPinBucket,
   isValidPakeMessage,
+  MAX_CLAIM_ATTEMPTS,
   MAX_CLAIM_CANDIDATES,
   MAX_MESSAGE_SIZE,
   type NostrSessionKeys,
@@ -272,6 +273,50 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           senderPubkey: string;
           pakeMessage: Uint8Array;
         }
+
+        // Structural validation only — with a plaintext rendezvous there is
+        // nothing to authenticate yet. The payload must be fresh and name the
+        // event's own author and transfer id, so a copied payload republished
+        // under another identity is rejected, and the SPAKE2 element must be
+        // a valid non-identity curve point. Shared between the initial fetch
+        // and replacement events that arrive while waiting for the confirm.
+        const parseClaimableRendezvous = (
+          event: Event,
+        ): RendezvousCandidate | null => {
+          if (
+            !event.created_at ||
+            Date.now() - event.created_at * 1000 > PIN_TTL_MS
+          ) {
+            return null;
+          }
+          const parsed = parseRendezvousEvent(event);
+          if (!parsed) return null;
+          const candidate = parsed.payload as Partial<RendezvousPayload>;
+          if (
+            candidate.type !== 'rendezvous' ||
+            candidate.transferId !== parsed.transferId ||
+            candidate.senderPubkey !== event.pubkey ||
+            typeof candidate.nonce !== 'string' ||
+            !candidate.nonce ||
+            typeof candidate.pakeMessage !== 'string'
+          ) {
+            return null;
+          }
+          let pakeMessage: Uint8Array;
+          try {
+            pakeMessage = base64ToUint8Array(candidate.pakeMessage);
+          } catch {
+            return null;
+          }
+          if (!isValidPakeMessage(pakeMessage)) return null;
+          return {
+            payload: candidate as RendezvousPayload,
+            salt: parsed.salt,
+            senderPubkey: event.pubkey,
+            pakeMessage,
+          };
+        };
+
         const rendezvousCandidates = new Map<string, RendezvousCandidate>();
 
         for (const event of sortedEvents) {
@@ -287,40 +332,11 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             continue;
           }
 
-          const parsed = parseRendezvousEvent(event);
-          if (!parsed) continue;
-          if (rendezvousCandidates.has(parsed.transferId)) continue;
+          const candidate = parseClaimableRendezvous(event);
+          if (!candidate) continue;
+          if (rendezvousCandidates.has(candidate.payload.transferId)) continue;
 
-          // Structural validation only — with a plaintext rendezvous there is
-          // nothing to authenticate yet. The payload must name the event's own
-          // author and transfer id, so a copied payload republished under
-          // another identity is rejected, and the SPAKE2 element must be a
-          // valid non-identity curve point.
-          const candidate = parsed.payload as Partial<RendezvousPayload>;
-          if (
-            candidate.type !== 'rendezvous' ||
-            candidate.transferId !== parsed.transferId ||
-            candidate.senderPubkey !== event.pubkey ||
-            typeof candidate.nonce !== 'string' ||
-            !candidate.nonce ||
-            typeof candidate.pakeMessage !== 'string'
-          ) {
-            continue;
-          }
-          let pakeMessage: Uint8Array;
-          try {
-            pakeMessage = base64ToUint8Array(candidate.pakeMessage);
-          } catch {
-            continue;
-          }
-          if (!isValidPakeMessage(pakeMessage)) continue;
-
-          rendezvousCandidates.set(parsed.transferId, {
-            payload: candidate as RendezvousPayload,
-            salt: parsed.salt,
-            senderPubkey: event.pubkey,
-            pakeMessage,
-          });
+          rendezvousCandidates.set(candidate.payload.transferId, candidate);
         }
 
         if (rendezvousCandidates.size === 0) {
@@ -351,8 +367,18 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           message: 'Waiting for the sender to verify...',
         });
 
-        const candidates: ClaimCandidate[] = [];
-        for (const rc of rendezvousCandidates.values()) {
+        // Run our side of the PAKE against one candidate's element — fresh
+        // ephemeral scalar per claim — and seal a claim under the resulting
+        // session's claim key. The transcript hash of the rendezvous we
+        // actually acted on rides twice: sealed (the sender compares it with
+        // what it published and drops the claim on any difference, so a
+        // republished rendezvous with any altered field never reaches the
+        // point where the two humans compare codes) and in plaintext as the
+        // claim's target, routing the claim to the single-use element it was
+        // derived against.
+        const buildClaim = async (
+          rc: RendezvousCandidate,
+        ): Promise<ClaimCandidate | null> => {
           try {
             const { message: ownMessage, secret } = startPake(
               'receiver',
@@ -375,10 +401,6 @@ export function useNostrReceive(): UseNostrReceiveReturn {
               rc.salt,
             );
 
-            // Hash the rendezvous we actually acted on. The sender compares
-            // it with the one it published and drops the claim on any
-            // difference, so a republished rendezvous with any altered field
-            // never reaches the point where the two humans compare codes.
             const transcriptHash = await computeRendezvousTranscriptHash(
               rc.payload,
               rc.salt,
@@ -394,7 +416,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
               receiverPubkey: publicKey,
               transcriptHash,
             };
-            candidates.push({
+            return {
               transferId: rc.payload.transferId,
               senderPubkey: rc.senderPubkey,
               senderNonce: rc.payload.nonce,
@@ -410,15 +432,24 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                 'claim',
                 await sealHandshakePayload(claimKey, claimPayload),
                 ownMessage,
+                transcriptHash,
               ),
-            });
+            };
           } catch {
             // A candidate whose element fails the PAKE is simply skipped.
+            return null;
           }
-        }
+        };
 
-        // The PAKE runs are done; the password scalar has no further use.
-        wipeBufferSource(pakeSecret);
+        const candidates: ClaimCandidate[] = [];
+        for (const rc of rendezvousCandidates.values()) {
+          const claim = await buildClaim(rc);
+          if (claim) candidates.push(claim);
+        }
+        // The password scalar stays live past this point: the sender's
+        // elements are single-use, so a claim that lost a race is answered
+        // with a replacement rendezvous we must re-derive against. It is
+        // wiped as soon as the confirm wait settles.
 
         if (candidates.length === 0) {
           setState({
@@ -434,8 +465,12 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         // Subscribe for confirms before publishing the claims so the response
         // cannot slip past us. The first confirm that opens under one of our
         // sessions' confirm keys — and echoes everything that session
-        // committed to — decides which candidate was real.
-        const winner = await new Promise<{
+        // committed to — decides which candidate was real. While waiting,
+        // also watch for replacement rendezvous events: the sender's elements
+        // are single-use, so if a junk claim spent the element we claimed,
+        // the sender publishes a fresh one and our claim must be redone
+        // against it.
+        const winnerPromise = new Promise<{
           candidate: ClaimCandidate;
           metadata: TransferMetadata;
         }>((resolve, reject) => {
@@ -444,16 +479,19 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           let cancelPoll: ReturnType<typeof setInterval> | null = null;
           let queryPoll: ReturnType<typeof setInterval> | null = null;
           let subId: string | null = null;
+          let rendezvousSubId: string | null = null;
 
           const cleanup = () => {
             if (timeout) clearTimeout(timeout);
             if (cancelPoll) clearInterval(cancelPoll);
             if (queryPoll) clearInterval(queryPoll);
             if (subId) client.unsubscribe(subId);
+            if (rendezvousSubId) client.unsubscribe(rendezvousSubId);
             timeout = null;
             cancelPoll = null;
             queryPoll = null;
             subId = null;
+            rendezvousSubId = null;
           };
 
           timeout = setTimeout(() => {
@@ -484,50 +522,57 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
             const handshake = parseHandshakeEvent(event);
             if (!handshake || handshake.type !== 'confirm') return;
-            const candidate = candidates.find(
+            // A re-claim shares its transfer id and author with the claim it
+            // replaced, so several claimed candidates can match one confirm —
+            // only the session the sender actually verified holds the key that
+            // opens it, so every match must be tried, not just the first.
+            const matching = candidates.filter(
               (c) =>
                 c.transferId === handshake.transferId &&
                 c.senderPubkey === event.pubkey,
             );
-            if (!candidate) return;
+            if (matching.length === 0) return;
 
             void (async () => {
-              let opened: unknown;
-              try {
-                opened = await openHandshakePayload(
-                  candidate.confirmKey,
-                  handshake.sealedPayload,
-                );
-              } catch {
-                return; // Not sealed by our PAKE peer for this candidate
-              }
+              for (const candidate of matching) {
+                let opened: unknown;
+                try {
+                  opened = await openHandshakePayload(
+                    candidate.confirmKey,
+                    handshake.sealedPayload,
+                  );
+                } catch {
+                  continue; // Not sealed by our PAKE peer for this candidate
+                }
 
-              const p = opened as Partial<ConfirmPayload>;
-              const m = p.metadata as Partial<TransferMetadata> | undefined;
-              if (
-                p.type !== 'confirm' ||
-                p.transferId !== candidate.transferId ||
-                p.senderNonce !== candidate.senderNonce ||
-                p.receiverNonce !== candidate.receiverNonce ||
-                p.senderPubkey !== event.pubkey ||
-                p.receiverPubkey !== publicKey ||
-                p.transcriptHash !== candidate.transcriptHash ||
-                !m ||
-                m.contentType !== 'file' ||
-                typeof m.fileName !== 'string' ||
-                typeof m.mimeType !== 'string' ||
-                typeof m.fileSize !== 'number' ||
-                !Number.isFinite(m.fileSize) ||
-                m.fileSize < 0 ||
-                typeof m.fileSizeExact !== 'boolean'
-              ) {
+                const p = opened as Partial<ConfirmPayload>;
+                const m = p.metadata as Partial<TransferMetadata> | undefined;
+                if (
+                  p.type !== 'confirm' ||
+                  p.transferId !== candidate.transferId ||
+                  p.senderNonce !== candidate.senderNonce ||
+                  p.receiverNonce !== candidate.receiverNonce ||
+                  p.senderPubkey !== event.pubkey ||
+                  p.receiverPubkey !== publicKey ||
+                  p.transcriptHash !== candidate.transcriptHash ||
+                  !m ||
+                  m.contentType !== 'file' ||
+                  typeof m.fileName !== 'string' ||
+                  typeof m.mimeType !== 'string' ||
+                  typeof m.fileSize !== 'number' ||
+                  !Number.isFinite(m.fileSize) ||
+                  m.fileSize < 0 ||
+                  typeof m.fileSizeExact !== 'boolean'
+                ) {
+                  continue;
+                }
+
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve({ candidate, metadata: m as TransferMetadata });
                 return;
               }
-
-              if (settled) return;
-              settled = true;
-              cleanup();
-              resolve({ candidate, metadata: m as TransferMetadata });
             })();
           };
 
@@ -541,6 +586,76 @@ export function useNostrReceive(): UseNostrReceiveReturn {
               },
             ],
             processEvent,
+          );
+
+          // Re-claim replacements. Only an event authored by the same key
+          // that published a rendezvous we already claimed counts — a forged
+          // "replacement" under another identity is just another candidate we
+          // never claimed. Each re-claim still hands its author one online
+          // PIN guess, so the total is capped: a claimed candidate's author
+          // rotating elements at us gets at most MAX_CLAIM_ATTEMPTS guesses
+          // per receive attempt, not an unbounded stream.
+          let claimAttempts = candidates.length;
+          const claimedHashes = new Set(
+            candidates.map((c) => c.transcriptHash),
+          );
+          const processedRendezvousIds = new Set<string>();
+
+          const processReplacement = (event: Event) => {
+            if (settled || cancelledRef.current) return;
+            if (processedRendezvousIds.has(event.id)) return;
+            processedRendezvousIds.add(event.id);
+
+            // Match the tag-level transfer id and the event author against
+            // the claimed candidates before doing any parse work — the hint
+            // subscription is public, so anyone can land events here, and an
+            // unrelated one must cost a tag read, not JSON parsing and curve
+            // point validation. parseClaimableRendezvous re-checks that the
+            // payload names this same tag and author, so nothing is lost.
+            const transferId = event.tags.find((t) => t[0] === 't')?.[1];
+            if (
+              !transferId ||
+              !candidates.some(
+                (c) =>
+                  c.transferId === transferId &&
+                  c.senderPubkey === event.pubkey,
+              )
+            ) {
+              return;
+            }
+            const rc = parseClaimableRendezvous(event);
+            if (!rc) return;
+
+            void (async () => {
+              const transcriptHash = await computeRendezvousTranscriptHash(
+                rc.payload,
+                rc.salt,
+              );
+              if (settled || cancelledRef.current) return;
+              if (claimedHashes.has(transcriptHash)) return;
+              if (claimAttempts >= MAX_CLAIM_ATTEMPTS) return;
+              claimAttempts += 1;
+              claimedHashes.add(transcriptHash);
+
+              const claim = await buildClaim(rc);
+              if (!claim || settled || cancelledRef.current) return;
+              // The confirm subscription and poll already cover this claim:
+              // its transfer id and author match the original candidate's.
+              candidates.push(claim);
+              await client.publish(claim.claimEvent);
+            })().catch((err) => {
+              console.error('Failed to re-claim replacement rendezvous:', err);
+            });
+          };
+
+          rendezvousSubId = client.subscribe(
+            [
+              {
+                kinds: [EVENT_KIND_RENDEZVOUS],
+                '#h': hints,
+              },
+            ],
+            processReplacement,
           );
 
           const publishAndPoll = async () => {
@@ -579,6 +694,19 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             reject(err instanceof Error ? err : new Error('Publish failed'));
           });
         });
+
+        let winner: Awaited<typeof winnerPromise>;
+        try {
+          winner = await winnerPromise;
+        } finally {
+          // Win or lose, no *new* re-claim can start once the winner promise
+          // settles. A processReplacement re-claim already past its settled
+          // check can still be in flight, though, and its buildClaim may
+          // observe the wiped scalar — benignly: the claim it derives could
+          // never verify anyway, and the settled re-checks after each await
+          // keep it from being published.
+          wipeBufferSource(pakeSecret);
+        }
 
         if (cancelledRef.current) return;
 

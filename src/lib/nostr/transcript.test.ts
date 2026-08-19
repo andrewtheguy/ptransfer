@@ -31,12 +31,12 @@ describe('Rendezvous transcript hash', () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeRendezvousTranscriptHash(payload, SALT)).toBe(hash);
 
-    // Frozen v3 vector. Every other test here is relative — reordering the
+    // Frozen v4 vector. Every other test here is relative — reordering the
     // canonical array, dropping a field, or editing the version label would
     // leave them all green. This pins the wire format itself, so any such
     // change has to be a deliberate protocol bump rather than an accident.
     expect(hash).toBe(
-      '614d33304b183901aa0a9dae42add9b0b8b843b76b3b22f1f1e890a0d08e7643',
+      '90188f66525ea1ceb4115e7cef91f777d22c5c2e9e6b35793622d1b681a28cc6',
     );
   });
 
