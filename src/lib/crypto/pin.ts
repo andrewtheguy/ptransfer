@@ -80,7 +80,7 @@ export function getPinLocator(pin: string): string {
   return pin.slice(0, PIN_LOCATOR_LENGTH);
 }
 
-function hkdfParams(info: string): HkdfParams {
+function hintHkdfParams(info: string): HkdfParams {
   const encoder = new TextEncoder();
   return {
     name: 'HKDF',
@@ -141,7 +141,7 @@ export async function computePinHintFromLocator(
   }
 
   const bits = await crypto.subtle.deriveBits(
-    hkdfParams(`hint:${bucket}`),
+    hintHkdfParams(`hint:${bucket}`),
     hkdfKey,
     Math.ceil(PIN_HINT_LENGTH / 2) * 8,
   );

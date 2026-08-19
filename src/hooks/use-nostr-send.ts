@@ -176,6 +176,11 @@ export function useNostrSend(): UseNostrSendReturn {
 
     const contentType: ContentType = 'file';
 
+    // Retained PIN generations. Declared outside the try so the finally block
+    // can wipe any PAKE secrets left behind by an exceptional exit (cancel,
+    // wait timeout, publish failure) that skipped the post-claim retirement.
+    const generations: PinGeneration[] = [];
+
     try {
       // Validate and sanitize metadata
       const rawFileName = content.name || '';
@@ -262,7 +267,6 @@ export function useNostrSend(): UseNostrSendReturn {
       // retained generations, then lock the transfer to that receiver. A
       // manual refresh bumps the epoch, so an in-flight rotation publish from
       // before the reset can neither register its generation nor be displayed.
-      const generations: PinGeneration[] = [];
       let pinEpoch = 0;
 
       // Best-effort cleanup for generations leaving the retained list: their
@@ -550,9 +554,11 @@ export function useNostrSend(): UseNostrSendReturn {
       // lock above hands the transfer to whoever got here first. So stop: no
       // WebRTC signal, and no file byte, leaves this device until a human
       // vouches that the peer we locked onto is the peer they meant. The code
-      // below is keyed by the SPAKE2 shared secret, so only the peer holding
-      // the matching session can recite it — a front-runner has nothing to
-      // say.
+      // below proves possession of the locked session — a front-runner that
+      // won the race holds that session and can compute it — but the operator
+      // learns it from their intended receiver over a channel the attacker
+      // does not control, and that receiver has no code to give when a
+      // front-runner holds the lock.
       //
       // Note what this deliberately does not do: the front-runner still holds
       // the lock, so it can stall this transfer. Stopping that is out of scope
@@ -879,6 +885,12 @@ export function useNostrSend(): UseNostrSendReturn {
         }));
       }
     } finally {
+      // Wiping is idempotent, so this is a no-op on the claim path (which
+      // already retired every generation) and the cleanup on every other exit.
+      for (const generation of generations) {
+        wipeBufferSource(generation.pakeSecret);
+      }
+      generations.length = 0;
       sendingRef.current = false;
       expectedConfirmationCodeRef.current = null;
       confirmationCodeAcceptRef.current = null;

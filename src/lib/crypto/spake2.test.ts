@@ -5,6 +5,7 @@ import { generatePin } from './pin';
 import {
   derivePakeSecret,
   finishPake,
+  getPakeConstantBytes,
   isValidPakeMessage,
   PAKE_MESSAGE_LENGTH,
   type PakeIdentities,
@@ -68,7 +69,26 @@ async function rootsAgree(a: CryptoKey, b: CryptoKey): Promise<boolean> {
   }
 }
 
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
 describe('SPAKE2 PIN handshake', () => {
+  it('uses the RFC 9382 P-256 constants for M and N', () => {
+    // Known-answer vectors: the nothing-up-my-sleeve points from RFC 9382
+    // §4. A swapped, edited, or home-grown constant breaks the security
+    // argument (an attacker knowing dlog(M)/dlog(N) can unblind elements),
+    // so pin the exact compressed encodings.
+    const { M, N } = getPakeConstantBytes();
+    expect(toHex(M)).toBe(
+      '02886e2f97ace46e55ba9dd7242579f2993b64e16ef3dcab95afd497333d8fa12f',
+    );
+    expect(toHex(N)).toBe(
+      '03d8bbd6c639c62937b04d997f38c3770719c629d7014d49a24b4f98baa1292b49',
+    );
+  });
+
   it('derives a valid nonzero reduced scalar from a PIN', async () => {
     const secret = await derivePakeSecret(generatePin());
     expect(secret).toHaveLength(32);

@@ -57,6 +57,37 @@ describe('Nostr events', () => {
     );
   });
 
+  it('rejects malformed rendezvous events', () => {
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const payload: RendezvousPayload = {
+      type: 'rendezvous',
+      transferId: 'transfer-id',
+      senderPubkey: publicKey,
+      pakeMessage: uint8ArrayToBase64(new Uint8Array(33).fill(2)),
+      nonce: generateHandshakeNonce(),
+    };
+    const event = createRendezvousEvent(
+      secretKey,
+      payload,
+      salt,
+      'hint',
+      getPinBucket(),
+    );
+    expect(parseRendezvousEvent(event)).not.toBeNull();
+
+    // Payload that parses but is not a plain object
+    expect(parseRendezvousEvent({ ...event, content: 'null' })).toBeNull();
+    expect(parseRendezvousEvent({ ...event, content: '[1,2]' })).toBeNull();
+    // Missing transfer-id tag
+    expect(
+      parseRendezvousEvent({
+        ...event,
+        tags: event.tags.filter((tag) => tag[0] !== 't'),
+      }),
+    ).toBeNull();
+  });
+
   it('seals and opens handshake payloads with the session seal key', async () => {
     const { secretKey } = generateEphemeralKeys();
     const sealKey = await generateAesKey();

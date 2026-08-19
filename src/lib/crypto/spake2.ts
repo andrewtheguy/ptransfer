@@ -7,10 +7,10 @@ import { wipeBufferSource } from './memory';
  *
  * A balanced PAKE is what removes the offline attack surface the old
  * PBKDF2-sealed handshake had to out-muscle: the published SPAKE2 elements are
- * password-blinded group elements, so a relay transcript is information-
- * theoretically useless for testing PIN guesses. The only way to test a guess
- * is a live protocol run, which the sender counts and caps
- * (CLAIM_VERIFY_LIMIT).
+ * password-blinded group elements, so a relay transcript provides no
+ * efficient offline PIN verifier under SPAKE2's computational security
+ * assumptions. The only way to test a guess in practice is a live protocol
+ * run, which the sender counts and caps (CLAIM_VERIFY_LIMIT).
  *
  * Web Crypto has no group operations, so the group math runs in @noble/curves
  * and the shared secret transits JavaScript memory briefly. That is an
@@ -48,6 +48,14 @@ const PAKE_CONTEXT = 'secure-send:spake2-p256:v3';
 const PAKE_SECRET_SALT = 'secure-send:spake2-w:v3';
 
 export type PakeRole = 'sender' | 'receiver';
+
+/**
+ * Compressed encodings of M and N, exposed solely so tests can pin them as
+ * known-answer vectors against the RFC 9382 values.
+ */
+export function getPakeConstantBytes(): { M: Uint8Array; N: Uint8Array } {
+  return { M: M.toBytes(true), N: N.toBytes(true) };
+}
 
 /**
  * Derive the SPAKE2 password scalar w from the PIN: HKDF-SHA256 stretched to

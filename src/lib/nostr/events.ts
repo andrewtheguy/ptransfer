@@ -107,11 +107,21 @@ export function parseRendezvousEvent(event: Event): {
   if (!hint || !saltB64 || !transferId || !event.content) return null;
 
   try {
+    const payload = JSON.parse(event.content) as unknown;
+    // Shape floor: the payload must at least be a plain object, or the
+    // caller's field validation has nothing to index into.
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      Array.isArray(payload)
+    ) {
+      return null;
+    }
     return {
       hint,
       salt: base64ToUint8Array(saltB64),
       transferId,
-      payload: JSON.parse(event.content) as unknown,
+      payload,
     };
   } catch {
     return null;
