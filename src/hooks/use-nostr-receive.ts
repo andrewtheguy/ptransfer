@@ -606,17 +606,25 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             if (processedRendezvousIds.has(event.id)) return;
             processedRendezvousIds.add(event.id);
 
-            const rc = parseClaimableRendezvous(event);
-            if (!rc) return;
+            // Match the tag-level transfer id and the event author against
+            // the claimed candidates before doing any parse work — the hint
+            // subscription is public, so anyone can land events here, and an
+            // unrelated one must cost a tag read, not JSON parsing and curve
+            // point validation. parseClaimableRendezvous re-checks that the
+            // payload names this same tag and author, so nothing is lost.
+            const transferId = event.tags.find((t) => t[0] === 't')?.[1];
             if (
+              !transferId ||
               !candidates.some(
                 (c) =>
-                  c.transferId === rc.payload.transferId &&
-                  c.senderPubkey === rc.senderPubkey,
+                  c.transferId === transferId &&
+                  c.senderPubkey === event.pubkey,
               )
             ) {
               return;
             }
+            const rc = parseClaimableRendezvous(event);
+            if (!rc) return;
 
             void (async () => {
               const transcriptHash = await computeRendezvousTranscriptHash(
@@ -691,8 +699,12 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         try {
           winner = await winnerPromise;
         } finally {
-          // The PAKE runs are done, win or lose; the password scalar has no
-          // further use once nothing can be re-claimed.
+          // Win or lose, no *new* re-claim can start once the winner promise
+          // settles. A processReplacement re-claim already past its settled
+          // check can still be in flight, though, and its buildClaim may
+          // observe the wiped scalar — benignly: the claim it derives could
+          // never verify anyway, and the settled re-checks after each await
+          // keep it from being published.
           wipeBufferSource(pakeSecret);
         }
 

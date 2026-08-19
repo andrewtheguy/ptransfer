@@ -411,6 +411,12 @@ export function useNostrSend(): UseNostrSendReturn {
         ) {
           return;
         }
+        // Assign before publishing, mirroring the fresh-PIN path: a receiver
+        // can re-claim the moment any relay accepts the event, potentially
+        // before publish() resolves here — and publish() rejecting does not
+        // mean no relay accepted, so the run is retained even then. An
+        // element that truly never left is merely inert: no claim can name
+        // its transcript hash, and rotation replaces the generation anyway.
         generation.run = run;
         await client.publish(event);
       };
