@@ -13,8 +13,5 @@ Implement automatic relay discovery using Nostr relay list events:
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
-### Argon2id Key Derivation
-Replace PBKDF2 with Argon2id (via WASM) for stronger resistance to brute-force attacks on the PIN.
-
 ## Backlog (Future Considerations)
 - Better website UI/UX

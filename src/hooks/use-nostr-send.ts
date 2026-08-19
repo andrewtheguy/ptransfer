@@ -1,37 +1,38 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  CLAIM_VERIFY_LIMIT,
   computePinHintFromLocator,
   constantTimeEqual,
   decrypt,
   deriveConfirmationCode,
+  deriveHandshakeSealKeys,
   deriveNostrSessionKeys,
-  derivePinAuthKey,
-  derivePinRendezvousKey,
-  deriveSharedSecretKey,
+  derivePakeSecret,
   encrypt,
-  generateECDHKeyPair,
+  finishPake,
   generatePin,
   generateSalt,
   generateTransferId,
   getPinBucket,
   getPinLocator,
-  importPinRoot,
   isPinBucketActive,
   MAX_MESSAGE_SIZE,
   type NostrSessionKeys,
   normalizeCrockfordBase32,
   PIN_ROTATION_MS,
   PIN_WAIT_TIMEOUT_MS,
+  startPake,
+  wipeBufferSource,
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
-  base64ToUint8Array,
   type ClaimPayload,
   type ConfirmPayload,
   type ContentType,
   computeRendezvousTranscriptHash,
+  computeTransferMetadataHash,
   createHandshakeEvent,
   createNostrClient,
   createRendezvousEvent,
@@ -46,6 +47,7 @@ import {
   parseSignalingEvent,
   type RendezvousPayload,
   sealHandshakePayload,
+  type TransferMetadata,
   type TransferState,
   uint8ArrayToBase64,
 } from '@/lib/nostr';
@@ -60,29 +62,34 @@ import { getWebRTCConfig } from '@/lib/webrtc-config';
  * bucket, regardless of timer delays or how many generations are retained.
  */
 interface PinGeneration {
-  authKey: CryptoKey;
+  /** SPAKE2 password scalar w for this generation's PIN (32 BE bytes). */
+  pakeSecret: Uint8Array;
+  /** SPAKE2 ephemeral scalar x behind this generation's published element. */
+  pakeEphemeral: bigint;
+  /** The published SPAKE2 element pA (33-byte compressed point). */
+  pakeMessage: Uint8Array;
   nonce: string;
   bucket: number;
   /** Digest of the rendezvous published for this generation; see transcript.ts. */
   transcriptHash: string;
+  /**
+   * Remaining SPAKE2 claim verifications this generation will run. With a
+   * PAKE, every verification attempt is exactly one online PIN guess for
+   * whoever authored the claim, so this budget — not any key-stretching — is
+   * the online guessing bound. Exhaustion stalls the generation (rotation
+   * mints a fresh budget); see CLAIM_VERIFY_LIMIT.
+   */
+  verifyBudget: number;
 }
 
 /** A verified receiver claim: the transfer is locked to this peer. */
 interface VerifiedClaim {
   receiverPubkey: string;
-  receiverEcdhPublicKey: Uint8Array;
   payload: ClaimPayload;
-  authKey: CryptoKey;
-}
-
-function decodeEcdhPublicKey(b64: string): Uint8Array | null {
-  try {
-    const bytes = base64ToUint8Array(b64);
-    if (bytes.length !== 65 || bytes[0] !== 0x04) return null;
-    return bytes;
-  } catch {
-    return null;
-  }
+  /** Non-extractable HKDF root of the matching SPAKE2 session. */
+  rootKey: CryptoKey;
+  /** Seal key for the confirm this sender now owes the receiver. */
+  confirmKey: CryptoKey;
 }
 
 /**
@@ -214,16 +221,22 @@ export function useNostrSend(): UseNostrSendReturn {
         return;
       }
 
-      // Per-transfer credentials: public salt (HKDF input for the ECDH session
-      // keys), ephemeral Nostr identity, and the ephemeral ECDH key pair whose
-      // shared secret will protect signaling and content.
+      // Per-transfer credentials: public salt (HKDF input for the session
+      // keys) and an ephemeral Nostr identity. The shared secret protecting
+      // signaling and content comes from the SPAKE2 run itself — each PIN
+      // generation carries fresh ephemeral scalars, so there is no separate
+      // ECDH key pair.
       const salt = generateSalt();
       const { secretKey, publicKey } = generateEphemeralKeys();
       const transferId = generateTransferId();
 
-      setState({ status: 'connecting', message: 'Preparing secure keys...' });
-      const ecdh = await generateECDHKeyPair();
-      const ecdhPublicKeyB64 = uint8ArrayToBase64(ecdh.publicKeyBytes);
+      const metadata: TransferMetadata = {
+        contentType,
+        fileName,
+        fileSize,
+        fileSizeExact,
+        mimeType,
+      };
 
       if (cancelledRef.current) return;
 
@@ -252,34 +265,45 @@ export function useNostrSend(): UseNostrSendReturn {
       const generations: PinGeneration[] = [];
       let pinEpoch = 0;
 
+      // Best-effort cleanup for generations leaving the retained list: their
+      // PAKE secret dies with them. The bigint ephemeral scalar cannot be
+      // wiped and is simply dropped.
+      const retireGenerations = (keep: (g: PinGeneration) => boolean) => {
+        const kept = generations.filter(keep);
+        for (const generation of generations) {
+          if (!kept.includes(generation)) {
+            wipeBufferSource(generation.pakeSecret);
+          }
+        }
+        generations.splice(0, generations.length, ...kept);
+      };
+
       const publishRendezvous = async () => {
         const epoch = pinEpoch;
         const newPin = generatePin();
         const bucket = getPinBucket();
-        // The hint hangs off the public locator segment, so it needs no PBKDF2
-        // and does not wait on the root — only the two seals do.
-        const [hint, root] = await Promise.all([
+        const [hint, pakeSecret] = await Promise.all([
           computePinHintFromLocator(getPinLocator(newPin), bucket),
-          importPinRoot(newPin),
+          derivePakeSecret(newPin),
         ]);
-        const [authKey, rendezvousKey] = await Promise.all([
-          derivePinAuthKey(root),
-          derivePinRendezvousKey(root),
-        ]);
+        // Fresh SPAKE2 run per generation: a new ephemeral scalar behind a new
+        // password-blinded element, so no published element ever replays.
+        const { message: pakeMessage, secret: pakeEphemeral } = startPake(
+          'sender',
+          pakeSecret,
+        );
         const nonce = generateHandshakeNonce();
 
+        // Plaintext by design: the element is blinded, and nothing here may be
+        // PIN-testable offline. File metadata deliberately stays out — it is
+        // delivered inside the sealed confirm, after the handshake.
         const payload: RendezvousPayload = {
           type: 'rendezvous',
-          contentType,
           transferId,
           senderPubkey: publicKey,
-          ecdhPublicKey: ecdhPublicKeyB64,
+          pakeMessage: uint8ArrayToBase64(pakeMessage),
           nonce,
           relays: [...DEFAULT_RELAYS],
-          fileName,
-          fileSize,
-          fileSizeExact,
-          mimeType,
         };
         // Hash what we are about to publish, so a claim can be checked against
         // the rendezvous we actually sent rather than the one the claimant says
@@ -288,28 +312,31 @@ export function useNostrSend(): UseNostrSendReturn {
           payload,
           salt,
         );
-        const encryptedPayload = await encrypt(
-          rendezvousKey,
-          new TextEncoder().encode(JSON.stringify(payload)),
-        );
         const event = createRendezvousEvent(
           secretKey,
-          encryptedPayload,
+          payload,
           salt,
-          transferId,
           hint,
           bucket,
         );
 
-        if (cancelledRef.current || epoch !== pinEpoch) return;
+        if (cancelledRef.current || epoch !== pinEpoch) {
+          wipeBufferSource(pakeSecret);
+          return;
+        }
 
         // Register the generation before publishing so a fast claim can never
         // race ahead of the retained-keys list.
-        generations.unshift({ authKey, nonce, bucket, transcriptHash });
-        const activeGenerations = generations.filter((generation) =>
-          isPinBucketActive(generation.bucket),
-        );
-        generations.splice(0, generations.length, ...activeGenerations);
+        generations.unshift({
+          pakeSecret,
+          pakeEphemeral,
+          pakeMessage,
+          nonce,
+          bucket,
+          transcriptHash,
+          verifyBudget: CLAIM_VERIFY_LIMIT,
+        });
+        retireGenerations((generation) => isPinBucketActive(generation.bucket));
 
         await client.publish(event);
 
@@ -373,68 +400,88 @@ export function useNostrSend(): UseNostrSendReturn {
             if (
               !handshake ||
               handshake.type !== 'claim' ||
-              handshake.transferId !== transferId
+              handshake.transferId !== transferId ||
+              !handshake.pakeMessage
             ) {
               return;
             }
+            const claimPakeMessage = handshake.pakeMessage;
 
             void (async () => {
-              // A retained key has no authority outside the sender's current
-              // and immediately previous wall-clock buckets.
-              for (const generation of generations.filter((candidate) =>
-                isPinBucketActive(candidate.bucket),
+              // A retained generation has no authority outside the sender's
+              // current and immediately previous wall-clock buckets, and each
+              // one runs at most CLAIM_VERIFY_LIMIT verifications — every
+              // attempt is one online PIN guess for the claim's author, and
+              // this counter is the only thing bounding those guesses.
+              for (const generation of generations.filter(
+                (candidate) =>
+                  isPinBucketActive(candidate.bucket) &&
+                  candidate.verifyBudget > 0,
               )) {
-                let opened: unknown;
+                generation.verifyBudget -= 1;
+
+                // Finish our side of the SPAKE2 run against the claimant's
+                // element, then try the claim seal. A wrong PIN (or a
+                // different generation) lands on a different root key and the
+                // seal simply refuses to open.
                 try {
-                  opened = await openHandshakePayload(
-                    generation.authKey,
+                  const rootKey = await finishPake(
+                    'sender',
+                    generation.pakeEphemeral,
+                    generation.pakeSecret,
+                    generation.pakeMessage,
+                    claimPakeMessage,
+                    {
+                      transferId,
+                      senderPubkey: publicKey,
+                      receiverPubkey: event.pubkey,
+                    },
+                  );
+                  const sealKeys = await deriveHandshakeSealKeys(rootKey, salt);
+
+                  const opened = await openHandshakePayload(
+                    sealKeys.claimKey,
                     handshake.sealedPayload,
                   );
-                } catch {
-                  continue; // Sealed with a different PIN/generation
-                }
 
-                const p = opened as Partial<ClaimPayload>;
-                const receiverEcdhPublicKey =
-                  typeof p.receiverEcdhPublicKey === 'string'
-                    ? decodeEcdhPublicKey(p.receiverEcdhPublicKey)
-                    : null;
+                  const p = opened as Partial<ClaimPayload>;
 
-                // Invalid claims are ignored, never fatal: transfer tags are
-                // public, so aborting here would let anyone deny the transfer.
-                // senderPubkey/receiverPubkey tie the sealed claim to the
-                // envelope that carried it, and transcriptHash ties it to the
-                // rendezvous we published. Together they stop a live-PIN
-                // attacker from republishing our rendezvous with rewritten
-                // metadata under its own identity and forwarding the real
-                // receiver's claim to us: both ECDH keys would survive intact,
-                // so the confirmation codes would still have matched.
-                if (
-                  p.type !== 'claim' ||
-                  p.transferId !== transferId ||
-                  p.senderNonce !== generation.nonce ||
-                  typeof p.receiverNonce !== 'string' ||
-                  !p.receiverNonce ||
-                  p.senderEcdhPublicKey !== ecdhPublicKeyB64 ||
-                  p.senderPubkey !== publicKey ||
-                  p.receiverPubkey !== event.pubkey ||
-                  p.transcriptHash !== generation.transcriptHash ||
-                  !receiverEcdhPublicKey ||
-                  !isPinBucketActive(generation.bucket)
-                ) {
+                  // Invalid claims are ignored, never fatal: transfer tags are
+                  // public, so aborting here would let anyone deny the
+                  // transfer. The SPAKE2 transcript already keys the seal to
+                  // both Nostr identities and this transfer; the echoes below
+                  // tie it to this exact generation and to the rendezvous we
+                  // actually published, so a live-PIN attacker cannot
+                  // republish our rendezvous with altered fields under its
+                  // own identity and relay the real receiver's claim to us.
+                  if (
+                    p.type !== 'claim' ||
+                    p.transferId !== transferId ||
+                    p.senderNonce !== generation.nonce ||
+                    typeof p.receiverNonce !== 'string' ||
+                    !p.receiverNonce ||
+                    p.senderPubkey !== publicKey ||
+                    p.receiverPubkey !== event.pubkey ||
+                    p.transcriptHash !== generation.transcriptHash ||
+                    !isPinBucketActive(generation.bucket)
+                  ) {
+                    return;
+                  }
+
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
+                  resolve({
+                    receiverPubkey: event.pubkey,
+                    payload: p as ClaimPayload,
+                    rootKey,
+                    confirmKey: sealKeys.confirmKey,
+                  });
                   return;
+                } catch {
+                  // Different PIN/generation, or an invalid element — try the
+                  // next retained generation.
                 }
-
-                if (settled) return;
-                settled = true;
-                cleanup();
-                resolve({
-                  receiverPubkey: event.pubkey,
-                  receiverEcdhPublicKey,
-                  payload: p as ClaimPayload,
-                  authKey: generation.authKey,
-                });
-                return;
               }
             })();
           },
@@ -460,7 +507,7 @@ export function useNostrSend(): UseNostrSendReturn {
           refreshInFlight = true;
           try {
             pinEpoch += 1;
-            generations.length = 0;
+            retireGenerations(() => false);
             scheduleRotation();
             await publishRendezvous();
           } catch (err) {
@@ -482,29 +529,30 @@ export function useNostrSend(): UseNostrSendReturn {
 
       if (cancelledRef.current) return;
 
-      // First-claim lockout: rotation has stopped, retained generations are
-      // dropped with this scope, and only this receiver's events are processed
-      // from here on. The PIN is no longer needed for display.
+      // First-claim lockout: rotation has stopped, the retained generations
+      // and their PAKE secrets are wiped, and only this receiver's events are
+      // processed from here on. The PIN is no longer needed for display.
       setPin(null);
+      retireGenerations(() => false);
 
-      // Session keys come from the ephemeral ECDH exchange the PIN just
-      // authenticated — the PIN derives no content or signaling keys.
-      const sharedSecret = await deriveSharedSecretKey(
-        ecdh.privateKey,
-        claim.receiverEcdhPublicKey,
-      );
+      // Session keys are HKDF derivations off the SPAKE2 root the claim just
+      // proved agreement on — the PIN authenticated the exchange, and the
+      // exchange's fresh ephemeral scalars supply the entropy.
       const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
-        sharedSecret,
+        claim.rootKey,
         salt,
       );
 
+      const metadataHash = await computeTransferMetadataHash(metadata);
+
       // The claim proves whoever sent it knew a live PIN. That is exactly the
       // thing a shoulder-surfer or a screen-share viewer also knows, and the
-      // lock above hands the transfer to whoever got here first. So stop: the
-      // confirm and every WebRTC signal stay unpublished until a human vouches
-      // that the peer we locked onto is the peer they meant. The code below is
-      // keyed by the ECDH shared secret, so only the holder of the matching
-      // private key can recite it — a front-runner has nothing to say.
+      // lock above hands the transfer to whoever got here first. So stop: no
+      // WebRTC signal, and no file byte, leaves this device until a human
+      // vouches that the peer we locked onto is the peer they meant. The code
+      // below is keyed by the SPAKE2 shared secret, so only the peer holding
+      // the matching session can recite it — a front-runner has nothing to
+      // say.
       //
       // Note what this deliberately does not do: the front-runner still holds
       // the lock, so it can stall this transfer. Stopping that is out of scope
@@ -512,12 +560,41 @@ export function useNostrSend(): UseNostrSendReturn {
       // docs/ARCHITECTURE.md, "Availability Is a Non-Goal"). Not leaking the
       // file is the property worth defending; uninterruptible delivery is not
       // one this architecture can offer in the first place.
-      const expectedCode = await deriveConfirmationCode(sharedSecret, salt, {
+      const expectedCode = await deriveConfirmationCode(claim.rootKey, salt, {
         transferId,
         senderNonce: claim.payload.senderNonce,
         receiverNonce: claim.payload.receiverNonce,
         transcriptHash: claim.payload.transcriptHash,
+        metadataHash,
       });
+
+      if (cancelledRef.current) return;
+
+      // Mutual proof plus metadata delivery: the confirm is sealed under the
+      // session's confirm key, which only the matching PAKE peer holds, so
+      // publishing it is this side's PIN proof in the reverse direction. It
+      // goes out *before* the code gate — the receiver needs it to learn what
+      // is being offered and to display the confirmation code at all. The
+      // code gate guards the WebRTC offer and the file bytes, which is where
+      // the actual harm lives.
+      const confirmPayload: ConfirmPayload = {
+        type: 'confirm',
+        transferId,
+        senderNonce: claim.payload.senderNonce,
+        receiverNonce: claim.payload.receiverNonce,
+        senderPubkey: publicKey,
+        receiverPubkey: claim.receiverPubkey,
+        transcriptHash: claim.payload.transcriptHash,
+        metadata,
+      };
+      const confirmEvent = createHandshakeEvent(
+        secretKey,
+        claim.receiverPubkey,
+        transferId,
+        'confirm',
+        await sealHandshakePayload(claim.confirmKey, confirmPayload),
+      );
+      await client.publish(confirmEvent);
 
       if (cancelledRef.current) return;
 
@@ -578,28 +655,8 @@ export function useNostrSend(): UseNostrSendReturn {
 
       if (cancelledRef.current) return;
 
-      // Mutual proof: confirm under the same PIN-derived auth key that sealed
-      // the claim, echoing both nonces and the receiver key we locked onto.
-      const confirmPayload: ConfirmPayload = {
-        type: 'confirm',
-        transferId,
-        senderNonce: claim.payload.senderNonce,
-        receiverNonce: claim.payload.receiverNonce,
-        receiverEcdhPublicKey: claim.payload.receiverEcdhPublicKey,
-        senderPubkey: publicKey,
-        receiverPubkey: claim.receiverPubkey,
-        transcriptHash: claim.payload.transcriptHash,
-      };
-      const confirmEvent = createHandshakeEvent(
-        secretKey,
-        claim.receiverPubkey,
-        transferId,
-        'confirm',
-        await sealHandshakePayload(claim.authKey, confirmPayload),
-      );
-      await client.publish(confirmEvent);
-
-      if (cancelledRef.current) return;
+      // The typed code matched: the human vouched for the peer we locked
+      // onto, so the gate opens and signaling may start.
 
       // WebRTC Transfer Logic (P2P only — no cloud fallback)
       let webRTCSuccess = false;

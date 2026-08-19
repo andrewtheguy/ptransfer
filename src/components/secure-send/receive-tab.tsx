@@ -209,11 +209,11 @@ export function ReceiveTab() {
 
   const handlePinChange = useCallback(
     (payload: PinChangePayload) => {
-      const { key, locator, isValid, length } = payload;
+      const { pakeSecret, locator, isValid, length } = payload;
       pinInputLengthRef.current = length;
 
-      if (isValid && key && locator) {
-        pinSecretRef.current = { key, locator };
+      if (isValid && pakeSecret && locator) {
+        pinSecretRef.current = { pakeSecret, locator };
         setIsPinValid(true);
       } else {
         pinSecretRef.current = null;

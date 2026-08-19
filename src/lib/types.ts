@@ -14,17 +14,17 @@ export type ReceivedContent = ReceivedFile;
 
 /**
  * Key material derived from an entered PIN.
- * @property key - Non-extractable HKDF PIN root (see importPinRoot): the full
- *   PBKDF2 stretch of the PIN, from which the receiver derives the rendezvous
- *   payload key and the claim/confirm auth key. It derives no
- *   content-encryption keys — those come from the ephemeral ECDH exchange the
- *   PIN authenticates.
+ * @property pakeSecret - The SPAKE2 password scalar w as 32 big-endian bytes
+ *   (see derivePakeSecret). This is the secret the whole handshake rests on;
+ *   the receiver feeds it to startPake/finishPake and wipes it once its
+ *   claims are built. Kept as bytes rather than a CryptoKey because Web
+ *   Crypto has no group operations — the PAKE math runs in @noble/curves.
  * @property locator - The PIN's public locator segment (see getPinLocator),
  *   the sole input to the per-bucket rendezvous hints the receiver filters on.
  *   Deliberately not secret: it is recoverable by enumeration from any hint the
- *   sender published, which is exactly why it is kept out of the root's job.
+ *   sender published, which is exactly why it is kept out of the PAKE's job.
  */
 export interface PinKeyMaterial {
-  key: CryptoKey;
+  pakeSecret: Uint8Array;
   locator: string;
 }

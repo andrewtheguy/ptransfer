@@ -1,13 +1,10 @@
 import {
-  PBKDF2_HASH,
-  PBKDF2_ITERATIONS,
   PIN_CHARSET,
   PIN_CHECKSUM_LENGTH,
+  PIN_HINT_HKDF_SALT,
   PIN_HINT_LENGTH,
-  PIN_HKDF_SALT,
   PIN_LENGTH,
   PIN_LOCATOR_LENGTH,
-  PIN_ROOT_SALT,
   PIN_ROTATION_MS,
 } from './constants';
 import { wipeBufferSource } from './memory';
@@ -77,71 +74,10 @@ export function isValidPin(pin: string): boolean {
  *
  * Treat the return value as public. It is recoverable from any relay event the
  * sender published (see computePinHintFromLocator), so it is carried alongside
- * the PIN root in PinKeyMaterial rather than guarded like one.
+ * the SPAKE2 secret in PinKeyMaterial rather than guarded like one.
  */
 export function getPinLocator(pin: string): string {
   return pin.slice(0, PIN_LOCATOR_LENGTH);
-}
-
-/**
- * Derive the PIN root: a non-extractable HKDF key produced by the full
- * PBKDF2-SHA-256 stretch of the PIN with the public PIN_ROOT_SALT.
- *
- * The two secret PIN-scoped values — the claim/confirm auth key and the
- * rendezvous payload key — are cheap HKDF derivations off this root with
- * distinct info labels, so the expensive stretch runs exactly once per PIN
- * while brute-forcing either published ciphertext still costs the full PBKDF2
- * work factor per PIN guess. The rendezvous hint is deliberately *not* one of
- * them: it hangs off the public locator segment instead, so the lookup tag can
- * never be used to confirm a guess at the rest of the PIN.
- *
- * The whole PIN is stretched, locator included. That adds no real strength —
- * the locator is recoverable from the published hint, which is why the honest
- * accounting in constants.ts counts only the remaining characters — but it
- * costs nothing and keeps a wrong locator from producing working seals.
- *
- * The PIN root derives no content-encryption keys — file content and WebRTC
- * signaling are protected by keys from the ephemeral ECDH exchange that the
- * PIN merely authenticates.
- *
- * Cleanup note: the encoded PIN bytes and the intermediate derived bits are
- * wiped after import. The original PIN string is managed by the JS engine and
- * cannot be explicitly wiped.
- */
-export async function importPinRoot(pin: string): Promise<CryptoKey> {
-  const encoder = new TextEncoder();
-  const pinData = encoder.encode(pin);
-
-  let pbkdf2Key: CryptoKey;
-  try {
-    pbkdf2Key = await crypto.subtle.importKey('raw', pinData, 'PBKDF2', false, [
-      'deriveBits',
-    ]);
-  } finally {
-    wipeBufferSource(pinData);
-  }
-
-  const rootBits = new Uint8Array(
-    await crypto.subtle.deriveBits(
-      {
-        name: 'PBKDF2',
-        salt: encoder.encode(PIN_ROOT_SALT),
-        iterations: PBKDF2_ITERATIONS,
-        hash: PBKDF2_HASH,
-      },
-      pbkdf2Key,
-      256,
-    ),
-  );
-
-  try {
-    return await crypto.subtle.importKey('raw', rootBits, 'HKDF', false, [
-      'deriveBits',
-      'deriveKey',
-    ]);
-  } finally {
-    wipeBufferSource(rootBits);
-  }
 }
 
 function hkdfParams(info: string): HkdfParams {
@@ -149,22 +85,9 @@ function hkdfParams(info: string): HkdfParams {
   return {
     name: 'HKDF',
     hash: 'SHA-256',
-    salt: encoder.encode(PIN_HKDF_SALT),
+    salt: encoder.encode(PIN_HINT_HKDF_SALT),
     info: encoder.encode(info),
   };
-}
-
-async function deriveRootAesKey(
-  root: CryptoKey,
-  info: string,
-): Promise<CryptoKey> {
-  return crypto.subtle.deriveKey(
-    hkdfParams(info),
-    root,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
-  );
 }
 
 /**
@@ -188,22 +111,18 @@ export function isPinBucketActive(bucket: number, now = Date.now()): boolean {
  * is never a stable cross-transfer correlator and pins down which rotation
  * generation an event belongs to.
  *
- * Keyed by the locator segment alone, never by the PIN root. That is the whole
- * point: the tag is public and enumerable either way, so deriving it from the
- * full PIN would only hand an attacker a cheap oracle for confirming guesses at
- * the secret characters. Keying it off the segment that is already public
- * leaves the rest of the PIN reachable only through the AES-GCM seals.
+ * Keyed by the locator segment alone, never by the rest of the PIN. That is
+ * the whole point: the tag is public and enumerable either way, so deriving it
+ * from the full PIN would hand an attacker a cheap oracle for confirming
+ * guesses at the secret characters — the one offline foothold the SPAKE2
+ * handshake otherwise eliminates. Keying it off the segment that is already
+ * public leaves the secret characters testable only through live claims the
+ * sender counts.
  *
- * A consequence worth remembering at the call site: with roughly 18 bits behind
- * it the hint is a filter, not an identifier. Unrelated transfers in the same
- * bucket do collide, and callers must be prepared to walk several candidates.
- *
- * PBKDF2 is deliberately absent. Stretching a value with 328,509 possible
- * inputs buys nothing, and skipping it lets both sides derive hints without
- * waiting on the PIN root.
- *
- * Callers pass the absolute bucket explicitly so the hint and the sender's
- * recorded acceptance bucket cannot disagree across a boundary.
+ * A consequence worth remembering at the call site: with roughly 11.6 bits
+ * behind it the hint is a filter, not an identifier. Unrelated transfers in
+ * the same bucket do collide, and callers must be prepared to walk several
+ * candidates.
  */
 export async function computePinHintFromLocator(
   locator: string,
@@ -231,29 +150,6 @@ export async function computePinHintFromLocator(
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, PIN_HINT_LENGTH);
-}
-
-/**
- * Derive the PIN auth key: the AES-GCM key that seals the claim/confirm
- * handshake payloads. A payload that decrypts under this key proves the author
- * knows the PIN; the payload contents bind the proof to the transfer, both
- * handshake nonces, and both ECDH public keys, which is what makes the
- * subsequent ECDH-derived session immune to a relay man-in-the-middle.
- */
-export async function derivePinAuthKey(root: CryptoKey): Promise<CryptoKey> {
-  return deriveRootAesKey(root, 'auth');
-}
-
-/**
- * Derive the PIN rendezvous key: the AES-GCM key for the rendezvous event
- * payload (transfer id, sender ECDH public key, handshake nonce, file
- * metadata). Confidentiality here is a privacy measure — recovering the PIN
- * offline reveals this metadata but no content keys.
- */
-export async function derivePinRendezvousKey(
-  root: CryptoKey,
-): Promise<CryptoKey> {
-  return deriveRootAesKey(root, 'rendezvous');
 }
 
 /**

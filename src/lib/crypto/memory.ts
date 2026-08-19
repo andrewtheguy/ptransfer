@@ -5,7 +5,9 @@
  * browser APIs, and Web Crypto implementations may have internal copies that
  * cannot be reached from application code.
  */
-export function wipeBufferSource(bufferSource: BufferSource): void {
+export function wipeBufferSource(
+  bufferSource: ArrayBufferView | ArrayBufferLike,
+): void {
   try {
     if (ArrayBuffer.isView(bufferSource)) {
       new Uint8Array(

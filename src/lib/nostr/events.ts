@@ -6,7 +6,11 @@ import {
 } from 'nostr-tools';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
 import { PIN_ACTIVE_BUCKETS, PIN_ROTATION_MS } from '../crypto/constants';
-import { EVENT_KIND_DATA_TRANSFER, EVENT_KIND_RENDEZVOUS } from './types';
+import {
+  EVENT_KIND_DATA_TRANSFER,
+  EVENT_KIND_RENDEZVOUS,
+  type RendezvousPayload,
+} from './types';
 
 /**
  * Generate ephemeral keypair for a transfer
@@ -34,12 +38,16 @@ export function generateHandshakeNonce(): string {
 
 /**
  * Create rendezvous event (kind 24243).
- * Contains the payload encrypted with the PIN-derived rendezvous key.
+ * The payload is plaintext JSON: with SPAKE2 nothing in it is sensitive (the
+ * element is password-blinded, the nonce and relay hints carry no authority),
+ * and encrypting it under a PIN-derived key would reintroduce the offline
+ * guessing target the PAKE removes. File metadata is deliberately absent — it
+ * travels sealed inside the confirm, after the handshake.
  *
  * @param hint - Rotation-bucket-scoped event-filtering tag: an HKDF derivation
  * off the PIN's public locator segment (see computePinHintFromLocator). It is a
  * filter, not an identifier — unrelated transfers in the same bucket collide,
- * and the receiver disambiguates by decrypting candidates.
+ * and the receiver claims several candidates to disambiguate.
  *
  * TTL behavior:
  * - The 'expiration' tag is the end of the PIN's immediately following bucket
@@ -50,9 +58,8 @@ export function generateHandshakeNonce(): string {
  */
 export function createRendezvousEvent(
   secretKey: Uint8Array,
-  encryptedPayload: Uint8Array,
+  payload: RendezvousPayload,
   salt: Uint8Array,
-  transferId: string,
   hint: string,
   pinBucket: number,
 ): Event {
@@ -64,11 +71,11 @@ export function createRendezvousEvent(
   const event = finalizeEvent(
     {
       kind: EVENT_KIND_RENDEZVOUS,
-      content: uint8ArrayToBase64(encryptedPayload),
+      content: JSON.stringify(payload),
       tags: [
         ['h', hint],
         ['s', uint8ArrayToBase64(salt)],
-        ['t', transferId],
+        ['t', payload.transferId],
         ['type', 'rendezvous'],
         ['expiration', expiration.toString()],
       ],
@@ -81,14 +88,15 @@ export function createRendezvousEvent(
 }
 
 /**
- * Parse rendezvous event tags.
- * @returns Object with hint, salt, transferId, and encryptedPayload
+ * Parse a rendezvous event: tags plus the plaintext JSON payload. Only shape
+ * is checked here; field validation (author binding, element validity,
+ * freshness) is the caller's job.
  */
 export function parseRendezvousEvent(event: Event): {
   hint: string;
   salt: Uint8Array;
   transferId: string;
-  encryptedPayload: Uint8Array;
+  payload: unknown;
 } | null {
   if (event.kind !== EVENT_KIND_RENDEZVOUS) return null;
 
@@ -96,14 +104,14 @@ export function parseRendezvousEvent(event: Event): {
   const saltB64 = event.tags.find((t) => t[0] === 's')?.[1];
   const transferId = event.tags.find((t) => t[0] === 't')?.[1];
 
-  if (!hint || !saltB64 || !transferId) return null;
+  if (!hint || !saltB64 || !transferId || !event.content) return null;
 
   try {
     return {
       hint,
       salt: base64ToUint8Array(saltB64),
       transferId,
-      encryptedPayload: base64ToUint8Array(event.content),
+      payload: JSON.parse(event.content) as unknown,
     };
   } catch {
     return null;
@@ -115,9 +123,13 @@ export type HandshakeType = 'claim' | 'confirm';
 /**
  * Create a handshake event (kind 24242, type=claim|confirm).
  *
- * Tags stay plaintext so relays can route by transfer and recipient, but they
- * carry no authority: the sealed body must decrypt under the PIN-derived auth
- * key and repeat the transfer/nonces before either side acts on it.
+ * The content is a JSON envelope: the sealed body, plus — for claims — the
+ * receiver's SPAKE2 element in plaintext, since the sender must finish its
+ * side of the PAKE before it can derive the key that opens the seal. Tags
+ * stay plaintext so relays can route by transfer and recipient, but neither
+ * they nor the element carry authority: the sealed body must decrypt under
+ * the session's seal key and repeat the transfer/nonces before either side
+ * acts on it.
  */
 export function createHandshakeEvent(
   secretKey: Uint8Array,
@@ -125,11 +137,19 @@ export function createHandshakeEvent(
   transferId: string,
   type: HandshakeType,
   sealedPayload: Uint8Array,
+  pakeMessage?: Uint8Array,
 ): Event {
+  const envelope: { sealed: string; pake?: string } = {
+    sealed: uint8ArrayToBase64(sealedPayload),
+  };
+  if (pakeMessage) {
+    envelope.pake = uint8ArrayToBase64(pakeMessage);
+  }
+
   const event = finalizeEvent(
     {
       kind: EVENT_KIND_DATA_TRANSFER,
-      content: uint8ArrayToBase64(sealedPayload),
+      content: JSON.stringify(envelope),
       tags: [
         ['p', recipientPubkey],
         ['t', transferId],
@@ -151,6 +171,8 @@ export function parseHandshakeEvent(event: Event): {
   transferId: string;
   type: HandshakeType;
   sealedPayload: Uint8Array;
+  /** The claimant's SPAKE2 element, when the envelope carries one. */
+  pakeMessage: Uint8Array | null;
 } | null {
   if (event.kind !== EVENT_KIND_DATA_TRANSFER) return null;
 
@@ -163,11 +185,23 @@ export function parseHandshakeEvent(event: Event): {
   if (!recipientPubkey || !transferId || !event.content) return null;
 
   try {
+    const envelope = JSON.parse(event.content) as {
+      sealed?: unknown;
+      pake?: unknown;
+    };
+    if (typeof envelope.sealed !== 'string') return null;
+    if (envelope.pake !== undefined && typeof envelope.pake !== 'string') {
+      return null;
+    }
     return {
       recipientPubkey,
       transferId,
       type,
-      sealedPayload: base64ToUint8Array(event.content),
+      sealedPayload: base64ToUint8Array(envelope.sealed),
+      pakeMessage:
+        typeof envelope.pake === 'string'
+          ? base64ToUint8Array(envelope.pake)
+          : null,
     };
   } catch {
     return null;
@@ -175,27 +209,31 @@ export function parseHandshakeEvent(event: Event): {
 }
 
 /**
- * Seal a handshake payload (claim/confirm) with the PIN-derived auth key.
- * AES-GCM's authentication tag is what makes a wrong-PIN proof unverifiable.
+ * Seal a handshake payload (claim/confirm) with the session's seal key, an
+ * HKDF derivation off the SPAKE2 root (see deriveHandshakeSealKeys). AES-GCM's
+ * authentication tag is the PAKE's key-confirmation step: only a peer that
+ * ran the same session — same PIN, elements, identities, and transfer — can
+ * produce or verify it.
  */
 export async function sealHandshakePayload(
-  authKey: CryptoKey,
+  sealKey: CryptoKey,
   payload: object,
 ): Promise<Uint8Array> {
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
-  return encrypt(authKey, bytes);
+  return encrypt(sealKey, bytes);
 }
 
 /**
  * Open a sealed handshake payload. Throws if the payload was not sealed with
- * this auth key (i.e. the author used a different PIN) or is not valid JSON.
- * Field validation is the caller's job.
+ * this session's key (i.e. the author ran a different PAKE session — wrong
+ * PIN, wrong generation, or tampered elements) or is not valid JSON. Field
+ * validation is the caller's job.
  */
 export async function openHandshakePayload(
-  authKey: CryptoKey,
+  sealKey: CryptoKey,
   sealedPayload: Uint8Array,
 ): Promise<unknown> {
-  const decrypted = await decrypt(authKey, sealedPayload);
+  const decrypted = await decrypt(sealKey, sealedPayload);
   return JSON.parse(new TextDecoder().decode(decrypted)) as unknown;
 }
 

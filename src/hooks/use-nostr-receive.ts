@@ -4,17 +4,19 @@ import {
   computePinHintFromLocator,
   decrypt,
   deriveConfirmationCode,
+  deriveHandshakeSealKeys,
   deriveNostrSessionKeys,
-  derivePinAuthKey,
-  derivePinRendezvousKey,
-  deriveSharedSecretKey,
   encrypt,
-  generateECDHKeyPair,
+  finishPake,
   getPinBucket,
+  isValidPakeMessage,
+  MAX_CLAIM_CANDIDATES,
   MAX_MESSAGE_SIZE,
   type NostrSessionKeys,
   PIN_HINT_LOOKBACK_BUCKETS,
   PIN_TTL_MS,
+  startPake,
+  wipeBufferSource,
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
@@ -23,6 +25,7 @@ import {
   type ClaimPayload,
   type ConfirmPayload,
   computeRendezvousTranscriptHash,
+  computeTransferMetadataHash,
   createHandshakeEvent,
   createNostrClient,
   createSignalingEvent,
@@ -38,8 +41,8 @@ import {
   parseSignalingEvent,
   type RendezvousPayload,
   sealHandshakePayload,
+  type TransferMetadata,
   type TransferState,
-  uint8ArrayToBase64,
 } from '@/lib/nostr';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
 import {
@@ -53,25 +56,34 @@ import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
 /**
- * Time to establish the WebRTC data channel after the handshake completes.
- * Bounds the pre-open phase, which the per-transfer stall watchdog does not
+ * Time to establish the WebRTC data channel once signaling has started.
+ * Bounds the post-offer phase, which the per-transfer stall watchdog does not
  * cover (it only arms once the channel opens). Mirrors the sender's timeout.
  */
 const P2P_CONNECTION_TIMEOUT_MS = 30000;
 
 /**
- * Time to wait for the sender's confirm after publishing the claim.
+ * Time to wait for the sender's confirm after publishing the claims. The
+ * sender confirms as soon as a claim verifies — no human is in this leg — so
+ * this only needs to cover relay latency. It is also the window in which a
+ * mistyped-but-checksum-valid PIN surfaces: such a claim is silently ignored
+ * by the sender, and this timeout is the only signal the receiver gets.
+ */
+const CONFIRM_TIMEOUT_MS = 60000;
+
+/**
+ * Time to wait for the sender's first WebRTC signal after its confirm.
  *
- * Generous because a human is in the loop: the sender does not confirm on
- * verifying a claim any more, it waits for its operator to type the
- * confirmation code this side is displaying. The budget has to cover reading
- * eight characters aloud over a phone call and someone typing them back.
+ * Generous because a human is in the loop here: the sender publishes nothing
+ * past the confirm until its operator types the confirmation code this side
+ * is displaying. The budget has to cover reading eight characters aloud over
+ * a phone call and someone typing them back.
  *
  * The sender's own entry deadline is deliberately shorter than this window, so
  * a slow typist makes the sender report the timeout rather than this side
- * giving up on a confirm that is still coming.
+ * giving up on an offer that is still coming.
  */
-const CONFIRM_TIMEOUT_MS = 180000;
+const OFFER_WAIT_TIMEOUT_MS = 180000;
 
 /**
  * How long to keep the peer connection alive after sending the final ACK.
@@ -83,14 +95,24 @@ const CONFIRM_TIMEOUT_MS = 180000;
  */
 const ACK_LINGER_MS = 3000;
 
-function decodeEcdhPublicKey(b64: string): Uint8Array | null {
-  try {
-    const bytes = base64ToUint8Array(b64);
-    if (bytes.length !== 65 || bytes[0] !== 0x04) return null;
-    return bytes;
-  } catch {
-    return null;
-  }
+/**
+ * One rendezvous candidate the receiver has run its side of the PAKE against
+ * and claimed. The hint is a filter, not an identifier, and the rendezvous is
+ * plaintext, so the receiver cannot know which candidate is its sender until
+ * a confirm opens under one of these sessions' keys.
+ */
+interface ClaimCandidate {
+  transferId: string;
+  senderPubkey: string;
+  senderNonce: string;
+  receiverNonce: string;
+  salt: Uint8Array;
+  transcriptHash: string;
+  /** Non-extractable HKDF root of this candidate's SPAKE2 session. */
+  rootKey: CryptoKey;
+  /** Seal key an authentic confirm from this candidate must open under. */
+  confirmKey: CryptoKey;
+  claimEvent: Event;
 }
 
 export interface UseNostrReceiveReturn {
@@ -158,7 +180,11 @@ export function useNostrReceive(): UseNostrReceiveReturn {
       discardSink();
 
       try {
-        if (!pinMaterial.key || !pinMaterial.locator) {
+        if (
+          !pinMaterial.pakeSecret ||
+          pinMaterial.pakeSecret.length === 0 ||
+          !pinMaterial.locator
+        ) {
           setState({
             status: 'error',
             message: 'PIN unavailable. Please re-enter.',
@@ -166,6 +192,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           receivingRef.current = false;
           return;
         }
+        const pakeSecret = pinMaterial.pakeSecret;
 
         setState({
           status: 'connecting',
@@ -173,21 +200,17 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         });
 
         // Mirror the sender's acceptance rule by deriving the receiver's
-        // current and immediately previous rotation buckets.
-        const root = pinMaterial.key;
+        // current and immediately previous rotation buckets. Nothing here
+        // waits on a key stretch — with the PAKE there is none.
         const currentBucket = getPinBucket();
-        const [hints, rendezvousKey, authKey] = await Promise.all([
-          Promise.all(
-            Array.from({ length: PIN_HINT_LOOKBACK_BUCKETS + 1 }, (_, offset) =>
-              computePinHintFromLocator(
-                pinMaterial.locator,
-                currentBucket - offset,
-              ),
+        const hints = await Promise.all(
+          Array.from({ length: PIN_HINT_LOOKBACK_BUCKETS + 1 }, (_, offset) =>
+            computePinHintFromLocator(
+              pinMaterial.locator,
+              currentBucket - offset,
             ),
           ),
-          derivePinRendezvousKey(root),
-          derivePinAuthKey(root),
-        ]);
+        );
 
         if (cancelledRef.current) return;
 
@@ -202,15 +225,17 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         setState({ status: 'receiving', message: 'Searching for sender...' });
 
         // The hint is derived from the PIN's public locator segment, so it
-        // carries only ~18 bits and unrelated transfers sharing a bucket do
-        // collide. The loop below authenticates each candidate, but a tight
-        // limit could truncate the real event away before it gets there.
+        // carries only ~11.6 bits and unrelated transfers sharing a bucket do
+        // collide. The rendezvous is plaintext, so nothing here can tell
+        // which candidate is our sender — the loop below claims several and
+        // lets the handshake decide, but a tight limit could truncate the
+        // real event away before it gets there.
         //
         // A flood of forged events sharing the tag can still push the real one
-        // out of this page. That is a stall, not a compromise — every candidate
-        // below must decrypt under the PIN rendezvous key and name its own
-        // author and transfer id, so truncation ends in "no transfer found",
-        // never in the wrong event being accepted. Paginating instead would not
+        // out of this page. That is a stall, not a compromise — a forged
+        // candidate's confirm can never open under our session keys, so
+        // truncation ends in "no transfer found" or a confirm timeout, never
+        // in the wrong event being accepted. Paginating instead would not
         // fix it: whoever can forge 50 events can forge 50,000, and chasing
         // pages would hand an attacker an unbounded loop. See
         // docs/ARCHITECTURE.md, "Availability Is a Non-Goal".
@@ -233,19 +258,25 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           return;
         }
 
-        // Try to decrypt each candidate
-        let payload: RendezvousPayload | null = null;
-        let transferId: string | null = null;
-        let senderPubkey: string | null = null;
-        let senderEcdhPublicKey: Uint8Array | null = null;
-        let salt: Uint8Array | null = null;
+        // Collect structurally valid candidates, newest first, one per
+        // transfer (the sender's current and previous rotation both match our
+        // hints and share a transferId — claim only the newest generation).
         let sawExpiredCandidate = false;
-
         const sortedEvents = [...events].sort(
           (a, b) => (b.created_at || 0) - (a.created_at || 0),
         );
 
+        interface RendezvousCandidate {
+          payload: RendezvousPayload;
+          salt: Uint8Array;
+          senderPubkey: string;
+          pakeMessage: Uint8Array;
+        }
+        const rendezvousCandidates = new Map<string, RendezvousCandidate>();
+
         for (const event of sortedEvents) {
+          if (rendezvousCandidates.size >= MAX_CLAIM_CANDIDATES) break;
+
           // A rendezvous event is only claimable while the sender still honors
           // its PIN generation.
           if (
@@ -258,163 +289,156 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
           const parsed = parseRendezvousEvent(event);
           if (!parsed) continue;
+          if (rendezvousCandidates.has(parsed.transferId)) continue;
 
-          let candidate: RendezvousPayload;
-          try {
-            const decrypted = await decrypt(
-              rendezvousKey,
-              parsed.encryptedPayload,
-            );
-            candidate = JSON.parse(
-              new TextDecoder().decode(decrypted),
-            ) as RendezvousPayload;
-          } catch {
-            // Not sealed with our PIN (stale event sharing the hint tag); try
-            // the next candidate.
-            continue;
-          }
-
-          // Bind the authenticated payload to the plaintext routing data: the
-          // payload must name the event's own author and transfer id, so a
-          // copied ciphertext republished under another identity is rejected.
-          const ecdhBytes =
-            typeof candidate.ecdhPublicKey === 'string'
-              ? decodeEcdhPublicKey(candidate.ecdhPublicKey)
-              : null;
+          // Structural validation only — with a plaintext rendezvous there is
+          // nothing to authenticate yet. The payload must name the event's own
+          // author and transfer id, so a copied payload republished under
+          // another identity is rejected, and the SPAKE2 element must be a
+          // valid non-identity curve point.
+          const candidate = parsed.payload as Partial<RendezvousPayload>;
           if (
             candidate.type !== 'rendezvous' ||
             candidate.transferId !== parsed.transferId ||
             candidate.senderPubkey !== event.pubkey ||
             typeof candidate.nonce !== 'string' ||
             !candidate.nonce ||
-            !ecdhBytes
+            typeof candidate.pakeMessage !== 'string'
           ) {
             continue;
           }
+          let pakeMessage: Uint8Array;
+          try {
+            pakeMessage = base64ToUint8Array(candidate.pakeMessage);
+          } catch {
+            continue;
+          }
+          if (!isValidPakeMessage(pakeMessage)) continue;
 
-          payload = candidate;
-          transferId = parsed.transferId;
-          senderPubkey = event.pubkey;
-          senderEcdhPublicKey = ecdhBytes;
-          salt = parsed.salt;
-          break;
+          rendezvousCandidates.set(parsed.transferId, {
+            payload: candidate as RendezvousPayload,
+            salt: parsed.salt,
+            senderPubkey: event.pubkey,
+            pakeMessage,
+          });
         }
 
-        if (
-          !payload ||
-          !transferId ||
-          !senderPubkey ||
-          !senderEcdhPublicKey ||
-          !salt
-        ) {
+        if (rendezvousCandidates.size === 0) {
           setState({
             status: 'error',
             message: sawExpiredCandidate
               ? 'This PIN has expired. Enter the code currently shown on the sender.'
-              : 'Could not decrypt transfer. Wrong PIN?',
+              : 'No claimable transfer found for this PIN. Check the code currently shown on the sender.',
           });
           return;
         }
 
         if (cancelledRef.current) return;
 
-        // Validate payload
-        if (
-          payload.fileSize == null ||
-          !Number.isFinite(payload.fileSize) ||
-          payload.fileSize < 0 ||
-          typeof payload.fileSizeExact !== 'boolean'
-        ) {
-          setState({
-            status: 'error',
-            message: 'Invalid file size in transfer',
-          });
-          return;
-        }
-
-        const resolvedFileName = payload.fileName || 'unknown';
-        const resolvedFileSize = payload.fileSize;
-        const resolvedFileSizeExact = payload.fileSizeExact;
-        const resolvedMimeType = payload.mimeType || 'application/octet-stream';
-
-        if (resolvedFileSize > MAX_MESSAGE_SIZE) {
-          setState({
-            status: 'error',
-            message: `Transfer rejected: Size (${formatFileSize(resolvedFileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
-          });
-          return;
-        }
-
-        // Claim the transfer: prove PIN knowledge and bind our ephemeral ECDH
-        // key (and the sender's) into the sealed payload.
+        // Claim every candidate: run our side of the SPAKE2 exchange against
+        // each one's element and seal a claim under the resulting session's
+        // claim key. Opening that seal is the sender's proof we know the PIN.
+        // Only the candidate our sender actually published will ever answer
+        // with a confirm that opens under its session's confirm key.
+        //
+        // Each claim hands whoever authored that candidate one online PIN
+        // guess — an unavoidable property of any PAKE, bounded here by
+        // MAX_CLAIM_CANDIDATES against a 2^28.9 space.
         const { secretKey, publicKey } = generateEphemeralKeys();
-        const ecdh = await generateECDHKeyPair();
-        const receiverEcdhPublicKeyB64 = uint8ArrayToBase64(
-          ecdh.publicKeyBytes,
-        );
-        const receiverNonce = generateHandshakeNonce();
-
-        // Derived before the claim goes out, not after the confirm comes back.
-        // Opening the rendezvous payload already proved we knew the PIN, and
-        // the sender's ECDH key came out of that same authenticated payload —
-        // bound to the event author and transfer id — so agreeing on the shared
-        // secret now discloses nothing and commits to nothing the claim below
-        // does not already commit to. It buys the confirmation code, which the
-        // sender needs from us before it will confirm at all.
-        const sharedSecret = await deriveSharedSecretKey(
-          ecdh.privateKey,
-          senderEcdhPublicKey,
-        );
-
-        // Hash the rendezvous we actually acted on. The sender compares it with
-        // the one it published and refuses the claim on any difference, so a
-        // republished rendezvous carrying rewritten file metadata never reaches
-        // the point where the two humans compare codes.
-        const transcriptHash = await computeRendezvousTranscriptHash(
-          payload,
-          salt,
-        );
-
-        const claimPayload: ClaimPayload = {
-          type: 'claim',
-          transferId,
-          senderNonce: payload.nonce,
-          receiverNonce,
-          receiverEcdhPublicKey: receiverEcdhPublicKeyB64,
-          senderEcdhPublicKey: payload.ecdhPublicKey,
-          senderPubkey,
-          receiverPubkey: publicKey,
-          transcriptHash,
-        };
-        const claimEvent = createHandshakeEvent(
-          secretKey,
-          senderPubkey,
-          transferId,
-          'claim',
-          await sealHandshakePayload(authKey, claimPayload),
-        );
-
-        // The sender will not confirm — and will not send a byte — until its
-        // operator types this code. Someone who front-ran us with a stolen PIN
-        // holds a different ECDH key, so the code on their screen is not the
-        // one the sender is about to be told.
-        setConfirmationCode(
-          await deriveConfirmationCode(sharedSecret, salt, {
-            transferId,
-            senderNonce: payload.nonce,
-            receiverNonce,
-            transcriptHash,
-          }),
-        );
 
         setState({
-          status: 'showing_confirmation_code',
-          message: 'Read the confirmation code to the sender to start.',
+          status: 'receiving',
+          message: 'Waiting for the sender to verify...',
         });
 
-        // Subscribe for the confirm before publishing the claim so the response
-        // cannot slip past us, then verify it under the same PIN auth key.
-        await new Promise<void>((resolve, reject) => {
+        const candidates: ClaimCandidate[] = [];
+        for (const rc of rendezvousCandidates.values()) {
+          try {
+            const { message: ownMessage, secret } = startPake(
+              'receiver',
+              pakeSecret,
+            );
+            const rootKey = await finishPake(
+              'receiver',
+              secret,
+              pakeSecret,
+              ownMessage,
+              rc.pakeMessage,
+              {
+                transferId: rc.payload.transferId,
+                senderPubkey: rc.senderPubkey,
+                receiverPubkey: publicKey,
+              },
+            );
+            const { claimKey, confirmKey } = await deriveHandshakeSealKeys(
+              rootKey,
+              rc.salt,
+            );
+
+            // Hash the rendezvous we actually acted on. The sender compares
+            // it with the one it published and drops the claim on any
+            // difference, so a republished rendezvous with any altered field
+            // never reaches the point where the two humans compare codes.
+            const transcriptHash = await computeRendezvousTranscriptHash(
+              rc.payload,
+              rc.salt,
+            );
+            const receiverNonce = generateHandshakeNonce();
+
+            const claimPayload: ClaimPayload = {
+              type: 'claim',
+              transferId: rc.payload.transferId,
+              senderNonce: rc.payload.nonce,
+              receiverNonce,
+              senderPubkey: rc.senderPubkey,
+              receiverPubkey: publicKey,
+              transcriptHash,
+            };
+            candidates.push({
+              transferId: rc.payload.transferId,
+              senderPubkey: rc.senderPubkey,
+              senderNonce: rc.payload.nonce,
+              receiverNonce,
+              salt: rc.salt,
+              transcriptHash,
+              rootKey,
+              confirmKey,
+              claimEvent: createHandshakeEvent(
+                secretKey,
+                rc.senderPubkey,
+                rc.payload.transferId,
+                'claim',
+                await sealHandshakePayload(claimKey, claimPayload),
+                ownMessage,
+              ),
+            });
+          } catch {
+            // A candidate whose element fails the PAKE is simply skipped.
+          }
+        }
+
+        // The PAKE runs are done; the password scalar has no further use.
+        wipeBufferSource(pakeSecret);
+
+        if (candidates.length === 0) {
+          setState({
+            status: 'error',
+            message:
+              'No claimable transfer found for this PIN. Check the code currently shown on the sender.',
+          });
+          return;
+        }
+
+        if (cancelledRef.current) return;
+
+        // Subscribe for confirms before publishing the claims so the response
+        // cannot slip past us. The first confirm that opens under one of our
+        // sessions' confirm keys — and echoes everything that session
+        // committed to — decides which candidate was real.
+        const winner = await new Promise<{
+          candidate: ClaimCandidate;
+          metadata: TransferMetadata;
+        }>((resolve, reject) => {
           let settled = false;
           let timeout: ReturnType<typeof setTimeout> | null = null;
           let cancelPoll: ReturnType<typeof setInterval> | null = null;
@@ -438,7 +462,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             cleanup();
             reject(
               new Error(
-                'Sender did not confirm. The transfer may have been claimed by another device, or the sender went offline.',
+                'Sender did not confirm. The transfer may have been claimed by another device, the sender may have gone offline, or the PIN was mistyped.',
               ),
             );
           }, CONFIRM_TIMEOUT_MS);
@@ -459,36 +483,43 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             processedEventIds.add(event.id);
 
             const handshake = parseHandshakeEvent(event);
-            if (
-              !handshake ||
-              handshake.type !== 'confirm' ||
-              handshake.transferId !== transferId ||
-              event.pubkey !== senderPubkey
-            ) {
-              return;
-            }
+            if (!handshake || handshake.type !== 'confirm') return;
+            const candidate = candidates.find(
+              (c) =>
+                c.transferId === handshake.transferId &&
+                c.senderPubkey === event.pubkey,
+            );
+            if (!candidate) return;
 
             void (async () => {
               let opened: unknown;
               try {
                 opened = await openHandshakePayload(
-                  authKey,
+                  candidate.confirmKey,
                   handshake.sealedPayload,
                 );
               } catch {
-                return; // Not sealed with our PIN
+                return; // Not sealed by our PAKE peer for this candidate
               }
 
               const p = opened as Partial<ConfirmPayload>;
+              const m = p.metadata as Partial<TransferMetadata> | undefined;
               if (
                 p.type !== 'confirm' ||
-                p.transferId !== transferId ||
-                p.senderNonce !== payload.nonce ||
-                p.receiverNonce !== receiverNonce ||
-                p.receiverEcdhPublicKey !== receiverEcdhPublicKeyB64 ||
+                p.transferId !== candidate.transferId ||
+                p.senderNonce !== candidate.senderNonce ||
+                p.receiverNonce !== candidate.receiverNonce ||
                 p.senderPubkey !== event.pubkey ||
                 p.receiverPubkey !== publicKey ||
-                p.transcriptHash !== transcriptHash
+                p.transcriptHash !== candidate.transcriptHash ||
+                !m ||
+                m.contentType !== 'file' ||
+                typeof m.fileName !== 'string' ||
+                typeof m.mimeType !== 'string' ||
+                typeof m.fileSize !== 'number' ||
+                !Number.isFinite(m.fileSize) ||
+                m.fileSize < 0 ||
+                typeof m.fileSizeExact !== 'boolean'
               ) {
                 return;
               }
@@ -496,7 +527,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
               if (settled) return;
               settled = true;
               cleanup();
-              resolve();
+              resolve({ candidate, metadata: m as TransferMetadata });
             })();
           };
 
@@ -504,16 +535,18 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             [
               {
                 kinds: [EVENT_KIND_DATA_TRANSFER],
-                '#t': [transferId],
+                '#t': candidates.map((c) => c.transferId),
                 '#p': [publicKey],
-                authors: [senderPubkey],
+                authors: candidates.map((c) => c.senderPubkey),
               },
             ],
             processEvent,
           );
 
           const publishAndPoll = async () => {
-            await client.publish(claimEvent);
+            for (const candidate of candidates) {
+              await client.publish(candidate.claimEvent);
+            }
             // Backstop for relays that processed the publish before the
             // subscription: poll for an already-stored confirm.
             queryPoll = setInterval(() => {
@@ -523,9 +556,9 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                   const existing = await client.query([
                     {
                       kinds: [EVENT_KIND_DATA_TRANSFER],
-                      '#t': [transferId],
+                      '#t': candidates.map((c) => c.transferId),
                       '#p': [publicKey],
-                      authors: [senderPubkey],
+                      authors: candidates.map((c) => c.senderPubkey),
                       limit: 10,
                     },
                   ]);
@@ -549,20 +582,45 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
         if (cancelledRef.current) return;
 
-        // The confirm proves the sender matched our code and locked onto us;
-        // the code has done its job and should not linger on screen.
-        setConfirmationCode(null);
+        const { candidate: session, metadata } = winner;
+        const transferId = session.transferId;
+        const senderPubkey = session.senderPubkey;
+        const salt = session.salt;
 
-        // Session keys come from the ephemeral ECDH exchange the PIN just
-        // authenticated — the PIN derives no content or signaling keys.
-        const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
-          sharedSecret,
-          salt,
+        const resolvedFileName = metadata.fileName || 'unknown';
+        const resolvedFileSize = metadata.fileSize;
+        const resolvedFileSizeExact = metadata.fileSizeExact;
+        const resolvedMimeType =
+          metadata.mimeType || 'application/octet-stream';
+
+        if (resolvedFileSize > MAX_MESSAGE_SIZE) {
+          setState({
+            status: 'error',
+            message: `Transfer rejected: Size (${formatFileSize(resolvedFileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
+          });
+          return;
+        }
+
+        // The confirm proved the sender ran our PAKE session, and its sealed
+        // metadata is now on the table. The sender publishes nothing further
+        // — no WebRTC offer, no file byte — until its operator types this
+        // code. Someone who front-ran us with a stolen PIN holds a different
+        // SPAKE2 session, so the code on their screen is not the one the
+        // sender is about to be told.
+        const metadataHash = await computeTransferMetadataHash(metadata);
+        setConfirmationCode(
+          await deriveConfirmationCode(session.rootKey, salt, {
+            transferId,
+            senderNonce: session.senderNonce,
+            receiverNonce: session.receiverNonce,
+            transcriptHash: session.transcriptHash,
+            metadataHash,
+          }),
         );
 
         setState({
-          status: 'receiving',
-          message: 'Receiving file...',
+          status: 'showing_confirmation_code',
+          message: 'Read the confirmation code to the sender to start.',
           contentType: 'file',
           fileMetadata: {
             fileName: resolvedFileName,
@@ -573,6 +631,14 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           currentRelays: client.getRelays(),
           totalRelays: DEFAULT_RELAYS.length,
         });
+
+        // Session keys are HKDF derivations off the same SPAKE2 root — the
+        // PIN authenticated the exchange, and the exchange's fresh ephemeral
+        // scalars supply the entropy.
+        const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
+          session.rootKey,
+          salt,
+        );
 
         // Decrypted chunks land in the receive sink as they arrive.
         const sink = resolvedFileSizeExact
@@ -607,6 +673,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
           let cancelPoll: ReturnType<typeof setInterval> | null = null;
           let dataChannelOpened = false;
+          let signalSeen = false;
           let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
           const clearConnectionTimeout = () => {
             if (connectionTimeout) {
@@ -615,22 +682,38 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             }
           };
 
-          // Bound the pre-open phase: the stall watchdog only arms once the data
-          // channel opens, so a sender that never completes WebRTC would leave
-          // receiver.done unresolved without this. Cleared the moment the channel
-          // opens (see below), on cancel, and on success/failure.
-          connectionTimeout = setTimeout(() => {
-            if (settled || dataChannelOpened) return;
-            settled = true;
-            if (cancelPoll) clearInterval(cancelPoll);
-            client.unsubscribe(subId);
-            try {
-              if (rtc) rtc.close();
-            } catch {
-              // ignore
-            }
-            reject(new P2PConnectionError('WebRTC connection timeout'));
-          }, P2P_CONNECTION_TIMEOUT_MS);
+          // Bound the pre-open phase: the stall watchdog only arms once the
+          // data channel opens, so a sender that never completes WebRTC would
+          // leave receiver.done unresolved without this. Two windows: a long
+          // one while the sender's operator types the confirmation code (its
+          // first signal is what ends that wait), then the ordinary
+          // connection timeout once signaling has started. Cleared the moment
+          // the channel opens (see below), on cancel, and on success/failure.
+          const armConnectionTimeout = (delayMs: number) => {
+            clearConnectionTimeout();
+            connectionTimeout = setTimeout(() => {
+              if (settled || dataChannelOpened) return;
+              settled = true;
+              if (cancelPoll) clearInterval(cancelPoll);
+              client.unsubscribe(subId);
+              try {
+                if (rtc) rtc.close();
+              } catch {
+                // ignore
+              }
+              // Only a failure after signaling started is a connection
+              // problem worth suggesting the offline-QR fallback for; before
+              // that, the sender simply never entered the code.
+              reject(
+                signalSeen
+                  ? new P2PConnectionError('WebRTC connection timeout')
+                  : new Error(
+                      'The sender did not enter the confirmation code in time. Start a new transfer.',
+                    ),
+              );
+            }, delayMs);
+          };
+          armConnectionTimeout(OFFER_WAIT_TIMEOUT_MS);
 
           // cancel() only flips cancelledRef and closes the relay client; rtc is
           // local to this Promise and unreachable from there. Poll so a cancel
@@ -721,6 +804,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                 receiver.start();
                 setState((s) => ({
                   ...s,
+                  status: 'receiving',
                   message: 'Receiving via P2P...',
                   useWebRTC: true,
                 }));
@@ -751,6 +835,22 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                   new TextDecoder().decode(decrypted),
                 );
                 if (signalPayload.type === 'signal' && signalPayload.signal) {
+                  // A signal that decrypts under the session's signals key
+                  // means the sender's operator entered the code: the gate
+                  // is open, the code has done its job, and the ordinary
+                  // connection timeout takes over from the code-entry wait.
+                  if (!signalSeen && !settled) {
+                    signalSeen = true;
+                    setConfirmationCode(null);
+                    if (!dataChannelOpened) {
+                      armConnectionTimeout(P2P_CONNECTION_TIMEOUT_MS);
+                    }
+                    setState((s) => ({
+                      ...s,
+                      status: 'receiving',
+                      message: 'Sender confirmed — connecting...',
+                    }));
+                  }
                   const r = initWebRTC();
                   await r.handleSignal(signalPayload.signal);
                 }
@@ -840,6 +940,9 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         }
       } finally {
         receivingRef.current = false;
+        // Idempotent backstop for early exits — the happy path already wiped
+        // it the moment the claims were built.
+        wipeBufferSource(pinMaterial.pakeSecret);
         if (clientRef.current) {
           clientRef.current.close();
           clientRef.current = null;

@@ -8,12 +8,9 @@ import {
 } from './constants';
 import {
   computePinHintFromLocator,
-  derivePinAuthKey,
-  derivePinRendezvousKey,
   generatePin,
   getPinBucket,
   getPinLocator,
-  importPinRoot,
   isPinBucketActive,
   isValidPin,
 } from './pin';
@@ -26,6 +23,14 @@ describe('PIN Utilities', () => {
     expect(isValidPin(pin)).toBe(true);
   });
 
+  test('the charset carries no symbols or ambiguous characters', () => {
+    expect(PIN_CHARSET).toHaveLength(55);
+    expect(PIN_CHARSET).toMatch(/^[A-Za-z2-9]+$/);
+    for (const ambiguous of ['0', '1', 'I', 'O', 'i', 'l', 'o']) {
+      expect(PIN_CHARSET.includes(ambiguous)).toBe(false);
+    }
+  });
+
   test('checksum rejects a changed data character', () => {
     const pin = generatePin();
     const replacement =
@@ -34,7 +39,7 @@ describe('PIN Utilities', () => {
   });
 
   test('checksum detects a typical adjacent transposition', () => {
-    const data = 'ABCDEFGHJKL';
+    const data = 'ABCDEFG';
     const pin = data + computeChecksumForTest(data);
     expect(isValidPin(pin)).toBe(true);
     const swapped = `BA${pin.slice(2)}`;
@@ -42,16 +47,10 @@ describe('PIN Utilities', () => {
   });
 
   test('PIN validation is case sensitive', () => {
-    const data = 'AbCDefGHJKL';
+    const data = 'AbCDefG';
     const pin = data + computeChecksumForTest(data);
     expect(isValidPin(pin)).toBe(true);
     expect(isValidPin(pin.toUpperCase())).toBe(false);
-  });
-
-  test('importPinRoot returns a non-extractable HKDF key', async () => {
-    const root = await importPinRoot(generatePin());
-    expect(root.extractable).toBe(false);
-    expect(root.algorithm.name).toBe('HKDF');
   });
 
   test('getPinLocator returns the leading locator segment', () => {
@@ -110,41 +109,6 @@ describe('PIN Utilities', () => {
     expect(isPinBucketActive(9, now)).toBe(true);
     expect(isPinBucketActive(8, now)).toBe(false);
     expect(isPinBucketActive(11, now)).toBe(false);
-  });
-
-  test('auth and rendezvous keys are distinct non-extractable AES keys', async () => {
-    const root = await importPinRoot(generatePin());
-    const authKey = await derivePinAuthKey(root);
-    const rendezvousKey = await derivePinRendezvousKey(root);
-
-    for (const key of [authKey, rendezvousKey]) {
-      expect(key.extractable).toBe(false);
-      expect(key.algorithm.name).toBe('AES-GCM');
-    }
-
-    // Domain separation: a payload sealed with one key must not open with the other
-    const plaintext = new TextEncoder().encode('payload');
-    const { encrypt, decrypt } = await import('./aes-gcm');
-    const sealed = await encrypt(authKey, plaintext);
-    await expect(decrypt(rendezvousKey, sealed)).rejects.toThrow();
-  });
-
-  test('two peers derive identical values from the same PIN', async () => {
-    const pin = generatePin();
-    const senderRoot = await importPinRoot(pin);
-    const receiverRoot = await importPinRoot(pin);
-
-    const bucket = getPinBucket();
-    expect(await computePinHintFromLocator(getPinLocator(pin), bucket)).toBe(
-      await computePinHintFromLocator(getPinLocator(pin), bucket),
-    );
-    const { encrypt, decrypt } = await import('./aes-gcm');
-    const sealed = await encrypt(
-      await derivePinAuthKey(senderRoot),
-      new TextEncoder().encode('proof'),
-    );
-    const opened = await decrypt(await derivePinAuthKey(receiverRoot), sealed);
-    expect(new TextDecoder().decode(opened)).toBe('proof');
   });
 });
 

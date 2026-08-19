@@ -9,7 +9,7 @@ A web application for sending encrypted files and folders with PIN-based Nostr s
 - **100% Static - No Backend Required**: The entire app is a static site that can be hosted on any static hosting service (GitHub Pages, Netlify, Vercel, S3, etc.). No server-side code, no database, no backend infrastructure needed.
 - **Works offline**: No internet required after page load when using Manual Exchange on same local network
 - **Flexible signaling**: Nostr (default) or Manual Exchange (QR/copy-paste). With internet, Manual Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
-- **Rotating PIN pairing (Nostr)**: A case-sensitive 12-character PIN that rotates every 2 minutes locates the sender and authenticates an ephemeral ECDH key exchange; content keys are never derived from the PIN
+- **Rotating PIN pairing (Nostr)**: A case-sensitive 8-character PIN (letters and digits only) that rotates every 2 minutes locates the sender and drives a SPAKE2 password-authenticated key exchange; nothing published to relays can be used to guess the PIN offline
 - **Confirmation code (Nostr)**: After entering the PIN, the receiver is shown an 8-character code the sender must type in before anything is sent — so someone who spots the PIN over your shoulder cannot quietly take the file
 - **File or folder transfer**: Send a file, or a ZIP archive created from multiple files/a folder. The 2GB limit applies to the final transferred payload — the generated ZIP for folders or multi-file selections, not the combined input size — so an archive that exceeds 2GB is not supported and the send fails. The sender reads selected files lazily and streams generated ZIP bytes directly into the encrypted WebRTC transfer without scratch storage; receivers keep payloads up to 100MB in memory and spill larger payloads to OPFS. See [Browser Requirements](#browser-requirements)
 - **End-to-end encryption**: All transfers use AES-256-GCM encryption
@@ -28,7 +28,9 @@ Support is feature-detected at runtime; on an unsupported browser, receiving a p
 ## Version Compatibility
 
 During `v0.0.x` (as shown in the app footer), compatibility between different app versions is not guaranteed.
-Sender and receiver should use the same app version for transfers.
+Sender and receiver should use the same app version for transfers. `v0.0.19` replaced the PIN
+protocol with a SPAKE2 password-authenticated key exchange and is incompatible with earlier
+releases.
 
 ## How It Works
 
@@ -37,7 +39,7 @@ Sender and receiver should use the same app version for transfers.
 1. Select the "Files" or "Folder" tab
 2. Drag and drop files or click to select a file/folder. A single file, or the combined input for multiple files or a folder (zipped while sending), can be up to 2GB
 3. Choose Auto Exchange mode or Manual Exchange mode
-4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 12-character PIN with the receiver. The PIN rotates automatically every 2 minutes while keeping the immediately previous PIN bucket valid; a countdown under the PIN shows when the next one appears. Selecting "Generate a new PIN" replaces it immediately and invalidates all retained older PIN generations.
+4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 8-character PIN with the receiver. The PIN rotates automatically every 2 minutes while keeping the immediately previous PIN bucket valid; a countdown under the PIN shows when the next one appears. Selecting "Generate a new PIN" replaces it immediately and invalidates all retained older PIN generations.
 5. Once someone claims the transfer, ask them for the confirmation code on their screen and enter it. Nothing is sent until it matches, so a stranger who saw the PIN cannot receive the file.
 6. For Manual Exchange, click "Start Manual Exchange" and exchange the QR/copy-paste signaling payloads with the receiver
 
@@ -50,15 +52,15 @@ Sender and receiver should use the same app version for transfers.
 
 ## Security
 
-- **PBKDF2-SHA256** with 600,000 iterations to stretch the PIN into its root key (browser-compatible)
+- **SPAKE2 password-authenticated key exchange (Nostr)**: The PIN drives a balanced PAKE (RFC 9382 over P-256), so every published value — the blinded key-exchange elements and the sealed handshake payloads — is useless for testing PIN guesses offline. The only way to test a guess is a live claim the sender verifies online, and the sender caps those verifications per PIN generation
 - **AES-256-GCM** authenticated encryption
-- **ECDH content keys (Nostr)**: File content and WebRTC signaling are encrypted with AES keys derived from an ephemeral P-256 ECDH exchange — the PIN derives no content keys, so a PIN recovered after the fact decrypts nothing
-- **PIN authenticates, then expires (Nostr)**: The sender mints a fresh 12-character PIN every 2 minutes and honors only PINs published in its current or immediately previous 2-minute bucket. The PIN seals a mutual claim/confirm challenge-response that binds both sides' ECDH public keys, defeating relay man-in-the-middle. The first verified claim locks the transfer to that receiver; the PIN itself is never transmitted
-- **Split PIN, public locator (Nostr)**: Only the first 3 characters — treated as public — derive the rotating `#h` tag that locates the rendezvous event, so no published value is a commitment to the rest of the PIN. That leaves the 8 secret characters (~48.9 bits behind 600,000 PBKDF2 iterations) protecting the seals, against a PIN that is live for 2–4 minutes and worthless once a claim locks
-- **Confirmation code stops front-running (Nostr)**: The receiver derives an 8-character code from the ephemeral ECDH shared secret and shows it as soon as the PIN is accepted. The sender publishes no confirm, no WebRTC signaling, and no file bytes until its operator types a matching code. Because the code is keyed by the shared secret, only the real receiver can produce it — someone who read the PIN off the sender's screen wins the claim race and then has nothing to say. It doubles as a key-confirmation check, since substituted ECDH keys would show different codes on the two screens
-- **The handshake is bound to what is being sent (Nostr)**: Claim and confirm seal both parties' Nostr identities — checked against the events that carried them — plus a hash of the whole rendezvous: sender identity, ECDH key, salt, file name, size, and MIME type. The same hash goes into the confirmation code. An attacker who knows a live PIN therefore cannot republish the transfer under its own identity with a rewritten file name or type and still have the two codes match
-- **Encrypted rendezvous metadata (Nostr)**: File name, size, and MIME type in the rendezvous payload are encrypted with a PIN-derived key
-- **Ephemeral identities**: New Nostr keypairs and ECDH key pairs generated per transfer
+- **PAKE-derived content keys (Nostr)**: File content and WebRTC signaling are encrypted with AES keys derived from the SPAKE2 shared secret, which mixes fresh ephemeral keys from both devices — so a PIN recovered after the fact decrypts nothing
+- **PIN authenticates, then expires (Nostr)**: The sender mints a fresh 8-character PIN every 2 minutes and honors only PINs published in its current or immediately previous 2-minute bucket. The mutual claim/confirm handshake is sealed with keys only a matching PAKE session holds, defeating relay man-in-the-middle. The first verified claim locks the transfer to that receiver; the PIN itself is never transmitted
+- **Split PIN, public locator (Nostr)**: Only the first 2 characters — treated as public — derive the rotating `#h` tag that locates the rendezvous event, so no published value is a commitment to the rest of the PIN. That leaves the 5 secret characters (~28.9 bits) exposed only to online guessing, throttled by the sender against a PIN that is live for 2–4 minutes and worthless once a claim locks
+- **Confirmation code stops front-running (Nostr)**: The receiver derives an 8-character code from the SPAKE2 shared secret and shows it once the sender's confirm verifies. The sender publishes no WebRTC signaling and sends no file bytes until its operator types a matching code. Because the code is keyed by the shared secret, only the real receiver can produce it — someone who read the PIN off the sender's screen wins the claim race and then has nothing to say. It doubles as a key-confirmation check, since tampered key-exchange elements would show different codes on the two screens
+- **The handshake is bound to what is being sent (Nostr)**: The PAKE transcript keys every session to both parties' Nostr identities and the transfer id, the sealed claim/confirm echo a hash of the whole rendezvous record, and the file metadata delivered in the confirm is hashed into the confirmation code. An attacker who knows a live PIN therefore cannot republish the transfer under its own identity with a rewritten file name or type and still have the two codes match
+- **Metadata after the handshake (Nostr)**: File name, size, and MIME type are never published to relays at all — they travel inside the sealed confirm, encrypted under a key only the authenticated peer holds
+- **Ephemeral identities**: New Nostr keypairs and PAKE scalars generated per transfer
 - **Expiration windows**: Each PIN is honored until the end of the immediately following 2-minute bucket (roughly 2–4 minutes, depending on when it was minted); rendezvous events carry a matching NIP-40 expiration tag for relays that honor it, and the sender stops waiting after 30 minutes (a resource backstop — bucket expiry, not the wait window, bounds PIN exposure)
 - **Manual exchange signaling**: QR payloads are time-bucketed obfuscated, not cryptographically confidential; file data is encrypted with an ECDH-derived AES key after the QR/clipboard exchange
 
@@ -68,7 +70,7 @@ Sender and receiver should use the same app version for transfers.
 - Vite
 - Tailwind CSS + shadcn/ui
 - nostr-tools for Nostr protocol
-- Web Crypto API for cryptographic operations
+- Web Crypto API for cryptographic operations, plus @noble/curves for the SPAKE2 group math Web Crypto cannot express
 
 ## Development
 

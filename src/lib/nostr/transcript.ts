@@ -1,32 +1,40 @@
-import type { RendezvousPayload } from './types';
+import type { RendezvousPayload, TransferMetadata } from './types';
 
 /**
- * Versioned domain separator. Bump it with any change to the field list below,
- * so a transcript from an older protocol can never hash equal to a newer one.
+ * Versioned domain separators. Bump them with any change to the field lists
+ * below, so a transcript from an older protocol can never hash equal to a
+ * newer one.
  */
-const TRANSCRIPT_LABEL = 'secure-send:nostr-rendezvous-transcript:v1';
+const TRANSCRIPT_LABEL = 'secure-send:nostr-rendezvous-transcript:v3';
+const METADATA_LABEL = 'secure-send:nostr-metadata-transcript:v1';
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function sha256Hex(canonical: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(canonical),
+  );
+  return toHex(new Uint8Array(digest));
+}
+
 /**
- * Hash everything the two peers must agree on about *what* is being
- * transferred, before either of them commits to it.
+ * Hash everything the rendezvous published in plaintext, so both peers can
+ * check they acted on the same one.
  *
- * The confirmation code is keyed by the ECDH shared secret, so it proves no
- * one substituted an ECDH key. It does not, by itself, prove anything about the
- * rest of the rendezvous: an attacker holding a live PIN can republish the
- * rendezvous under its own Nostr identity, pass both ECDH keys through
- * untouched, and swap the file metadata. Both sides then derive the *same*
- * code, the humans compare successfully, and the receiver saves genuine bytes
- * under an attacker-chosen name and MIME type.
+ * The SPAKE2 transcript already keys the session by both identities, both
+ * elements, and the transfer id — a substituted element or a rewrapped
+ * identity yields a different root key and every seal fails on its own. What
+ * it does not cover is the rest of the rendezvous record: the salt (an HKDF
+ * input for every session key) and the relay hints. This digest extends the
+ * agreement to those, and to the exact wire encoding of the fields the PAKE
+ * covers only semantically.
  *
- * Folding this digest into the claim, the confirm, and the confirmation-code
- * KDF closes that: the receiver hashes the rendezvous it acted on, the sender
- * hashes the one it published, and any difference — one byte of file name, a
- * substituted sender identity, a replayed nonce, a different salt — makes the
- * claim fail verification and the two codes disagree.
+ * It is folded into the sealed claim and confirm (so a mismatch is rejected
+ * automatically) and into the confirmation-code KDF (so even a missed check
+ * would surface as two humans reading different codes).
  *
  * Canonicalization is a JSON array rather than an object: element order is
  * fixed here instead of depending on key ordering, and JSON string escaping
@@ -39,23 +47,39 @@ export async function computeRendezvousTranscriptHash(
   const canonical = JSON.stringify([
     TRANSCRIPT_LABEL,
     payload.type,
-    payload.contentType,
     payload.transferId,
     payload.senderPubkey,
-    payload.ecdhPublicKey,
+    payload.pakeMessage,
     payload.nonce,
     payload.relays ?? [],
-    payload.fileName,
-    payload.fileSize,
-    payload.fileSizeExact,
-    payload.mimeType,
     toHex(salt),
   ]);
 
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(canonical),
-  );
+  return sha256Hex(canonical);
+}
 
-  return toHex(new Uint8Array(digest));
+/**
+ * Hash the file metadata the sender delivers inside its sealed confirm.
+ *
+ * Metadata moved out of the rendezvous (nothing PIN-guessable may be
+ * published, and nothing published is encrypted anymore), so it can no longer
+ * ride the rendezvous transcript — the receiver commits to that digest in its
+ * claim, before it has seen any metadata. This separate digest is bound into
+ * the confirmation-code KDF instead: the AES-GCM seal on the confirm already
+ * authenticates the metadata cryptographically, and this makes the code the
+ * humans compare attest to *what* is being transferred as well.
+ */
+export async function computeTransferMetadataHash(
+  metadata: TransferMetadata,
+): Promise<string> {
+  const canonical = JSON.stringify([
+    METADATA_LABEL,
+    metadata.contentType,
+    metadata.fileName,
+    metadata.fileSize,
+    metadata.fileSizeExact,
+    metadata.mimeType,
+  ]);
+
+  return sha256Hex(canonical);
 }
