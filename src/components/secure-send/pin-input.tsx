@@ -63,6 +63,9 @@ export const PinInput = forwardRef<PinInputRef, PinInputProps>(
     useEffect(() => {
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        // Invalidate any in-flight securePin derivation so it cannot store or
+        // emit a secret after unmount — it wipes its own result instead.
+        generationRef.current++;
         // Wipe the secured scalar on unmount. Inlined rather than calling
         // dropSecuredSecret so this cleanup stays free of callback deps.
         if (securedSecretRef.current) {

@@ -290,62 +290,72 @@ export function useNostrSend(): UseNostrSendReturn {
           computePinHintFromLocator(getPinLocator(newPin), bucket),
           derivePakeSecret(newPin),
         ]);
-        // Fresh SPAKE2 run per generation: a new ephemeral scalar behind a new
-        // password-blinded element, so no published element ever replays.
-        const { message: pakeMessage, secret: pakeEphemeral } = startPake(
-          'sender',
-          pakeSecret,
-        );
-        const nonce = generateHandshakeNonce();
+        // Until the generation is registered below, this scope owns the
+        // secret: wipe it on every exit — stale epoch, cancellation, or a
+        // throw anywhere between derivation and registration.
+        let registered = false;
+        try {
+          // Fresh SPAKE2 run per generation: a new ephemeral scalar behind a
+          // new password-blinded element, so no published element ever
+          // replays.
+          const { message: pakeMessage, secret: pakeEphemeral } = startPake(
+            'sender',
+            pakeSecret,
+          );
+          const nonce = generateHandshakeNonce();
 
-        // Plaintext by design: the element is blinded, and nothing here may be
-        // PIN-testable offline. File metadata deliberately stays out — it is
-        // delivered inside the sealed confirm, after the handshake.
-        const payload: RendezvousPayload = {
-          type: 'rendezvous',
-          transferId,
-          senderPubkey: publicKey,
-          pakeMessage: uint8ArrayToBase64(pakeMessage),
-          nonce,
-          relays: [...DEFAULT_RELAYS],
-        };
-        // Hash what we are about to publish, so a claim can be checked against
-        // the rendezvous we actually sent rather than the one the claimant says
-        // it saw. Per generation, since the nonce is fresh on every rotation.
-        const transcriptHash = await computeRendezvousTranscriptHash(
-          payload,
-          salt,
-        );
-        const event = createRendezvousEvent(
-          secretKey,
-          payload,
-          salt,
-          hint,
-          bucket,
-        );
+          // Plaintext by design: the element is blinded, and nothing here may
+          // be PIN-testable offline. File metadata deliberately stays out — it
+          // is delivered inside the sealed confirm, after the handshake.
+          const payload: RendezvousPayload = {
+            type: 'rendezvous',
+            transferId,
+            senderPubkey: publicKey,
+            pakeMessage: uint8ArrayToBase64(pakeMessage),
+            nonce,
+            relays: [...DEFAULT_RELAYS],
+          };
+          // Hash what we are about to publish, so a claim can be checked
+          // against the rendezvous we actually sent rather than the one the
+          // claimant says it saw. Per generation, since the nonce is fresh on
+          // every rotation.
+          const transcriptHash = await computeRendezvousTranscriptHash(
+            payload,
+            salt,
+          );
+          const event = createRendezvousEvent(
+            secretKey,
+            payload,
+            salt,
+            hint,
+            bucket,
+          );
 
-        if (cancelledRef.current || epoch !== pinEpoch) {
-          wipeBufferSource(pakeSecret);
-          return;
-        }
+          if (cancelledRef.current || epoch !== pinEpoch) return;
 
-        // Register the generation before publishing so a fast claim can never
-        // race ahead of the retained-keys list.
-        generations.unshift({
-          pakeSecret,
-          pakeEphemeral,
-          pakeMessage,
-          nonce,
-          bucket,
-          transcriptHash,
-          verifyBudget: CLAIM_VERIFY_LIMIT,
-        });
-        retireGenerations((generation) => isPinBucketActive(generation.bucket));
+          // Register the generation before publishing so a fast claim can
+          // never race ahead of the retained-keys list.
+          generations.unshift({
+            pakeSecret,
+            pakeEphemeral,
+            pakeMessage,
+            nonce,
+            bucket,
+            transcriptHash,
+            verifyBudget: CLAIM_VERIFY_LIMIT,
+          });
+          registered = true;
+          retireGenerations((generation) =>
+            isPinBucketActive(generation.bucket),
+          );
 
-        await client.publish(event);
+          await client.publish(event);
 
-        if (!cancelledRef.current && epoch === pinEpoch) {
-          setPin(newPin);
+          if (!cancelledRef.current && epoch === pinEpoch) {
+            setPin(newPin);
+          }
+        } finally {
+          if (!registered) wipeBufferSource(pakeSecret);
         }
       };
 
@@ -365,6 +375,11 @@ export function useNostrSend(): UseNostrSendReturn {
           cancelPoll = null;
           timeout = null;
           subId = null;
+          // Settling ends this transfer's rotation era: bump the epoch so an
+          // in-flight publishRendezvous wakes up stale and aborts instead of
+          // registering a generation, publishing after lockout, or
+          // re-displaying a PIN.
+          pinEpoch += 1;
           refreshPinRef.current = null;
         };
 
