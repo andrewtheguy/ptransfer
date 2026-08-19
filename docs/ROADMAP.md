@@ -44,5 +44,41 @@ Findings from research (August 2026):
   characters — still fine for QR/copy-paste. The onion address alone lets
   anyone connect, so the embedded key must gate decryption/authentication.
 
+### Relay Fallback for Data Transfer via ppng.io (piping-server)
+A fallback path for when WebRTC finds no direct route: stream the encrypted
+payload through a public HTTP relay instead of failing. piping-server
+(https://ppng.io) is a blind streaming relay — the sender `POST`s to a path,
+the receiver `GET`s the same path, and bytes stream through without being
+stored.
+
+Findings from research (August 2026):
+- **CORS is fully open** (verified live against ppng.io): preflight returns
+  `access-control-allow-origin: *` with `GET, HEAD, POST, PUT, OPTIONS` and
+  headers `Content-Type, Content-Disposition, X-Piping`, so browser `fetch()`
+  works from any origin with no proxy. Works browser ↔ browser and
+  browser ↔ CLI (plain HTTP on both sides).
+- **Rendezvous fits the existing PAKE**: derive a high-entropy path from the
+  SPAKE2 shared secret (HKDF); the path is the only thing gating the stream,
+  and the payload is E2E-encrypted before it touches the relay, so the relay
+  sees only ciphertext and both parties' IPs — the same trust position the
+  Nostr signaling relays already occupy.
+- **Zero infrastructure**: unlike adapting Magic Wormhole's transit relay
+  (whose public instances are donated app-specific infra — the default
+  `transit.magic-wormhole.io` is raw TCP a browser can't reach, and Least
+  Authority's WebSocket relay is for Winden), ppng.io is explicitly offered as
+  general-purpose public piping infrastructure. It is also self-hostable if
+  its goodwill or bandwidth tolerance for multi-GB transfers proves
+  insufficient — there is no SLA.
+- **Design tension**: the CLI's transport is deliberately direct-only ("fails
+  rather than route file bytes through a relay server"). A relay fallback
+  reverses that stance and should be opt-in, ideally with a user-configurable
+  relay URL.
+- Alternatives considered: a self-hosted Magic Wormhole transit relay
+  (WebSocket-capable upstream, blind token-matching pipe, but requires running
+  a server); a TURN server (least protocol work since transport is already
+  WebRTC, same trust profile); iroh's relay network (browser support in alpha
+  as of iroh 0.32, always-relayed via WebSocket in browsers, would also give
+  CLI interop since beam-rs uses iroh natively).
+
 ### Other
 - Better website UI/UX
