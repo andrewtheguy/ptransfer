@@ -138,7 +138,7 @@ export interface PakeStart {
  * sees, so its x and pA are reused up to CLAIM_VERIFY_LIMIT times inside one
  * rotation bucket.
  *
- * That reuse is a deliberate deviation from RFC 9382 §6 ("Randomly generated
+ * That reuse is a deliberate deviation from RFC 9382 §7 ("Randomly generated
  * values, e.g., x and y, MUST NOT be reused"). It is forced by the rendezvous
  * shape: pA is published before any claimant exists, and each claim is sealed
  * under a transcript committing to the pA its author saw, so a fresh scalar per
