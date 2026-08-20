@@ -1,6 +1,6 @@
 import { deflateSync, inflateSync } from 'fflate';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
-import { NOSTR_FILE_AAD_PREFIX } from './constants';
+import { NOSTR_FILE_AAD_PREFIX, NOSTR_FILE_CHUNK_SIZE } from './constants';
 import { decodeZ85, encodeZ85 } from './z85';
 
 /**
@@ -53,16 +53,27 @@ export async function encodeChunkContent(
 
 /**
  * Nostr event content string -> chunk plaintext.
- * Throws on tampering (GCM auth failure), wrong AAD, or corrupt deflate data.
+ * Throws on tampering (GCM auth failure), wrong AAD, corrupt deflate data,
+ * or a decompressed size above maxSize (decompression-bomb guard).
  */
 export async function decodeChunkContent(
   key: CryptoKey,
   content: string,
   aad: Uint8Array,
+  maxSize: number = NOSTR_FILE_CHUNK_SIZE,
 ): Promise<Uint8Array> {
   const encrypted = decodeZ85(content);
   const compressed = await decrypt(key, encrypted, aad);
-  return inflateSync(compressed);
+  // Fixed output buffer: fflate never grows a caller-provided buffer, so an
+  // over-sized decompression comes back at maxSize + 1 (or throws) and is
+  // rejected instead of ballooning memory or truncating silently.
+  const plaintext = inflateSync(compressed, {
+    out: new Uint8Array(maxSize + 1),
+  });
+  if (plaintext.length > maxSize) {
+    throw new Error('Decompressed chunk exceeds the chunk size');
+  }
+  return plaintext;
 }
 
 export async function sha256(data: Uint8Array): Promise<Uint8Array> {

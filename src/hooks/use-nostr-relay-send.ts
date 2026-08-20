@@ -1,5 +1,5 @@
 import { SimplePool } from 'nostr-tools';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wipeBufferSource } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import {
@@ -82,6 +82,20 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
     }
     setState({ status: 'idle' });
   }, [clearExpiryTimeout]);
+
+  // On unmount: stop the pending expiry timer (so it can't setState on an
+  // unmounted component) and close any open relay sockets. No setState here.
+  useEffect(
+    () => () => {
+      cancelledRef.current = true;
+      clearExpiryTimeout();
+      if (poolRef.current) {
+        poolRef.current.destroy();
+        poolRef.current = null;
+      }
+    },
+    [clearExpiryTimeout],
+  );
 
   const finish = useCallback(() => {
     clearExpiryTimeout();

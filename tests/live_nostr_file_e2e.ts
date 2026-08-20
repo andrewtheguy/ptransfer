@@ -46,7 +46,6 @@ async function main() {
       data,
       {
         fileName: 'live-e2e.bin',
-        fileSize: FILE_SIZE,
         mimeType: 'application/octet-stream',
       },
       {

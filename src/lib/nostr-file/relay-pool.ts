@@ -50,7 +50,9 @@ export function createLocalStorageRelayPool(): RelayPoolStorage {
           !Array.isArray(s.candidates) ||
           !s.candidates.every((c) => typeof c === 'string') ||
           typeof s.discoveredAt !== 'number' ||
-          typeof s.cursor !== 'number'
+          typeof s.cursor !== 'number' ||
+          !Number.isInteger(s.cursor) ||
+          s.cursor < 0
         ) {
           return null;
         }
@@ -82,7 +84,15 @@ function normalizeRelayUrl(raw: string): string | null {
   }
   if (url.protocol !== 'wss:') return null;
   const host = url.hostname;
-  if (!host || host.endsWith('.onion') || host.endsWith('.local')) return null;
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.onion') ||
+    host.endsWith('.local')
+  ) {
+    return null;
+  }
   // Drop IP literals (typically private/test relays not reachable for peers).
   if (/^[\d.]+$/.test(host) || host.includes(':')) return null;
   if (url.username || url.password) return null;
@@ -169,13 +179,18 @@ async function probeRelay(
     const { event, dTag } = buildProbeEvent(secretKey, content);
     wipeBufferSource(secretKey);
 
-    const withTimeout = <T>(p: Promise<T>): Promise<T> =>
-      Promise.race([
+    const withTimeout = <T>(p: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return Promise.race([
         p,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('probe timeout')), timeoutMs),
-        ),
-      ]);
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('probe timeout')),
+            timeoutMs,
+          );
+        }),
+      ]).finally(() => clearTimeout(timer));
+    };
 
     await withTimeout(Promise.all(pool.publish([url], event)));
     const events = await withTimeout(
@@ -237,7 +252,8 @@ export async function healthCheckRelays(
       const url = candidates[index];
       const rttMs = await probeRelay(pool, url, timeoutMs);
       checked++;
-      if (rttMs !== null) {
+      // Re-check the target: sibling probes may have filled it in flight.
+      if (rttMs !== null && healthy.length < targetCount) {
         healthy.push({ url, rttMs });
       }
       opts.onProgress?.(checked, healthy.length);

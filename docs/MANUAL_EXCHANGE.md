@@ -87,7 +87,9 @@ Under **Advanced options** (visible when Manual Exchange is selected on the send
 through public Nostr relays, for files up to **10 MB**:
 
 1. The sender's file is encrypted with a random key and uploaded in full to a set of
-   discovered Nostr relays as **temporary events that auto-delete after 1 hour** (NIP-40)
+   discovered Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a
+   deletion request that compliant relays honor by pruning the events, not guaranteed
+   erasure; the file stays protected by its encryption regardless
 2. Only after the complete upload is confirmed does the sender get a single exchange code
    (multi-QR or copy/paste) containing the download manifest **and the decryption key**
 3. The receiver pastes/scans that code in the normal Manual Exchange receive flow — it is
@@ -99,8 +101,9 @@ Differences from normal Manual Exchange:
   no in-app delivery confirmation
 - **No live connection needed**: the peers never connect to each other; both only need
   internet access to the relays, and not necessarily at the same time
-- **Time limit**: the receiver must download within 1 hour of the upload, before the relay
-  copies expire
+- **Time limit**: the receiver must download within 1 hour of the upload — the app
+  enforces this deadline, and expired copies are pruned by compliant relays (deletion is
+  requested via NIP-40, not cryptographically guaranteed)
 - **The code IS the key**: unlike signaling payloads, this code contains the decryption key.
   Anyone who obtains it before expiry can download and decrypt the file — share it only over
   a trusted channel (in person, or an end-to-end encrypted messenger)

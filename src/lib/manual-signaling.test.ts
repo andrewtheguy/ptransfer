@@ -200,7 +200,9 @@ describe('Nostr file payload', () => {
       ],
     };
     const binary = generateNostrFilePayloadBinary(large);
-    expect(binary.length).toBeLessThan(800);
+    // Target capacity: two ~400-byte QR frames for the worst-case payload.
+    const TWO_QR_CAPACITY_BYTES = 800;
+    expect(binary.length).toBeLessThan(TWO_QR_CAPACITY_BYTES);
   });
 
   it('discriminates all payload types', () => {
@@ -253,6 +255,17 @@ describe('Nostr file payload', () => {
       }),
     ).toBe(false);
     expect(isValidNostrFilePayload({ ...validPayload, type: 'offer' })).toBe(
+      false,
+    );
+    expect(isValidNostrFilePayload({ ...validPayload, v: 2 })).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, enc: 2 })).toBe(false);
+    expect(
+      isValidNostrFilePayload({ ...validPayload, pubkey: 'Z'.repeat(64) }),
+    ).toBe(false);
+    expect(
+      isValidNostrFilePayload({ ...validPayload, fileHash: 'not base64!!' }),
+    ).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, chunkSize: 100 })).toBe(
       false,
     );
   });

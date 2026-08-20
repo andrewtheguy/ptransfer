@@ -91,7 +91,7 @@ async function publishWithRetry(
  */
 export async function uploadFileToNostr(
   data: Uint8Array,
-  meta: { fileName: string; fileSize: number; mimeType: string },
+  meta: { fileName: string; mimeType: string },
   opts: {
     onProgress: (p: UploadProgress) => void;
     isCancelled: () => boolean;
@@ -139,6 +139,11 @@ export async function uploadFileToNostr(
     // Relay selection
     let relays: string[];
     if (opts.relayOverride && opts.relayOverride.length > 0) {
+      if (opts.relayOverride.length < MIN_CHUNK_RELAY_SUCCESS) {
+        throw new Error(
+          'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.',
+        );
+      }
       relays = opts.relayOverride;
     } else {
       onProgress({ phase: 'discovering' });

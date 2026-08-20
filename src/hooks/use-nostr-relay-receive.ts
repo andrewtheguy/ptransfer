@@ -1,5 +1,5 @@
 import { SimplePool } from 'nostr-tools';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NostrFilePayload } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import {
@@ -40,6 +40,20 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
     cancel();
     setReceivedContent(null);
   }, [cancel]);
+
+  // Close relay sockets when the component unmounts mid-download (no
+  // setState here — the component is gone).
+  useEffect(
+    () => () => {
+      cancelledRef.current = true;
+      receivingRef.current = false;
+      if (poolRef.current) {
+        poolRef.current.destroy();
+        poolRef.current = null;
+      }
+    },
+    [],
+  );
 
   const start = useCallback(async (payload: NostrFilePayload) => {
     // Guard against concurrent invocations

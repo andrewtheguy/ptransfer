@@ -37,10 +37,19 @@ export interface NostrFileManifest {
 const HEX_32 = /^[0-9a-f]{32}$/;
 const HEX_64 = /^[0-9a-f]{64}$/;
 // base64 of 32 bytes: 43 chars + '=' padding
-const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
+export const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
 const MAX_RELAYS = 10;
 const MIN_CHUNK_SIZE = 1024;
 const MAX_CHUNK_SIZE = 65408;
+
+function isWssUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'wss:' && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 export function isValidNostrFileManifest(
   value: unknown,
@@ -93,7 +102,7 @@ export function isValidNostrFileManifest(
     m.relays.length === 0 ||
     m.relays.length > MAX_RELAYS ||
     !m.relays.every(
-      (r) => typeof r === 'string' && r.startsWith('wss://') && r.length < 200,
+      (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
     )
   ) {
     return false;
@@ -101,9 +110,9 @@ export function isValidNostrFileManifest(
 
   if (
     typeof m.createdAt !== 'number' ||
-    !Number.isFinite(m.createdAt) ||
+    !Number.isInteger(m.createdAt) ||
     typeof m.expiresAt !== 'number' ||
-    !Number.isFinite(m.expiresAt) ||
+    !Number.isInteger(m.expiresAt) ||
     m.expiresAt !== m.createdAt + NOSTR_FILE_EXPIRATION_SEC
   ) {
     return false;

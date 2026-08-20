@@ -1,7 +1,11 @@
 import { wipeBufferSource } from '../crypto/memory';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../nostr/events';
 import { assembleChunks, chunkAad, decodeChunkContent, sha256 } from './codec';
-import { CLOCK_SKEW_TOLERANCE_SEC, RELAY_QUERY_MAX_WAIT_MS } from './constants';
+import {
+  CLOCK_SKEW_TOLERANCE_SEC,
+  DOWNLOAD_RETRY_PASS_DELAY_MS,
+  RELAY_QUERY_MAX_WAIT_MS,
+} from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
@@ -54,14 +58,19 @@ export async function downloadFileFromNostr(
     );
   }
 
-  const aesKey = await crypto.subtle.importKey(
-    'raw',
-    keyBytes as BufferSource,
-    'AES-GCM',
-    false,
-    ['decrypt'],
-  );
-  wipeBufferSource(keyBytes);
+  let aesKey: CryptoKey;
+  try {
+    aesKey = await crypto.subtle.importKey(
+      'raw',
+      keyBytes as BufferSource,
+      'AES-GCM',
+      false,
+      ['decrypt'],
+    );
+  } finally {
+    // Wipe on success and on import failure alike.
+    wipeBufferSource(keyBytes);
+  }
 
   const throwIfCancelled = () => {
     if (isCancelled()) throw new NostrFileCancelledError();
@@ -76,6 +85,12 @@ export async function downloadFileFromNostr(
   // Two full passes over the relay list: the second catches chunks a relay
   // failed to deliver transiently on the first.
   for (let pass = 0; pass < 2; pass++) {
+    if (pass > 0) {
+      // Brief pause so transiently failed or dropped relay connections have
+      // a moment to recover before the retry pass.
+      await new Promise((r) => setTimeout(r, DOWNLOAD_RETRY_PASS_DELAY_MS));
+      throwIfCancelled();
+    }
     for (const relay of manifest.relays) {
       const missing = missingIndices(chunks);
       if (missing.length === 0) break;
@@ -108,6 +123,7 @@ export async function downloadFileFromNostr(
               aesKey,
               content,
               chunkAad(manifest.transferId, index, manifest.totalChunks),
+              manifest.chunkSize,
             );
             chunksDone++;
             onProgress({

@@ -170,7 +170,10 @@ export function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setRemaining(Math.max(0, expiresAt - Math.floor(Date.now() / 1000)));
+      const next = Math.max(0, expiresAt - Math.floor(Date.now() / 1000));
+      setRemaining(next);
+      // The countdown never leaves 0 — stop ticking once it gets there.
+      if (next === 0) clearInterval(interval);
     }, 1000);
     return () => clearInterval(interval);
   }, [expiresAt]);

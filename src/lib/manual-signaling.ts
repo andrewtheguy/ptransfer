@@ -1,5 +1,6 @@
 import { deflateSync, inflateSync } from 'fflate';
 import {
+  BASE64_32_BYTES,
   isValidNostrFileManifest,
   type NostrFileManifest,
 } from './nostr-file/manifest';
@@ -308,8 +309,6 @@ export interface NostrFilePayload extends NostrFileManifest {
   key: string;
 }
 
-const BASE64_32_BYTE_KEY = /^[A-Za-z0-9+/]{43}=$/;
-
 /**
  * Validate NostrFilePayload structure
  */
@@ -319,7 +318,7 @@ export function isValidNostrFilePayload(
   if (!payload || typeof payload !== 'object') return false;
   const p = payload as Record<string, unknown>;
   if (p.type !== 'nostr-file') return false;
-  if (typeof p.key !== 'string' || !BASE64_32_BYTE_KEY.test(p.key)) {
+  if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
     return false;
   }
   return isValidNostrFileManifest(payload);

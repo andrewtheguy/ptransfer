@@ -1,5 +1,6 @@
 import type { Event } from 'nostr-tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { NOSTR_FILE_MAX_BYTES } from './constants';
 import { downloadFileFromNostr } from './download';
 import { isValidNostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
@@ -54,7 +55,6 @@ function createMockPool(failRelays: Set<string> = new Set()): MockPool {
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
 const META = {
   fileName: 'test.bin',
-  fileSize: 0,
   mimeType: 'application/octet-stream',
 };
 const noProgress = () => {};
@@ -153,7 +153,7 @@ describe('uploadFileToNostr', () => {
       uploadFileToNostr(new Uint8Array(0), META, opts),
     ).rejects.toThrow(/empty/);
     await expect(
-      uploadFileToNostr(new Uint8Array(10 * 1024 * 1024 + 1), META, opts),
+      uploadFileToNostr(new Uint8Array(NOSTR_FILE_MAX_BYTES + 1), META, opts),
     ).rejects.toThrow(/too large/);
     expect(pool.store.size).toBe(0);
   });

@@ -53,6 +53,9 @@ export const D_TAG_FILTER_BATCH = 100;
 
 export const RELAY_QUERY_MAX_WAIT_MS = 10000;
 
+// Pause before the download's second (retry) pass over the relay list.
+export const DOWNLOAD_RETRY_PASS_DELAY_MS = 1000;
+
 export const RELAY_POOL_STORAGE_KEY = 'ptransfer:nostr-file:relay-pool:v1';
 export const RELAY_CANDIDATE_TTL_MS = 24 * 60 * 60 * 1000;
 

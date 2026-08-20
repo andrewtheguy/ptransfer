@@ -475,7 +475,7 @@ An opt-in Manual Exchange variant (Advanced options → "Relay file through Nost
 
 Content pipeline: `deflate → AES-256-GCM (nonce‖ct‖tag, AAD = "ptransfer-nostr-file:v1:<transferId>:<index>:<total>") → Z85`. Z85 (base85) matches nostrsave: ~1.25× expansion vs base64's ~1.33×, JSON-escape-free. A 32 KiB chunk encodes to ~41 KB, under the ~64 KB relay content ceiling. Events deliberately carry no filename, size, or plaintext hash — file metadata travels only inside the manual payload, and the random `transferId` (rather than the file hash) prevents known-file confirmation against public relays.
 
-**Every published event carries the NIP-40 `expiration` tag (1 hour), health-check probes included** — this mode never asks relays to hold data beyond one transfer window. Chunks orphaned by a cancelled or failed upload are encrypted noise that expires on its own.
+**Every published event carries the NIP-40 `expiration` tag (1 hour), health-check probes included** — this mode never asks relays to hold data beyond one transfer window. The 1-hour value is a client-enforced transfer deadline plus a deletion *request*: compliant relays stop serving and prune expired events, but NIP-40 does not guarantee deletion or provide cryptographic erasure — a non-compliant relay could retain its copy. Confidentiality never depends on relay deletion: chunks orphaned by a cancelled or failed upload are AES-256-GCM ciphertext under a key that was never published, whether or not a relay prunes them.
 
 **Manifest (inside the PT01 payload, never published):** version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId`, ephemeral pubkey, chunk size, total chunks, relay list, created/expiry timestamps, plus the base64 AES key. ~600 bytes → 2–3 QR codes.
 
