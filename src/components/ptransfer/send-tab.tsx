@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/collapsible';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
-import { useSend } from '@/contexts/send-context';
+import { type NostrFileRelayMode, useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { supportsFolderSelection } from '@/lib/folder-utils';
@@ -56,6 +56,8 @@ export function SendTab() {
 
   const [methodChoice, setMethodChoice] = useState<MethodChoice>('online');
   const [nostrFileRelay, setNostrFileRelay] = useState(false);
+  const [nostrRelayVariant, setNostrRelayVariant] =
+    useState<Exclude<NostrFileRelayMode, 'off'>>('stored');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -120,7 +122,7 @@ export function SendTab() {
     setConfig({
       selectedFiles,
       methodChoice,
-      nostrFileRelay: nostrRelayActive,
+      nostrFileRelay: nostrRelayActive ? nostrRelayVariant : 'off',
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -426,11 +428,11 @@ export function SendTab() {
                 </label>
                 <p className="text-xs text-muted-foreground">
                   Max {formatFileSize(NOSTR_FILE_MAX_BYTES)}. Instead of a
-                  direct connection, the encrypted file is saved to public Nostr
-                  relays as temporary events that auto-delete after 1 hour. The
-                  recipient only needs your exchange code — no live connection
-                  between you. The code contains the decryption key, so share it
-                  only over a trusted channel.
+                  direct connection, the encrypted file travels in pieces
+                  through public Nostr relays as temporary events that
+                  auto-delete after 1 hour. The recipient only needs your
+                  exchange code. The code contains the decryption key, so share
+                  it only over a trusted channel.
                 </p>
               </div>
               <Switch
@@ -440,6 +442,70 @@ export function SendTab() {
                 className="mt-0.5"
               />
             </div>
+            {nostrFileRelay && (
+              <RadioGroup
+                value={nostrRelayVariant}
+                onValueChange={(value) =>
+                  setNostrRelayVariant(
+                    value as Exclude<NostrFileRelayMode, 'off'>,
+                  )
+                }
+                className="mt-3 gap-2"
+              >
+                <label
+                  htmlFor="send-nostr-relay-stored"
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
+                    nostrRelayVariant === 'stored'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-muted/60'
+                  }`}
+                >
+                  <RadioGroupItem
+                    id="send-nostr-relay-stored"
+                    value="stored"
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium">
+                      Stored, two copies
+                    </span>
+                    <p className="text-xs text-muted-foreground">
+                      Uploads the whole file first with two copies of every
+                      piece, then shows the code. The recipient can download any
+                      time within the hour, even after you close this page.
+                      Upload cost: about 2× the file size.
+                    </p>
+                  </div>
+                </label>
+                <label
+                  htmlFor="send-nostr-relay-live"
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
+                    nostrRelayVariant === 'live'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-muted/60'
+                  }`}
+                >
+                  <RadioGroupItem
+                    id="send-nostr-relay-live"
+                    value="live"
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium">
+                      Live, single copy
+                    </span>
+                    <p className="text-xs text-muted-foreground">
+                      Shows the code right away and uploads each piece once
+                      while the recipient downloads alongside. Over an encrypted
+                      side channel on the relays, the recipient reports any
+                      piece it could not fetch and only those are sent again.
+                      Both of you must stay online until it finishes. Upload
+                      cost: about 1× the file size.
+                    </p>
+                  </div>
+                </label>
+              </RadioGroup>
+            )}
             {isOverNostrLimit && (
               <p className="mt-2 text-xs text-destructive">
                 Selected files exceed the {formatFileSize(NOSTR_FILE_MAX_BYTES)}{' '}

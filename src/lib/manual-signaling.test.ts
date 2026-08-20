@@ -6,8 +6,10 @@ import {
   generateMutualOfferBinary,
   generateNostrFilePayloadBinary,
   isMutualPayload,
+  isValidNostrFileLivePayload,
   isValidNostrFilePayload,
   isValidSignalingPayload,
+  type NostrFileLivePayload,
   type NostrFilePayload,
   parseAnyManualPayload,
   parseClipboardPayload,
@@ -234,6 +236,32 @@ describe('Nostr file payload', () => {
     expect(parseAnyManualPayload(new Uint8Array([1, 2, 3, 4, 5]))).toBeNull();
     // A nostr-file payload is not a signaling payload.
     expect(parseMutualPayload(nostrBinary)).toBeNull();
+  });
+
+  it('round-trips and discriminates the live variant', () => {
+    const live: NostrFileLivePayload = {
+      ...validPayload,
+      type: 'nostr-file-live',
+      replication: 1,
+    };
+    const binary = generateNostrFilePayloadBinary(live);
+    const parsed = parseAnyManualPayload(binary);
+    expect(parsed?.kind).toBe('nostr-file-live');
+    expect(parsed?.payload).toEqual(live);
+    expect(isValidNostrFilePayload(live)).toBe(false);
+    expect(parseMutualPayload(binary)).toBeNull();
+  });
+
+  it('rejects a live payload that claims redundancy', () => {
+    const live = { ...validPayload, type: 'nostr-file-live', replication: 1 };
+    expect(isValidNostrFileLivePayload(live)).toBe(true);
+    expect(isValidNostrFileLivePayload({ ...live, replication: 2 })).toBe(
+      false,
+    );
+    expect(isValidNostrFileLivePayload({ ...live, key: 'short' })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...live, type: 'nostr-file' })).toBe(
+      false,
+    );
   });
 
   it('rejects malformed nostr-file payloads', () => {

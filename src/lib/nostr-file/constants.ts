@@ -68,6 +68,29 @@ export const DOWNLOAD_SWEEP_PASSES = 2;
 // Pause before each sweep pass.
 export const DOWNLOAD_RETRY_PASS_DELAY_MS = 1000;
 
+// Live (single-copy) variant: the sender uploads each chunk to one relay
+// and announces availability over an encrypted control channel; the receiver
+// acknowledges and only pieces it could not fetch are sent again.
+//
+// Chunks per availability announcement (64 × 32 KiB = 2 MiB).
+export const LIVE_BATCH_CHUNKS = 64;
+// The sender re-announces its latest availability when nothing changed, so a
+// lost announcement or acknowledgement is recovered on the next beat.
+export const LIVE_HEARTBEAT_MS = 15000;
+// Either side gives up when the peer has been silent this long (after the
+// peer was seen at least once).
+export const LIVE_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+// Floor on how many times one chunk may be re-sent before the transfer fails.
+export const LIVE_MIN_RETRANSMITS_PER_CHUNK = 4;
+// A relay the receiver reports this many misses against (it acknowledged the
+// chunk but does not serve it) stops receiving new chunks and re-sends.
+export const LIVE_RELAY_DEMOTE_MISSES = 2;
+// HKDF info label for the control-channel key derived from the file key.
+export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
+// Decompression bound for a control message body (a full 3200-chunk map
+// with every chunk listed is well under this).
+export const CONTROL_MESSAGE_MAX_BYTES = 256 * 1024;
+
 export const RELAY_POOL_STORAGE_KEY = 'ptransfer:nostr-file:relay-pool:v1';
 export const RELAY_CANDIDATE_TTL_MS = 24 * 60 * 60 * 1000;
 

@@ -1,9 +1,13 @@
 export * from './codec';
 export * from './constants';
+export * from './control';
 export * from './download';
+export * from './download-live';
 export * from './events';
+export * from './fetch';
 export * from './manifest';
 export type * from './pool';
 export * from './relay-pool';
 export * from './upload';
+export * from './upload-live';
 export * from './z85';
