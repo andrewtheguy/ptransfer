@@ -1,0 +1,442 @@
+import { wipeBufferSource } from '../crypto/memory';
+import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
+import { chunkAad, encodeChunkContent, sha256, splitIntoChunks } from './codec';
+import {
+  CLOCK_SKEW_TOLERANCE_SEC,
+  LIVE_BATCH_CHUNKS,
+  LIVE_HEARTBEAT_MS,
+  LIVE_IDLE_TIMEOUT_MS,
+  LIVE_MIN_RETRANSMITS_PER_CHUNK,
+  LIVE_RELAY_DEMOTE_MISSES,
+  NOSTR_FILE_CHUNK_SIZE,
+  NOSTR_FILE_EXPIRATION_SEC,
+  NOSTR_FILE_MANIFEST_VERSION,
+  NOSTR_FILE_MAX_BYTES,
+  UPLOAD_CHUNK_CONCURRENCY,
+} from './constants';
+import {
+  type AckMessage,
+  type AvailMessage,
+  deriveControlKey,
+  encodePosition,
+  openControlChannel,
+  parseReceiverMessage,
+} from './control';
+import { buildChunkEvent } from './events';
+import type { NostrFileManifest } from './manifest';
+import type { NostrFilePool } from './pool';
+import {
+  createLocalStorageRelayPool,
+  type RelayPoolStorage,
+} from './relay-pool';
+import { Deferred, Signal } from './sync';
+import {
+  NostrFileCancelledError,
+  publishWithRetry,
+  resolveUploadRelays,
+  type UploadProgress,
+} from './upload';
+
+export interface LiveSendProgress {
+  phase: UploadProgress['phase'] | 'transfer';
+  chunksDone?: number;
+  chunksTotal?: number;
+  relaysChecked?: number;
+  relaysHealthy?: number;
+  /** transfer phase: the receiver has sent at least one control message */
+  receiverConnected?: boolean;
+  /** transfer phase: chunks the receiver reported holding */
+  receiverHave?: number;
+  /** transfer phase: chunks re-sent after the receiver could not fetch them */
+  resent?: number;
+  /** transfer phase: relays no longer used because the receiver cannot read from them */
+  relaysDemoted?: number;
+}
+
+/**
+ * Live (single-copy) relay transfer, sender side.
+ *
+ * Unlike uploadFileToNostr, the manual payload is handed out *before* the
+ * upload (`onReady`), and the sender stays online: each chunk is published to
+ * one ring relay (chunk i → relays[i % N], walking the ring on rejection),
+ * availability is announced over the encrypted control channel after every
+ * LIVE_BATCH_CHUNKS chunks, and the receiver's acknowledgements name the
+ * chunks it could not fetch — only those are re-sent, to another relay.
+ * A relay the receiver keeps missing chunks on (it acknowledges writes but
+ * does not serve them) is demoted: new chunks and re-sends skip it while
+ * any other relay is left. Resolves once the receiver reports the verified
+ * file, or throws when the transfer cannot complete (relay failure, expiry,
+ * peer gone).
+ */
+export async function sendFileLive(
+  data: Uint8Array,
+  meta: { fileName: string; mimeType: string },
+  opts: {
+    onProgress: (p: LiveSendProgress) => void;
+    /**
+     * Called once relays are selected and the control channel is open.
+     * Ownership of `keyBytes` transfers to the callee, which must wipe it.
+     */
+    onReady: (manifest: NostrFileManifest, keyBytes: Uint8Array) => void;
+    isCancelled: () => boolean;
+    pool: NostrFilePool;
+    storage?: RelayPoolStorage;
+    relayOverride?: string[];
+  },
+): Promise<void> {
+  const { onProgress, isCancelled, pool } = opts;
+  const storage = opts.storage ?? createLocalStorageRelayPool();
+
+  if (data.length === 0) throw new Error('Cannot send an empty file');
+  if (data.length > NOSTR_FILE_MAX_BYTES) {
+    throw new Error(
+      `File too large for Nostr relay transfer (max ${NOSTR_FILE_MAX_BYTES / (1024 * 1024)} MB)`,
+    );
+  }
+
+  const throwIfCancelled = () => {
+    if (isCancelled()) throw new NostrFileCancelledError();
+  };
+
+  onProgress({ phase: 'hashing' });
+  const fileHash = uint8ArrayToBase64(await sha256(data));
+  const transferId = Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, '0'),
+  ).join('');
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+  const { secretKey, publicKey } = generateEphemeralKeys();
+  let keyHandedOver = false;
+
+  try {
+    const aesKey = await crypto.subtle.importKey(
+      'raw',
+      keyBytes as BufferSource,
+      'AES-GCM',
+      false,
+      ['encrypt'],
+    );
+    const controlKey = await deriveControlKey(keyBytes, transferId);
+    const chunks = splitIntoChunks(data, NOSTR_FILE_CHUNK_SIZE);
+    const total = chunks.length;
+    throwIfCancelled();
+
+    const relays = await resolveUploadRelays(pool, storage, {
+      relayOverride: opts.relayOverride,
+      isCancelled,
+      onProgress,
+    });
+    const n = relays.length;
+    const createdAt = Math.floor(Date.now() / 1000);
+    const expiresAt = createdAt + NOSTR_FILE_EXPIRATION_SEC;
+    const manifest: NostrFileManifest = {
+      v: NOSTR_FILE_MANIFEST_VERSION,
+      fileName: meta.fileName,
+      fileSize: data.length,
+      mimeType: meta.mimeType,
+      fileHash,
+      transferId,
+      pubkey: publicKey,
+      chunkSize: NOSTR_FILE_CHUNK_SIZE,
+      totalChunks: total,
+      enc: 1,
+      relays: [...relays],
+      replication: 1,
+      createdAt,
+      expiresAt,
+    };
+
+    // Placement state. `placedPos[i]` is the ring position holding chunk i
+    // (-1 while unplaced), `gen[i]` how many times it was re-sent, and
+    // `nextOffset[i]` where the next attempt starts walking the ring.
+    const placedPos = new Int32Array(total).fill(-1);
+    const gen = new Uint32Array(total);
+    const nextOffset = new Uint32Array(total);
+    const maxRetransmits = Math.max(n, LIVE_MIN_RETRANSMITS_PER_CHUNK);
+    // Receiver-reported misses per ring position; a position past the
+    // threshold is demoted (never all of them — something must stay).
+    const misses = new Uint32Array(n);
+    const demoted = new Set<number>();
+    let upto = 0; // chunks [0, upto) are all placed
+    let chunksDone = 0;
+    let resent = 0;
+    let nextChunk = 0;
+    const retryQueue: number[] = [];
+    const pendingRetry = new Set<number>();
+
+    let finished = false;
+    let succeeded = false;
+    const outcome = new Deferred<void>();
+    const work = new Signal();
+    const control = new Signal();
+    let availDirty = false;
+
+    let receiverPubkey: string | null = null;
+    let receiverHave = 0;
+    let lastPeerN = 0;
+    let lastPeerAt = 0;
+
+    const stop = () => {
+      finished = true;
+      work.notify();
+      control.notify();
+    };
+    const fail = (err: unknown) => {
+      if (finished) return;
+      outcome.reject(err);
+      stop();
+    };
+    const succeed = () => {
+      if (finished) return;
+      succeeded = true;
+      outcome.resolve();
+      stop();
+    };
+    const report = () =>
+      onProgress({
+        phase: 'transfer',
+        chunksDone,
+        chunksTotal: total,
+        receiverConnected: receiverPubkey !== null,
+        receiverHave,
+        resent,
+        relaysDemoted: demoted.size,
+      });
+
+    /**
+     * Ring positions to try for a chunk, starting at `startOffset` from its
+     * home position: healthy relays first (in ring order), demoted ones only
+     * as a last resort.
+     */
+    const candidatePositions = (index: number, startOffset: number) => {
+      const healthy: number[] = [];
+      const fallback: number[] = [];
+      for (let j = 0; j < n; j++) {
+        const pos = (index + ((startOffset + j) % n)) % n;
+        (demoted.has(pos) ? fallback : healthy).push(pos);
+      }
+      return [...healthy, ...fallback];
+    };
+
+    const handleAck = (msg: AckMessage) => {
+      receiverHave = Math.max(receiverHave, msg.have);
+      for (const [index, pos, g] of msg.missing) {
+        // The receiver tried a placement we have since replaced — it will
+        // see the new one on the next announcement.
+        if (placedPos[index] !== pos || gen[index] !== g) continue;
+        if (pendingRetry.has(index)) continue;
+        misses[pos]++;
+        if (misses[pos] >= LIVE_RELAY_DEMOTE_MISSES && demoted.size < n - 1) {
+          demoted.add(pos);
+        }
+        if (gen[index] >= maxRetransmits) {
+          fail(
+            new Error(
+              `Piece ${index + 1} of ${total} could not be delivered after ${gen[index]} re-sends — transfer aborted`,
+            ),
+          );
+          return;
+        }
+        pendingRetry.add(index);
+        retryQueue.push(index);
+      }
+      work.notify();
+    };
+
+    const channel = openControlChannel(pool, relays, {
+      transferId,
+      key: controlKey,
+      role: 'sender',
+      secretKey,
+      since: createdAt - CLOCK_SKEW_TOLERANCE_SEC,
+      expiresAt,
+      onMessage: (raw, pubkey) => {
+        if (finished || pubkey === publicKey) return;
+        // First valid peer wins; only the code holder can seal messages.
+        if (receiverPubkey !== null && pubkey !== receiverPubkey) return;
+        const msg = parseReceiverMessage(raw, total, n);
+        if (!msg || msg.n <= lastPeerN) return;
+        lastPeerN = msg.n;
+        receiverPubkey = pubkey;
+        lastPeerAt = Date.now();
+        switch (msg.t) {
+          case 'hello':
+            // The receiver just joined: announce what is already placed now
+            // instead of leaving it idle until the next heartbeat (a relay
+            // that will not serve the stored backlog gives it nothing).
+            availDirty = true;
+            control.notify();
+            break;
+          case 'ack':
+            handleAck(msg);
+            break;
+          case 'done':
+            succeed();
+            return;
+          case 'cancel':
+            fail(new Error('The receiver cancelled the transfer'));
+            return;
+        }
+        report();
+      },
+    });
+
+    try {
+      opts.onReady(manifest, keyBytes);
+      keyHandedOver = true;
+      report();
+
+      const buildAvail = (): Omit<AvailMessage, 'n'> => {
+        let map = '';
+        const gens: [number, number][] = [];
+        for (let i = 0; i < upto; i++) {
+          map += encodePosition(placedPos[i]);
+          if (gen[i] !== 0) gens.push([i, gen[i]]);
+        }
+        return { t: 'avail', upto, map, gens };
+      };
+
+      const worker = async (): Promise<void> => {
+        while (!finished) {
+          throwIfCancelled();
+          let index: number;
+          let isRetry = false;
+          if (retryQueue.length > 0) {
+            index = retryQueue.shift() as number;
+            isRetry = true;
+          } else if (nextChunk < total) {
+            index = nextChunk++;
+          } else {
+            await work.wait(1000);
+            continue;
+          }
+          const aad = chunkAad(transferId, index, total);
+          const content = await encodeChunkContent(aesKey, chunks[index], aad);
+          const event = buildChunkEvent(secretKey, {
+            transferId,
+            index,
+            total,
+            content,
+            createdAt,
+          });
+          // Walk the ring from this chunk's next offset (healthy relays
+          // first) until one accepts; a re-send therefore starts past the
+          // relay the receiver could not read from. Candidates are re-ranked
+          // before every attempt so a demotion that lands mid-walk counts.
+          let placed = -1;
+          const tried = new Set<number>();
+          while (placed < 0 && tried.size < n) {
+            if (finished) return;
+            throwIfCancelled();
+            const pos = candidatePositions(index, nextOffset[index]).find(
+              (p) => !tried.has(p),
+            );
+            if (pos === undefined) break;
+            tried.add(pos);
+            nextOffset[index] = (((pos - index) % n) + n + 1) % n;
+            if (await publishWithRetry(pool, relays[pos], event, isCancelled)) {
+              placed = pos;
+            }
+          }
+          throwIfCancelled();
+          if (placed < 0) {
+            throw new Error(
+              `Chunk ${index + 1}/${total} could not be saved to any relay — transfer aborted`,
+            );
+          }
+          placedPos[index] = placed;
+          if (isRetry) {
+            gen[index]++;
+            resent++;
+            pendingRetry.delete(index);
+          } else {
+            chunksDone++;
+          }
+          const prevUpto = upto;
+          while (upto < total && placedPos[upto] >= 0) upto++;
+          if (
+            isRetry ||
+            upto === total ||
+            Math.floor(prevUpto / LIVE_BATCH_CHUNKS) !==
+              Math.floor(upto / LIVE_BATCH_CHUNKS)
+          ) {
+            availDirty = true;
+            control.notify();
+          }
+          report();
+        }
+      };
+
+      // Announce new availability as soon as it exists; otherwise repeat the
+      // latest announcement on every heartbeat so a lost message (either
+      // direction) is recovered on the next beat.
+      const controlLoop = async (): Promise<void> => {
+        while (!finished) {
+          if (!availDirty) {
+            await control.wait(LIVE_HEARTBEAT_MS);
+            if (finished) break;
+          }
+          availDirty = false;
+          await channel.send(buildAvail());
+        }
+      };
+
+      const watchdog = setInterval(() => {
+        if (finished) return;
+        if (isCancelled()) {
+          fail(new NostrFileCancelledError());
+          return;
+        }
+        const now = Date.now();
+        if (now / 1000 > expiresAt) {
+          fail(
+            new Error(
+              'The relay copies expired before the receiver finished. Start a new transfer.',
+            ),
+          );
+          return;
+        }
+        if (
+          upto === total &&
+          lastPeerAt > 0 &&
+          now - lastPeerAt > LIVE_IDLE_TIMEOUT_MS
+        ) {
+          fail(
+            new Error(
+              'The receiver stopped responding. Ask them to keep the page open and try again.',
+            ),
+          );
+        }
+      }, 1000);
+
+      const workers = Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CHUNK_CONCURRENCY, total) }, () =>
+          worker().catch(fail),
+        ),
+      );
+      const loop = controlLoop().catch(fail);
+
+      try {
+        await outcome.promise;
+      } finally {
+        stop();
+        clearInterval(watchdog);
+        await Promise.allSettled([workers, loop]);
+        if (!succeeded) {
+          // Best effort: let the receiver stop waiting right away.
+          await Promise.race([
+            channel.send({ t: 'cancel' }).catch(() => {}),
+            new Promise((r) => setTimeout(r, 3000)),
+          ]);
+        }
+      }
+    } finally {
+      channel.close();
+    }
+  } catch (err) {
+    if (!keyHandedOver) wipeBufferSource(keyBytes);
+    throw err;
+  } finally {
+    wipeBufferSource(secretKey);
+  }
+}

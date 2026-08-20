@@ -1,19 +1,19 @@
 import { SimplePool } from 'nostr-tools';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wipeBufferSource } from '@/lib/crypto';
-import { formatFileSize } from '@/lib/file-utils';
 import {
   generateNostrFilePayloadBinary,
   type NostrFilePayload,
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import { uint8ArrayToBase64 } from '@/lib/nostr/events';
-import {
-  NOSTR_FILE_MAX_BYTES,
-  NostrFileCancelledError,
-  uploadFileToNostr,
-} from '@/lib/nostr-file';
+import { NostrFileCancelledError, uploadFileToNostr } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
+import {
+  chunkBytesEstimate,
+  readSourceFully,
+  validateNostrRelaySource,
+} from './nostr-relay-source';
 
 export interface UseNostrRelaySendReturn {
   state: TransferState;
@@ -21,40 +21,6 @@ export interface UseNostrRelaySendReturn {
   /** One-way flow: the user confirms the receiver has the code. */
   finish: () => void;
   cancel: () => void;
-}
-
-async function readSourceFully(
-  source: TransferSource,
-  isCancelled: () => boolean,
-): Promise<Uint8Array> {
-  const reader = source.stream().getReader();
-  const parts: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      if (isCancelled()) throw new NostrFileCancelledError();
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.length;
-        if (total > NOSTR_FILE_MAX_BYTES) {
-          throw new Error(
-            `File exceeds ${formatFileSize(NOSTR_FILE_MAX_BYTES)} Nostr relay limit`,
-          );
-        }
-        parts.push(value);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const data = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    data.set(part, offset);
-    offset += part.length;
-  }
-  return data;
 }
 
 export function useNostrRelaySend(): UseNostrRelaySendReturn {
@@ -120,32 +86,12 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
       const isCancelled = () => cancelledRef.current;
 
       try {
-        // Validate and sanitize metadata
-        const fileName = (content.name || '').trim();
-        if (!fileName) {
-          setState({ status: 'error', message: 'Missing file name' });
+        const checked = validateNostrRelaySource(content);
+        if (!checked.ok) {
+          setState(checked.state);
           return;
         }
-        const mimeType = content.type || 'application/octet-stream';
-
-        if (
-          !Number.isFinite(content.estimatedSize) ||
-          content.estimatedSize < 0 ||
-          (content.size !== null &&
-            (!Number.isFinite(content.size) || content.size <= 0))
-        ) {
-          setState({ status: 'error', message: 'Invalid file size' });
-          return;
-        }
-        // Pre-read bound; the exact byte count is re-checked while reading
-        // (ZIP sources only know their real size at end of stream).
-        if ((content.size ?? content.estimatedSize) > NOSTR_FILE_MAX_BYTES) {
-          setState({
-            status: 'error',
-            message: `File exceeds ${formatFileSize(NOSTR_FILE_MAX_BYTES)} Nostr relay limit`,
-          });
-          return;
-        }
+        const { fileName, mimeType } = checked;
 
         setState({ status: 'preparing', message: 'Preparing file...' });
         const data = await readSourceFully(content, isCancelled);
@@ -196,10 +142,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
                     progress: {
                       current: Math.min(
                         (p.chunksDone ?? 0) *
-                          manifestChunkEstimate(
-                            data.length,
-                            p.chunksTotal ?? 1,
-                          ),
+                          chunkBytesEstimate(data.length, p.chunksTotal ?? 1),
                         data.length,
                       ),
                       total: data.length,
@@ -273,9 +216,4 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
     () => ({ state, send, finish, cancel }),
     [state, send, finish, cancel],
   );
-}
-
-// Progress in bytes from chunk counts (chunks are equal-sized except the last).
-function manifestChunkEstimate(fileSize: number, totalChunks: number): number {
-  return Math.ceil(fileSize / Math.max(totalChunks, 1));
 }

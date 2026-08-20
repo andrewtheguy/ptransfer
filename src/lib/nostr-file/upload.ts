@@ -61,7 +61,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Publish one event to one relay with retries. Returns true when the relay
  * acknowledged the event.
  */
-async function publishWithRetry(
+export async function publishWithRetry(
   pool: NostrFilePool,
   relay: string,
   event: Event,
@@ -79,6 +79,48 @@ async function publishWithRetry(
     }
   }
   return false;
+}
+
+export const NOT_ENOUGH_RELAYS_MESSAGE =
+  'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.';
+
+/**
+ * The relay ring for an upload: the caller's override, or discovery +
+ * health check + rotating batch selection. Throws when fewer than
+ * MIN_CHUNK_RELAY_SUCCESS relays are usable.
+ */
+export async function resolveUploadRelays(
+  pool: NostrFilePool,
+  storage: RelayPoolStorage,
+  opts: {
+    relayOverride?: string[];
+    isCancelled: () => boolean;
+    onProgress: (p: UploadProgress) => void;
+  },
+): Promise<string[]> {
+  const { isCancelled, onProgress } = opts;
+  const throwIfCancelled = () => {
+    if (isCancelled()) throw new NostrFileCancelledError();
+  };
+  if (opts.relayOverride && opts.relayOverride.length > 0) {
+    if (opts.relayOverride.length < MIN_CHUNK_RELAY_SUCCESS) {
+      throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+    }
+    return opts.relayOverride;
+  }
+  onProgress({ phase: 'discovering' });
+  const candidates = await getRelayCandidates(pool, storage);
+  throwIfCancelled();
+  const healthy = await healthCheckRelays(pool, candidates, {
+    isCancelled,
+    onProgress: (relaysChecked, relaysHealthy) =>
+      onProgress({ phase: 'health_check', relaysChecked, relaysHealthy }),
+  });
+  throwIfCancelled();
+  if (healthy.length < MIN_CHUNK_RELAY_SUCCESS) {
+    throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+  }
+  return selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
 }
 
 /**
@@ -142,32 +184,11 @@ export async function uploadFileToNostr(
     const totalChunks = chunks.length;
     throwIfCancelled();
 
-    // Relay selection
-    let relays: string[];
-    if (opts.relayOverride && opts.relayOverride.length > 0) {
-      if (opts.relayOverride.length < MIN_CHUNK_RELAY_SUCCESS) {
-        throw new Error(
-          'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.',
-        );
-      }
-      relays = opts.relayOverride;
-    } else {
-      onProgress({ phase: 'discovering' });
-      const candidates = await getRelayCandidates(pool, storage);
-      throwIfCancelled();
-      const healthy = await healthCheckRelays(pool, candidates, {
-        isCancelled,
-        onProgress: (relaysChecked, relaysHealthy) =>
-          onProgress({ phase: 'health_check', relaysChecked, relaysHealthy }),
-      });
-      throwIfCancelled();
-      if (healthy.length < MIN_CHUNK_RELAY_SUCCESS) {
-        throw new Error(
-          'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.',
-        );
-      }
-      relays = selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
-    }
+    const relays = await resolveUploadRelays(pool, storage, {
+      relayOverride: opts.relayOverride,
+      isCancelled,
+      onProgress,
+    });
 
     // Stripe chunks over the batch; strict all-confirmed gate.
     const replication = Math.min(CHUNK_REPLICATION, relays.length);

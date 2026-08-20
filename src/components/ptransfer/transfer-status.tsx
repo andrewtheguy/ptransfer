@@ -38,6 +38,8 @@ export function TransferStatus({
       case 'discovering_relays':
       case 'uploading':
       case 'fetching':
+      // Live Nostr relay: the code is on screen while the transfer runs.
+      case 'showing_payload':
         return <Loader2 className="h-4 w-4 animate-spin" />;
       // Both sides of the confirmation-code step are blocked on a human
       // reading a code aloud, not on the network — a spinner would misreport

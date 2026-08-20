@@ -10,6 +10,16 @@ import {
 
 export type MethodChoice = 'online' | 'offline';
 
+/**
+ * Experimental Nostr file relay (Manual Exchange only, max 100 MB):
+ * - `off`: normal direct connection
+ * - `stored`: upload everything first with two copies per piece, then hand
+ *   over the code; the receiver downloads any time within the hour
+ * - `live`: hand over the code right away, one copy per piece; both sides
+ *   stay online and only pieces the receiver could not fetch are re-sent
+ */
+export type NostrFileRelayMode = 'off' | 'stored' | 'live';
+
 interface SendConfig {
   // Files (loose files and folder selections mixed; folder entries carry
   // webkitRelativePath so archive structure is preserved)
@@ -17,9 +27,7 @@ interface SendConfig {
 
   // Configuration
   methodChoice: MethodChoice;
-  // Experimental: relay the file through temporary Nostr events instead of a
-  // direct connection (Manual Exchange only, max 100 MB).
-  nostrFileRelay: boolean;
+  nostrFileRelay: NostrFileRelayMode;
 }
 
 interface SendContextState {

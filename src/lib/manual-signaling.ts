@@ -310,14 +310,24 @@ export interface NostrFilePayload extends NostrFileManifest {
 }
 
 /**
- * Validate NostrFilePayload structure
+ * Live (single-copy) Nostr file relay payload: the same manifest, handed out
+ * *before* the upload. The sender stays online and the two sides coordinate
+ * over an encrypted control channel on the same relays (keyed off `key`), so
+ * both need the relays at the same time. `replication` is always 1 — pieces
+ * a receiver cannot fetch are re-sent individually instead of being stored
+ * twice up front.
  */
-export function isValidNostrFilePayload(
+export interface NostrFileLivePayload extends NostrFileManifest {
+  type: 'nostr-file-live';
+  /** base64(32-byte AES-256-GCM key) */
+  key: string;
+}
+
+function hasValidKeyAndManifest(
   payload: unknown,
-): payload is NostrFilePayload {
+): payload is NostrFileManifest & { key: string } {
   if (!payload || typeof payload !== 'object') return false;
   const p = payload as Record<string, unknown>;
-  if (p.type !== 'nostr-file') return false;
   if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
     return false;
   }
@@ -325,17 +335,42 @@ export function isValidNostrFilePayload(
 }
 
 /**
- * Generate nostr file relay payload as PT01 binary data
+ * Validate NostrFilePayload structure
+ */
+export function isValidNostrFilePayload(
+  payload: unknown,
+): payload is NostrFilePayload {
+  if (!payload || typeof payload !== 'object') return false;
+  if ((payload as Record<string, unknown>).type !== 'nostr-file') return false;
+  return hasValidKeyAndManifest(payload);
+}
+
+/**
+ * Validate NostrFileLivePayload structure
+ */
+export function isValidNostrFileLivePayload(
+  payload: unknown,
+): payload is NostrFileLivePayload {
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as Record<string, unknown>;
+  if (p.type !== 'nostr-file-live') return false;
+  if (p.replication !== 1) return false;
+  return hasValidKeyAndManifest(payload);
+}
+
+/**
+ * Generate a nostr file relay payload (stored or live) as PT01 binary data
  */
 export function generateNostrFilePayloadBinary(
-  payload: NostrFilePayload,
+  payload: NostrFilePayload | NostrFileLivePayload,
 ): Uint8Array {
   return encodeManualPayload(payload);
 }
 
 export type ParsedManualPayload =
   | { kind: 'signaling'; payload: SignalingPayload }
-  | { kind: 'nostr-file'; payload: NostrFilePayload };
+  | { kind: 'nostr-file'; payload: NostrFilePayload }
+  | { kind: 'nostr-file-live'; payload: NostrFileLivePayload };
 
 /**
  * Parse any manual-exchange PT01 binary and discriminate its payload type.
@@ -348,6 +383,9 @@ export function parseAnyManualPayload(
     const payload = decodeManualPayload(binary);
     if (isValidNostrFilePayload(payload)) {
       return { kind: 'nostr-file', payload };
+    }
+    if (isValidNostrFileLivePayload(payload)) {
+      return { kind: 'nostr-file-live', payload };
     }
     if (isValidSignalingPayload(payload)) {
       return { kind: 'signaling', payload };

@@ -1,13 +1,14 @@
-import { wipeBufferSource } from '../crypto/memory';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../nostr/events';
-import { assembleChunks, chunkAad, decodeChunkContent, sha256 } from './codec';
+import { assembleChunks, sha256 } from './codec';
 import {
-  CLOCK_SKEW_TOLERANCE_SEC,
   DOWNLOAD_RETRY_PASS_DELAY_MS,
   DOWNLOAD_SWEEP_PASSES,
-  RELAY_QUERY_MAX_WAIT_MS,
 } from './constants';
-import { buildChunkFilters, parseChunkEvent } from './events';
+import {
+  assertManifestWindow,
+  fetchChunksFromRelay,
+  importDecryptKey,
+} from './fetch';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
 import { NostrFileCancelledError } from './upload';
@@ -57,34 +58,9 @@ export async function downloadFileFromNostr(
   },
 ): Promise<Uint8Array> {
   const { onProgress, isCancelled, pool } = opts;
-  const nowSec = Math.floor(Date.now() / 1000);
 
-  if (nowSec > manifest.expiresAt + CLOCK_SKEW_TOLERANCE_SEC) {
-    wipeBufferSource(keyBytes);
-    throw new Error(
-      'This transfer has expired — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
-    );
-  }
-  if (manifest.createdAt > nowSec + CLOCK_SKEW_TOLERANCE_SEC) {
-    wipeBufferSource(keyBytes);
-    throw new Error(
-      'This transfer appears to be from the future — check that your device clock is set correctly.',
-    );
-  }
-
-  let aesKey: CryptoKey;
-  try {
-    aesKey = await crypto.subtle.importKey(
-      'raw',
-      keyBytes as BufferSource,
-      'AES-GCM',
-      false,
-      ['decrypt'],
-    );
-  } finally {
-    // Wipe on success and on import failure alike.
-    wipeBufferSource(keyBytes);
-  }
+  assertManifestWindow(manifest, keyBytes);
+  const aesKey = await importDecryptKey(keyBytes);
 
   const throwIfCancelled = () => {
     if (isCancelled()) throw new NostrFileCancelledError();
@@ -96,55 +72,16 @@ export async function downloadFileFromNostr(
   let chunksDone = 0;
   onProgress({ chunksDone, chunksTotal: manifest.totalChunks });
 
-  const fetchFromRelay = async (
-    relay: string,
-    indices: number[],
-  ): Promise<void> => {
-    const filters = buildChunkFilters(
-      manifest.pubkey,
-      manifest.transferId,
-      indices,
-    );
-    for (const filter of filters) {
-      throwIfCancelled();
-      let events: Awaited<ReturnType<NostrFilePool['querySync']>>;
-      try {
-        events = await pool.querySync([relay], filter, {
-          maxWait: RELAY_QUERY_MAX_WAIT_MS,
-        });
-      } catch {
-        continue;
-      }
-      for (const event of events) {
-        const parsed = parseChunkEvent(
-          event,
-          manifest.pubkey,
-          manifest.transferId,
-        );
-        if (!parsed) continue;
-        const { index, content } = parsed;
-        if (index >= manifest.totalChunks || chunks[index]) continue;
-        let plaintext: Uint8Array;
-        try {
-          plaintext = await decodeChunkContent(
-            aesKey,
-            content,
-            chunkAad(manifest.transferId, index, manifest.totalChunks),
-            manifest.chunkSize,
-          );
-        } catch {
-          // Tampered or corrupt chunk — leave it missing, another relay
-          // may hold a good copy.
-          continue;
-        }
-        // Another relay's worker may have decoded this chunk meanwhile.
-        if (chunks[index]) continue;
+  const fetchFromRelay = (relay: string, indices: number[]) =>
+    fetchChunksFromRelay(pool, manifest, aesKey, relay, indices, {
+      have: (index) => chunks[index] !== null,
+      onChunk: (index, plaintext) => {
         chunks[index] = plaintext;
         chunksDone++;
         onProgress({ chunksDone, chunksTotal: manifest.totalChunks, relay });
-      }
-    }
-  };
+      },
+      throwIfCancelled,
+    });
 
   // One worker per relay; a cancelled worker rejects and the rest wind down
   // at their own next cancellation check.

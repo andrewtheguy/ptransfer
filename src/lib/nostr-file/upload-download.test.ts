@@ -1,14 +1,9 @@
-import type { Event } from 'nostr-tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHUNK_REPLICATION, NOSTR_FILE_MAX_BYTES } from './constants';
 import { downloadFileFromNostr } from './download';
 import { isValidNostrFileManifest, stripeRelays } from './manifest';
-import type { NostrFilePool } from './pool';
+import { createMockPool as createNetwork, type MockPool } from './mock-pool';
 import { type UploadProgress, uploadFileToNostr } from './upload';
-
-interface MockPool extends NostrFilePool {
-  store: Map<string, Event[]>;
-}
 
 // crypto.getRandomValues caps at 65536 bytes per call
 function randomBytes(size: number): Uint8Array {
@@ -20,36 +15,7 @@ function randomBytes(size: number): Uint8Array {
 }
 
 function createMockPool(failRelays: Set<string> = new Set()): MockPool {
-  const store = new Map<string, Event[]>();
-  return {
-    store,
-    publish(relays, event) {
-      return relays.map(async (relay) => {
-        if (failRelays.has(relay)) throw new Error('relay down');
-        const list = store.get(relay) ?? [];
-        // Copy: each relay holds its own instance, like the real network.
-        list.push({ ...event, tags: event.tags.map((t) => [...t]) });
-        store.set(relay, list);
-        return 'ok';
-      });
-    },
-    async querySync(relays, filter) {
-      const out: Event[] = [];
-      for (const relay of relays) {
-        for (const ev of store.get(relay) ?? []) {
-          if (filter.kinds && !filter.kinds.includes(ev.kind)) continue;
-          if (filter.authors && !filter.authors.includes(ev.pubkey)) continue;
-          const dTags = filter['#d'];
-          if (dTags) {
-            const d = ev.tags.find((t) => t[0] === 'd')?.[1];
-            if (!d || !dTags.includes(d)) continue;
-          }
-          out.push(ev);
-        }
-      }
-      return out;
-    },
-  };
+  return createNetwork({ failRelays });
 }
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
