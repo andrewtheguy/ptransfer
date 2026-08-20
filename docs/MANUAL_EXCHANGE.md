@@ -90,8 +90,11 @@ through public Nostr relays, for files up to **100 MB**:
    discovered Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a
    deletion request that compliant relays honor by pruning the events, not guaranteed
    erasure; the file stays protected by its encryption regardless. The encrypted pieces
-   are spread across up to 16 relays with two copies each, so no single relay holds the
-   whole file and the upload costs about twice the file size in bandwidth
+   are spread across up to 16 relays with two copies each, so the upload costs about
+   twice the file size in bandwidth and, with a normal-sized relay set, each relay holds
+   only a fraction of the pieces. If few relays pass the health check (the minimum is
+   two), or relays reject pieces and the copies fall back to the others, individual
+   relays can end up holding every piece — still encrypted
 2. Only after the complete upload is confirmed does the sender get a single exchange code
    (multi-QR or copy/paste) containing the download manifest **and the decryption key**
 3. The receiver pastes/scans that code in the normal Manual Exchange receive flow — it is
