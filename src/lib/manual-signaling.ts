@@ -1,4 +1,9 @@
 import { deflateSync, inflateSync } from 'fflate';
+import {
+  BASE64_32_BYTES,
+  isValidNostrFileManifest,
+  type NostrFileManifest,
+} from './nostr-file/manifest';
 
 // Deterministic deflate helpers (avoid browser stream API stalls).
 function deflateCompress(data: Uint8Array): Uint8Array {
@@ -82,6 +87,69 @@ function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 /**
+ * Encode any manual-exchange payload object into the PT01 container:
+ * [PT01][xorObfuscate([mag!][deflate(JSON)], hourly seed)]
+ */
+function encodeManualPayload(payload: object): Uint8Array {
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(payload));
+  const compressed = deflateCompress(jsonBytes);
+
+  // Build inner: [mag!][compressed]
+  const inner = new Uint8Array(4 + compressed.length);
+  inner.set(INNER_MAGIC_V3, 0);
+  inner.set(compressed, 4);
+
+  const currentBucket = Math.floor(Date.now() / 1000 / BUCKET_SEC);
+  const seed = getSeedForBucket(currentBucket);
+  const obfuscatedInner = xorObfuscate(inner, seed);
+
+  // Final binary: [PT01][obfuscatedInner]
+  const result = new Uint8Array(4 + obfuscatedInner.length);
+  result.set(MAGIC_HEADER_V1, 0);
+  result.set(obfuscatedInner, 4);
+  return result;
+}
+
+/**
+ * Decode a PT01 container back to the parsed JSON value, trying the current
+ * and previous hourly seed buckets. Returns null on any mismatch.
+ */
+function decodeManualPayload(binary: Uint8Array): unknown {
+  if (!isMutualPayload(binary)) {
+    return null;
+  }
+
+  const obfuscatedInner = binary.subarray(4);
+  const currentBucket = Math.floor(Date.now() / 1000 / BUCKET_SEC);
+
+  // Try current and previous bucket (approx 2 hours window)
+  for (let i = 0; i <= 1; i++) {
+    try {
+      const seed = getSeedForBucket(currentBucket - i);
+
+      // Optimization: check inner magic first (de-obfuscate only first 4 bytes)
+      const innerHead = xorObfuscate(obfuscatedInner.subarray(0, 4), seed);
+      if (
+        innerHead[0] !== INNER_MAGIC_V3[0] ||
+        innerHead[1] !== INNER_MAGIC_V3[1] ||
+        innerHead[2] !== INNER_MAGIC_V3[2] ||
+        innerHead[3] !== INNER_MAGIC_V3[3]
+      ) {
+        continue;
+      }
+
+      const deobfuscated = xorObfuscate(obfuscatedInner, seed);
+      const compressed = deobfuscated.slice(4); // Skip INNER_MAGIC_V3
+      const jsonBytes = deflateDecompress(compressed);
+      const json = new TextDecoder().decode(jsonBytes);
+      return JSON.parse(json) as unknown;
+    } catch {}
+  }
+
+  return null;
+}
+
+/**
  * Parse base64 clipboard data to binary payload
  */
 export function parseClipboardPayload(base64: string): Uint8Array | null {
@@ -157,24 +225,7 @@ export function generateMutualOfferBinary(
     salt: Array.from(metadata.salt),
   };
 
-  const encoder = new TextEncoder();
-  const jsonBytes = encoder.encode(JSON.stringify(payload));
-  const compressed = deflateCompress(jsonBytes);
-
-  // Build inner: [mag!][compressed]
-  const inner = new Uint8Array(4 + compressed.length);
-  inner.set(INNER_MAGIC_V3, 0);
-  inner.set(compressed, 4);
-
-  const currentBucket = Math.floor(Date.now() / 1000 / BUCKET_SEC);
-  const seed = getSeedForBucket(currentBucket);
-  const obfuscatedInner = xorObfuscate(inner, seed);
-
-  // Final binary: [PT01][obfuscatedInner]
-  const result = new Uint8Array(4 + obfuscatedInner.length);
-  result.set(MAGIC_HEADER_V1, 0);
-  result.set(obfuscatedInner, 4);
-  return result;
+  return encodeManualPayload(payload);
 }
 
 /**
@@ -195,24 +246,7 @@ export function generateMutualAnswerBinary(
     publicKey: Array.from(publicKey),
   };
 
-  const encoder = new TextEncoder();
-  const jsonBytes = encoder.encode(JSON.stringify(payload));
-  const compressed = deflateCompress(jsonBytes);
-
-  // Build inner: [mag!][compressed]
-  const inner = new Uint8Array(4 + compressed.length);
-  inner.set(INNER_MAGIC_V3, 0);
-  inner.set(compressed, 4);
-
-  const currentBucket = Math.floor(Date.now() / 1000 / BUCKET_SEC);
-  const seed = getSeedForBucket(currentBucket);
-  const obfuscatedInner = xorObfuscate(inner, seed);
-
-  // Final binary: [PT01][obfuscatedInner]
-  const result = new Uint8Array(4 + obfuscatedInner.length);
-  result.set(MAGIC_HEADER_V1, 0);
-  result.set(obfuscatedInner, 4);
-  return result;
+  return encodeManualPayload(payload);
 }
 
 /**
@@ -233,41 +267,10 @@ export function parseMutualPayload(
   binary: Uint8Array,
 ): SignalingPayload | null {
   try {
-    if (!isMutualPayload(binary)) {
-      return null;
+    const payload = decodeManualPayload(binary);
+    if (isValidSignalingPayload(payload)) {
+      return payload;
     }
-
-    const obfuscatedInner = binary.subarray(4);
-    const currentBucket = Math.floor(Date.now() / 1000 / BUCKET_SEC);
-
-    // Try current and previous bucket (approx 2 hours window)
-    for (let i = 0; i <= 1; i++) {
-      try {
-        const seed = getSeedForBucket(currentBucket - i);
-
-        // Optimization: check inner magic first (de-obfuscate only first 4 bytes)
-        const innerHead = xorObfuscate(obfuscatedInner.subarray(0, 4), seed);
-        if (
-          innerHead[0] !== INNER_MAGIC_V3[0] ||
-          innerHead[1] !== INNER_MAGIC_V3[1] ||
-          innerHead[2] !== INNER_MAGIC_V3[2] ||
-          innerHead[3] !== INNER_MAGIC_V3[3]
-        ) {
-          continue;
-        }
-
-        const deobfuscated = xorObfuscate(obfuscatedInner, seed);
-        const compressed = deobfuscated.slice(4); // Skip INNER_MAGIC_V3
-        const jsonBytes = deflateDecompress(compressed);
-        const json = new TextDecoder().decode(jsonBytes);
-        const payload = JSON.parse(json);
-
-        if (isValidSignalingPayload(payload)) {
-          return payload;
-        }
-      } catch {}
-    }
-
     return null;
   } catch {
     return null;
@@ -292,4 +295,65 @@ export function isMutualPayload(binary: Uint8Array): boolean {
  */
 export function generateMutualClipboardData(binary: Uint8Array): string {
   return uint8ArrayToBase64(binary);
+}
+
+/**
+ * Nostr file relay payload: the manifest of a file already saved to nostr
+ * relays plus the decryption key. One-way — the receiver needs nothing else
+ * and sends nothing back. Because the key rides in it, this payload must only
+ * ever travel over the trusted manual channel (QR / direct copy-paste).
+ */
+export interface NostrFilePayload extends NostrFileManifest {
+  type: 'nostr-file';
+  /** base64(32-byte AES-256-GCM key) */
+  key: string;
+}
+
+/**
+ * Validate NostrFilePayload structure
+ */
+export function isValidNostrFilePayload(
+  payload: unknown,
+): payload is NostrFilePayload {
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as Record<string, unknown>;
+  if (p.type !== 'nostr-file') return false;
+  if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
+    return false;
+  }
+  return isValidNostrFileManifest(payload);
+}
+
+/**
+ * Generate nostr file relay payload as PT01 binary data
+ */
+export function generateNostrFilePayloadBinary(
+  payload: NostrFilePayload,
+): Uint8Array {
+  return encodeManualPayload(payload);
+}
+
+export type ParsedManualPayload =
+  | { kind: 'signaling'; payload: SignalingPayload }
+  | { kind: 'nostr-file'; payload: NostrFilePayload };
+
+/**
+ * Parse any manual-exchange PT01 binary and discriminate its payload type.
+ * Returns null for unknown or malformed payloads.
+ */
+export function parseAnyManualPayload(
+  binary: Uint8Array,
+): ParsedManualPayload | null {
+  try {
+    const payload = decodeManualPayload(binary);
+    if (isValidNostrFilePayload(payload)) {
+      return { kind: 'nostr-file', payload };
+    }
+    if (isValidSignalingPayload(payload)) {
+      return { kind: 'signaling', payload };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

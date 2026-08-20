@@ -16,16 +16,24 @@ export function generateNonce(): Uint8Array {
 /**
  * Encrypt data with AES-256-GCM
  * Returns: nonce (12 bytes) || ciphertext || tag (16 bytes)
+ *
+ * When `aad` is provided it is bound into the authentication tag; decryption
+ * then requires the identical additional data.
  */
 export async function encrypt(
   key: CryptoKey,
   plaintext: Uint8Array,
   nonce?: Uint8Array,
+  aad?: Uint8Array,
 ): Promise<Uint8Array> {
   const iv = nonce ?? generateNonce();
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv as BufferSource },
+    {
+      name: 'AES-GCM',
+      iv: iv as BufferSource,
+      ...(aad ? { additionalData: aad as BufferSource } : {}),
+    },
     key,
     plaintext as BufferSource,
   );
@@ -45,6 +53,7 @@ export async function encrypt(
 export async function decrypt(
   key: CryptoKey,
   encrypted: Uint8Array,
+  aad?: Uint8Array,
 ): Promise<Uint8Array> {
   if (encrypted.length < MIN_ENCRYPTED_LENGTH) {
     throw new Error(
@@ -56,7 +65,11 @@ export async function decrypt(
   const ciphertext = encrypted.slice(AES_NONCE_LENGTH);
 
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: nonce as BufferSource },
+    {
+      name: 'AES-GCM',
+      iv: nonce as BufferSource,
+      ...(aad ? { additionalData: aad as BufferSource } : {}),
+    },
     key,
     ciphertext as BufferSource,
   );

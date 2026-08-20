@@ -4,8 +4,12 @@ import {
   generateMutualAnswerBinary,
   generateMutualClipboardData,
   generateMutualOfferBinary,
+  generateNostrFilePayloadBinary,
   isMutualPayload,
+  isValidNostrFilePayload,
   isValidSignalingPayload,
+  type NostrFilePayload,
+  parseAnyManualPayload,
   parseClipboardPayload,
   parseMutualPayload,
   type SignalingPayload,
@@ -145,5 +149,124 @@ describe('Manual Signaling Utils', () => {
     };
     const size = await estimatePayloadSize(payload);
     expect(size).toBeGreaterThan(0);
+  });
+});
+
+describe('Nostr file payload', () => {
+  const mockOffer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
+  const mockCandidates: RTCIceCandidate[] = [];
+  const mockPublicKey = new Uint8Array(65).fill(1);
+  mockPublicKey[0] = 4;
+  const mockSalt = new Uint8Array(16).fill(2);
+  const createdAt = Math.floor(Date.now() / 1000);
+  const validPayload: NostrFilePayload = {
+    type: 'nostr-file',
+    v: 1,
+    fileName: 'photo.jpg',
+    fileSize: 5 * 1024 * 1024,
+    mimeType: 'image/jpeg',
+    fileHash: `${'B'.repeat(43)}=`,
+    transferId: 'a'.repeat(32),
+    pubkey: 'c'.repeat(64),
+    chunkSize: 32768,
+    totalChunks: Math.ceil((5 * 1024 * 1024) / 32768),
+    enc: 1,
+    relays: ['wss://relay.one', 'wss://relay.two'],
+    createdAt,
+    expiresAt: createdAt + 3600,
+    key: `${'K'.repeat(43)}=`,
+  };
+
+  it('round-trips through the PT01 container', () => {
+    const binary = generateNostrFilePayloadBinary(validPayload);
+    expect(isMutualPayload(binary)).toBe(true);
+    const parsed = parseAnyManualPayload(binary);
+    expect(parsed?.kind).toBe('nostr-file');
+    expect(parsed?.payload).toEqual(validPayload);
+  });
+
+  it('encodes a 320-chunk manifest into a compact payload', () => {
+    const large: NostrFilePayload = {
+      ...validPayload,
+      fileSize: 10 * 1024 * 1024,
+      totalChunks: 320,
+      relays: [
+        'wss://relay.example-one.com',
+        'wss://relay.example-two.net',
+        'wss://relay.example-three.io',
+        'wss://relay.example-four.org',
+        'wss://relay.example-five.dev',
+        'wss://relay.example-six.social',
+      ],
+    };
+    const binary = generateNostrFilePayloadBinary(large);
+    // Target capacity: two ~400-byte QR frames for the worst-case payload.
+    const TWO_QR_CAPACITY_BYTES = 800;
+    expect(binary.length).toBeLessThan(TWO_QR_CAPACITY_BYTES);
+  });
+
+  it('discriminates all payload types', () => {
+    const offerBinary = generateMutualOfferBinary(mockOffer, mockCandidates, {
+      createdAt: Date.now(),
+      fileName: 'a.txt',
+      fileSize: 1,
+      fileSizeExact: true,
+      mimeType: 'text/plain',
+      publicKey: mockPublicKey,
+      salt: mockSalt,
+    });
+    expect(parseAnyManualPayload(offerBinary)?.kind).toBe('signaling');
+
+    const nostrBinary = generateNostrFilePayloadBinary(validPayload);
+    expect(parseAnyManualPayload(nostrBinary)?.kind).toBe('nostr-file');
+
+    expect(parseAnyManualPayload(new Uint8Array([1, 2, 3, 4, 5]))).toBeNull();
+    // A nostr-file payload is not a signaling payload.
+    expect(parseMutualPayload(nostrBinary)).toBeNull();
+  });
+
+  it('rejects malformed nostr-file payloads', () => {
+    expect(isValidNostrFilePayload(validPayload)).toBe(true);
+    expect(isValidNostrFilePayload({ ...validPayload, key: 'short' })).toBe(
+      false,
+    );
+    expect(
+      isValidNostrFilePayload({ ...validPayload, fileSize: 11 * 1024 * 1024 }),
+    ).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, totalChunks: 3 })).toBe(
+      false,
+    );
+    expect(isValidNostrFilePayload({ ...validPayload, transferId: 'zz' })).toBe(
+      false,
+    );
+    expect(isValidNostrFilePayload({ ...validPayload, relays: [] })).toBe(
+      false,
+    );
+    expect(
+      isValidNostrFilePayload({
+        ...validPayload,
+        relays: ['http://not-wss.example'],
+      }),
+    ).toBe(false);
+    expect(
+      isValidNostrFilePayload({
+        ...validPayload,
+        expiresAt: validPayload.createdAt + 7200,
+      }),
+    ).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, type: 'offer' })).toBe(
+      false,
+    );
+    expect(isValidNostrFilePayload({ ...validPayload, v: 2 })).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, enc: 2 })).toBe(false);
+    expect(
+      isValidNostrFilePayload({ ...validPayload, pubkey: 'Z'.repeat(64) }),
+    ).toBe(false);
+    expect(
+      isValidNostrFilePayload({ ...validPayload, fileHash: 'not base64!!' }),
+    ).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, chunkSize: 100 })).toBe(
+      false,
+    );
   });
 });

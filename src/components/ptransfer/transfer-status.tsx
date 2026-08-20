@@ -8,7 +8,7 @@ import {
   Radio,
   XCircle,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
@@ -34,6 +34,10 @@ export function TransferStatus({
       case 'waiting_for_receiver':
       case 'transferring':
       case 'receiving':
+      case 'preparing':
+      case 'discovering_relays':
+      case 'uploading':
+      case 'fetching':
         return <Loader2 className="h-4 w-4 animate-spin" />;
       // Both sides of the confirmation-code step are blocked on a human
       // reading a code aloud, not on the network — a spinner would misreport
@@ -146,7 +150,49 @@ export function TransferStatus({
         </div>
       )}
 
+      {state.expiresAt !== undefined && state.status !== 'complete' && (
+        <ExpiryCountdown expiresAt={state.expiresAt} />
+      )}
+
       {betweenProgressAndChunks}
     </div>
+  );
+}
+
+/**
+ * Countdown to a NIP-40 expiry timestamp (unix seconds). Isolated so its
+ * 1-second tick re-renders only this row.
+ */
+export function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
+  const [remaining, setRemaining] = useState(() =>
+    Math.max(0, expiresAt - Math.floor(Date.now() / 1000)),
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const next = Math.max(0, expiresAt - Math.floor(Date.now() / 1000));
+      setRemaining(next);
+      // The countdown never leaves 0 — stop ticking once it gets there.
+      if (next === 0) clearInterval(interval);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
+
+  return (
+    <p className="text-xs text-muted-foreground">
+      {remaining > 0 ? (
+        <>
+          Relay copies expire in{' '}
+          <span className="font-medium tabular-nums">
+            {minutes}:{String(seconds).padStart(2, '0')}
+          </span>
+        </>
+      ) : (
+        'Relay copies have expired'
+      )}
+    </p>
   );
 }

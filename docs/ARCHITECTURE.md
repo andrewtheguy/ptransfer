@@ -451,6 +451,38 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 - **Manual**: Signaling is obfuscated and time-limited, not encrypted; content confidentiality is provided by ECDH-derived AES-256-GCM over the data channel when the QR/clipboard exchange is authentic
 - **All modes**: Once WebRTC connection is established, DTLS encrypts all data in transit, and file content is additionally encrypted with the shared chunk protocol
 
+### Nostr File Relay (`src/lib/nostr-file/`) — Experimental
+
+An opt-in Manual Exchange variant (Advanced options → "Relay file through Nostr", max 10 MB) that replaces the live WebRTC connection with store-and-forward through public Nostr relays. The flow follows nostrsave's design, adapted for explicitly temporary data: the sender encrypts and uploads the complete file to relays first, and only after every piece is confirmed does the manual-exchange payload hand the receiver everything needed to download and decrypt — no live connection between the peers.
+
+**Sender flow (`use-nostr-relay-send.ts` → `upload.ts`):**
+1. Materialize the file/ZIP into memory (≤ 10 MB), SHA-256 it, generate a random 16-byte `transferId`, a random 32-byte AES-256-GCM key, and an ephemeral Nostr identity
+2. Discover relay candidates via NIP-66 (kind 30166) / NIP-65 (kind 10002) queries against the seed relays (candidates cached in localStorage for 24 h; seeds always included as the floor)
+3. Health-check candidates with a real write→read round trip per relay — a production-shaped probe event through the full codec, read back and byte-compared — keeping the fastest passers
+4. Select a batch of up to 6 relays via a persisted rotating cursor (load balancing across uploads); every chunk is published to the whole batch (redundancy, not sharding)
+5. Split into 32 KiB chunks, 8 in flight; per relay retry 3× with exponential backoff. A chunk counts as saved at ≥ 2 relay acks; a chunk that cannot reach 2 relays aborts the entire upload — the receiver can never be handed a code for a partial file
+6. Only after **all** chunks are confirmed, embed the manifest + key into the PT01 payload and show it (multi-QR / copy-paste). One-way: there is no answer step
+
+**Chunk event schema (kind 30078, NIP-78 addressable):**
+
+| Tag | Value |
+|-----|-------|
+| `d` | `<transferId>:<chunkIndex>` (derived — the manifest needs no per-chunk event ids) |
+| `x` | `<transferId>` |
+| `chunk` | `<index> <totalChunks>` |
+| `encryption` | `deflate+aes-256-gcm` |
+| `expiration` | `created_at + 3600` (NIP-40) |
+
+Content pipeline: `deflate → AES-256-GCM (nonce‖ct‖tag, AAD = "ptransfer-nostr-file:v1:<transferId>:<index>:<total>") → Z85`. Z85 (base85) matches nostrsave: ~1.25× expansion vs base64's ~1.33×, JSON-escape-free. A 32 KiB chunk encodes to ~41 KB, under the ~64 KB relay content ceiling. Events deliberately carry no filename, size, or plaintext hash — file metadata travels only inside the manual payload, and the random `transferId` (rather than the file hash) prevents known-file confirmation against public relays.
+
+**Every published event carries the NIP-40 `expiration` tag (1 hour), health-check probes included** — this mode never asks relays to hold data beyond one transfer window. The 1-hour value is a client-enforced transfer deadline plus a deletion *request*: compliant relays stop serving and prune expired events, but NIP-40 does not guarantee deletion or provide cryptographic erasure — a non-compliant relay could retain its copy. Confidentiality never depends on relay deletion: chunks orphaned by a cancelled or failed upload are AES-256-GCM ciphertext under a key that was never published, whether or not a relay prunes them.
+
+**Manifest (inside the PT01 payload, never published):** version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId`, ephemeral pubkey, chunk size, total chunks, relay list, created/expiry timestamps, plus the base64 AES key. ~600 bytes → 2–3 QR codes.
+
+**Receiver flow (`use-nostr-relay-receive.ts` → `download.ts`):** the pasted/scanned payload is auto-detected (`parseAnyManualPayload`) — no separate receive mode. After a wall-clock expiry check (±10 min skew tolerance), the receiver walks the manifest's relays one at a time, fetching only still-missing chunks by derived `d` tags (`authors` + `#d` filters, ≤ 100 ids per filter), decrypting each under the AAD binding (a tampered or substituted chunk fails GCM and stays missing for the next relay), with a second full pass for transient failures. The assembled file must match the manifest's SHA-256.
+
+**Security model:** relays see ciphertext, chunk count/sizes, timing, and an ephemeral pubkey — never plaintext, filenames, or the file hash. Unlike the signaling payload (obfuscated, but key material is only ECDH public keys), this payload **contains the decryption key**, so the trusted-channel requirement is absolute: anyone holding the payload before expiry can download and decrypt. Availability is best-effort — relays may drop data before the 1-hour expiry; the ≥2-relay redundancy per chunk mitigates but does not guarantee.
+
 ### WebRTC (`src/lib/webrtc.ts`)
 
 Handles direct peer-to-peer connections using WebRTC data channels.

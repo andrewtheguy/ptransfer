@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx tsx
 
 // Live web ↔ web smoke test for pTransfer: a browser-tab sender
 // transfers a file to a browser-tab receiver through the real Nostr relays
@@ -8,7 +8,7 @@
 // It deliberately uses the public relays and therefore lives outside the unit
 // test suite; it needs internet access, Node/npm, and a Chrome-family browser.
 //
-//   node tests/live_web_to_web_e2e.mjs
+//   npx tsx tests/live_web_to_web_e2e.ts
 //
 // Environment:
 //   PTRANSFER_WEB_URL                 reuse a running dev server (default
@@ -18,7 +18,7 @@
 //   PTRANSFER_E2E_CACHE               playwright-core install cache
 //   PTRANSFER_PLAYWRIGHT_VERSION      playwright-core version (default 1.55.0)
 
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile } from 'node:fs/promises';
@@ -26,6 +26,67 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// Minimal structural views of the playwright-core API this script uses.
+// playwright-core is installed at runtime into CACHE_ROOT rather than being a
+// project dependency, so its own type declarations are not imported here.
+interface PwLocator {
+  click(): Promise<void>;
+  fill(value: string): Promise<void>;
+  first(): PwLocator;
+  innerText(): Promise<string>;
+  inputValue(): Promise<string>;
+  setInputFiles(files: string): Promise<void>;
+  waitFor(options?: { state?: string; timeout?: number }): Promise<void>;
+}
+
+interface PwDownload {
+  saveAs(path: string): Promise<void>;
+}
+
+interface PwPage {
+  getByRole(
+    role: string,
+    options?: { name?: string; exact?: boolean },
+  ): PwLocator;
+  getByText(text: string, options?: { exact?: boolean }): PwLocator;
+  goto(url: string, options?: { waitUntil?: string }): Promise<unknown>;
+  locator(selector: string): PwLocator;
+  on(event: 'pageerror', handler: (error: Error) => void): void;
+  waitForEvent(
+    event: 'download',
+    options?: { timeout?: number },
+  ): Promise<PwDownload>;
+  waitForFunction(
+    fn: () => boolean,
+    arg?: unknown,
+    options?: { timeout?: number },
+  ): Promise<unknown>;
+  waitForLoadState(state?: string): Promise<void>;
+}
+
+interface PwBrowserContext {
+  close(): Promise<void>;
+  newPage(): Promise<PwPage>;
+}
+
+interface PwBrowser {
+  close(): Promise<void>;
+  newContext(options?: { acceptDownloads?: boolean }): Promise<PwBrowserContext>;
+}
+
+interface PwBrowserType {
+  launch(options?: {
+    args?: string[];
+    executablePath?: string;
+    headless?: boolean;
+  }): Promise<PwBrowser>;
+}
+
+interface PackageIdentity {
+  name: string;
+  version: string;
+}
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(SCRIPT_DIR, '..');
@@ -40,20 +101,24 @@ const CACHE_ROOT = resolve(
 const PLAYWRIGHT_VERSION = process.env.PTRANSFER_PLAYWRIGHT_VERSION ?? '1.55.0';
 const ARTIFACTS = await mkdtemp(join(tmpdir(), 'ptransfer-web-e2e-'));
 
-let browser;
-let ownedWebServer;
+let browser: PwBrowser | undefined;
+let ownedWebServer: ChildProcess | undefined;
 let cleanupStarted = false;
 
-function sleep(milliseconds) {
+function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-async function withTimeout(promise, timeoutMs, description) {
-  let timer;
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  description: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
-      new Promise((_, reject) => {
+      new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`Timed out waiting for ${description}`)),
           timeoutMs,
@@ -65,18 +130,25 @@ async function withTimeout(promise, timeoutMs, description) {
   }
 }
 
-async function runCommand(command, args, options = {}) {
+async function runCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<void> {
   console.log(`[setup] ${command} ${args.join(' ')}`);
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     stdio: 'inherit',
   });
-  const exit = new Promise((resolvePromise, reject) => {
+  const exit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolvePromise, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => resolvePromise({ code, signal }));
   });
-  let result;
+  let result: { code: number | null; signal: NodeJS.Signals | null };
   try {
     result = await withTimeout(
       exit,
@@ -94,7 +166,10 @@ async function runCommand(command, args, options = {}) {
   }
 }
 
-async function probeWebServer(url, expectedPackageName) {
+async function probeWebServer(
+  url: URL,
+  expectedPackageName: string,
+): Promise<{ reachable: boolean; version: string | null }> {
   let reachable = false;
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
@@ -111,7 +186,10 @@ async function probeWebServer(url, expectedPackageName) {
       await packageResponse.body?.cancel();
       return { reachable, version: null };
     }
-    const servedPackage = await packageResponse.json();
+    const servedPackage = (await packageResponse.json()) as {
+      name?: unknown;
+      version?: unknown;
+    };
     const version = servedPackage.name === expectedPackageName
       && typeof servedPackage.version === 'string'
       ? servedPackage.version
@@ -122,8 +200,8 @@ async function probeWebServer(url, expectedPackageName) {
   }
 }
 
-async function availableLoopbackUrl() {
-  const port = await new Promise((resolvePromise, reject) => {
+async function availableLoopbackUrl(): Promise<URL> {
+  const port = await new Promise<number>((resolvePromise, reject) => {
     const server = createServer();
     server.unref();
     server.once('error', reject);
@@ -146,7 +224,7 @@ async function availableLoopbackUrl() {
   return new URL(`http://127.0.0.1:${port}`);
 }
 
-async function ensureWebServer(expectedPackage) {
+async function ensureWebServer(expectedPackage: PackageIdentity): Promise<void> {
   const existing = await probeWebServer(
     REQUESTED_WEB_URL,
     expectedPackage.name,
@@ -217,7 +295,7 @@ async function ensureWebServer(expectedPackage) {
   );
 }
 
-async function loadChromium() {
+async function loadChromium(): Promise<PwBrowserType> {
   const playwrightEntry = join(
     CACHE_ROOT,
     'node_modules',
@@ -240,18 +318,20 @@ async function loadChromium() {
       ],
     );
   }
-  const playwright = await import(pathToFileURL(playwrightEntry).href);
+  const playwright = (await import(pathToFileURL(playwrightEntry).href)) as {
+    chromium: PwBrowserType;
+  };
   return playwright.chromium;
 }
 
-async function findBrowser() {
+async function findBrowser(): Promise<string> {
   const candidates = [
     process.env.CHROME_PATH,
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
-  ].filter(Boolean);
+  ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     try {
       await access(candidate, fsConstants.X_OK);
@@ -263,8 +343,8 @@ async function findBrowser() {
   throw new Error('No Chrome-family browser found; set CHROME_PATH');
 }
 
-function instrumentPage(page, label) {
-  const pageErrors = [];
+function instrumentPage(page: PwPage, label: string): () => void {
+  const pageErrors: Error[] = [];
   page.on('pageerror', (error) => {
     pageErrors.push(error);
     console.error(`[${label}:pageerror] ${error.stack ?? error}`);
@@ -276,9 +356,9 @@ function instrumentPage(page, label) {
   };
 }
 
-async function warmWebApp() {
+async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
   console.log('[setup] warming browser dependency cache');
-  const context = await browser.newContext();
+  const context = await activeBrowser.newContext();
   const page = await context.newPage();
   try {
     // The about page exercises the QR worker and its WASM dependency. On a
@@ -315,7 +395,7 @@ async function warmWebApp() {
   }
 }
 
-async function readWebConfirmationCode(page) {
+async function readWebConfirmationCode(page: PwPage): Promise<string> {
   await page.waitForFunction(
     () => /Confirmation code\s+[0-9A-Z]{4}-[0-9A-Z]{4}/.test(document.body.innerText),
     null,
@@ -329,7 +409,11 @@ async function readWebConfirmationCode(page) {
   return `${match[1]}${match[2]}`;
 }
 
-async function assertSameBytes(expectedPath, actualPath, label) {
+async function assertSameBytes(
+  expectedPath: string,
+  actualPath: string,
+  label: string,
+): Promise<void> {
   const [expected, actual] = await Promise.all([
     readFile(expectedPath),
     readFile(actualPath),
@@ -343,12 +427,12 @@ async function assertSameBytes(expectedPath, actualPath, label) {
   console.log(`[PASS] ${label}: ${actual.length} bytes, sha256 ${digest}`);
 }
 
-async function webToWeb() {
+async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
   console.log('\n=== Web sender -> web receiver ===');
   // Isolated contexts: two independent tabs with no shared storage, exactly
   // like a sender and a receiver on different machines.
-  const senderContext = await browser.newContext();
-  const receiverContext = await browser.newContext({ acceptDownloads: true });
+  const senderContext = await activeBrowser.newContext();
+  const receiverContext = await activeBrowser.newContext({ acceptDownloads: true });
   const senderPage = await senderContext.newPage();
   const receiverPage = await receiverContext.newPage();
   const assertNoSenderErrors = instrumentPage(senderPage, 'web sender');
@@ -418,11 +502,14 @@ async function webToWeb() {
   }
 }
 
-async function terminate(child, processGroup = false) {
+async function terminate(
+  child: ChildProcess | undefined,
+  processGroup = false,
+): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  const signal = (name) => {
+  const signal = (name: NodeJS.Signals) => {
     try {
       if (processGroup && child.pid !== undefined) {
         process.kill(-child.pid, name);
@@ -430,7 +517,7 @@ async function terminate(child, processGroup = false) {
         child.kill(name);
       }
     } catch (error) {
-      if (error.code !== 'ESRCH') {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
         throw error;
       }
     }
@@ -444,7 +531,7 @@ async function terminate(child, processGroup = false) {
   }
 }
 
-async function cleanup() {
+async function cleanup(): Promise<void> {
   if (cleanupStarted) {
     return;
   }
@@ -455,7 +542,7 @@ async function cleanup() {
   await terminate(ownedWebServer, true).catch(() => {});
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     cleanup().finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
   });
@@ -464,7 +551,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 try {
   const expectedWebPackage = JSON.parse(
     await readFile(join(WEB_ROOT, 'package.json'), 'utf8'),
-  );
+  ) as PackageIdentity;
   console.log(`[setup] pTransfer ${expectedWebPackage.version}`);
   const chromium = await loadChromium();
   const executablePath = await findBrowser();
@@ -475,11 +562,11 @@ try {
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
 
-  await warmWebApp();
-  await webToWeb();
+  await warmWebApp(browser);
+  await webToWeb(browser);
   console.log(`\nWEB -> WEB LIVE TEST PASSED\nArtifacts: ${ARTIFACTS}`);
 } catch (error) {
-  console.error(`\nWEB -> WEB LIVE TEST FAILED\n${error.stack ?? error}`);
+  console.error(`\nWEB -> WEB LIVE TEST FAILED\n${(error as Error).stack ?? error}`);
   console.error(`Artifacts: ${ARTIFACTS}`);
   process.exitCode = 1;
 } finally {
