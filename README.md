@@ -1,8 +1,8 @@
-# Secure Send
+# pTransfer
 
-A web application for sending encrypted files and folders with PIN-based Nostr signaling. Uses WebRTC for direct P2P connections.
+pTransfer is a web application for sending encrypted files and folders with PIN-based Nostr signaling. It uses WebRTC for direct P2P connections.
 
-**Demo:** [https://securesend.kuvi.dev/](https://securesend.kuvi.dev/)
+**Demo:** [Launch pTransfer](https://ptransfer.kuvi.dev/)
 
 ## Features
 
@@ -27,10 +27,9 @@ Support is feature-detected at runtime; on an unsupported browser, receiving a p
 
 ## Version Compatibility
 
-During `v0.0.x` (as shown in the app footer), compatibility between different app versions is not guaranteed.
-Sender and receiver should use the same app version for transfers. `v0.0.19` replaced the PIN
-protocol with a SPAKE2 password-authenticated key exchange and is incompatible with earlier
-releases.
+Compatibility between different app versions is not guaranteed. Sender and receiver should use
+the same app version for transfers. `v0.0.22` renamed the project and all name-bearing protocol
+identifiers to pTransfer and is incompatible with earlier releases.
 
 ## How It Works
 

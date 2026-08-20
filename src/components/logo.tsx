@@ -8,7 +8,7 @@ export function Logo({ className = 'h-10 w-10' }: LogoProps) {
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       className={className}
-      aria-label="Secure Send Logo"
+      aria-label="pTransfer logo"
     >
       {/* Folder */}
       <path

@@ -180,7 +180,7 @@ export function QRScanner({
           onScan(assembled);
         }
       } else {
-        // Binary SS03 payload from QRDisplay
+        // Binary PT01 payload from QRDisplay
         if (!isValidBinaryPayload(binaryData)) {
           setError('Invalid or unsupported QR payload format');
           onError?.('Invalid or unsupported QR payload format');

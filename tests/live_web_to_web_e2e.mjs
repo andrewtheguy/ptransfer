@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 
-// Live web ↔ web smoke test for secure-send-web: a browser-tab sender
+// Live web ↔ web smoke test for pTransfer: a browser-tab sender
 // transfers a file to a browser-tab receiver through the real Nostr relays
 // and a real WebRTC data channel, driven headlessly via Playwright.
 //
-// Mirrors secure-send-cli's tests/live_interop_e2e.mjs, minus the CLI legs.
+// Mirrors ptransfer-cli's tests/live_interop_e2e.mjs, minus the CLI legs.
 // It deliberately uses the public relays and therefore lives outside the unit
 // test suite; it needs internet access, Node/npm, and a Chrome-family browser.
 //
 //   node tests/live_web_to_web_e2e.mjs
 //
 // Environment:
-//   SECURE_SEND_WEB_URL             reuse a running dev server (default
+//   PTRANSFER_WEB_URL                 reuse a running dev server (default
 //                                   http://127.0.0.1:4173; started on a free
 //                                   loopback port when absent or stale)
 //   CHROME_PATH                     browser binary (default: known locations)
-//   SECURE_SEND_E2E_CACHE           playwright-core install cache
-//   SECURE_SEND_PLAYWRIGHT_VERSION  playwright-core version (default 1.55.0)
+//   PTRANSFER_E2E_CACHE               playwright-core install cache
+//   PTRANSFER_PLAYWRIGHT_VERSION      playwright-core version (default 1.55.0)
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -30,15 +30,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(SCRIPT_DIR, '..');
 const REQUESTED_WEB_URL = new URL(
-  process.env.SECURE_SEND_WEB_URL ?? 'http://127.0.0.1:4173',
+  process.env.PTRANSFER_WEB_URL ?? 'http://127.0.0.1:4173',
 );
 let webUrl = REQUESTED_WEB_URL;
 const CACHE_ROOT = resolve(
-  process.env.SECURE_SEND_E2E_CACHE
-    ?? join(tmpdir(), 'secure-send-web-live-e2e-cache'),
+  process.env.PTRANSFER_E2E_CACHE
+    ?? join(tmpdir(), 'ptransfer-web-live-e2e-cache'),
 );
-const PLAYWRIGHT_VERSION = process.env.SECURE_SEND_PLAYWRIGHT_VERSION ?? '1.55.0';
-const ARTIFACTS = await mkdtemp(join(tmpdir(), 'secure-send-web-e2e-'));
+const PLAYWRIGHT_VERSION = process.env.PTRANSFER_PLAYWRIGHT_VERSION ?? '1.55.0';
+const ARTIFACTS = await mkdtemp(join(tmpdir(), 'ptransfer-web-e2e-'));
 
 let browser;
 let ownedWebServer;
@@ -154,14 +154,14 @@ async function ensureWebServer(expectedPackage) {
   if (existing.version === expectedPackage.version) {
     webUrl = REQUESTED_WEB_URL;
     console.log(
-      `[setup] using verified secure-send-web ${existing.version} at ${webUrl.origin}`,
+      `[setup] using verified pTransfer ${existing.version} at ${webUrl.origin}`,
     );
     return;
   }
 
   if (existing.reachable) {
     console.log(
-      `[setup] not reusing ${REQUESTED_WEB_URL.origin}: expected secure-send-web `
+      `[setup] not reusing ${REQUESTED_WEB_URL.origin}: expected pTransfer `
       + `${expectedPackage.version}, found ${existing.version ?? 'an unverified response'}`,
     );
   }
@@ -177,7 +177,7 @@ async function ensureWebServer(expectedPackage) {
     : await availableLoopbackUrl();
 
   const port = webUrl.port || '80';
-  console.log(`[setup] starting secure-send-web ${expectedPackage.version} at ${webUrl.origin}`);
+  console.log(`[setup] starting pTransfer ${expectedPackage.version} at ${webUrl.origin}`);
   ownedWebServer = spawn(
     'npm',
     [
@@ -204,7 +204,7 @@ async function ensureWebServer(expectedPackage) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (ownedWebServer.exitCode !== null || ownedWebServer.signalCode !== null) {
-      throw new Error('secure-send-web exited before becoming ready');
+      throw new Error('pTransfer exited before becoming ready');
     }
     const probe = await probeWebServer(webUrl, expectedPackage.name);
     if (probe.version === expectedPackage.version) {
@@ -213,7 +213,7 @@ async function ensureWebServer(expectedPackage) {
     await sleep(250);
   }
   throw new Error(
-    `secure-send-web ${expectedPackage.version} did not become ready at ${webUrl.origin}`,
+    `pTransfer ${expectedPackage.version} did not become ready at ${webUrl.origin}`,
   );
 }
 
@@ -426,7 +426,7 @@ try {
   const expectedWebPackage = JSON.parse(
     await readFile(join(WEB_ROOT, 'package.json'), 'utf8'),
   );
-  console.log(`[setup] secure-send-web ${expectedWebPackage.version}`);
+  console.log(`[setup] pTransfer ${expectedWebPackage.version}`);
   const chromium = await loadChromium();
   const executablePath = await findBrowser();
   await ensureWebServer(expectedWebPackage);

@@ -72,8 +72,8 @@ export function Footer() {
             align="center"
             className="max-w-[280px] p-2 text-xs leading-relaxed"
           >
-            Compatibility is not expected between v0.0.x versions. Sender and
-            receiver should use the same app version.
+            Compatibility is not guaranteed across pTransfer versions. Sender
+            and receiver should use the same app version.
             <div className="mt-1 text-muted-foreground">{`v${APP_VERSION} (${GIT_COMMIT_HASH})`}</div>
           </DropdownMenuContent>
         </DropdownMenu>

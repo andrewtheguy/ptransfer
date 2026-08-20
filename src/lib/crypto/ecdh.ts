@@ -187,7 +187,7 @@ export async function deriveAESKeyFromSecretKey(
       name: 'HKDF',
       hash: 'SHA-256',
       salt: toArrayBuffer(salt),
-      info: new TextEncoder().encode('secure-send-mutual'),
+      info: new TextEncoder().encode('ptransfer-mutual'),
     },
     sharedSecretKey,
     { name: 'AES-GCM', length: AES_KEY_LENGTH },

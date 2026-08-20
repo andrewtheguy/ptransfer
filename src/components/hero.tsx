@@ -1,6 +1,6 @@
 import { Download, Lock, Send, Shield, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { SecureTransferIllustration } from '@/components/illustrations';
+import { PTransferIllustration } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
 import { Button } from '@/components/ui/button';
 
@@ -56,7 +56,7 @@ export function Hero() {
         </div>
 
         <div className="order-first md:order-last">
-          <SecureTransferIllustration className="mx-auto w-full max-w-md" />
+          <PTransferIllustration className="mx-auto w-full max-w-md" />
         </div>
       </div>
     </SectionContainer>

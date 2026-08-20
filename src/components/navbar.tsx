@@ -33,7 +33,7 @@ export function Navbar() {
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
         <Link to="/" className="inline-flex items-center gap-3">
           <Logo className="h-10 w-10" />
-          <span className="font-semibold text-lg">Secure Send</span>
+          <span className="font-semibold text-lg">pTransfer</span>
         </Link>
         <nav className="hidden items-center gap-1 text-sm md:flex">
           {NAV_LINKS.map(({ to, label, icon: Icon, end }) => (

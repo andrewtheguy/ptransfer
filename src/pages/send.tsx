@@ -1,9 +1,9 @@
-import { SecureSend } from '@/components/secure-send';
+import { PTransfer } from '@/components/ptransfer';
 
 export function SendPage() {
   return (
     <div className="flex w-full justify-center">
-      <SecureSend view="send" />
+      <PTransfer view="send" />
     </div>
   );
 }

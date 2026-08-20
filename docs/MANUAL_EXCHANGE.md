@@ -11,7 +11,7 @@ two devices, **you** carry the connection data between them by hand — using **
 either side can scan or paste, whichever is more convenient.
 
 Once the two devices are connected, file bytes are sent directly peer-to-peer over WebRTC
-using the shared Secure Send data-channel protocol (encrypted 128KB chunks, `DONE:<chunkCount>:<byteCount>`,
+using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:<chunkCount>:<byteCount>`,
 then a single receiver `ACK` once `DONE` validates the chunk count and final byte count and all chunks have
 authenticated and reassembled).
 

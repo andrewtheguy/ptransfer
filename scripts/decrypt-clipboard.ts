@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Decrypt clipboard data from Secure Send QR mode
+ * Decrypt clipboard data from pTransfer QR mode
  * Usage: npx tsx scripts/decrypt-clipboard.ts <pin> [base64-data]
  *    or: echo '<base64-data>' | npx tsx scripts/decrypt-clipboard.ts <pin>
  */

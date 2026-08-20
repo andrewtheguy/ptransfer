@@ -7,11 +7,11 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ConfirmationCodeInput } from '@/components/secure-send/confirmation-code-input';
-import { MultiQRDisplay } from '@/components/secure-send/multi-qr-display';
-import { PinDisplay } from '@/components/secure-send/pin-display';
-import { QRInput } from '@/components/secure-send/qr-input';
-import { TransferStatus } from '@/components/secure-send/transfer-status';
+import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-input';
+import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
+import { PinDisplay } from '@/components/ptransfer/pin-display';
+import { QRInput } from '@/components/ptransfer/qr-input';
+import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useSend } from '@/contexts/send-context';
 import {

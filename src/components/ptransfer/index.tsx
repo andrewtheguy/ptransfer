@@ -10,13 +10,13 @@ import {
 import { ReceiveTab } from './receive-tab';
 import { SendTab } from './send-tab';
 
-type SecureSendView = 'send' | 'receive';
+type PTransferView = 'send' | 'receive';
 
-type SecureSendProps = {
-  view?: SecureSendView;
+type PTransferProps = {
+  view?: PTransferView;
 };
 
-export function SecureSend({ view = 'send' }: SecureSendProps) {
+export function PTransfer({ view = 'send' }: PTransferProps) {
   const getTitle = () => {
     switch (view) {
       case 'send':

@@ -1,4 +1,4 @@
-import { AboutContent } from '@/components/secure-send/about-content';
+import { AboutContent } from '@/components/ptransfer/about-content';
 
 export function AboutPage() {
   return <AboutContent />;

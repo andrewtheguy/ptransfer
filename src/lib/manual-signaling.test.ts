@@ -45,6 +45,7 @@ describe('Manual Signaling Utils', () => {
     );
 
     expect(isMutualPayload(binary)).toBe(true);
+    expect(Array.from(binary.subarray(0, 4))).toEqual([0x50, 0x54, 0x30, 0x31]);
     expect(binary.length).toBeGreaterThan(8); // Header + something
 
     const parsed = await parseMutualPayload(binary);
