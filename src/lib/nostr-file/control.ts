@@ -316,6 +316,10 @@ export interface ControlChannel {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const CHANNEL_CLOSED_MESSAGE = 'Control channel closed';
+const DELIVERY_FAILED_MESSAGE =
+  'Lost contact with the Nostr relays — the control message could not be delivered';
+
 /**
  * Publish to every relay; resolve on the first acceptance, keep retrying the
  * rest in the background, reject only when all relays gave up.
@@ -326,6 +330,13 @@ function publishToAny(
   event: Event,
   isClosed: () => boolean,
 ): Promise<void> {
+  // A channel closed before the first attempt says so, rather than blaming
+  // relays it never tried; an empty ring has to settle too, or the caller
+  // waits forever on a loop that never runs.
+  if (isClosed()) return Promise.reject(new Error(CHANNEL_CLOSED_MESSAGE));
+  if (relays.length === 0) {
+    return Promise.reject(new Error(DELIVERY_FAILED_MESSAGE));
+  }
   return new Promise<void>((resolve, reject) => {
     let failures = 0;
     for (const relay of relays) {
@@ -346,7 +357,7 @@ function publishToAny(
         if (failures === relays.length) {
           reject(
             new Error(
-              'Lost contact with the Nostr relays — the control message could not be delivered',
+              isClosed() ? CHANNEL_CLOSED_MESSAGE : DELIVERY_FAILED_MESSAGE,
             ),
           );
         }
@@ -414,7 +425,7 @@ export function openControlChannel(
 
   return {
     async send(message) {
-      if (closed) throw new Error('Control channel closed');
+      if (closed) throw new Error(CHANNEL_CLOSED_MESSAGE);
       n++;
       const content = await encodeControlMessage(key, transferId, role, {
         ...message,

@@ -113,14 +113,9 @@ export async function receiveFileLive(
   try {
     let channel: ControlChannel | null = null;
 
-    // One fetch cycle per announcement (coalesced: an announcement that
-    // arrives mid-cycle queues exactly one more cycle).
-    const runCycle = async (): Promise<void> => {
-      if (!channel) return;
-      if (cycleRunning) {
-        cyclePending = true;
-        return;
-      }
+    // One fetch cycle: fetch whatever the latest announcement made available,
+    // report the outcome, and repeat while another announcement queued a pass.
+    const runCycle = async (ch: ControlChannel): Promise<void> => {
       cycleRunning = true;
       try {
         do {
@@ -173,7 +168,7 @@ export async function receiveFileLive(
             if (chunks[i] || !placement) continue;
             missing.push([i, placement[0], placement[1]]);
           }
-          await channel.send({
+          await ch.send({
             t: 'ack',
             avail: availN,
             have: chunksDone,
@@ -187,14 +182,30 @@ export async function receiveFileLive(
                 'File integrity check failed — the download was corrupted',
               );
             }
-            await channel.send({ t: 'done' });
+            // The file is complete and verified — hand it over first, then
+            // tell the sender as a courtesy. A `done` no relay would take
+            // must not sink a download that already succeeded; the sender's
+            // idle watchdog covers a lost one.
             succeed(data);
+            await ch.send({ t: 'done' }).catch(() => {});
             return;
           }
         } while (cyclePending && !finished);
       } finally {
         cycleRunning = false;
       }
+    };
+
+    // Announcements coalesce: one arriving mid-cycle queues exactly one more
+    // pass. The guard stays out here so `cyclePromise` always tracks the
+    // in-flight cycle — the teardown awaits it before closing the channel.
+    const scheduleCycle = () => {
+      if (!channel) return;
+      if (cycleRunning) {
+        cyclePending = true;
+        return;
+      }
+      cyclePromise = runCycle(channel).catch(fail);
     };
 
     channel = openControlChannel(pool, relays, {
@@ -220,7 +231,7 @@ export async function receiveFileLive(
         gens.clear();
         for (const [index, gen] of msg.gens) gens.set(index, gen);
         report();
-        cyclePromise = runCycle().catch(fail);
+        scheduleCycle();
       },
     });
     const openChannel = channel;
