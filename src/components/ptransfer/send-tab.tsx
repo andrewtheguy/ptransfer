@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  ChevronDown,
   ChevronRight,
   FileUp,
   FolderUp,
@@ -12,11 +13,18 @@ import {
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Switch } from '@/components/ui/switch';
 import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { supportsFolderSelection } from '@/lib/folder-utils';
+import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file';
 
 type MethodChoice = 'online' | 'offline';
 
@@ -47,6 +55,8 @@ export function SendTab() {
   const { setConfig } = useSend();
 
   const [methodChoice, setMethodChoice] = useState<MethodChoice>('online');
+  const [nostrFileRelay, setNostrFileRelay] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -55,7 +65,9 @@ export function SendTab() {
 
   const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
   const isOverLimit = totalSize > MAX_MESSAGE_SIZE;
-  const canSend = selectedFiles.length > 0 && !isOverLimit;
+  const nostrRelayActive = methodChoice === 'offline' && nostrFileRelay;
+  const isOverNostrLimit = nostrRelayActive && totalSize > NOSTR_FILE_MAX_BYTES;
+  const canSend = selectedFiles.length > 0 && !isOverLimit && !isOverNostrLimit;
   // Anything beyond a single loose file is zipped; folder selections always
   // zip so their structure is preserved.
   const willZip =
@@ -108,6 +120,7 @@ export function SendTab() {
     setConfig({
       selectedFiles,
       methodChoice,
+      nostrFileRelay: nostrRelayActive,
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -386,6 +399,57 @@ export function SendTab() {
         </RadioGroup>
       </div>
 
+      {/* Advanced options (Manual Exchange only) */}
+      {methodChoice === 'offline' && (
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="rounded-lg border bg-muted/30 p-3"
+        >
+          <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+            />
+            Advanced options
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <label
+                  htmlFor="send-nostr-file-relay"
+                  className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                >
+                  Relay file through Nostr
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                    Experimental
+                  </span>
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Max {formatFileSize(NOSTR_FILE_MAX_BYTES)}. Instead of a
+                  direct connection, the encrypted file is saved to public Nostr
+                  relays as temporary events that auto-delete after 1 hour. The
+                  recipient only needs your exchange code — no live connection
+                  between you. The code contains the decryption key, so share it
+                  only over a trusted channel.
+                </p>
+              </div>
+              <Switch
+                id="send-nostr-file-relay"
+                checked={nostrFileRelay}
+                onCheckedChange={setNostrFileRelay}
+                className="mt-0.5"
+              />
+            </div>
+            {isOverNostrLimit && (
+              <p className="mt-2 text-xs text-destructive">
+                Selected files exceed the {formatFileSize(NOSTR_FILE_MAX_BYTES)}{' '}
+                Nostr relay limit — remove files or turn this option off
+              </p>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
       {/* How it works info box */}
       <div className="rounded-lg bg-gradient-to-br from-primary/5 to-accent/5 border border-primary/10 p-4">
         <div className="flex items-start gap-3">
@@ -417,9 +481,11 @@ export function SendTab() {
 
       <Button onClick={handleSend} disabled={!canSend} className="w-full">
         <Send className="mr-2 h-4 w-4" />
-        {methodChoice === 'offline'
-          ? 'Start Manual Exchange'
-          : 'Start Auto Exchange'}
+        {nostrRelayActive
+          ? 'Start Nostr Relay Transfer'
+          : methodChoice === 'offline'
+            ? 'Start Manual Exchange'
+            : 'Start Auto Exchange'}
         <ChevronRight className="ml-1 h-3 w-3" />
       </Button>
     </div>

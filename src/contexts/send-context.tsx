@@ -17,6 +17,9 @@ interface SendConfig {
 
   // Configuration
   methodChoice: MethodChoice;
+  // Experimental: relay the file through temporary Nostr events instead of a
+  // direct connection (Manual Exchange only, max 10 MB).
+  nostrFileRelay: boolean;
 }
 
 interface SendContextState {

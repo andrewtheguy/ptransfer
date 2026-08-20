@@ -11,13 +11,20 @@ import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
 import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { QRInput } from '@/components/ptransfer/qr-input';
-import { TransferStatus } from '@/components/ptransfer/transfer-status';
+import {
+  ExpiryCountdown,
+  TransferStatus,
+} from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useSend } from '@/contexts/send-context';
 import {
   type UseManualSendReturn,
   useManualSend,
 } from '@/hooks/use-manual-send';
+import {
+  type UseNostrRelaySendReturn,
+  useNostrRelaySend,
+} from '@/hooks/use-nostr-relay-send';
 import { type UseNostrSendReturn, useNostrSend } from '@/hooks/use-nostr-send';
 import {
   archiveTimestamp,
@@ -41,7 +48,8 @@ type TransferStep =
 // Discriminated union for type-safe hook access
 type ActiveHook =
   | { type: 'online'; hook: UseNostrSendReturn }
-  | { type: 'offline'; hook: UseManualSendReturn };
+  | { type: 'offline'; hook: UseManualSendReturn }
+  | { type: 'nostr-file'; hook: UseNostrRelaySendReturn };
 
 export function SendTransferPage() {
   const navigate = useNavigate();
@@ -56,17 +64,22 @@ export function SendTransferPage() {
   // Hooks for transfer
   const nostrHook = useNostrSend();
   const manualHook = useManualSend();
+  const nostrRelayHook = useNostrRelaySend();
 
   const startedRef = useRef(false);
 
   // Determine which hook to use based on config with discriminated union
   const isOnline = config?.methodChoice === 'online';
+  const isNostrFileRelay =
+    config?.methodChoice === 'offline' && config.nostrFileRelay;
   const activeHook: ActiveHook = useMemo(
     () =>
       isOnline
         ? { type: 'online', hook: nostrHook }
-        : { type: 'offline', hook: manualHook },
-    [isOnline, nostrHook, manualHook],
+        : isNostrFileRelay
+          ? { type: 'nostr-file', hook: nostrRelayHook }
+          : { type: 'offline', hook: manualHook },
+    [isOnline, isNostrFileRelay, nostrHook, manualHook, nostrRelayHook],
   );
 
   // Extract common state from active hook
@@ -89,6 +102,10 @@ export function SendTransferPage() {
   const submitAnswer =
     activeHook.type === 'offline' ? activeHook.hook.submitAnswer : undefined;
 
+  // Nostr file relay properties (type-safe access via discriminated union)
+  const finishNostrRelay =
+    activeHook.type === 'nostr-file' ? activeHook.hook.finish : undefined;
+
   // Redirect if no config
   useEffect(() => {
     if (!config) {
@@ -104,8 +121,9 @@ export function SendTransferPage() {
 
     const prepareFile = async () => {
       try {
-        // Check Nostr availability first if needed
-        if (config.methodChoice === 'online') {
+        // Check Nostr availability first if needed (Auto Exchange and the
+        // Nostr file relay both depend on reachable relays)
+        if (config.methodChoice === 'online' || config.nostrFileRelay) {
           if (cancelled) return;
           setStep('checking');
           const result = await testRelayAvailability();
@@ -201,9 +219,10 @@ export function SendTransferPage() {
         console.error('Failed to cancel transfer:', err);
       }
     }
-    // Update config to manual mode and restart the transfer flow
+    // Update config to manual mode (dropping the relay-dependent Nostr file
+    // relay option) and restart the transfer flow
     startedRef.current = false;
-    setConfig({ ...config, methodChoice: 'offline' });
+    setConfig({ ...config, methodChoice: 'offline', nostrFileRelay: false });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);
@@ -278,7 +297,7 @@ export function SendTransferPage() {
       {step === 'active' && (
         <>
           {/* Manual Exchange mode: showing offer */}
-          {!isOnline &&
+          {activeHook.type === 'offline' &&
             offerData &&
             submitAnswer &&
             state.status === 'showing_offer' && (
@@ -338,9 +357,52 @@ export function SendTransferPage() {
             )}
 
           {/* Manual Exchange mode: other states (connecting, transferring, etc.) */}
-          {!isOnline && state.status !== 'showing_offer' && (
-            <TransferStatus state={state} />
-          )}
+          {activeHook.type === 'offline' &&
+            state.status !== 'showing_offer' && (
+              <TransferStatus state={state} />
+            )}
+
+          {/* Nostr file relay mode: upload complete, showing the code */}
+          {activeHook.type === 'nostr-file' &&
+            state.status === 'showing_payload' &&
+            state.payloadData &&
+            finishNostrRelay && (
+              <div className="space-y-4">
+                <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
+                  <p className="font-medium">
+                    File saved to Nostr relays — hand over the code
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Your encrypted file is stored on public relays as temporary
+                    events. Give the receiver the code below — by QR codes or{' '}
+                    <strong>Copy Data</strong> — over a trusted channel; it
+                    contains the decryption key. This is one-way: nothing comes
+                    back to you.
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    The relay copies delete themselves after 1 hour, so the
+                    receiver must download before then.
+                  </p>
+                </div>
+
+                <MultiQRDisplay data={state.payloadData} />
+
+                {state.expiresAt !== undefined && (
+                  <ExpiryCountdown expiresAt={state.expiresAt} />
+                )}
+
+                <Button onClick={finishNostrRelay} className="w-full">
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Done — receiver has the code
+                </Button>
+              </div>
+            )}
+
+          {/* Nostr file relay mode: other states (preparing, uploading, etc.) */}
+          {activeHook.type === 'nostr-file' &&
+            state.status !== 'showing_payload' && (
+              <TransferStatus state={state} />
+            )}
 
           {/* Nostr mode: Transfer progress */}
           {isOnline && (

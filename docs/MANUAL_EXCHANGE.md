@@ -80,6 +80,33 @@ later over WebRTC by per-chunk AES-GCM authentication.
 2. The P2P connection establishes and the file transfers directly
 3. Both sides show that the transfer completed when done
 
+## Experimental: Relay File Through Nostr
+
+Under **Advanced options** (visible when Manual Exchange is selected on the send tab), the
+**Relay file through Nostr** switch replaces the live connection with store-and-forward
+through public Nostr relays, for files up to **10 MB**:
+
+1. The sender's file is encrypted with a random key and uploaded in full to a set of
+   discovered Nostr relays as **temporary events that auto-delete after 1 hour** (NIP-40)
+2. Only after the complete upload is confirmed does the sender get a single exchange code
+   (multi-QR or copy/paste) containing the download manifest **and the decryption key**
+3. The receiver pastes/scans that code in the normal Manual Exchange receive flow — it is
+   detected automatically — and downloads and decrypts the file from the relays
+
+Differences from normal Manual Exchange:
+
+- **One-way**: there is no answer step; the receiver sends nothing back, and the sender gets
+  no in-app delivery confirmation
+- **No live connection needed**: the peers never connect to each other; both only need
+  internet access to the relays, and not necessarily at the same time
+- **Time limit**: the receiver must download within 1 hour of the upload, before the relay
+  copies expire
+- **The code IS the key**: unlike signaling payloads, this code contains the decryption key.
+  Anyone who obtains it before expiry can download and decrypt the file — share it only over
+  a trusted channel (in person, or an end-to-end encrypted messenger)
+- Relays see only encrypted pieces, sizes, and timing — never the file name, contents, or
+  the decryption key
+
 ## Tips
 
 - **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them

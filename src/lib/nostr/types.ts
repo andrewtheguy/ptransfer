@@ -26,7 +26,13 @@ export type TransferStatus =
   | 'waiting_for_answer'
   | 'waiting_for_offer'
   | 'generating_answer'
-  | 'showing_answer';
+  | 'showing_answer'
+  // Nostr file relay states (experimental store-and-forward)
+  | 'preparing'
+  | 'discovering_relays'
+  | 'uploading'
+  | 'showing_payload'
+  | 'fetching';
 
 // File metadata
 export interface FileMetadata {
@@ -49,6 +55,10 @@ interface TransferStateBase {
   // Set on an error state when a direct P2P connection could not be established;
   // drives the offline-QR fallback suggestion in the UI.
   connectionFailed?: boolean;
+  // Nostr file relay: unix seconds when the relay copies expire (NIP-40).
+  expiresAt?: number;
+  // Nostr file relay: the PT01 payload the sender hands to the receiver.
+  payloadData?: Uint8Array;
 }
 
 // Error state has required message

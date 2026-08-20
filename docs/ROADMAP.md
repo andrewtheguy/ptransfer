@@ -10,6 +10,17 @@ Implement automatic relay discovery using Nostr relay list events:
 - Select best relays based on latency, availability, and suitability
 - Filter out relays requiring payment or authentication
 
+Status: implemented for the experimental Nostr file relay
+(`src/lib/nostr-file/relay-pool.ts` — NIP-66/NIP-65 discovery, write→read
+health probes, localStorage candidate cache with 24h TTL, rotating batch
+selection). Not yet used for Auto Exchange signaling relays.
+
+### ~~Nostr File Relay (Manual Exchange)~~ — Shipped (experimental)
+Store-and-forward transfer through Nostr relays for Manual Exchange (max
+10 MB): complete upload of encrypted chunks as NIP-40 expiring events first,
+then a one-way manual payload carrying the manifest + decryption key. See
+"Nostr File Relay" in ARCHITECTURE.md.
+
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
