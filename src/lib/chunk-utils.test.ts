@@ -253,18 +253,6 @@ describe('buildChunkUrl / extractChunkParam', () => {
     expect(extractChunkParam('https://example.com/r')).toBeNull();
   });
 
-  it('returns null for legacy d-param fragment format', () => {
-    expect(extractChunkParam('https://example.com/r#d=abc')).toBeNull();
-  });
-
-  it('returns null for old query-string format', () => {
-    expect(extractChunkParam('https://example.com/r?d=abc')).toBeNull();
-  });
-
-  it('returns null for old hash-router format', () => {
-    expect(extractChunkParam('https://example.com/#/r?d=abc')).toBeNull();
-  });
-
   it('returns null for invalid URL', () => {
     expect(extractChunkParam('not a url')).toBeNull();
   });

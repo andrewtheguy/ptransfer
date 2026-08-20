@@ -9,9 +9,9 @@ function deflateDecompress(data: Uint8Array): Uint8Array {
   return inflateSync(data);
 }
 
-// Magic header: "SS03" = Secure Send version 3
-const MAGIC_HEADER_V3 = new Uint8Array([0x53, 0x53, 0x30, 0x33]);
-// Inner magic: "mag!" (0x6d 0x61 0x67 0x21) - inside obfuscated area to verify seed
+// Magic header: "PT01" = pTransfer manual-signaling format version 1
+const MAGIC_HEADER_V1 = new Uint8Array([0x50, 0x54, 0x30, 0x31]);
+// Inner magic: "mag!" - inside the obfuscated area to verify the seed
 const INNER_MAGIC_V3 = new Uint8Array([0x6d, 0x61, 0x67, 0x21]);
 const BUCKET_SEC = 3600; // 1 hour
 const BASE_SEED = 0x9e3779b9;
@@ -111,24 +111,24 @@ export function isValidSignalingPayload(
 }
 
 /**
- * Validate binary payload has correct magic header (SS03, version 3)
+ * Validate binary payload has the pTransfer version 1 magic header
  */
 export function isValidBinaryPayload(binary: Uint8Array): boolean {
   return isMutualPayload(binary);
 }
 
 /**
- * Estimate compressed payload size in bytes (includes SS03 magic header)
+ * Estimate compressed payload size in bytes (includes PT01 magic header)
  */
 export function estimatePayloadSize(payload: SignalingPayload): number {
   const json = JSON.stringify(payload);
   const compressed = deflateCompress(new TextEncoder().encode(json));
-  return 4 + 4 + compressed.length; // 4 for SS03, 4 for INNER_MAGIC_V3
+  return 4 + 4 + compressed.length; // 4 for PT01, 4 for INNER_MAGIC_V3
 }
 
 /**
  * Generate mutual offer as binary data
- * Format: [SS03 magic (4 bytes)][obfuscated compressed payload]
+ * Format: [PT01 magic (4 bytes)][obfuscated compressed payload]
  * NOT encrypted - ECDH public keys are not secret
  */
 export function generateMutualOfferBinary(
@@ -170,16 +170,16 @@ export function generateMutualOfferBinary(
   const seed = getSeedForBucket(currentBucket);
   const obfuscatedInner = xorObfuscate(inner, seed);
 
-  // Final binary: [SS03][obfuscatedInner]
+  // Final binary: [PT01][obfuscatedInner]
   const result = new Uint8Array(4 + obfuscatedInner.length);
-  result.set(MAGIC_HEADER_V3, 0);
+  result.set(MAGIC_HEADER_V1, 0);
   result.set(obfuscatedInner, 4);
   return result;
 }
 
 /**
  * Generate mutual answer as binary data
- * Format: [SS03 magic (4 bytes)][obfuscated compressed payload]
+ * Format: [PT01 magic (4 bytes)][obfuscated compressed payload]
  */
 export function generateMutualAnswerBinary(
   answer: RTCSessionDescriptionInit,
@@ -208,9 +208,9 @@ export function generateMutualAnswerBinary(
   const seed = getSeedForBucket(currentBucket);
   const obfuscatedInner = xorObfuscate(inner, seed);
 
-  // Final binary: [SS03][obfuscatedInner]
+  // Final binary: [PT01][obfuscatedInner]
   const result = new Uint8Array(4 + obfuscatedInner.length);
-  result.set(MAGIC_HEADER_V3, 0);
+  result.set(MAGIC_HEADER_V1, 0);
   result.set(obfuscatedInner, 4);
   return result;
 }
@@ -275,15 +275,15 @@ export function parseMutualPayload(
 }
 
 /**
- * Check if binary payload is mutual exchange format (SS03, version 3)
+ * Check if binary payload is pTransfer mutual exchange format version 1
  */
 export function isMutualPayload(binary: Uint8Array): boolean {
   if (binary.length < 8) return false;
   return (
-    binary[0] === MAGIC_HEADER_V3[0] &&
-    binary[1] === MAGIC_HEADER_V3[1] &&
-    binary[2] === MAGIC_HEADER_V3[2] &&
-    binary[3] === MAGIC_HEADER_V3[3]
+    binary[0] === MAGIC_HEADER_V1[0] &&
+    binary[1] === MAGIC_HEADER_V1[1] &&
+    binary[2] === MAGIC_HEADER_V1[2] &&
+    binary[3] === MAGIC_HEADER_V1[3]
   );
 }
 

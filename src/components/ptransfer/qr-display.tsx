@@ -18,7 +18,7 @@ const clipboardWriteSupported =
   typeof navigator.clipboard?.writeText === 'function';
 
 interface QRDisplayProps {
-  data: Uint8Array; // Binary data for QR code (SS03 obfuscated payload)
+  data: Uint8Array; // Binary data for QR code (PT01 obfuscated payload)
   label?: string;
   showCopyButton?: boolean;
   clipboardData?: string; // Base64 payload for copy button

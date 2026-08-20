@@ -31,12 +31,12 @@ describe('Rendezvous transcript hash', () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeRendezvousTranscriptHash(payload, SALT)).toBe(hash);
 
-    // Frozen v4 vector. Every other test here is relative — reordering the
+    // Frozen pTransfer v4 vector. Every other test here is relative — reordering the
     // canonical array, dropping a field, or editing the version label would
     // leave them all green. This pins the wire format itself, so any such
     // change has to be a deliberate protocol bump rather than an accident.
     expect(hash).toBe(
-      '90188f66525ea1ceb4115e7cef91f777d22c5c2e9e6b35793622d1b681a28cc6',
+      'edf3c4ce9b70adf0cb6e316e247f2f840e18af094d20466dfd55c00e694be675',
     );
   });
 
@@ -90,9 +90,9 @@ describe('Transfer metadata hash', () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeTransferMetadataHash(metadata)).toBe(hash);
 
-    // Frozen v1 vector, for the same reason as the rendezvous vector above.
+    // Frozen pTransfer v1 vector, for the same reason as the rendezvous vector above.
     expect(hash).toBe(
-      '4e81dd4145657c1786a5a7109907cc70b1492cd17a8dcf1cfeeccf81c92aee26',
+      '6ebaf21fd32f1f01883abf53f3b87d3b682a85ec923577f91dddde3567d086b0',
     );
   });
 

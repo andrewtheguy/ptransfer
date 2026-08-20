@@ -49,7 +49,7 @@ export const PIN_HINT_LOOKBACK_BUCKETS = PIN_ACTIVE_BUCKETS - 1;
 // HKDF salt for the locator-keyed rendezvous hint derivation
 // ('hint:<bucket>'). Public constant for domain separation only: the hint is
 // keyed by the public locator segment and never by any PIN secret.
-export const PIN_HINT_HKDF_SALT = 'secure-send:pin:v4';
+export const PIN_HINT_HKDF_SALT = 'ptransfer:pin:v4';
 
 // How many SPAKE2 claim verifications the sender will run per PIN generation.
 // With a balanced PAKE the only way to test a PIN guess is to publish a claim

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Secure Send is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling, a manual exchange method (QR or copy/paste with time-bucketed obfuscation), and direct P2P (WebRTC) data transfer. In Nostr mode the content-encryption key comes from a SPAKE2 password-authenticated key exchange driven by the PIN (fresh ephemeral scalars on both sides per run); in manual mode it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard path.
+pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling, a manual exchange method (QR or copy/paste with time-bucketed obfuscation), and direct P2P (WebRTC) data transfer. In Nostr mode the content-encryption key comes from a SPAKE2 password-authenticated key exchange driven by the PIN (fresh ephemeral scalars on both sides per run); in manual mode it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard path.
 
 ## Core Principles
 
@@ -31,7 +31,7 @@ By default, Nostr is used for signaling. Manual Exchange is available as an alte
 
 ## Transfer Flow
 
-Secure Send has two method-specific signaling paths, but only one file-transfer path. Nostr and Manual Exchange differ only until both peers have enough SDP/ICE/key material to open a WebRTC data channel. After that convergence point, both modes call the same shared transfer layer in `src/lib/p2p-transfer.ts`.
+pTransfer has two method-specific signaling paths, but only one file-transfer path. Nostr and Manual Exchange differ only until both peers have enough SDP/ICE/key material to open a WebRTC data channel. After that convergence point, both modes call the same shared transfer layer in `src/lib/p2p-transfer.ts`.
 
 ### Unified Transfer Flow (All Signaling Methods)
 
@@ -46,8 +46,8 @@ flowchart TD
     end
 
     subgraph Manual[Manual setup]
-        M1[QR/clipboard offer<br/>obfuscated SS03 payload]
-        M2[QR/clipboard answer<br/>obfuscated SS03 payload]
+        M1[QR/clipboard offer<br/>obfuscated PT01 payload]
+        M2[QR/clipboard answer<br/>obfuscated PT01 payload]
         M1 --> M2
     end
 
@@ -265,7 +265,7 @@ Both sides hold the session keys from the same root (`deriveNostrSessionKeys`: `
 #### Confirmation Code (anti front-running)
 A PIN is a value a human reads off a screen and says out loud. Anything that can see it — a shoulder-surfer, a screen share, a photo — can claim the transfer, and the first-claim lockout hands the file to whoever got there first. A PAKE cannot help with this: it proves knowledge of the PIN, which is exactly what the attacker has. The confirmation code closes the gap by moving the final go/no-go onto a channel the attacker does not control — the sender's operator learns the code from the intended receiver directly.
 
-`deriveConfirmationCode` (`kdf.ts`) is a short authentication string: HKDF-SHA256 over the SPAKE2 root with the public per-transfer salt, info label `secure-send:nostr-session:v4:confirmation` bound to the transfer id, both handshake nonces, the rendezvous transcript hash, and the metadata hash, truncated to 40 bits and encoded as 8 Crockford Base32 characters.
+`deriveConfirmationCode` (`kdf.ts`) is a short authentication string: HKDF-SHA256 over the SPAKE2 root with the public per-transfer salt, info label `ptransfer:nostr-session:v4:confirmation` bound to the transfer id, both handshake nonces, the rendezvous transcript hash, and the metadata hash, truncated to 40 bits and encoded as 8 Crockford Base32 characters.
 
 - **Receiver**: derives and displays the code once the sender's confirm verifies — which delivered the metadata the code must attest to. The wait is short: the confirm is published on claim verification, with no human in that leg.
 - **Sender**: derives the same value from the claim it locked onto, publishes its confirm, and parks. No WebRTC offer and no file bytes leave the sender until its operator types a matching code. A mismatch is retryable — a typo must not kill a transfer — and never settles the gate.
@@ -350,13 +350,13 @@ Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. 
 > [!IMPORTANT]
 > **Security boundary**: Manual signaling payloads are not cryptographically confidential. The time-bucketed obfuscation deters casual inspection and the 1-hour TTL prevents stale offers from starting a session, but someone who captures the QR/clipboard payload can potentially recover metadata and SDP/ICE details. File-content confidentiality comes from the ECDH-derived AES-256-GCM key, assuming the offer and answer are exchanged over an authentic QR/clipboard path.
 
-**Binary Payload Format (SS03):**
+**Binary Payload Format (PT01):**
 
 The payload consists of two distinct layers to balance rapid identification with obfuscation of the content.
 
 | Component | Length | Status | Description |
 |-----------|--------|--------|-------------|
-| **Outer Magic** | 4 bytes | Plaintext | Fixed header: `"SS03"` (`0x53 0x53 0x30 0x33`) |
+| **Outer Magic** | 4 bytes | Plaintext | Fixed header: `"PT01"` (`0x50 0x54 0x30 0x31`) |
 | **Inner Buffer** | Variable | **Obfuscated** | Time-bucketed XOR-obfuscated content (detailed below) |
 
 **Obfuscated Inner Buffer Structure:**
@@ -369,7 +369,7 @@ The following structure is revealed *after* successful de-obfuscation using the 
 | **Payload** | Variable | Obfuscated | Deflate-compressed `SignalingPayload` JSON |
 
 **Verification Process:**
-1. **Identification**: The receiver checks the first 4 bytes for the plaintext `"SS03"` header.
+1. **Identification**: The receiver checks the first 4 bytes for the plaintext `"PT01"` header.
 2. **Seed Testing**: The receiver iterates through candidate seeds for the current and previous hour (2-hour sliding window). 
 3. **Optimized Check**: For each candidate seed, only the first 4 bytes of the inner buffer are de-obfuscated. If they match the `"mag!"` marker, the correct seed has been found.
 4. **Full Processing**: The rest of the buffer is de-obfuscated, decompressed via deflate, and parsed as JSON.
@@ -415,7 +415,7 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 2. Compress with deflate (variable length).
 3. Prepend fixed-length `"mag!"` marker (4 bytes).
 4. XOR-obfuscate this inner buffer with the current hourly seed.
-5. Prepend fixed-length plaintext `"SS03"` header (4 bytes).
+5. Prepend fixed-length plaintext `"PT01"` header (4 bytes).
 6. Result: Final binary payload.
 
 
@@ -432,7 +432,7 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 *Answer (Receiver → Sender):*
 | Method | Encoding | Use Case |
 |--------|----------|----------|
-| QR Code | SS03 obfuscated binary (single QR) | Camera available, sender already in-app |
+| QR Code | PT01 obfuscated binary (single QR) | Camera available, sender already in-app |
 | Copy/Paste | Base64-encoded binary | No camera, text-safe for clipboard |
 
 **Key Features:**
@@ -631,7 +631,7 @@ Both receive modes reject extra, duplicate, out-of-range, malformed, and oversiz
 
 ## TTL / Expiration Spec
 
-Secure Send enforces hard session TTLs. Expired requests MUST NOT establish a session or begin transfer, even if the PIN/key is correct.
+pTransfer enforces hard session TTLs. Expired requests MUST NOT establish a session or begin transfer, even if the PIN/key is correct.
 
 **Duration**
 - **Nostr**: current-or-previous bucket acceptance (roughly 2–4 minutes, with `PIN_TTL_MS` = 4 minutes as the maximum freshness bound) inside a `PIN_WAIT_TIMEOUT_MS` (30 minute) resource-backstop wait window

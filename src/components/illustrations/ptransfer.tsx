@@ -1,5 +1,5 @@
 /**
- * Original flat-style illustration authored for Secure Send (no external assets).
+ * Original flat-style illustration authored for pTransfer (no external assets).
  * Free to use/modify — released by the project under its own license.
  * Colors are driven by theme tokens (fill-primary, fill-secondary, ...) so the
  * artwork tints to the palette and adapts to dark mode automatically. Offline-safe.
@@ -8,7 +8,7 @@ interface IllustrationProps {
   className?: string;
 }
 
-export function SecureTransferIllustration({ className }: IllustrationProps) {
+export function PTransferIllustration({ className }: IllustrationProps) {
   return (
     <svg
       viewBox="0 0 480 340"

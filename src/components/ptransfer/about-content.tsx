@@ -100,16 +100,16 @@ export function AboutContent() {
 
   return (
     <div className="flex flex-col gap-16 pb-8 sm:gap-24">
-      {/* What is Secure Send */}
+      {/* What is pTransfer */}
       <SectionContainer className="pt-2 sm:pt-6">
         <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            What is Secure Send?
+            What is pTransfer?
           </h1>
 
           <div className="mt-5 space-y-4 text-pretty text-base text-muted-foreground">
             <p>
-              Secure Send is a free, open-source tool for sending files and
+              pTransfer is a free, open-source tool for sending files and
               folders straight from one device to another with end-to-end
               encryption. Your content is encrypted in your browser and travels
               over a direct peer-to-peer connection — it's never uploaded to a
@@ -286,7 +286,7 @@ export function AboutContent() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl">Share the app</h2>
           <p className="mt-3 text-muted-foreground">
-            Scan to open Secure Send on another device.
+            Scan to open pTransfer on another device.
           </p>
         </div>
         <div className="mx-auto mt-8 flex max-w-md flex-col items-center gap-4 rounded-2xl border bg-muted/40 p-6">
@@ -319,7 +319,7 @@ export function AboutContent() {
         <p className="text-center text-xs text-muted-foreground">
           Source code available for audit at{' '}
           <a
-            href="https://github.com/andrewtheguy/secure-send-web"
+            href="https://github.com/andrewtheguy/ptransfer"
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline"

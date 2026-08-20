@@ -5,8 +5,8 @@ import type { RendezvousPayload, TransferMetadata } from './types';
  * below, so a transcript from an older protocol can never hash equal to a
  * newer one.
  */
-const TRANSCRIPT_LABEL = 'secure-send:nostr-rendezvous-transcript:v4';
-const METADATA_LABEL = 'secure-send:nostr-metadata-transcript:v1';
+const TRANSCRIPT_LABEL = 'ptransfer:nostr-rendezvous-transcript:v4';
+const METADATA_LABEL = 'ptransfer:nostr-metadata-transcript:v1';
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');

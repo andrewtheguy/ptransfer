@@ -27,3 +27,6 @@ public/*.wasm
 *.sw?
 
 tmp/
+
+CLAUDE.local.md
+.claude/settings.local.json

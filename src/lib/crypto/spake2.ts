@@ -44,8 +44,8 @@ const N = Point.fromHex(
 );
 
 /** Versioned domain separators. Bump with any change to the TT layout. */
-const PAKE_CONTEXT = 'secure-send:spake2-p256:v4';
-const PAKE_SECRET_SALT = 'secure-send:spake2-w:v4';
+const PAKE_CONTEXT = 'ptransfer:spake2-p256:v4';
+const PAKE_SECRET_SALT = 'ptransfer:spake2-w:v4';
 
 export type PakeRole = 'sender' | 'receiver';
 

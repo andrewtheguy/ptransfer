@@ -32,7 +32,7 @@ Findings from research (August 2026):
   possible (hosting uses only outbound circuits) but would mean reimplementing
   `tor-hsservice`/`tor-hsclient` on top of `tor-proto` in WASM — a major
   security-sensitive protocol project no one has done.
-- **Requires secure-send-cli on the hosting side** (native Rust can use
+- **Requires ptransfer-cli on the hosting side** (native Rust can use
   `arti-client` + `tor-hsservice` like beam-rs). CLI ↔ CLI works directly.
 - **CLI ↔ regular browser does not work** — browsers cannot reach `.onion`.
 - **CLI ↔ web app in Tor Browser is possible** but requires a new

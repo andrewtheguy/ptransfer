@@ -10,8 +10,8 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { QRDisplay } from '@/components/secure-send/qr-display';
-import { TransferStatus } from '@/components/secure-send/transfer-status';
+import { QRDisplay } from '@/components/ptransfer/qr-display';
+import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useChunkCollector } from '@/hooks/use-chunk-collector';
 import { useManualReceive } from '@/hooks/use-manual-receive';
