@@ -8,6 +8,7 @@ import {
   DISCOVERY_CANDIDATE_LIMIT,
   EVENT_KIND_FILE_CHUNK,
   HEALTH_CHECK_CONCURRENCY,
+  HEALTH_CHECK_PROBE_BYTES,
   HEALTH_CHECK_TARGET_COUNT,
   HEALTH_CHECK_TIMEOUT_MS,
   RELAY_CANDIDATE_TTL_MS,
@@ -154,8 +155,9 @@ export async function discoverRelayCandidates(
 
 /**
  * Real write->read round trip against a single relay using the production
- * event shape (kind, tags, NIP-40 expiration, full codec) with throwaway
- * keys. Returns the round-trip time, or null if the relay fails any step.
+ * event shape (kind, tags, NIP-40 expiration, full codec, full chunk size)
+ * with throwaway keys. Returns the round-trip time, or null if the relay
+ * fails any step.
  */
 async function probeRelay(
   pool: NostrFilePool,
@@ -172,7 +174,9 @@ async function probeRelay(
       false,
       ['encrypt', 'decrypt'],
     );
-    const payload = crypto.getRandomValues(new Uint8Array(1024));
+    const payload = crypto.getRandomValues(
+      new Uint8Array(HEALTH_CHECK_PROBE_BYTES),
+    );
     const aad = chunkAad('probe', 0, 1);
     const content = await encodeChunkContent(aesKey, payload, aad);
     const { secretKey, publicKey } = generateEphemeralKeys();

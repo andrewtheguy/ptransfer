@@ -2,6 +2,7 @@ import { verifyEvent } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys } from '../nostr/events';
 import {
+  D_TAG_FILTER_BATCH,
   EVENT_KIND_FILE_CHUNK,
   NOSTR_FILE_ENCRYPTION_LABEL,
   NOSTR_FILE_EXPIRATION_SEC,
@@ -93,12 +94,12 @@ describe('chunk events', () => {
 });
 
 describe('buildChunkFilters', () => {
-  it('batches d identifiers at 100 per filter', () => {
-    const indices = Array.from({ length: 101 }, (_, i) => i);
+  it('batches d identifiers at D_TAG_FILTER_BATCH per filter', () => {
+    const indices = Array.from({ length: D_TAG_FILTER_BATCH + 1 }, (_, i) => i);
     const filters = buildChunkFilters('pk', TRANSFER_ID, indices);
     expect(filters.length).toBe(2);
-    expect(filters[0]['#d']?.length).toBe(100);
-    expect(filters[1]['#d']).toEqual([`${TRANSFER_ID}:100`]);
+    expect(filters[0]['#d']?.length).toBe(D_TAG_FILTER_BATCH);
+    expect(filters[1]['#d']).toEqual([`${TRANSFER_ID}:${D_TAG_FILTER_BATCH}`]);
     expect(filters[0].authors).toEqual(['pk']);
     expect(filters[0].kinds).toEqual([EVENT_KIND_FILE_CHUNK]);
   });

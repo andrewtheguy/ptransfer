@@ -3,6 +3,7 @@ import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { chunkAad, encodeChunkContent, sha256, splitIntoChunks } from './codec';
 import {
+  CHUNK_REPLICATION,
   MIN_CHUNK_RELAY_SUCCESS,
   NOSTR_FILE_CHUNK_SIZE,
   NOSTR_FILE_EXPIRATION_SEC,
@@ -16,7 +17,7 @@ import {
   UPLOAD_RELAY_COUNT,
 } from './constants';
 import { buildChunkEvent } from './events';
-import type { NostrFileManifest } from './manifest';
+import { type NostrFileManifest, stripeRelays } from './manifest';
 import type { NostrFilePool } from './pool';
 import {
   createLocalStorageRelayPool,
@@ -82,6 +83,11 @@ async function publishWithRetry(
 
 /**
  * Save a file to nostr relays as temporary (NIP-40, 1 hour) chunk events.
+ *
+ * Chunks are striped across the relay batch (stripeRelays): each chunk goes
+ * to CHUNK_REPLICATION relays, falling back to the next relays in the ring
+ * when a placed relay rejects it, so every relay carries only a fraction of
+ * the file and the total upload volume stays at replication × file size.
  *
  * Strict handover gate: resolves only after EVERY chunk has been acknowledged
  * by at least MIN_CHUNK_RELAY_SUCCESS relays — a partial upload always throws,
@@ -163,9 +169,9 @@ export async function uploadFileToNostr(
       relays = selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
     }
 
-    // Upload every chunk to every batch relay; strict all-confirmed gate.
+    // Stripe chunks over the batch; strict all-confirmed gate.
+    const replication = Math.min(CHUNK_REPLICATION, relays.length);
     const createdAt = Math.floor(Date.now() / 1000);
-    const acceptedPerRelay = new Map<string, number>(relays.map((r) => [r, 0]));
     let chunksDone = 0;
     onProgress({ phase: 'uploading', chunksDone, chunksTotal: totalChunks });
 
@@ -187,19 +193,23 @@ export async function uploadFileToNostr(
           createdAt,
         });
         const outcomes = await Promise.all(
-          relays.map((relay) =>
+          stripeRelays(relays, replication, index).map((relay) =>
             publishWithRetry(pool, relay, event, isCancelled),
           ),
         );
+        let acks = outcomes.filter(Boolean).length;
+        // Fallback: continue around the ring past the placed relays until
+        // enough copies exist. The download's sweep pass finds these.
+        for (
+          let j = replication;
+          j < relays.length && acks < MIN_CHUNK_RELAY_SUCCESS;
+          j++
+        ) {
+          throwIfCancelled();
+          const relay = relays[(index + j) % relays.length];
+          if (await publishWithRetry(pool, relay, event, isCancelled)) acks++;
+        }
         throwIfCancelled();
-        let acks = 0;
-        outcomes.forEach((ok, i) => {
-          if (ok) {
-            acks++;
-            const relay = relays[i];
-            acceptedPerRelay.set(relay, (acceptedPerRelay.get(relay) ?? 0) + 1);
-          }
-        });
         if (acks < MIN_CHUNK_RELAY_SUCCESS) {
           aborted = true;
           throw new Error(
@@ -227,7 +237,8 @@ export async function uploadFileToNostr(
     );
     if (failure) throw failure.reason;
 
-    // All chunks confirmed — build the manifest, best-accepting relays first.
+    // All chunks confirmed — build the manifest. Relay order is the placement
+    // ring and must not be changed.
     const manifest: NostrFileManifest = {
       v: NOSTR_FILE_MANIFEST_VERSION,
       fileName: meta.fileName,
@@ -239,10 +250,8 @@ export async function uploadFileToNostr(
       chunkSize: NOSTR_FILE_CHUNK_SIZE,
       totalChunks,
       enc: 1,
-      relays: [...relays].sort(
-        (a, b) =>
-          (acceptedPerRelay.get(b) ?? 0) - (acceptedPerRelay.get(a) ?? 0),
-      ),
+      relays: [...relays],
+      replication,
       createdAt,
       expiresAt: createdAt + NOSTR_FILE_EXPIRATION_SEC,
     };

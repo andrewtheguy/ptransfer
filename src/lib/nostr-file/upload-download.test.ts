@@ -1,8 +1,8 @@
 import type { Event } from 'nostr-tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NOSTR_FILE_MAX_BYTES } from './constants';
+import { CHUNK_REPLICATION, NOSTR_FILE_MAX_BYTES } from './constants';
 import { downloadFileFromNostr } from './download';
-import { isValidNostrFileManifest } from './manifest';
+import { isValidNostrFileManifest, stripeRelays } from './manifest';
 import type { NostrFilePool } from './pool';
 import { type UploadProgress, uploadFileToNostr } from './upload';
 
@@ -53,6 +53,10 @@ function createMockPool(failRelays: Set<string> = new Set()): MockPool {
 }
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
+const SIX_RELAYS = Array.from(
+  { length: 6 },
+  (_, i) => `wss://r${i + 1}.example`,
+);
 const META = {
   fileName: 'test.bin',
   mimeType: 'application/octet-stream',
@@ -81,8 +85,22 @@ async function settleWithFakeTimers<T>(promise: Promise<T>): Promise<void> {
   }
 }
 
+// Map of chunk index -> relays holding a copy.
+function placements(pool: MockPool): Map<number, Set<string>> {
+  const out = new Map<number, Set<string>>();
+  for (const [relay, events] of pool.store) {
+    for (const ev of events) {
+      const index = Number(ev.tags.find((t) => t[0] === 'chunk')?.[1]);
+      const set = out.get(index) ?? new Set<string>();
+      set.add(relay);
+      out.set(index, set);
+    }
+  }
+  return out;
+}
+
 describe('uploadFileToNostr', () => {
-  it('uploads every chunk to every relay and returns a valid manifest', async () => {
+  it('stripes each chunk onto its placement relays and returns a valid manifest', async () => {
     const pool = createMockPool();
     const data = randomBytes(100_000); // 4 chunks
     const progress: UploadProgress[] = [];
@@ -90,24 +108,33 @@ describe('uploadFileToNostr', () => {
       onProgress: (p) => progress.push(p),
       isCancelled: never,
       pool,
-      relayOverride: RELAYS,
+      relayOverride: SIX_RELAYS,
     });
 
     expect(isValidNostrFileManifest(manifest)).toBe(true);
     expect(manifest.totalChunks).toBe(4);
     expect(manifest.fileSize).toBe(data.length);
-    expect(new Set(manifest.relays)).toEqual(new Set(RELAYS));
+    // Relay order is the placement ring and must be preserved verbatim.
+    expect(manifest.relays).toEqual(SIX_RELAYS);
+    expect(manifest.replication).toBe(CHUNK_REPLICATION);
     expect(keyBytes.length).toBe(32);
-    for (const relay of RELAYS) {
-      expect(pool.store.get(relay)?.length).toBe(4);
+
+    const placed = placements(pool);
+    for (let i = 0; i < 4; i++) {
+      expect([...(placed.get(i) ?? [])].sort()).toEqual(
+        stripeRelays(SIX_RELAYS, CHUNK_REPLICATION, i).sort(),
+      );
     }
+    let totalEvents = 0;
+    for (const events of pool.store.values()) totalEvents += events.length;
+    expect(totalEvents).toBe(4 * CHUNK_REPLICATION);
     const last = progress.at(-1);
     expect(last).toEqual({ phase: 'uploading', chunksDone: 4, chunksTotal: 4 });
   });
 
-  it('tolerates a minority of dead relays', async () => {
+  it('falls back to the next ring relay when a placed relay is dead', async () => {
     const pool = createMockPool(new Set(['wss://r3.example']));
-    const data = randomBytes(1000);
+    const data = randomBytes(100_000); // 4 chunks
     vi.useFakeTimers();
     const promise = uploadFileToNostr(data, META, {
       onProgress: noProgress,
@@ -117,10 +144,25 @@ describe('uploadFileToNostr', () => {
     });
     // Drive the retry backoff timers of the dead relay.
     await settleWithFakeTimers(promise);
-    const { manifest } = await promise;
-    // Best-accepting relays sort first; the dead relay sorts last.
-    expect(manifest.relays.at(-1)).toBe('wss://r3.example');
+    const { manifest, keyBytes } = await promise;
+    expect(manifest.relays).toEqual(RELAYS);
     expect(pool.store.get('wss://r3.example')).toBeUndefined();
+    // Every chunk still has two copies, on the two live relays.
+    const placed = placements(pool);
+    for (let i = 0; i < 4; i++) {
+      expect([...(placed.get(i) ?? [])].sort()).toEqual([
+        'wss://r1.example',
+        'wss://r2.example',
+      ]);
+    }
+    // The sweep pass finds the fallback copies that are off their stripe.
+    const download = downloadFileFromNostr(manifest, keyBytes, {
+      onProgress: noProgress,
+      isCancelled: never,
+      pool,
+    });
+    await settleWithFakeTimers(download);
+    expect(await download).toEqual(data);
   });
 
   it('aborts the whole upload when a chunk cannot reach enough relays', async () => {
@@ -197,7 +239,7 @@ describe('downloadFileFromNostr', () => {
 
   it('recovers a chunk corrupted on one relay from another relay', async () => {
     const { pool, data, manifest, keyBytes } = await uploadedFixture();
-    // Corrupt every copy on the first relay the download will try.
+    // Corrupt every copy on the first relay.
     const firstRelay = manifest.relays[0];
     const events = pool.store.get(firstRelay);
     if (!events) throw new Error('fixture missing relay events');
@@ -211,6 +253,48 @@ describe('downloadFileFromNostr', () => {
       pool,
     });
     expect(downloaded).toEqual(data);
+  });
+
+  it('reads only each relay stripe in the placement pass', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(100_000); // 4 chunks
+    const { manifest, keyBytes } = await uploadFileToNostr(data, META, {
+      onProgress: noProgress,
+      isCancelled: never,
+      pool,
+      relayOverride: SIX_RELAYS,
+    });
+    const asked = new Map<string, string[]>();
+    const originalQuery = pool.querySync.bind(pool);
+    pool.querySync = async (relays, filter, params) => {
+      const list = asked.get(relays[0]) ?? [];
+      list.push(...(filter['#d'] ?? []));
+      asked.set(relays[0], list);
+      return originalQuery(relays, filter, params);
+    };
+    const downloaded = await downloadFileFromNostr(manifest, keyBytes, {
+      onProgress: noProgress,
+      isCancelled: never,
+      pool,
+    });
+    expect(downloaded).toEqual(data);
+    // Everything arrived in the placement pass, so each relay was asked for
+    // exactly its stripe and nothing else.
+    for (let pos = 0; pos < SIX_RELAYS.length; pos++) {
+      const expected: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        if (
+          stripeRelays(SIX_RELAYS, CHUNK_REPLICATION, i).includes(
+            SIX_RELAYS[pos],
+          )
+        ) {
+          expected.push(`${manifest.transferId}:${i}`);
+        }
+      }
+      expect((asked.get(SIX_RELAYS[pos]) ?? []).sort()).toEqual(
+        expected.sort(),
+      );
+    }
   });
 
   it('fails clearly when chunks are gone from every relay', async () => {

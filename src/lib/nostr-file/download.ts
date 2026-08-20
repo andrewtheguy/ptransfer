@@ -4,6 +4,7 @@ import { assembleChunks, chunkAad, decodeChunkContent, sha256 } from './codec';
 import {
   CLOCK_SKEW_TOLERANCE_SEC,
   DOWNLOAD_RETRY_PASS_DELAY_MS,
+  DOWNLOAD_SWEEP_PASSES,
   RELAY_QUERY_MAX_WAIT_MS,
 } from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
@@ -25,13 +26,26 @@ function missingIndices(chunks: (Uint8Array | null)[]): number[] {
   return missing;
 }
 
+/** Whether chunk `index` was placed on the relay at ring position `relayPos`. */
+function isPlacedOn(
+  manifest: NostrFileManifest,
+  index: number,
+  relayPos: number,
+): boolean {
+  const n = manifest.relays.length;
+  const offset = (((relayPos - index) % n) + n) % n;
+  return offset < manifest.replication;
+}
+
 /**
  * Retrieve, verify, and reassemble a file saved to nostr relays.
  *
- * Iterates the manifest's relays one at a time, fetching only the still
- * missing chunks from each (read-side load spreading). Every chunk is
- * authenticated by its AES-GCM tag under transfer/index-bound AAD; the
- * assembled file must match the manifest's whole-file hash.
+ * All relays are read in parallel. The first pass asks each relay only for
+ * the chunks striped onto it (stripeRelays placement); sweep passes then ask
+ * every relay for whatever is still missing, which covers fallback placements
+ * and transient failures. Every chunk is authenticated by its AES-GCM tag
+ * under transfer/index-bound AAD; the assembled file must match the
+ * manifest's whole-file hash.
  */
 export async function downloadFileFromNostr(
   manifest: NostrFileManifest,
@@ -82,63 +96,86 @@ export async function downloadFileFromNostr(
   let chunksDone = 0;
   onProgress({ chunksDone, chunksTotal: manifest.totalChunks });
 
-  // Two full passes over the relay list: the second catches chunks a relay
-  // failed to deliver transiently on the first.
-  for (let pass = 0; pass < 2; pass++) {
-    if (pass > 0) {
-      // Brief pause so transiently failed or dropped relay connections have
-      // a moment to recover before the retry pass.
-      await new Promise((r) => setTimeout(r, DOWNLOAD_RETRY_PASS_DELAY_MS));
+  const fetchFromRelay = async (
+    relay: string,
+    indices: number[],
+  ): Promise<void> => {
+    const filters = buildChunkFilters(
+      manifest.pubkey,
+      manifest.transferId,
+      indices,
+    );
+    for (const filter of filters) {
       throwIfCancelled();
-    }
-    for (const relay of manifest.relays) {
-      const missing = missingIndices(chunks);
-      if (missing.length === 0) break;
-      const filters = buildChunkFilters(
-        manifest.pubkey,
-        manifest.transferId,
-        missing,
-      );
-      for (const filter of filters) {
-        throwIfCancelled();
-        let events: Awaited<ReturnType<NostrFilePool['querySync']>>;
+      let events: Awaited<ReturnType<NostrFilePool['querySync']>>;
+      try {
+        events = await pool.querySync([relay], filter, {
+          maxWait: RELAY_QUERY_MAX_WAIT_MS,
+        });
+      } catch {
+        continue;
+      }
+      for (const event of events) {
+        const parsed = parseChunkEvent(
+          event,
+          manifest.pubkey,
+          manifest.transferId,
+        );
+        if (!parsed) continue;
+        const { index, content } = parsed;
+        if (index >= manifest.totalChunks || chunks[index]) continue;
+        let plaintext: Uint8Array;
         try {
-          events = await pool.querySync([relay], filter, {
-            maxWait: RELAY_QUERY_MAX_WAIT_MS,
-          });
+          plaintext = await decodeChunkContent(
+            aesKey,
+            content,
+            chunkAad(manifest.transferId, index, manifest.totalChunks),
+            manifest.chunkSize,
+          );
         } catch {
+          // Tampered or corrupt chunk — leave it missing, another relay
+          // may hold a good copy.
           continue;
         }
-        for (const event of events) {
-          const parsed = parseChunkEvent(
-            event,
-            manifest.pubkey,
-            manifest.transferId,
-          );
-          if (!parsed) continue;
-          const { index, content } = parsed;
-          if (index >= manifest.totalChunks || chunks[index]) continue;
-          try {
-            chunks[index] = await decodeChunkContent(
-              aesKey,
-              content,
-              chunkAad(manifest.transferId, index, manifest.totalChunks),
-              manifest.chunkSize,
-            );
-            chunksDone++;
-            onProgress({
-              chunksDone,
-              chunksTotal: manifest.totalChunks,
-              relay,
-            });
-          } catch {
-            // Tampered or corrupt chunk — leave it missing, another relay
-            // may hold a good copy.
-          }
-        }
+        // Another relay's worker may have decoded this chunk meanwhile.
+        if (chunks[index]) continue;
+        chunks[index] = plaintext;
+        chunksDone++;
+        onProgress({ chunksDone, chunksTotal: manifest.totalChunks, relay });
       }
     }
+  };
+
+  // One worker per relay; a cancelled worker rejects and the rest wind down
+  // at their own next cancellation check.
+  const runPass = async (
+    wanted: (relayPos: number, missing: number[]) => number[],
+  ): Promise<void> => {
+    const missing = missingIndices(chunks);
+    const results = await Promise.allSettled(
+      manifest.relays.map(async (relay, relayPos) => {
+        const indices = wanted(relayPos, missing);
+        if (indices.length > 0) await fetchFromRelay(relay, indices);
+      }),
+    );
+    const failure = results.find(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  };
+
+  // Placement pass: each relay serves only its stripe.
+  await runPass((relayPos, missing) =>
+    missing.filter((index) => isPlacedOn(manifest, index, relayPos)),
+  );
+  // Sweep passes: every relay is asked for everything still missing.
+  for (let pass = 0; pass < DOWNLOAD_SWEEP_PASSES; pass++) {
     if (missingIndices(chunks).length === 0) break;
+    // Brief pause so transiently failed or dropped relay connections have
+    // a moment to recover before the retry pass.
+    await new Promise((r) => setTimeout(r, DOWNLOAD_RETRY_PASS_DELAY_MS));
+    throwIfCancelled();
+    await runPass((_relayPos, missing) => missing);
   }
 
   const stillMissing = missingIndices(chunks);
