@@ -15,6 +15,11 @@ using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:
 then a single receiver `ACK` once `DONE` validates the chunk count and final byte count and all chunks have
 authenticated and reassembled).
 
+This guide describes that **direct flow** unless it says otherwise. The experimental
+[Relay file through Nostr](#experimental-relay-file-through-nostr) options replace it
+entirely: there is no offer/answer, no WebRTC connection between the two devices, and no
+direct route between them is needed — see that section for how they differ.
+
 ## When to Use This
 
 Manual mode is useful when:
@@ -45,7 +50,9 @@ The signaling data carries what the two devices need to find and connect to each
 it as shareable only with your intended recipient. When the offer is reassembled from QR codes,
 it is error-checked (a CRC over the offer) before use — this only guards against a misread or
 garbled QR code and is **separate** from the file's cryptographic integrity, which is enforced
-later over WebRTC by per-chunk AES-GCM authentication.
+later over WebRTC by per-chunk AES-GCM authentication. (The relay options get the same CRC
+check when their code is reassembled from QR codes, and verify the file itself with per-piece
+AES-GCM plus a whole-file checksum.)
 
 ## Step-by-Step
 
@@ -125,9 +132,10 @@ Differences from normal Manual Exchange:
 - **No answer step**: the receiver never sends a code back. In the Stored variant the
   sender also gets no in-app delivery confirmation; in the Live variant the sender's page
   shows the receiver's progress and completes when the receiver has the verified file
-- **Connectivity**: the peers never connect to each other; both only need internet access
-  to the relays. With Stored, not necessarily at the same time; with Live, both pages must
-  stay open until the transfer completes (a side that goes silent for a few minutes ends it)
+- **Connectivity**: no WebRTC connection is made — the peers never connect to each other, and
+  both only need internet access to the relays. With Stored, not necessarily at the same time;
+  with Live, both pages must stay open until the transfer completes (a side that goes silent
+  for a few minutes ends it)
 - **Time limit**: everything must finish within 1 hour of the transfer *start* — the app
   enforces this deadline, and expired pieces are pruned by compliant relays (deletion is
   requested via NIP-40, not cryptographically guaranteed). With Stored, a large file on a
@@ -148,10 +156,11 @@ Differences from normal Manual Exchange:
   the **Paste** tab on the receiving side. If the clipboard is blocked, use **Show text to copy
   manually** to select the text by hand
 - **Single QR**: Very small offers may produce just one QR code — the flow still works the same way
-- **A direct route is required**: Without internet, both devices normally need to be on the same
-  Wi-Fi or local network. With internet, STUN can help discover direct routes across different
-  networks, but restrictive NAT or firewall rules can still prevent a connection. TURN relaying
-  is not supported
+- **A direct route is required (direct flow only)**: Without internet, both devices normally need
+  to be on the same Wi-Fi or local network. With internet, STUN can help discover direct routes
+  across different networks, but restrictive NAT or firewall rules can still prevent a connection.
+  TURN relaying is not supported. This does not apply to the Nostr relay options — the devices
+  never connect to each other, so each only needs internet access to the relays
 - **Deployment path**: Host at domain root (for example `https://example.com`). Subpath
   deployments (for example `https://example.com/my-app`) can break scanned QR links
 
@@ -164,6 +173,7 @@ Differences from normal Manual Exchange:
 | "Camera access denied" in-app | Allow camera permissions in your browser settings and reload the page. Or switch to the **Paste** tab and use copy/paste instead. |
 | Copy button does nothing | Some browsers block clipboard access. Use **Show text to copy manually** and select the text by hand. |
 | Pasted data is rejected | Make sure you copied the entire blob and pasted the matching piece (offer to the receiver, answer to the sender). |
-| Transfer fails after the offer is collected | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
+| Transfer fails after the offer is collected (direct flow) | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
 | Sender shows expired error | Generate a new offer by retrying the send flow. |
-| Sender times out after sending | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
+| Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
+| Relay transfer stalls or times out (Nostr relay options) | Both devices need internet access to the relays, not to each other. With *Live*, both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must also finish within 1 hour of the transfer start; after that, start a new one. |
