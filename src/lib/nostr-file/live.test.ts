@@ -153,10 +153,23 @@ describe('live single-copy relay transfer', () => {
     // receiver's first acknowledgement has demoted r2, so every chunk placed
     // after that point must avoid it and never need a re-send.
     const chunks = LIVE_BATCH_CHUNKS + 40;
-    let release!: () => void;
+    // Bounded: if the demotion never happens the gate opens anyway, so the
+    // assertion below reports why rather than the test timing out.
+    let demoted = false;
+    let openGate!: () => void;
+    let gateTimer: ReturnType<typeof setTimeout>;
     const demotedGate = new Promise<void>((resolve) => {
-      release = resolve;
+      openGate = () => {
+        clearTimeout(gateTimer);
+        resolve();
+      };
+      gateTimer = setTimeout(resolve, 10_000);
     });
+    const release = () => {
+      if (demoted) return;
+      demoted = true;
+      openGate();
+    };
     const publishes: { relay: string; index: number }[] = [];
     const pool = createMockPool({
       blackholeRelays: new Set(['wss://r2.example']),
@@ -178,6 +191,11 @@ describe('live single-copy relay transfer', () => {
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
 
+    // Everything below assumes the second batch was published after r2 was
+    // demoted; say so first if it was not.
+    expect(demoted, 'r2 was never demoted — the gate opened on timeout').toBe(
+      true,
+    );
     const placed = chunkPlacements(pool);
     for (let i = 0; i < chunks; i++) {
       // Exactly one readable copy: only chunks that landed on the blackholed
@@ -242,6 +260,23 @@ describe('live single-copy relay transfer', () => {
     });
     await expect(receiveDone).rejects.toThrow(/cancelled/i);
     await expect(sendDone).rejects.toThrow(/receiver cancelled/i);
+  }, 15000);
+
+  it('tells the receiver when the sender cancels', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(400_000); // 13 chunks
+    let senderCancelled = false;
+    const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
+      senderCancelled: () => senderCancelled,
+      // Cancel as soon as the code is out and the upload has begun.
+      onSend: (p) => {
+        if (p.phase === 'transfer') senderCancelled = true;
+      },
+    });
+    await expect(sendDone).rejects.toThrow(/cancelled/i);
+    // The sender's wind-down notice reaches the receiver, so it stops waiting
+    // instead of sitting out its 3-minute idle watchdog.
+    await expect(receiveDone).rejects.toThrow(/sender cancelled/i);
   }, 15000);
 
   it('rejects an expired manifest without joining the channel', async () => {

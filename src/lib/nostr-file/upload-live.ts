@@ -261,6 +261,11 @@ export async function sendFileLive(
         lastPeerAt = Date.now();
         switch (msg.t) {
           case 'hello':
+            // The receiver just joined: announce what is already placed now
+            // instead of leaving it idle until the next heartbeat (a relay
+            // that will not serve the stored backlog gives it nothing).
+            availDirty = true;
+            control.notify();
             break;
           case 'ack':
             handleAck(msg);

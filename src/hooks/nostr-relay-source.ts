@@ -31,6 +31,10 @@ export async function readSourceFully(
       }
     }
   } finally {
+    // Cancel before releasing: an abandoned read (cancelled, or over the
+    // size limit) has to close the source too, or a streamed ZIP keeps
+    // packaging into a reader nobody is draining.
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
   const data = new Uint8Array(total);

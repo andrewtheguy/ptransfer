@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys } from '../nostr/events';
+import { PUBLISH_BACKOFF_BASE_MS, PUBLISH_MAX_RETRIES } from './constants';
 import {
   buildControlEvent,
   controlChannelTag,
@@ -271,8 +272,11 @@ describe('openControlChannel', () => {
     const dead = open(createMockPool({ failRelays: new Set(RELAYS) }));
     const started = Date.now();
     await expect(dead.send({ t: 'cancel' })).rejects.toThrow(/Lost contact/);
-    // Three retries with 500/1000/2000 ms backoff per relay, in parallel.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(3400);
+    // Every relay is retried with doubling backoff, all of them in parallel,
+    // so the whole send takes at least one relay's backoff schedule.
+    const backoffTotal =
+      PUBLISH_BACKOFF_BASE_MS * (2 ** PUBLISH_MAX_RETRIES - 1);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(backoffTotal * 0.95);
     dead.close();
   }, 15000);
 });
