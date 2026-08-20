@@ -30,12 +30,15 @@ export interface UseNostrRelayLiveSendReturn {
 export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
 
-  const cancelledRef = useRef(false);
+  // Cancellation is per run: cancel() unlocks sendingRef, so a new send can
+  // start while the previous one is still winding down, and that run has to
+  // keep seeing its own cancellation (and stop touching the shared state).
+  const runRef = useRef<{ cancelled: boolean } | null>(null);
   const sendingRef = useRef(false);
   const poolRef = useRef<SimplePool | null>(null);
 
   const cancel = useCallback(() => {
-    cancelledRef.current = true;
+    if (runRef.current) runRef.current.cancelled = true;
     sendingRef.current = false;
     setState({ status: 'idle' });
   }, []);
@@ -44,7 +47,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   // pool itself. No setState here.
   useEffect(
     () => () => {
-      cancelledRef.current = true;
+      if (runRef.current) runRef.current.cancelled = true;
     },
     [],
   );
@@ -52,9 +55,10 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   const send = useCallback(async (content: TransferSource) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
-    cancelledRef.current = false;
+    const run = { cancelled: false };
+    runRef.current = run;
 
-    const isCancelled = () => cancelledRef.current;
+    const isCancelled = () => run.cancelled;
 
     try {
       const checked = validateNostrRelaySource(content);
@@ -70,7 +74,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
         setState({ status: 'error', message: 'File is empty' });
         return;
       }
-      if (cancelledRef.current) return;
+      if (run.cancelled) return;
 
       const fileMetadata = { fileName, fileSize: data.length, mimeType };
       // Reconnect dropped sockets: the control channel subscription has to
@@ -82,86 +86,92 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       let expiresAt = 0;
       let relays: string[] = [];
 
-      await sendFileLive(data, fileMetadata, {
-        pool,
-        isCancelled,
-        onReady: (manifest, keyBytes) => {
-          const payload: NostrFileLivePayload = {
-            ...manifest,
-            type: 'nostr-file-live',
-            key: uint8ArrayToBase64(keyBytes),
-          };
-          wipeBufferSource(keyBytes);
-          payloadBinary = generateNostrFilePayloadBinary(payload);
-          expiresAt = manifest.expiresAt;
-          relays = manifest.relays;
-        },
-        onProgress: (p) => {
-          if (cancelledRef.current) return;
-          switch (p.phase) {
-            case 'hashing':
-              setState({
-                status: 'preparing',
-                message: 'Encrypting file...',
-                fileMetadata,
-              });
-              break;
-            case 'discovering':
-              setState({
-                status: 'discovering_relays',
-                message: 'Discovering Nostr relays...',
-                fileMetadata,
-              });
-              break;
-            case 'health_check':
-              setState({
-                status: 'discovering_relays',
-                message: `Testing relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
-                fileMetadata,
-              });
-              break;
-            case 'uploading':
-              break;
-            case 'transfer': {
-              if (!payloadBinary) break;
-              const chunksDone = p.chunksDone ?? 0;
-              const chunksTotal = p.chunksTotal ?? 1;
-              const have = p.receiverHave ?? 0;
-              const uploaded = chunksDone === chunksTotal;
-              let message: string;
-              if (!p.receiverConnected) {
-                message = uploaded
-                  ? 'All pieces uploaded. Waiting for the receiver to enter the code...'
-                  : `Uploading pieces (${chunksDone}/${chunksTotal})... waiting for the receiver to enter the code.`;
-              } else if (have >= chunksTotal) {
-                message = 'Receiver has every piece — verifying...';
-              } else {
-                message = `Receiver connected — has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
-                  p.resent ? `, re-sent ${p.resent}` : ''
-                }).`;
+      try {
+        await sendFileLive(data, fileMetadata, {
+          pool,
+          isCancelled,
+          onReady: (manifest, keyBytes) => {
+            const payload: NostrFileLivePayload = {
+              ...manifest,
+              type: 'nostr-file-live',
+              key: uint8ArrayToBase64(keyBytes),
+            };
+            wipeBufferSource(keyBytes);
+            payloadBinary = generateNostrFilePayloadBinary(payload);
+            expiresAt = manifest.expiresAt;
+            relays = manifest.relays;
+          },
+          onProgress: (p) => {
+            if (run.cancelled) return;
+            switch (p.phase) {
+              case 'hashing':
+                setState({
+                  status: 'preparing',
+                  message: 'Encrypting file...',
+                  fileMetadata,
+                });
+                break;
+              case 'discovering':
+                setState({
+                  status: 'discovering_relays',
+                  message: 'Discovering Nostr relays...',
+                  fileMetadata,
+                });
+                break;
+              case 'health_check':
+                setState({
+                  status: 'discovering_relays',
+                  message: `Testing relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
+                  fileMetadata,
+                });
+                break;
+              case 'uploading':
+                break;
+              case 'transfer': {
+                if (!payloadBinary) break;
+                const chunksDone = p.chunksDone ?? 0;
+                const chunksTotal = p.chunksTotal ?? 1;
+                const have = p.receiverHave ?? 0;
+                const uploaded = chunksDone === chunksTotal;
+                let message: string;
+                if (!p.receiverConnected) {
+                  message = uploaded
+                    ? 'All pieces uploaded. Waiting for the receiver to enter the code...'
+                    : `Uploading pieces (${chunksDone}/${chunksTotal})... waiting for the receiver to enter the code.`;
+                } else if (have >= chunksTotal) {
+                  message = 'Receiver has every piece — verifying...';
+                } else {
+                  message = `Receiver connected — has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
+                    p.resent ? `, re-sent ${p.resent}` : ''
+                  }).`;
+                }
+                setState({
+                  status: 'showing_payload',
+                  message,
+                  payloadData: payloadBinary,
+                  expiresAt,
+                  progress: {
+                    current: Math.min(
+                      have * chunkBytesEstimate(data.length, chunksTotal),
+                      data.length,
+                    ),
+                    total: data.length,
+                  },
+                  contentType: 'file',
+                  fileMetadata,
+                  currentRelays: relays,
+                });
+                break;
               }
-              setState({
-                status: 'showing_payload',
-                message,
-                payloadData: payloadBinary,
-                expiresAt,
-                progress: {
-                  current: Math.min(
-                    have * chunkBytesEstimate(data.length, chunksTotal),
-                    data.length,
-                  ),
-                  total: data.length,
-                },
-                contentType: 'file',
-                fileMetadata,
-                currentRelays: relays,
-              });
-              break;
             }
-          }
-        },
-      });
-      if (cancelledRef.current) return;
+          },
+        });
+      } finally {
+        // Close this run's sockets — never a newer run's pool.
+        pool.destroy();
+        if (poolRef.current === pool) poolRef.current = null;
+      }
+      if (run.cancelled) return;
 
       setState({
         status: 'complete',
@@ -170,22 +180,16 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
         fileMetadata,
       });
     } catch (error) {
-      if (
-        !cancelledRef.current &&
-        !(error instanceof NostrFileCancelledError)
-      ) {
+      if (!run.cancelled && !(error instanceof NostrFileCancelledError)) {
         setState({
           status: 'error',
           message: error instanceof Error ? error.message : 'Failed to send',
         });
       }
     } finally {
-      sendingRef.current = false;
-      // Close this run's sockets — never a newer run's pool.
-      if (poolRef.current) {
-        poolRef.current.destroy();
-        poolRef.current = null;
-      }
+      // A cancelled run may have been superseded already; only the current
+      // one may unlock sending.
+      if (runRef.current === run) sendingRef.current = false;
     }
   }, []);
 
