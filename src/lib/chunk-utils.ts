@@ -204,8 +204,6 @@ export function extractChunkParam(url: string): string | null {
     if (!hash || hash.length < 2) return null;
 
     const payload = hash.slice(1);
-    // No backward compatibility: reject legacy /r#d=... links.
-    if (payload.startsWith('d=')) return null;
     if (!/^[A-Za-z0-9_-]+$/.test(payload)) return null;
 
     return payload;
