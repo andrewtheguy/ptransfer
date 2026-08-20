@@ -161,7 +161,7 @@ describe('Nostr file payload', () => {
   const createdAt = Math.floor(Date.now() / 1000);
   const validPayload: NostrFilePayload = {
     type: 'nostr-file',
-    v: 1,
+    v: 2,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
@@ -172,6 +172,7 @@ describe('Nostr file payload', () => {
     totalChunks: Math.ceil((5 * 1024 * 1024) / 32768),
     enc: 1,
     relays: ['wss://relay.one', 'wss://relay.two'],
+    replication: 2,
     createdAt,
     expiresAt: createdAt + 3600,
     key: `${'K'.repeat(43)}=`,
@@ -185,11 +186,11 @@ describe('Nostr file payload', () => {
     expect(parsed?.payload).toEqual(validPayload);
   });
 
-  it('encodes a 320-chunk manifest into a compact payload', () => {
+  it('encodes a 3200-chunk, 16-relay manifest into a compact payload', () => {
     const large: NostrFilePayload = {
       ...validPayload,
-      fileSize: 10 * 1024 * 1024,
-      totalChunks: 320,
+      fileSize: 100 * 1024 * 1024,
+      totalChunks: 3200,
       relays: [
         'wss://relay.example-one.com',
         'wss://relay.example-two.net',
@@ -197,6 +198,16 @@ describe('Nostr file payload', () => {
         'wss://relay.example-four.org',
         'wss://relay.example-five.dev',
         'wss://relay.example-six.social',
+        'wss://relay.example-seven.com',
+        'wss://relay.example-eight.net',
+        'wss://relay.example-nine.io',
+        'wss://relay.example-ten.org',
+        'wss://relay.example-eleven.dev',
+        'wss://relay.example-twelve.social',
+        'wss://relay.example-thirteen.com',
+        'wss://relay.example-fourteen.net',
+        'wss://relay.example-fifteen.io',
+        'wss://relay.example-sixteen.org',
       ],
     };
     const binary = generateNostrFilePayloadBinary(large);
@@ -231,8 +242,15 @@ describe('Nostr file payload', () => {
       false,
     );
     expect(
-      isValidNostrFilePayload({ ...validPayload, fileSize: 11 * 1024 * 1024 }),
+      isValidNostrFilePayload({
+        ...validPayload,
+        fileSize: 101 * 1024 * 1024,
+        totalChunks: Math.ceil((101 * 1024 * 1024) / 32768),
+      }),
     ).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, replication: 3 })).toBe(
+      false,
+    );
     expect(isValidNostrFilePayload({ ...validPayload, totalChunks: 3 })).toBe(
       false,
     );
@@ -257,7 +275,7 @@ describe('Nostr file payload', () => {
     expect(isValidNostrFilePayload({ ...validPayload, type: 'offer' })).toBe(
       false,
     );
-    expect(isValidNostrFilePayload({ ...validPayload, v: 2 })).toBe(false);
+    expect(isValidNostrFilePayload({ ...validPayload, v: 1 })).toBe(false);
     expect(isValidNostrFilePayload({ ...validPayload, enc: 2 })).toBe(false);
     expect(
       isValidNostrFilePayload({ ...validPayload, pubkey: 'Z'.repeat(64) }),

@@ -7,6 +7,9 @@
  * not part of `npm test`:
  *
  *   npx tsx tests/live_nostr_file_e2e.ts
+ *
+ * NOSTR_E2E_FILE_MB overrides the file size (default 0.1, max 100), e.g.
+ *   NOSTR_E2E_FILE_MB=100 npx tsx tests/live_nostr_file_e2e.ts
  */
 import { SimplePool } from 'nostr-tools';
 import { downloadFileFromNostr } from '../src/lib/nostr-file/download';
@@ -20,7 +23,11 @@ import { sha256 } from '../src/lib/nostr-file/codec';
 import type { RelayPoolState, RelayPoolStorage } from '../src/lib/nostr-file/relay-pool';
 import { uploadFileToNostr } from '../src/lib/nostr-file/upload';
 
-const FILE_SIZE = 100 * 1024;
+const FILE_MB = Number(process.env.NOSTR_E2E_FILE_MB ?? '0.1');
+if (!Number.isFinite(FILE_MB) || FILE_MB <= 0 || FILE_MB > 100) {
+  throw new Error('NOSTR_E2E_FILE_MB must be a number in (0, 100]');
+}
+const FILE_SIZE = Math.round(FILE_MB * 1024 * 1024);
 
 function memoryStorage(): RelayPoolStorage {
   let state: RelayPoolState | null = null;
@@ -66,7 +73,10 @@ async function main() {
       },
     );
     console.log(`\nUpload done in ${Date.now() - started}ms`);
-    console.log('Relays:', manifest.relays.join(', '));
+    console.log(
+      `Relays (${manifest.relays.length}, replication ${manifest.replication}):`,
+      manifest.relays.join(', '),
+    );
 
     // Round-trip the manual payload exactly as the UI does
     const payloadBinary = generateNostrFilePayloadBinary({

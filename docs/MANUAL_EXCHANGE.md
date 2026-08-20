@@ -84,12 +84,17 @@ later over WebRTC by per-chunk AES-GCM authentication.
 
 Under **Advanced options** (visible when Manual Exchange is selected on the send tab), the
 **Relay file through Nostr** switch replaces the live connection with store-and-forward
-through public Nostr relays, for files up to **10 MB**:
+through public Nostr relays, for files up to **100 MB**:
 
 1. The sender's file is encrypted with a random key and uploaded in full to a set of
    discovered Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a
    deletion request that compliant relays honor by pruning the events, not guaranteed
-   erasure; the file stays protected by its encryption regardless
+   erasure; the file stays protected by its encryption regardless. The encrypted pieces
+   are spread across up to 16 relays with two copies each, so the upload costs about
+   twice the file size in bandwidth and, with a normal-sized relay set, each relay holds
+   only a fraction of the pieces. If few relays pass the health check (the minimum is
+   two), or relays reject pieces and the copies fall back to the others, individual
+   relays can end up holding every piece — still encrypted
 2. Only after the complete upload is confirmed does the sender get a single exchange code
    (multi-QR or copy/paste) containing the download manifest **and the decryption key**
 3. The receiver pastes/scans that code in the normal Manual Exchange receive flow — it is
@@ -101,9 +106,11 @@ Differences from normal Manual Exchange:
   no in-app delivery confirmation
 - **No live connection needed**: the peers never connect to each other; both only need
   internet access to the relays, and not necessarily at the same time
-- **Time limit**: the receiver must download within 1 hour of the upload — the app
-  enforces this deadline, and expired copies are pruned by compliant relays (deletion is
-  requested via NIP-40, not cryptographically guaranteed)
+- **Time limit**: the receiver must download within 1 hour of the upload *start* — the
+  app enforces this deadline, and expired copies are pruned by compliant relays (deletion
+  is requested via NIP-40, not cryptographically guaranteed). A large file on a slow
+  connection eats into that hour, so hand the code over promptly; the sender screen shows
+  the remaining time
 - **The code IS the key**: unlike signaling payloads, this code contains the decryption key.
   Anyone who obtains it before expiry can download and decrypt the file — share it only over
   a trusted channel (in person, or an end-to-end encrypted messenger)
