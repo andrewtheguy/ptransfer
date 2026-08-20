@@ -75,7 +75,7 @@ sequenceDiagram
     end
     Receiver-->>Sender: Claim (SPAKE2 element pB + body sealed with the session claim key)
     Note over Sender: First claim that opens verifies PIN knowledge and locks the transfer
-    Sender->>Receiver: Confirm (sealed with the session confirm key; carries file metadata)
+    Sender->>Receiver: Confirm (sealed with the session confirm key, carries file metadata)
     Note over Receiver: Verifies the confirm, derives and displays the confirmation code
     Note over Sender,Receiver: Human channel: receiver reads the code, sender types it
     Note over Sender: Publishes no WebRTC signal until the typed code matches
