@@ -26,7 +26,7 @@ export const NOSTR_FILE_AAD_PREFIX = 'ptransfer-nostr-file:v1';
 // Relay batch selected per upload. Chunks are striped across the batch: chunk
 // i is placed on CHUNK_REPLICATION consecutive relays starting at
 // relays[i % N], so each relay stores only CHUNK_REPLICATION / N of the file.
-export const UPLOAD_RELAY_COUNT = 12;
+export const UPLOAD_RELAY_COUNT = 16;
 
 // Copies kept per chunk. Two is enough for data that lives one hour; the
 // remaining batch relays only serve as fallbacks when a placed relay rejects.
@@ -41,7 +41,7 @@ export const PUBLISH_BACKOFF_BASE_MS = 500;
 export const PUBLISH_BACKOFF_CAP_MS = 5000;
 export const PUBLISH_BACKOFF_JITTER_MS = 250;
 
-export const UPLOAD_CHUNK_CONCURRENCY = 12;
+export const UPLOAD_CHUNK_CONCURRENCY = 16;
 
 export const HEALTH_CHECK_CONCURRENCY = 16;
 export const HEALTH_CHECK_TIMEOUT_MS = 8000;

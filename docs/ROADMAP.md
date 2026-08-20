@@ -18,7 +18,7 @@ selection). Not yet used for Auto Exchange signaling relays.
 ### ~~Nostr File Relay (Manual Exchange)~~ — Shipped (experimental)
 Store-and-forward transfer through Nostr relays for Manual Exchange (max
 100 MB): complete upload of encrypted chunks as NIP-40 expiring events,
-striped across up to 12 relays with two copies each, then a one-way manual
+striped across up to 16 relays with two copies each, then a one-way manual
 payload carrying the manifest + decryption key. See
 "Nostr File Relay" in ARCHITECTURE.md.
 

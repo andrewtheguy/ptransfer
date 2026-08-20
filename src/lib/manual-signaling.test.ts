@@ -186,7 +186,7 @@ describe('Nostr file payload', () => {
     expect(parsed?.payload).toEqual(validPayload);
   });
 
-  it('encodes a 3200-chunk, 12-relay manifest into a compact payload', () => {
+  it('encodes a 3200-chunk, 16-relay manifest into a compact payload', () => {
     const large: NostrFilePayload = {
       ...validPayload,
       fileSize: 100 * 1024 * 1024,
@@ -204,6 +204,10 @@ describe('Nostr file payload', () => {
         'wss://relay.example-ten.org',
         'wss://relay.example-eleven.dev',
         'wss://relay.example-twelve.social',
+        'wss://relay.example-thirteen.com',
+        'wss://relay.example-fourteen.net',
+        'wss://relay.example-fifteen.io',
+        'wss://relay.example-sixteen.org',
       ],
     };
     const binary = generateNostrFilePayloadBinary(large);
