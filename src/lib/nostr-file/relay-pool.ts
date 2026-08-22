@@ -76,6 +76,12 @@ export function createLocalStorageRelayPool(): RelayPoolStorage {
   };
 }
 
+// RFC 2606/6761 names that never resolve on the public internet — a listed
+// "relay" there is placeholder junk. `.example` (TLD) stays usable: it is
+// this codebase's own test-fixture convention and never appears in the wild.
+const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+const RESERVED_TLDS = ['.test', '.invalid'];
+
 export function normalizeRelayUrl(raw: string): string | null {
   let url: URL;
   try {
@@ -90,7 +96,9 @@ export function normalizeRelayUrl(raw: string): string | null {
     host === 'localhost' ||
     host.endsWith('.localhost') ||
     host.endsWith('.onion') ||
-    host.endsWith('.local')
+    host.endsWith('.local') ||
+    RESERVED_TLDS.some((tld) => host.endsWith(tld)) ||
+    RESERVED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
   ) {
     return null;
   }

@@ -62,7 +62,7 @@ describe('parseRelayCandidates', () => {
     ]);
   });
 
-  it('drops non-wss, onion, local, localhost, IP-literal, credentialed, and junk URLs', () => {
+  it('drops non-wss, onion, local, localhost, IP-literal, credentialed, reserved-domain, and junk URLs', () => {
     const events = [
       makeEvent(10002, [
         ['r', 'ws://insecure.example'],
@@ -73,6 +73,12 @@ describe('parseRelayCandidates', () => {
         ['r', 'wss://dev.localhost'],
         ['r', 'wss://192.168.1.1'],
         ['r', 'wss://user:pass@relay.example'],
+        ['r', 'wss://example.com'],
+        ['r', 'wss://relay.example.com'],
+        ['r', 'wss://relay.example.net'],
+        ['r', 'wss://relay.example.org'],
+        ['r', 'wss://relay.test'],
+        ['r', 'wss://relay.invalid'],
         ['r', 'not a url'],
         ['r', 'wss://good.example'],
       ]),
