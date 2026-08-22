@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-input';
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
+import { NostrRelayStatsPanel } from '@/components/ptransfer/nostr-relay-stats';
 import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { QRInput } from '@/components/ptransfer/qr-input';
 import {
@@ -409,6 +410,8 @@ export function SendTransferPage() {
                 {state.expiresAt !== undefined && (
                   <ExpiryCountdown expiresAt={state.expiresAt} />
                 )}
+
+                {state.stats && <NostrRelayStatsPanel stats={state.stats} />}
 
                 <Button onClick={finishNostrRelay} className="w-full">
                   <CheckCircle2 className="mr-2 h-4 w-4" />

@@ -26,6 +26,11 @@ import {
   type RelayPoolStorage,
   selectUploadRelays,
 } from './relay-pool';
+import {
+  createTransferStats,
+  type NostrFileTransferStats,
+  relayStatsFor,
+} from './stats';
 
 export class NostrFileCancelledError extends Error {
   constructor() {
@@ -40,6 +45,8 @@ export interface UploadProgress {
   chunksTotal?: number;
   relaysChecked?: number;
   relaysHealthy?: number;
+  /** Running totals for the whole transfer; one object, mutated in place. */
+  stats: NostrFileTransferStats;
 }
 
 export interface UploadResult {
@@ -59,18 +66,27 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Publish one event to one relay with retries. Returns true when the relay
- * acknowledged the event.
+ * acknowledged the event. Attempts, acceptances, failures, and accepted
+ * content bytes are tallied into `stats` (whole-transfer and per-relay).
  */
 export async function publishWithRetry(
   pool: NostrFilePool,
   relay: string,
   event: Event,
   isCancelled: () => boolean,
+  stats: NostrFileTransferStats,
 ): Promise<boolean> {
+  const relayStats = relayStatsFor(stats, relay);
   for (let attempt = 0; attempt <= PUBLISH_MAX_RETRIES; attempt++) {
     if (isCancelled()) return false;
+    stats.publishAttempts++;
+    relayStats.publishAttempts++;
     try {
       await Promise.all(pool.publish([relay], event));
+      stats.eventsPublished++;
+      stats.bytesPublished += event.content.length;
+      relayStats.eventsAccepted++;
+      relayStats.bytesUp += event.content.length;
       return true;
     } catch {
       if (attempt < PUBLISH_MAX_RETRIES) {
@@ -78,6 +94,8 @@ export async function publishWithRetry(
       }
     }
   }
+  stats.publishesFailed++;
+  relayStats.publishesFailed++;
   return false;
 }
 
@@ -96,31 +114,55 @@ export async function resolveUploadRelays(
     relayOverride?: string[];
     isCancelled: () => boolean;
     onProgress: (p: UploadProgress) => void;
+    stats: NostrFileTransferStats;
   },
 ): Promise<string[]> {
-  const { isCancelled, onProgress } = opts;
+  const { isCancelled, onProgress, stats } = opts;
   const throwIfCancelled = () => {
     if (isCancelled()) throw new NostrFileCancelledError();
+  };
+  const seedRing = (relays: string[]) => {
+    for (const relay of relays) relayStatsFor(stats, relay);
+    return relays;
   };
   if (opts.relayOverride && opts.relayOverride.length > 0) {
     if (opts.relayOverride.length < MIN_CHUNK_RELAY_SUCCESS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
-    return opts.relayOverride;
+    return seedRing(opts.relayOverride);
   }
-  onProgress({ phase: 'discovering' });
+  onProgress({ phase: 'discovering', stats });
+  const discoverStarted = Date.now();
   const candidates = await getRelayCandidates(pool, storage);
+  stats.candidates = candidates.length;
+  stats.phaseMs.discover = Date.now() - discoverStarted;
   throwIfCancelled();
+  const healthCheckStarted = Date.now();
   const healthy = await healthCheckRelays(pool, candidates, {
     isCancelled,
-    onProgress: (relaysChecked, relaysHealthy) =>
-      onProgress({ phase: 'health_check', relaysChecked, relaysHealthy }),
+    onProgress: (relaysChecked, relaysHealthy) => {
+      stats.relaysChecked = relaysChecked;
+      stats.relaysHealthy = relaysHealthy;
+      onProgress({
+        phase: 'health_check',
+        relaysChecked,
+        relaysHealthy,
+        stats,
+      });
+    },
   });
+  stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
   throwIfCancelled();
   if (healthy.length < MIN_CHUNK_RELAY_SUCCESS) {
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
   }
-  return selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
+  const relays = selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
+  seedRing(relays);
+  for (const { url, rttMs } of healthy) {
+    const entry = stats.relays.find((r) => r.url === url);
+    if (entry) entry.rttMs = rttMs;
+  }
+  return relays;
 }
 
 /**
@@ -162,9 +204,15 @@ export async function uploadFileToNostr(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
+  const stats = createTransferStats('sender', 'stored');
+  stats.fileBytes = data.length;
+  stats.chunkSize = NOSTR_FILE_CHUNK_SIZE;
+
   // Hash + crypto material
-  onProgress({ phase: 'hashing' });
+  onProgress({ phase: 'hashing', stats });
+  const hashStarted = Date.now();
   const fileHash = uint8ArrayToBase64(await sha256(data));
+  stats.phaseMs.hash = Date.now() - hashStarted;
   const transferId = Array.from(
     crypto.getRandomValues(new Uint8Array(16)),
     (b) => b.toString(16).padStart(2, '0'),
@@ -182,19 +230,27 @@ export async function uploadFileToNostr(
     );
     const chunks = splitIntoChunks(data, NOSTR_FILE_CHUNK_SIZE);
     const totalChunks = chunks.length;
+    stats.chunksTotal = totalChunks;
     throwIfCancelled();
 
     const relays = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.relayOverride,
       isCancelled,
       onProgress,
+      stats,
     });
 
     // Stripe chunks over the batch; strict all-confirmed gate.
     const replication = Math.min(CHUNK_REPLICATION, relays.length);
     const createdAt = Math.floor(Date.now() / 1000);
+    const uploadStarted = Date.now();
     let chunksDone = 0;
-    onProgress({ phase: 'uploading', chunksDone, chunksTotal: totalChunks });
+    onProgress({
+      phase: 'uploading',
+      chunksDone,
+      chunksTotal: totalChunks,
+      stats,
+    });
 
     let nextChunk = 0;
     let aborted = false;
@@ -206,6 +262,7 @@ export async function uploadFileToNostr(
         if (index >= totalChunks) return;
         const aad = chunkAad(transferId, index, totalChunks);
         const content = await encodeChunkContent(aesKey, chunks[index], aad);
+        stats.encodedBytes += content.length;
         const event = buildChunkEvent(secretKey, {
           transferId,
           index,
@@ -215,7 +272,7 @@ export async function uploadFileToNostr(
         });
         const outcomes = await Promise.all(
           stripeRelays(relays, replication, index).map((relay) =>
-            publishWithRetry(pool, relay, event, isCancelled),
+            publishWithRetry(pool, relay, event, isCancelled, stats),
           ),
         );
         let acks = outcomes.filter(Boolean).length;
@@ -228,7 +285,10 @@ export async function uploadFileToNostr(
         ) {
           throwIfCancelled();
           const relay = relays[(index + j) % relays.length];
-          if (await publishWithRetry(pool, relay, event, isCancelled)) acks++;
+          if (await publishWithRetry(pool, relay, event, isCancelled, stats)) {
+            acks++;
+            stats.fallbackPublishes++;
+          }
         }
         throwIfCancelled();
         if (acks < MIN_CHUNK_RELAY_SUCCESS) {
@@ -238,10 +298,12 @@ export async function uploadFileToNostr(
           );
         }
         chunksDone++;
+        stats.phaseMs.transfer = Date.now() - uploadStarted;
         onProgress({
           phase: 'uploading',
           chunksDone,
           chunksTotal: totalChunks,
+          stats,
         });
       }
     };

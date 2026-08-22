@@ -11,12 +11,19 @@ import {
 } from './fetch';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
+import {
+  createTransferStats,
+  type NostrFileTransferStats,
+  relayStatsFor,
+} from './stats';
 import { NostrFileCancelledError } from './upload';
 
 export interface DownloadProgress {
   chunksDone: number;
   chunksTotal: number;
   relay?: string;
+  /** Running totals for the whole transfer; one object, mutated in place. */
+  stats: NostrFileTransferStats;
 }
 
 function missingIndices(chunks: (Uint8Array | null)[]): number[] {
@@ -66,11 +73,18 @@ export async function downloadFileFromNostr(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
+  const stats = createTransferStats('receiver', 'stored');
+  stats.fileBytes = manifest.fileSize;
+  stats.chunkSize = manifest.chunkSize;
+  stats.chunksTotal = manifest.totalChunks;
+  for (const relay of manifest.relays) relayStatsFor(stats, relay);
+  const downloadStarted = Date.now();
+
   const chunks: (Uint8Array | null)[] = new Array(manifest.totalChunks).fill(
     null,
   );
   let chunksDone = 0;
-  onProgress({ chunksDone, chunksTotal: manifest.totalChunks });
+  onProgress({ chunksDone, chunksTotal: manifest.totalChunks, stats });
 
   const fetchFromRelay = (relay: string, indices: number[]) =>
     fetchChunksFromRelay(pool, manifest, aesKey, relay, indices, {
@@ -78,9 +92,16 @@ export async function downloadFileFromNostr(
       onChunk: (index, plaintext) => {
         chunks[index] = plaintext;
         chunksDone++;
-        onProgress({ chunksDone, chunksTotal: manifest.totalChunks, relay });
+        stats.phaseMs.transfer = Date.now() - downloadStarted;
+        onProgress({
+          chunksDone,
+          chunksTotal: manifest.totalChunks,
+          relay,
+          stats,
+        });
       },
       throwIfCancelled,
+      stats,
     });
 
   // One worker per relay; a cancelled worker rejects and the rest wind down
@@ -112,8 +133,10 @@ export async function downloadFileFromNostr(
     // a moment to recover before the retry pass.
     await new Promise((r) => setTimeout(r, DOWNLOAD_RETRY_PASS_DELAY_MS));
     throwIfCancelled();
+    stats.sweepPasses++;
     await runPass((_relayPos, missing) => missing);
   }
+  stats.phaseMs.transfer = Date.now() - downloadStarted;
 
   const stillMissing = missingIndices(chunks);
   if (stillMissing.length > 0) {

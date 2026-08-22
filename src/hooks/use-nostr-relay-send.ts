@@ -71,6 +71,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
             status: 'complete',
             message: 'File relayed via Nostr!',
             contentType: 'file',
+            stats: prev.stats,
           }
         : prev,
     );
@@ -84,6 +85,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
       cancelledRef.current = false;
 
       const isCancelled = () => cancelledRef.current;
+      let lastStats: TransferState['stats'];
 
       try {
         const checked = validateNostrRelaySource(content);
@@ -113,12 +115,14 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
             isCancelled,
             onProgress: (p) => {
               if (cancelledRef.current) return;
+              lastStats = p.stats;
               switch (p.phase) {
                 case 'hashing':
                   setState({
                     status: 'preparing',
                     message: 'Encrypting file...',
                     fileMetadata,
+                    stats: p.stats,
                   });
                   break;
                 case 'discovering':
@@ -126,6 +130,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
                     status: 'discovering_relays',
                     message: 'Discovering Nostr relays...',
                     fileMetadata,
+                    stats: p.stats,
                   });
                   break;
                 case 'health_check':
@@ -133,6 +138,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
                     status: 'discovering_relays',
                     message: `Testing relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
                     fileMetadata,
+                    stats: p.stats,
                   });
                   break;
                 case 'uploading':
@@ -148,6 +154,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
                       total: data.length,
                     },
                     fileMetadata,
+                    stats: p.stats,
                   });
                   break;
               }
@@ -190,6 +197,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
           contentType: 'file',
           fileMetadata,
           currentRelays: manifest.relays,
+          stats: lastStats,
         });
       } catch (error) {
         if (
@@ -199,6 +207,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
           setState({
             status: 'error',
             message: error instanceof Error ? error.message : 'Failed to send',
+            stats: lastStats,
           });
         }
       } finally {

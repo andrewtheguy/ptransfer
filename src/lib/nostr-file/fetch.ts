@@ -4,6 +4,7 @@ import { CLOCK_SKEW_TOLERANCE_SEC, RELAY_QUERY_MAX_WAIT_MS } from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
+import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /** Shared receiver-side pieces of the stored and live relay flows. */
 
@@ -62,8 +63,12 @@ export async function fetchChunksFromRelay(
     have: (index: number) => boolean;
     onChunk: (index: number, plaintext: Uint8Array) => void;
     throwIfCancelled: () => void;
+    /** Tally queries, events, bytes, duplicates, and corrupt chunks. */
+    stats: NostrFileTransferStats;
   },
 ): Promise<void> {
+  const { stats } = opts;
+  const relayStats = relayStatsFor(stats, relay);
   const filters = buildChunkFilters(
     manifest.pubkey,
     manifest.transferId,
@@ -71,23 +76,43 @@ export async function fetchChunksFromRelay(
   );
   for (const filter of filters) {
     opts.throwIfCancelled();
+    stats.queries++;
+    relayStats.queries++;
     let events: Awaited<ReturnType<NostrFilePool['querySync']>>;
     try {
       events = await pool.querySync([relay], filter, {
         maxWait: RELAY_QUERY_MAX_WAIT_MS,
       });
     } catch {
+      stats.queryFailures++;
+      relayStats.queryFailures++;
       continue;
     }
     for (const event of events) {
+      stats.eventsReceived++;
+      stats.bytesReceived += event.content.length;
+      relayStats.eventsReceived++;
+      relayStats.bytesDown += event.content.length;
       const parsed = parseChunkEvent(
         event,
         manifest.pubkey,
         manifest.transferId,
       );
-      if (!parsed) continue;
+      if (!parsed) {
+        stats.corruptEvents++;
+        relayStats.corruptEvents++;
+        continue;
+      }
       const { index, content } = parsed;
-      if (index >= manifest.totalChunks || opts.have(index)) continue;
+      if (index >= manifest.totalChunks) {
+        stats.corruptEvents++;
+        relayStats.corruptEvents++;
+        continue;
+      }
+      if (opts.have(index)) {
+        stats.duplicateEvents++;
+        continue;
+      }
       let plaintext: Uint8Array;
       try {
         plaintext = await decodeChunkContent(
@@ -98,10 +123,16 @@ export async function fetchChunksFromRelay(
         );
       } catch {
         // Tampered or corrupt chunk — leave it missing.
+        stats.corruptEvents++;
+        relayStats.corruptEvents++;
         continue;
       }
       // Another relay's worker may have decoded this chunk meanwhile.
-      if (opts.have(index)) continue;
+      if (opts.have(index)) {
+        stats.duplicateEvents++;
+        continue;
+      }
+      relayStats.chunksSupplied++;
       opts.onChunk(index, plaintext);
     }
   }

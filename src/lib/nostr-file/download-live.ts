@@ -17,6 +17,11 @@ import {
 } from './fetch';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
+import {
+  createTransferStats,
+  type NostrFileTransferStats,
+  relayStatsFor,
+} from './stats';
 import { Deferred } from './sync';
 import { NostrFileCancelledError } from './upload';
 
@@ -27,6 +32,8 @@ export interface LiveReceiveProgress {
   available: number;
   /** the sender has sent at least one control message */
   senderConnected: boolean;
+  /** Running totals for the whole transfer; one object, mutated in place. */
+  stats: NostrFileTransferStats;
 }
 
 /**
@@ -80,6 +87,12 @@ export async function receiveFileLive(
   let lastPeerAt = 0;
   const startedAt = Date.now();
 
+  const stats = createTransferStats('receiver', 'live');
+  stats.fileBytes = manifest.fileSize;
+  stats.chunkSize = manifest.chunkSize;
+  stats.chunksTotal = total;
+  for (const relay of relays) relayStatsFor(stats, relay);
+
   let finished = false;
   let succeeded = false;
   let cycleRunning = false;
@@ -98,13 +111,16 @@ export async function receiveFileLive(
     succeeded = true;
     outcome.resolve(data);
   };
-  const report = () =>
+  const report = () => {
+    stats.phaseMs.transfer = Date.now() - startedAt;
     onProgress({
       chunksDone,
       chunksTotal: total,
       available: upto,
       senderConnected: lastPeerAt > 0,
+      stats,
     });
+  };
   const placementOf = (index: number): [number, number] => [
     decodePosition(map[index]),
     gens.get(index) ?? 0,
@@ -120,6 +136,7 @@ export async function receiveFileLive(
       try {
         do {
           cyclePending = false;
+          stats.ackCycles++;
           const availN = lastSenderN;
           const byPos = new Map<number, number[]>();
           const tried = new Map<number, [number, number]>();
@@ -149,6 +166,7 @@ export async function receiveFileLive(
                     report();
                   },
                   throwIfCancelled,
+                  stats,
                 },
               ),
             ),
@@ -168,6 +186,7 @@ export async function receiveFileLive(
             if (chunks[i] || !placement) continue;
             missing.push([i, placement[0], placement[1]]);
           }
+          stats.missingReported += missing.length;
           await ch.send({
             t: 'ack',
             avail: availN,
@@ -216,6 +235,7 @@ export async function receiveFileLive(
       since: manifest.createdAt - CLOCK_SKEW_TOLERANCE_SEC,
       expiresAt: manifest.expiresAt,
       authors: [manifest.pubkey],
+      stats,
       onMessage: (raw, pubkey) => {
         if (finished || pubkey !== manifest.pubkey) return;
         const msg = parseSenderMessage(raw, total, n);

@@ -14,6 +14,7 @@ import { Progress } from '@/components/ui/progress';
 import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
+import { NostrRelayStatsPanel } from './nostr-relay-stats';
 
 interface TransferStatusProps {
   state: TransferState;
@@ -155,6 +156,8 @@ export function TransferStatus({
       {state.expiresAt !== undefined && state.status !== 'complete' && (
         <ExpiryCountdown expiresAt={state.expiresAt} />
       )}
+
+      {state.stats && <NostrRelayStatsPanel stats={state.stats} />}
 
       {betweenProgressAndChunks}
     </div>

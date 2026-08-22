@@ -11,6 +11,7 @@ import {
   PUBLISH_MAX_RETRIES,
 } from './constants';
 import type { NostrFilePool, PoolSubscription } from './pool';
+import type { NostrFileTransferStats } from './stats';
 
 /**
  * Encrypted control channel for the live (single-copy) relay variant.
@@ -389,6 +390,8 @@ export function openControlChannel(
     expiresAt: number;
     /** Restrict the subscription to these authors (receiver knows the sender). */
     authors?: string[];
+    /** Tally sent events and unsealed peer messages into these totals. */
+    stats?: NostrFileTransferStats;
     onMessage: (message: unknown, pubkey: string) => void;
   },
 ): ControlChannel {
@@ -414,7 +417,9 @@ export function openControlChannel(
         if (!dTag.startsWith(`${transferId}:ctl:${peerRole}:`)) return;
         void decodeControlMessage(key, transferId, peerRole, event.content)
           .then((message) => {
-            if (!closed) onMessage(message, event.pubkey);
+            if (closed) return;
+            if (opts.stats) opts.stats.controlReceived++;
+            onMessage(message, event.pubkey);
           })
           .catch(() => {
             // Not sealed under this transfer's key — ignore.
@@ -439,6 +444,7 @@ export function openControlChannel(
         expiresAt: opts.expiresAt,
       });
       await publishToAny(pool, relays, event, () => closed);
+      if (opts.stats) opts.stats.controlSent++;
     },
     close() {
       if (closed) return;
