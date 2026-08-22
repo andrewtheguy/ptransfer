@@ -21,10 +21,13 @@ export function NostrRelayStatsPanel({
   const [open, setOpen] = useState(false);
 
   const isSender = stats.role === 'sender';
-  const overheadOf = (bytes: number): string | null => {
+  // Deflate can shrink well below the raw size, so a signed "overhead %"
+  // turns negative and reads badly; "% of file size" is unambiguous in both
+  // directions (6% for compressible data, ~250% for a stored upload).
+  const ofFileSize = (bytes: number): string | null => {
     if (stats.fileBytes <= 0 || bytes <= 0) return null;
-    const pct = ((bytes - stats.fileBytes) / stats.fileBytes) * 100;
-    return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+    const pct = (bytes / stats.fileBytes) * 100;
+    return `${pct.toFixed(pct < 10 ? 1 : 0)}% of file size`;
   };
   const ms = (value: number | undefined): string | null =>
     value === undefined ? null : `${(value / 1000).toFixed(1)}s`;
@@ -48,13 +51,13 @@ export function NostrRelayStatsPanel({
       [
         'Encoded size',
         stats.encodedBytes > 0
-          ? `${formatFileSize(stats.encodedBytes)} (codec overhead ${overheadOf(stats.encodedBytes)})`
+          ? `${formatFileSize(stats.encodedBytes)} (${ofFileSize(stats.encodedBytes)})`
           : null,
       ],
       [
         'Published to relays',
         stats.bytesPublished > 0
-          ? `${formatFileSize(stats.bytesPublished)} in ${stats.eventsPublished} events (overhead ${overheadOf(stats.bytesPublished)})`
+          ? `${formatFileSize(stats.bytesPublished)} in ${stats.eventsPublished} events (${ofFileSize(stats.bytesPublished)})`
           : null,
       ],
       [
@@ -80,7 +83,7 @@ export function NostrRelayStatsPanel({
       [
         'Downloaded from relays',
         stats.bytesReceived > 0
-          ? `${formatFileSize(stats.bytesReceived)} in ${stats.eventsReceived} events (overhead ${overheadOf(stats.bytesReceived)})`
+          ? `${formatFileSize(stats.bytesReceived)} in ${stats.eventsReceived} events (${ofFileSize(stats.bytesReceived)})`
           : null,
       ],
       [
