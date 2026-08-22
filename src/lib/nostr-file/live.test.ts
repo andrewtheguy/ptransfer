@@ -23,8 +23,10 @@ const META = { fileName: 'live.bin', mimeType: 'application/octet-stream' };
 const never = () => false;
 const noProgress = () => {};
 
-function memoryStorage(): RelayPoolStorage {
-  let state: RelayPoolState | null = null;
+function memoryStorage(
+  initial: RelayPoolState | null = null,
+): RelayPoolStorage {
+  let state: RelayPoolState | null = initial;
   return {
     get: () => state,
     set(s) {
@@ -365,15 +367,20 @@ describe('live single-copy relay transfer', () => {
     const handover = new Promise<Handover>((resolve) => {
       readyResolve = resolve;
     });
-    // No dataRelayOverride: discovery runs for real and degrades to the
-    // DEFAULT_RELAYS seeds, which the mock pool all passes. The control
-    // relays overlap those seeds on purpose — the ring must exclude them.
+    // No dataRelayOverride: the ring resolves for real from the candidate
+    // cache (fresh, so discovery is skipped). The cache still lists a
+    // signaling seed — the whole DEFAULT_RELAYS pool must never be rung.
     const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
+    const storageRing = ['wss://s1.example', 'wss://s2.example'];
     const sendDone = sendFileLive(data, META, {
       pool,
       isCancelled: never,
       controlRelayOverride: controlRelays,
-      storage: memoryStorage(),
+      storage: memoryStorage({
+        candidates: [DEFAULT_RELAYS[2], ...storageRing],
+        discoveredAt: Date.now(),
+        cursor: 0,
+      }),
       onProgress: (p) => {
         if (!ready) phasesBeforeReady.push(p.phase);
         else if (p.phase === 'discovering' || p.phase === 'health_check') {
@@ -404,15 +411,13 @@ describe('live single-copy relay transfer', () => {
     await sendDone;
     expect(received).toEqual(data);
     expect(discoveringAfterReady).toBe(true);
-    // The ring the receiver adopted from the avails is the discovered one:
-    // every chunk landed on a seed relay, never on a control relay — the
-    // sets stay mutually exclusive even though both draw from the seeds.
+    // The ring the receiver adopted from the avails is the resolved one:
+    // every chunk landed on a storage candidate, never on a signaling relay.
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
     for (const relays of placed.values()) {
       expect(relays).toHaveLength(1);
-      expect(DEFAULT_RELAYS).toContain(relays[0]);
-      expect(controlRelays).not.toContain(relays[0]);
+      expect(storageRing).toContain(relays[0]);
     }
   }, 15000);
 

@@ -126,6 +126,8 @@ export async function resolveControlRelays(
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
   }
   const relays = healthy.slice(0, CONTROL_RELAY_COUNT).map((r) => r.url);
+  const passedOver = healthy.slice(CONTROL_RELAY_COUNT).map((r) => r.url);
+  if (passedOver.length > 0) pool.close?.(passedOver);
   seedStats(relays);
   for (const { url, rttMs } of healthy) {
     const entry = stats.relays.find((r) => r.url === url);
@@ -137,9 +139,11 @@ export async function resolveControlRelays(
 /**
  * The relay ring for an upload: the caller's override, or discovery +
  * health check + rotating batch selection. Relays in `excludeRelays` (the
- * transfer's control relays) never join the ring, whichever path picks it —
- * chunk traffic must not compete with the control channel on a shared relay.
- * Throws when fewer than MIN_UPLOAD_RELAYS relays are usable.
+ * transfer's control relays) and the whole DEFAULT_RELAYS signaling pool
+ * never join the ring, whichever path picks it — signaling relays are chosen
+ * for small messages, not 32 KiB chunks, and chunk traffic must not compete
+ * with the control channel. Throws when fewer than MIN_UPLOAD_RELAYS relays
+ * are usable.
  */
 export async function resolveUploadRelays(
   pool: NostrFilePool,
@@ -160,8 +164,12 @@ export async function resolveUploadRelays(
     for (const relay of relays) relayStatsFor(stats, relay, 'storage');
     return relays;
   };
+  // DEFAULT_RELAYS is also filtered here (not just in discovery) so a stale
+  // candidate cache written before seeds were barred cannot resurface them.
   const excluded = new Set(
-    opts.excludeRelays.map((url) => normalizeRelayUrl(url) ?? url),
+    [...opts.excludeRelays, ...DEFAULT_RELAYS].map(
+      (url) => normalizeRelayUrl(url) ?? url,
+    ),
   );
   const isExcluded = (url: string) =>
     excluded.has(normalizeRelayUrl(url) ?? url);
@@ -181,6 +189,13 @@ export async function resolveUploadRelays(
   );
   stats.candidates = candidates.length;
   stats.phaseMs.discover = Date.now() - discoverStarted;
+  // Discovery connected to the seeds; the ones not carrying this transfer's
+  // control channel have no further job — stop their sockets.
+  const controlSet = new Set(
+    opts.excludeRelays.map((url) => normalizeRelayUrl(url) ?? url),
+  );
+  const doneSeeds = DEFAULT_RELAYS.filter((url) => !controlSet.has(url));
+  if (doneSeeds.length > 0) pool.close?.(doneSeeds);
   throwIfCancelled();
   const healthCheckStarted = Date.now();
   const healthy = await healthCheckRelays(pool, candidates, {
@@ -202,6 +217,11 @@ export async function resolveUploadRelays(
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
   }
   const relays = selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
+  const ringSet = new Set(relays);
+  const unselected = healthy
+    .filter((r) => !ringSet.has(r.url))
+    .map((r) => r.url);
+  if (unselected.length > 0) pool.close?.(unselected);
   seedRing(relays);
   for (const { url, rttMs } of healthy) {
     const entry = stats.relays.find((r) => r.url === url);

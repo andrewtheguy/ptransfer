@@ -127,8 +127,10 @@ export function parseRelayCandidates(events: Event[]): string[] {
 
 /**
  * Discover relay candidates from the seed relays via NIP-66/NIP-65 queries.
- * The seeds themselves are always part of the result — discovery failure
- * degrades to the default relay list, never to nothing.
+ * The seeds are only queried, never returned: `DEFAULT_RELAYS` is the
+ * signaling pool and must never carry chunks, so a seed named by a discovery
+ * event is dropped too, and a failed discovery yields an empty list (the
+ * upload then refuses to start) rather than degrading to the seeds.
  */
 export async function discoverRelayCandidates(
   pool: NostrFilePool,
@@ -144,13 +146,10 @@ export async function discoverRelayCandidates(
   const events = results.flatMap((r) =>
     r.status === 'fulfilled' ? r.value : [],
   );
-  const discovered = parseRelayCandidates(events);
-  const seedSet = seeds
-    .map((s) => normalizeRelayUrl(s))
-    .filter((s): s is string => s !== null);
-  // Seeds first so health-check early-stop favors known-good relays.
-  const merged = [...new Set([...seedSet, ...discovered])];
-  return merged.slice(0, DISCOVERY_CANDIDATE_CAP);
+  const seedSet = new Set(seeds.map((s) => normalizeRelayUrl(s) ?? s));
+  return parseRelayCandidates(events)
+    .filter((url) => !seedSet.has(url))
+    .slice(0, DISCOVERY_CANDIDATE_CAP);
 }
 
 /**
@@ -260,6 +259,10 @@ export async function healthCheckRelays(
       // Re-check the target: sibling probes may have filled it in flight.
       if (rttMs !== null && healthy.length < targetCount) {
         healthy.push({ url, rttMs });
+      } else {
+        // Failed the probe, or passed after the target filled: this relay
+        // will not be used, so stop its socket (and its reconnect loop) now.
+        pool.close?.([url]);
       }
       opts.onProgress?.(checked, healthy.length);
     }

@@ -21,7 +21,8 @@ Two separate relay sets do two different jobs:
   writes (fine for signaling, useless for 32 KiB chunks) still serves perfectly here.
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
   ring is *not* in the payload — the sender announces it over the control channel. The
-  transfer's control relays are excluded from the ring, so the two sets never overlap.
+  whole `DEFAULT_RELAYS` signaling pool is barred from the ring, so the two sets never
+  overlap.
 
 The sender hands out the code (payload `type: 'nostr-file-live'`) as soon as the control
 relays pass their probe — storage-relay discovery runs in the background while the user
@@ -48,10 +49,11 @@ handed out, so it stays quick.
 
 1. **Discover candidates** via NIP-66 relay-discovery events (kind 30166) and NIP-65 relay
    lists (kind 10002) queried against the seed relays (`DEFAULT_RELAYS` from
-   `src/lib/nostr/relays.ts`). The seeds themselves are always part of the result, so
-   discovery failure degrades to seeds-only rather than failing the transfer. Candidates
-   are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in localStorage for 24 h
-   (`ptransfer:nostr-file:relay-pool:v1`).
+   `src/lib/nostr/relays.ts`). The seeds are only queried, never candidates themselves:
+   `DEFAULT_RELAYS` is the signaling pool and never carries chunks, so a failed discovery
+   fails the transfer with the not-enough-relays error rather than degrading to the
+   seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in
+   localStorage for 24 h (`ptransfer:nostr-file:relay-pool:v1`).
 2. **Health-check candidates** with a real write→read round trip per relay: a
    production-shaped probe event through the full codec at the full chunk size
    (`HEALTH_CHECK_PROBE_BYTES` = 32 KiB), read back and byte-compared. A relay with a
@@ -60,14 +62,18 @@ handed out, so it stays quick.
    `HEALTH_CHECK_TARGET_COUNT` (20) relays pass — some rotation headroom without probing
    the whole candidate list (only ~1 in 6 public candidates passes the full-size probe).
    Per-relay round-trip time is measured (`HealthyRelay.rttMs`) and the fastest passers
-   are kept.
+   are kept. Sockets are dropped as soon as a relay has no further job — a failed probe,
+   a pass after the target filled, a seed once discovery finishes, a healthy relay the
+   batch selection skipped — because with reconnect enabled a lingering dead socket
+   would retry forever, spamming connections for the rest of the transfer.
 3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a rotating cursor
    persisted with the candidate cache, load-balancing across uploads. The transfer's
-   control relays are excluded from the candidates first — the two sets are mutually
-   exclusive, so chunk traffic never competes with the control channel on a shared
-   relay. The minimum viable batch is two relays. The batch order **is the placement
-   ring**, announced to the receiver inside every `avail` control message (never stored
-   in the manifest).
+   control relays and the whole `DEFAULT_RELAYS` signaling pool are filtered out of the
+   candidates first (also catching stale caches written before seeds were barred) — the
+   two sets are mutually exclusive, so chunk traffic never competes with the control
+   channel on a shared relay. The minimum viable batch is two relays. The batch order
+   **is the placement ring**, announced to the receiver inside every `avail` control
+   message (never stored in the manifest).
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 

@@ -154,6 +154,8 @@ describe('control relay probe', () => {
     const urls = healthy.map((r) => r.url);
     expect(urls).not.toContain(DEFAULT_RELAYS[1]);
     expect(urls).toHaveLength(DEFAULT_RELAYS.length - 1);
+    // A failed probe also drops the socket so it stops reconnecting.
+    expect(pool.closedRelays).toEqual([DEFAULT_RELAYS[1]]);
   });
 });
 
@@ -200,6 +202,12 @@ describe('resolveControlRelays', () => {
     expect(relays).not.toContain(DEFAULT_RELAYS[0]);
     for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
     expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
+    // Every seed is either picked for the channel or its socket is closed.
+    for (const url of DEFAULT_RELAYS) {
+      expect(relays.includes(url) || pool.closedRelays.includes(url)).toBe(
+        true,
+      );
+    }
   });
 });
 
@@ -210,19 +218,39 @@ describe('resolveUploadRelays', () => {
     stats: createTransferStats('sender'),
   });
 
-  it('keeps the control relays out of a discovered ring', async () => {
+  it('never rings signaling relays, whether discovered or cached', async () => {
     const pool = createMockPool();
+    // NIP-66 events served by a seed relay: two real candidates plus a seed
+    // that someone listed — the signaling pool must never come back.
+    pool.store.set(DEFAULT_RELAYS[0], [
+      makeEvent(30166, [['d', 'wss://s1.example']]),
+      makeEvent(30166, [['d', 'wss://s2.example']]),
+      makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]),
+    ]);
     const relays = await resolveUploadRelays(pool, memoryStorage(), {
       ...opts(),
-      // Trailing slash on purpose: exclusion matches normalized URLs.
-      excludeRelays: [`${DEFAULT_RELAYS[0]}/`, DEFAULT_RELAYS[1]],
+      excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
     });
-    // Discovery degrades to the DEFAULT_RELAYS seeds in the mock network,
-    // minus the two claimed by the control channel.
-    expect(relays).not.toContain(DEFAULT_RELAYS[0]);
-    expect(relays).not.toContain(DEFAULT_RELAYS[1]);
-    expect(relays.length).toBeGreaterThanOrEqual(2);
-    for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
+    expect(relays.sort()).toEqual(['wss://s1.example', 'wss://s2.example']);
+    // Seeds queried for discovery are closed once it finishes — except the
+    // two carrying this transfer's control channel.
+    for (const url of DEFAULT_RELAYS.slice(2)) {
+      expect(pool.closedRelays).toContain(url);
+    }
+    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[0]);
+    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[1]);
+
+    // A candidate cache written before seeds were barred still lists one.
+    const stale = memoryStorage({
+      candidates: [DEFAULT_RELAYS[2], 'wss://s3.example', 'wss://s4.example'],
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+    const fromCache = await resolveUploadRelays(pool, stale, {
+      ...opts(),
+      excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
+    });
+    expect(fromCache.sort()).toEqual(['wss://s3.example', 'wss://s4.example']);
   });
 
   it('filters the override and refuses a ring the exclusion leaves too small', async () => {
@@ -231,7 +259,8 @@ describe('resolveUploadRelays', () => {
     const relays = await resolveUploadRelays(pool, memoryStorage(), {
       ...opts(),
       relayOverride: override,
-      excludeRelays: ['wss://c.example'],
+      // Trailing slash on purpose: exclusion matches normalized URLs.
+      excludeRelays: ['wss://c.example/'],
     });
     expect(relays).toEqual(['wss://a.example', 'wss://b.example']);
     await expect(
