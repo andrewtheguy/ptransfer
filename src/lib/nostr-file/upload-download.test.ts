@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHUNK_REPLICATION, NOSTR_FILE_MAX_BYTES } from './constants';
-import { downloadFileFromNostr } from './download';
+import { type DownloadProgress, downloadFileFromNostr } from './download';
 import { isValidNostrFileManifest, stripeRelays } from './manifest';
 import { createMockPool as createNetwork, type MockPool } from './mock-pool';
 import { type UploadProgress, uploadFileToNostr } from './upload';
@@ -95,15 +95,43 @@ describe('uploadFileToNostr', () => {
     for (const events of pool.store.values()) totalEvents += events.length;
     expect(totalEvents).toBe(4 * CHUNK_REPLICATION);
     const last = progress.at(-1);
-    expect(last).toEqual({ phase: 'uploading', chunksDone: 4, chunksTotal: 4 });
+    expect(last).toMatchObject({
+      phase: 'uploading',
+      chunksDone: 4,
+      chunksTotal: 4,
+    });
+
+    // Detailed stats: every publish accepted first try, two copies per chunk.
+    const stats = last?.stats;
+    expect(stats).toMatchObject({
+      role: 'sender',
+      variant: 'stored',
+      fileBytes: data.length,
+      chunksTotal: 4,
+      eventsPublished: 4 * CHUNK_REPLICATION,
+      publishAttempts: 4 * CHUNK_REPLICATION,
+      publishesFailed: 0,
+      fallbackPublishes: 0,
+    });
+    // Z85 over deflate+GCM: encoded output exceeds the (incompressible) raw
+    // size, and the published volume is replication × the encoded size.
+    expect(stats!.encodedBytes).toBeGreaterThan(data.length);
+    expect(stats!.bytesPublished).toBe(stats!.encodedBytes * CHUNK_REPLICATION);
+    expect(stats!.relays.map((r) => r.url)).toEqual(SIX_RELAYS);
+    const perRelayAccepted = stats!.relays.reduce(
+      (sum, r) => sum + r.eventsAccepted,
+      0,
+    );
+    expect(perRelayAccepted).toBe(4 * CHUNK_REPLICATION);
   });
 
   it('falls back to the next ring relay when a placed relay is dead', async () => {
     const pool = createMockPool(new Set(['wss://r3.example']));
     const data = randomBytes(100_000); // 4 chunks
     vi.useFakeTimers();
+    const uploadProgress: UploadProgress[] = [];
     const promise = uploadFileToNostr(data, META, {
-      onProgress: noProgress,
+      onProgress: (p) => uploadProgress.push(p),
       isCancelled: never,
       pool,
       relayOverride: RELAYS,
@@ -121,14 +149,44 @@ describe('uploadFileToNostr', () => {
         'wss://r2.example',
       ]);
     }
+    // Chunks 1 and 2 had the dead relay in their stripe: each records one
+    // failed publish (after retries) and one accepted fallback copy.
+    const uploadStats = uploadProgress.at(-1)?.stats;
+    expect(uploadStats).toMatchObject({
+      eventsPublished: 4 * CHUNK_REPLICATION,
+      publishesFailed: 2,
+      fallbackPublishes: 2,
+    });
+    const dead = uploadStats!.relays.find((r) => r.url === 'wss://r3.example')!;
+    expect(dead.eventsAccepted).toBe(0);
+    expect(dead.publishesFailed).toBe(2);
+    expect(dead.publishAttempts).toBeGreaterThan(2); // retries counted
+
     // The sweep pass finds the fallback copies that are off their stripe.
+    const downloadProgress: DownloadProgress[] = [];
     const download = downloadFileFromNostr(manifest, keyBytes, {
-      onProgress: noProgress,
+      onProgress: (p) => downloadProgress.push(p),
       isCancelled: never,
       pool,
     });
     await settleWithFakeTimers(download);
     expect(await download).toEqual(data);
+    const downloadStats = downloadProgress.at(-1)?.stats;
+    expect(downloadStats).toMatchObject({
+      role: 'receiver',
+      variant: 'stored',
+      chunksTotal: 4,
+      corruptEvents: 0,
+    });
+    // Each chunk kept one on-stripe copy, so the placement pass finds
+    // everything and no sweep is needed.
+    expect(downloadStats!.sweepPasses).toBe(0);
+    const supplied = downloadStats!.relays.reduce(
+      (sum, r) => sum + r.chunksSupplied,
+      0,
+    );
+    expect(supplied).toBe(4);
+    expect(downloadStats!.bytesReceived).toBeGreaterThan(data.length);
   });
 
   it('aborts the whole upload when a chunk cannot reach enough relays', async () => {

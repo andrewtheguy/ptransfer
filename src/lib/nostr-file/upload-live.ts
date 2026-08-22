@@ -29,6 +29,11 @@ import {
   createLocalStorageRelayPool,
   type RelayPoolStorage,
 } from './relay-pool';
+import {
+  createTransferStats,
+  type NostrFileTransferStats,
+  relayStatsFor,
+} from './stats';
 import { Deferred, Signal } from './sync';
 import {
   NostrFileCancelledError,
@@ -51,6 +56,8 @@ export interface LiveSendProgress {
   resent?: number;
   /** transfer phase: relays no longer used because the receiver cannot read from them */
   relaysDemoted?: number;
+  /** Running totals for the whole transfer; one object, mutated in place. */
+  stats: NostrFileTransferStats;
 }
 
 /**
@@ -98,8 +105,14 @@ export async function sendFileLive(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
-  onProgress({ phase: 'hashing' });
+  const stats = createTransferStats('sender', 'live');
+  stats.fileBytes = data.length;
+  stats.chunkSize = NOSTR_FILE_CHUNK_SIZE;
+
+  onProgress({ phase: 'hashing', stats });
+  const hashStarted = Date.now();
   const fileHash = uint8ArrayToBase64(await sha256(data));
+  stats.phaseMs.hash = Date.now() - hashStarted;
   const transferId = Array.from(
     crypto.getRandomValues(new Uint8Array(16)),
     (b) => b.toString(16).padStart(2, '0'),
@@ -119,12 +132,14 @@ export async function sendFileLive(
     const controlKey = await deriveControlKey(keyBytes, transferId);
     const chunks = splitIntoChunks(data, NOSTR_FILE_CHUNK_SIZE);
     const total = chunks.length;
+    stats.chunksTotal = total;
     throwIfCancelled();
 
     const relays = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.relayOverride,
       isCancelled,
       onProgress,
+      stats,
     });
     const n = relays.length;
     const createdAt = Math.floor(Date.now() / 1000);
@@ -192,7 +207,11 @@ export async function sendFileLive(
       outcome.resolve();
       stop();
     };
-    const report = () =>
+    const transferStarted = Date.now();
+    const report = () => {
+      stats.chunksResent = resent;
+      stats.relaysDemoted = demoted.size;
+      stats.phaseMs.transfer = Date.now() - transferStarted;
       onProgress({
         phase: 'transfer',
         chunksDone,
@@ -201,7 +220,9 @@ export async function sendFileLive(
         receiverHave,
         resent,
         relaysDemoted: demoted.size,
+        stats,
       });
+    };
 
     /**
      * Ring positions to try for a chunk, starting at `startOffset` from its
@@ -226,8 +247,10 @@ export async function sendFileLive(
         if (placedPos[index] !== pos || gen[index] !== g) continue;
         if (pendingRetry.has(index)) continue;
         misses[pos]++;
+        relayStatsFor(stats, relays[pos]).missesReported++;
         if (misses[pos] >= LIVE_RELAY_DEMOTE_MISSES && demoted.size < n - 1) {
           demoted.add(pos);
+          relayStatsFor(stats, relays[pos]).demoted = true;
         }
         if (gen[index] >= maxRetransmits) {
           fail(
@@ -250,6 +273,7 @@ export async function sendFileLive(
       secretKey,
       since: createdAt - CLOCK_SKEW_TOLERANCE_SEC,
       expiresAt,
+      stats,
       onMessage: (raw, pubkey) => {
         if (finished || pubkey === publicKey) return;
         // First valid peer wins; only the code holder can seal messages.
@@ -312,6 +336,7 @@ export async function sendFileLive(
           }
           const aad = chunkAad(transferId, index, total);
           const content = await encodeChunkContent(aesKey, chunks[index], aad);
+          if (!isRetry) stats.encodedBytes += content.length;
           const event = buildChunkEvent(secretKey, {
             transferId,
             index,
@@ -334,7 +359,15 @@ export async function sendFileLive(
             if (pos === undefined) break;
             tried.add(pos);
             nextOffset[index] = (((pos - index) % n) + n + 1) % n;
-            if (await publishWithRetry(pool, relays[pos], event, isCancelled)) {
+            if (
+              await publishWithRetry(
+                pool,
+                relays[pos],
+                event,
+                isCancelled,
+                stats,
+              )
+            ) {
               placed = pos;
             }
           }

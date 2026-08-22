@@ -59,6 +59,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
     runRef.current = run;
 
     const isCancelled = () => run.cancelled;
+    let lastStats: TransferState['stats'];
 
     try {
       const checked = validateNostrRelaySource(content);
@@ -103,12 +104,14 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
           },
           onProgress: (p) => {
             if (run.cancelled) return;
+            lastStats = p.stats;
             switch (p.phase) {
               case 'hashing':
                 setState({
                   status: 'preparing',
                   message: 'Encrypting file...',
                   fileMetadata,
+                  stats: p.stats,
                 });
                 break;
               case 'discovering':
@@ -116,6 +119,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                   status: 'discovering_relays',
                   message: 'Discovering Nostr relays...',
                   fileMetadata,
+                  stats: p.stats,
                 });
                 break;
               case 'health_check':
@@ -123,6 +127,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                   status: 'discovering_relays',
                   message: `Testing relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
                   fileMetadata,
+                  stats: p.stats,
                 });
                 break;
               case 'uploading':
@@ -160,6 +165,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                   contentType: 'file',
                   fileMetadata,
                   currentRelays: relays,
+                  stats: p.stats,
                 });
                 break;
               }
@@ -178,12 +184,14 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
         message: 'File relayed via Nostr!',
         contentType: 'file',
         fileMetadata,
+        stats: lastStats,
       });
     } catch (error) {
       if (!run.cancelled && !(error instanceof NostrFileCancelledError)) {
         setState({
           status: 'error',
           message: error instanceof Error ? error.message : 'Failed to send',
+          stats: lastStats,
         });
       }
     } finally {

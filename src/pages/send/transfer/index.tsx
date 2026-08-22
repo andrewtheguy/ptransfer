@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-input';
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
+import { NostrRelayStatsPanel } from '@/components/ptransfer/nostr-relay-stats';
 import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { QRInput } from '@/components/ptransfer/qr-input';
 import {
@@ -410,6 +411,8 @@ export function SendTransferPage() {
                   <ExpiryCountdown expiresAt={state.expiresAt} />
                 )}
 
+                {state.stats && <NostrRelayStatsPanel stats={state.stats} />}
+
                 <Button onClick={finishNostrRelay} className="w-full">
                   <CheckCircle2 className="mr-2 h-4 w-4" />
                   Done — receiver has the code
@@ -497,6 +500,9 @@ export function SendTransferPage() {
               </p>
             </div>
           </div>
+          {'stats' in state && state.stats && (
+            <NostrRelayStatsPanel stats={state.stats} />
+          )}
           <Button onClick={handleSendAnother} className="w-full">
             <RotateCcw className="mr-2 h-4 w-4" />
             Send Another
@@ -514,6 +520,9 @@ export function SendTransferPage() {
               <p className="text-sm text-muted-foreground">{error}</p>
             </div>
           </div>
+          {'stats' in state && state.stats && (
+            <NostrRelayStatsPanel stats={state.stats} />
+          )}
           <div className="flex gap-2">
             <Button onClick={handleRetry} className="flex-1">
               Retry

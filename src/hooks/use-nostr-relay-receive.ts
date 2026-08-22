@@ -85,6 +85,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
         expiresAt: payload.expiresAt,
         currentRelays: payload.relays,
       };
+      let lastStats: TransferState['stats'];
 
       try {
         setState({
@@ -115,6 +116,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
             status: 'error',
             message:
               error instanceof Error ? error.message : 'Failed to receive',
+            stats: lastStats,
           });
         }
       } finally {
@@ -141,6 +143,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
               isCancelled,
               onProgress: (p) => {
                 if (cancelledRef.current) return;
+                lastStats = p.stats;
                 setState({
                   status: 'fetching',
                   message: !p.senderConnected
@@ -150,6 +153,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
                       : `Receiving pieces... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
                   progress: progressOf(p.chunksDone),
                   ...baseState,
+                  stats: p.stats,
                 });
               },
             })
@@ -158,11 +162,13 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
               isCancelled,
               onProgress: (p) => {
                 if (cancelledRef.current) return;
+                lastStats = p.stats;
                 setState({
                   status: 'fetching',
                   message: `Fetching encrypted pieces... ${p.chunksDone}/${p.chunksTotal}`,
                   progress: progressOf(p.chunksDone),
                   ...baseState,
+                  stats: p.stats,
                 });
               },
             });
@@ -182,6 +188,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
           message: 'File received via Nostr!',
           contentType: 'file',
           fileMetadata,
+          stats: lastStats,
         });
       }
     },

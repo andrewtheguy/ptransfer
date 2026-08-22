@@ -1,3 +1,5 @@
+import type { NostrFileTransferStats } from '../nostr-file/stats';
+
 // Event kinds (matching wormhole-rs)
 export const EVENT_KIND_DATA_TRANSFER = 24242;
 export const EVENT_KIND_RENDEZVOUS = 24243;
@@ -59,6 +61,8 @@ interface TransferStateBase {
   expiresAt?: number;
   // Nostr file relay: the PT01 payload the sender hands to the receiver.
   payloadData?: Uint8Array;
+  // Nostr file relay: detailed running statistics (chunks, bytes, relays).
+  stats?: NostrFileTransferStats;
 }
 
 // Error state has required message

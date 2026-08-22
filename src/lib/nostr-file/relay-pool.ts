@@ -273,8 +273,8 @@ export async function healthCheckRelays(
 
 /**
  * Pick the relay batch for this upload via a persisted rotating cursor over
- * the healthy list (load balancing across uploads, like nostrsave's SQLite
- * cursor). Returns up to `count` relays.
+ * the healthy list (load balancing across uploads). Returns up to `count`
+ * relays.
  */
 export function selectUploadRelays(
   healthy: HealthyRelay[],
