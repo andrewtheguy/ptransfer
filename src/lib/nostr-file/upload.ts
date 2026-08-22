@@ -102,7 +102,7 @@ export async function resolveUploadRelays(
     return relays;
   };
   if (opts.relayOverride && opts.relayOverride.length > 0) {
-    if (opts.relayOverride.length < MIN_UPLOAD_RELAYS) {
+    if (new Set(opts.relayOverride).size < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
     return seedRing(opts.relayOverride);

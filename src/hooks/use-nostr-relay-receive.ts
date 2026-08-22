@@ -23,14 +23,16 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
   const [receivedContent, setReceivedContent] =
     useState<ReceivedContent | null>(null);
 
-  const cancelledRef = useRef(false);
+  // Cancellation is per run: cancel() unlocks receivingRef, so a new receive
+  // can start while the previous one is still winding down, and that run has
+  // to keep seeing its own cancellation (and stop touching the shared state).
+  const runRef = useRef<{ cancelled: boolean } | null>(null);
   const receivingRef = useRef(false);
-  const poolRef = useRef<SimplePool | null>(null);
 
-  // The engine sends the sender a cancel notice first; its pool is closed in
+  // The engine sends the sender a cancel notice first and closes its pool in
   // start()'s finally once it winds down.
   const cancel = useCallback(() => {
-    cancelledRef.current = true;
+    if (runRef.current) runRef.current.cancelled = true;
     receivingRef.current = false;
     setState({ status: 'idle' });
   }, []);
@@ -44,8 +46,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
   // winds down and its pool is closed in start()'s finally (no setState here).
   useEffect(
     () => () => {
-      cancelledRef.current = true;
-      receivingRef.current = false;
+      if (runRef.current) runRef.current.cancelled = true;
     },
     [],
   );
@@ -54,7 +55,8 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
     // Guard against concurrent invocations
     if (receivingRef.current) return;
     receivingRef.current = true;
-    cancelledRef.current = false;
+    const run = { cancelled: false };
+    runRef.current = run;
     setReceivedContent(null);
 
     const fileMetadata = {
@@ -81,20 +83,15 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
       // Reconnect dropped sockets: the control channel subscription has to
       // outlive transient relay hiccups.
       const pool = new SimplePool({ enableReconnect: true });
-      poolRef.current = pool;
       const keyBytes = decodePayloadKey(payload.key);
       try {
-        await run(pool, keyBytes);
+        await doReceive(pool, keyBytes);
       } finally {
         // Close this run's sockets — never a newer run's pool.
         pool.destroy();
-        if (poolRef.current === pool) poolRef.current = null;
       }
     } catch (error) {
-      if (
-        !cancelledRef.current &&
-        !(error instanceof NostrFileCancelledError)
-      ) {
+      if (!run.cancelled && !(error instanceof NostrFileCancelledError)) {
         setState({
           status: 'error',
           message: error instanceof Error ? error.message : 'Failed to receive',
@@ -102,21 +99,26 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
         });
       }
     } finally {
-      receivingRef.current = false;
+      // A cancelled run may have been superseded already; only the current
+      // one may unlock receiving.
+      if (runRef.current === run) receivingRef.current = false;
     }
 
-    async function run(pool: SimplePool, keyBytes: Uint8Array): Promise<void> {
+    async function doReceive(
+      pool: SimplePool,
+      keyBytes: Uint8Array,
+    ): Promise<void> {
       const chunkBytes = chunkBytesEstimate(
         payload.fileSize,
         payload.totalChunks,
       );
-      const isCancelled = () => cancelledRef.current;
+      const isCancelled = () => run.cancelled;
 
       const data = await receiveFileLive(payload, keyBytes, {
         pool,
         isCancelled,
         onProgress: (p) => {
-          if (cancelledRef.current) return;
+          if (run.cancelled) return;
           lastStats = p.stats;
           setState({
             status: 'fetching',
@@ -134,7 +136,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
           });
         },
       });
-      if (cancelledRef.current) return;
+      if (run.cancelled) return;
 
       setReceivedContent({
         contentType: 'file',

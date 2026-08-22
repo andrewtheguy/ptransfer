@@ -11,6 +11,9 @@
  *
  * NOSTR_E2E_FILE_MB overrides the file size (default 0.1, max 100), e.g.
  *   NOSTR_E2E_FILE_MB=100 npx tsx tests/live_nostr_file_e2e.ts
+ *
+ * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
+ * past it, both sides cancel and the run fails with a timeout error.
  */
 import { SimplePool } from 'nostr-tools';
 import {
@@ -33,6 +36,11 @@ if (!Number.isFinite(FILE_MB) || FILE_MB <= 0 || FILE_MB > 100) {
   throw new Error('NOSTR_E2E_FILE_MB must be a number in (0, 100]');
 }
 const FILE_SIZE = Math.round(FILE_MB * 1024 * 1024);
+
+const TIMEOUT_MS = Number(process.env.NOSTR_E2E_TIMEOUT_MS ?? 15 * 60 * 1000);
+if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS <= 0) {
+  throw new Error('NOSTR_E2E_TIMEOUT_MS must be a positive number');
+}
 
 function memoryStorage(): RelayPoolStorage {
   let state: RelayPoolState | null = null;
@@ -69,6 +77,10 @@ async function verify(sent: Uint8Array, got: Uint8Array): Promise<void> {
 async function runLive(data: Uint8Array) {
   const senderPool = new SimplePool({ enableReconnect: true });
   const receiverPool = new SimplePool({ enableReconnect: true });
+  // Shared deadline: both engines poll this as their cancellation check, so a
+  // stalled run winds down on both sides instead of hanging forever.
+  const deadline = Date.now() + TIMEOUT_MS;
+  const deadlineExceeded = () => Date.now() > deadline;
   try {
     console.log(
       'Sending',
@@ -87,7 +99,7 @@ async function runLive(data: Uint8Array) {
       {
         pool: senderPool,
         storage: memoryStorage(),
-        isCancelled: () => false,
+        isCancelled: deadlineExceeded,
         onReady: (manifest: NostrFileManifest, keyBytes) => {
           console.log(
             `\nCode ready after ${Date.now() - started}ms; relays (${manifest.relays.length}):`,
@@ -133,7 +145,7 @@ async function runLive(data: Uint8Array) {
       keyFromPayload(payload.key),
       {
         pool: receiverPool,
-        isCancelled: () => false,
+        isCancelled: deadlineExceeded,
         onProgress: () => {},
       },
     );
@@ -141,6 +153,13 @@ async function runLive(data: Uint8Array) {
     await sendDone;
     console.log(`Sender done in ${Date.now() - started}ms total`);
     await verify(data, received);
+  } catch (err) {
+    if (deadlineExceeded()) {
+      throw new Error(
+        `Timed out: the ${TIMEOUT_MS}ms deadline passed before the transfer completed (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    throw err;
   } finally {
     senderPool.destroy();
     receiverPool.destroy();
