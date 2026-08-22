@@ -186,6 +186,32 @@ describe('live single-copy relay transfer', () => {
     expect(sendProgress.at(-1)?.resent).toBe(2);
   }, 15000);
 
+  it('demotes a relay that keeps rejecting publishes', async () => {
+    // r2 rejects every publish. Chunks whose ring walk starts there give up
+    // after the retry schedule and land elsewhere; after enough give-ups the
+    // relay is demoted without the receiver ever reporting a miss.
+    const bad = RELAYS[1];
+    const pool = createMockPool({ failRelays: new Set([bad]) });
+    const data = randomBytes(12 * 32768); // chunks 1, 4, 7, 10 start on r2
+    const sendProgress: LiveSendProgress[] = [];
+    const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
+      onSend: (p) => sendProgress.push(p),
+    });
+    const [received] = await Promise.all([receiveDone, sendDone]);
+    expect(received).toEqual(data);
+
+    for (const copies of chunkPlacements(pool).values()) {
+      expect(copies).toHaveLength(1);
+      expect(copies).not.toContain(bad);
+    }
+    const stats = sendProgress.at(-1)?.stats;
+    const badRow = stats?.relays.find((r) => r.url === bad);
+    expect(badRow?.demoted).toBe(true);
+    expect(badRow?.eventsAccepted).toBe(0);
+    // A give-up demotion is publish-side only — no re-sends were needed.
+    expect(sendProgress.at(-1)?.resent).toBe(0);
+  }, 20000);
+
   it('demotes a relay the receiver keeps missing chunks on', async () => {
     // r2 blackholes reads. Publishes of the second batch are held until the
     // receiver's first acknowledgement has demoted r2, so every chunk placed
@@ -330,11 +356,13 @@ describe('live single-copy relay transfer', () => {
       readyResolve = resolve;
     });
     // No dataRelayOverride: discovery runs for real and degrades to the
-    // DEFAULT_RELAYS seeds, which the mock pool all passes.
+    // DEFAULT_RELAYS seeds, which the mock pool all passes. The control
+    // relays overlap those seeds on purpose — the ring must exclude them.
+    const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
     const sendDone = sendFileLive(data, META, {
       pool,
       isCancelled: never,
-      controlRelayOverride: CONTROL_RELAYS,
+      controlRelayOverride: controlRelays,
       storage: memoryStorage(),
       onProgress: (p) => {
         if (!ready) phasesBeforeReady.push(p.phase);
@@ -367,12 +395,14 @@ describe('live single-copy relay transfer', () => {
     expect(received).toEqual(data);
     expect(discoveringAfterReady).toBe(true);
     // The ring the receiver adopted from the avails is the discovered one:
-    // every chunk landed on a seed relay, none on the control relays.
+    // every chunk landed on a seed relay, never on a control relay — the
+    // sets stay mutually exclusive even though both draw from the seeds.
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
     for (const relays of placed.values()) {
       expect(relays).toHaveLength(1);
       expect(DEFAULT_RELAYS).toContain(relays[0]);
+      expect(controlRelays).not.toContain(relays[0]);
     }
   }, 15000);
 

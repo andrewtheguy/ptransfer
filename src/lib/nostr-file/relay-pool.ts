@@ -76,7 +76,7 @@ export function createLocalStorageRelayPool(): RelayPoolStorage {
   };
 }
 
-function normalizeRelayUrl(raw: string): string | null {
+export function normalizeRelayUrl(raw: string): string | null {
   let url: URL;
   try {
     url = new URL(raw.trim());

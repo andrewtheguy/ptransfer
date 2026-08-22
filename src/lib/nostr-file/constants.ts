@@ -91,6 +91,10 @@ export const LIVE_MIN_RETRANSMITS_PER_CHUNK = 4;
 // A relay the receiver reports this many misses against (it acknowledged the
 // chunk but does not serve it) stops receiving new chunks and re-sends.
 export const LIVE_RELAY_DEMOTE_MISSES = 2;
+// A relay that gives up this many publishes (every retry rejected) is demoted
+// too: each chunk whose ring walk starts there otherwise burns the whole
+// retry-with-backoff schedule before moving on.
+export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
 // Decompression bound for a control message body (a full 3200-chunk map

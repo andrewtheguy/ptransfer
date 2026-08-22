@@ -7,6 +7,7 @@ import {
   LIVE_HEARTBEAT_MS,
   LIVE_IDLE_TIMEOUT_MS,
   LIVE_MIN_RETRANSMITS_PER_CHUNK,
+  LIVE_RELAY_DEMOTE_GIVEUPS,
   LIVE_RELAY_DEMOTE_MISSES,
   NOSTR_FILE_CHUNK_SIZE,
   NOSTR_FILE_EXPIRATION_SEC,
@@ -182,9 +183,11 @@ export async function sendFileLive(
     let ring: string[] = [];
     let ringSize = 0;
     let maxRetransmits = LIVE_MIN_RETRANSMITS_PER_CHUNK;
-    // Receiver-reported misses per ring position; a position past the
-    // threshold is demoted (never all of them — something must stay).
+    // Receiver-reported misses and publish give-ups per ring position; a
+    // position past either threshold is demoted (never all of them —
+    // something must stay).
     let misses = new Uint32Array(0);
+    let giveUps = new Uint32Array(0);
     const demoted = new Set<number>();
     let upto = 0; // chunks [0, upto) are all placed
     let chunksDone = 0;
@@ -253,6 +256,12 @@ export async function sendFileLive(
       return [...healthy, ...fallback];
     };
 
+    const demote = (pos: number) => {
+      if (demoted.size >= ringSize - 1) return;
+      demoted.add(pos);
+      relayStatsFor(stats, ring[pos]).demoted = true;
+    };
+
     const handleAck = (msg: AckMessage) => {
       receiverHave = Math.max(receiverHave, msg.have);
       for (const [index, pos, g] of msg.missing) {
@@ -262,13 +271,7 @@ export async function sendFileLive(
         if (pendingRetry.has(index)) continue;
         misses[pos]++;
         relayStatsFor(stats, ring[pos]).missesReported++;
-        if (
-          misses[pos] >= LIVE_RELAY_DEMOTE_MISSES &&
-          demoted.size < ringSize - 1
-        ) {
-          demoted.add(pos);
-          relayStatsFor(stats, ring[pos]).demoted = true;
-        }
+        if (misses[pos] >= LIVE_RELAY_DEMOTE_MISSES) demote(pos);
         if (gen[index] >= maxRetransmits) {
           fail(
             new Error(
@@ -381,6 +384,9 @@ export async function sendFileLive(
               await publishWithRetry(pool, ring[pos], event, isCancelled, stats)
             ) {
               placed = pos;
+            } else if (++giveUps[pos] >= LIVE_RELAY_DEMOTE_GIVEUPS) {
+              // Rejected through every retry: stop starting walks here.
+              demote(pos);
             }
           }
           throwIfCancelled();
@@ -467,6 +473,7 @@ export async function sendFileLive(
       const uploadStart = (async () => {
         const dataRelays = await resolveUploadRelays(pool, storage, {
           relayOverride: opts.dataRelayOverride,
+          excludeRelays: controlRelays,
           isCancelled,
           onProgress,
           stats,
@@ -475,6 +482,7 @@ export async function sendFileLive(
         ring = dataRelays;
         ringSize = dataRelays.length;
         misses = new Uint32Array(ringSize);
+        giveUps = new Uint32Array(ringSize);
         maxRetransmits = Math.max(ringSize, LIVE_MIN_RETRANSMITS_PER_CHUNK);
         availDirty = true;
         control.notify();

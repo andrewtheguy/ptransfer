@@ -16,6 +16,7 @@ import type { NostrFilePool } from './pool';
 import {
   getRelayCandidates,
   healthCheckRelays,
+  normalizeRelayUrl,
   type RelayPoolStorage,
   selectUploadRelays,
 } from './relay-pool';
@@ -135,14 +136,17 @@ export async function resolveControlRelays(
 
 /**
  * The relay ring for an upload: the caller's override, or discovery +
- * health check + rotating batch selection. Throws when fewer than
- * MIN_UPLOAD_RELAYS relays are usable.
+ * health check + rotating batch selection. Relays in `excludeRelays` (the
+ * transfer's control relays) never join the ring, whichever path picks it —
+ * chunk traffic must not compete with the control channel on a shared relay.
+ * Throws when fewer than MIN_UPLOAD_RELAYS relays are usable.
  */
 export async function resolveUploadRelays(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
   opts: {
     relayOverride?: string[];
+    excludeRelays: string[];
     isCancelled: () => boolean;
     onProgress: (p: UploadProgress) => void;
     stats: NostrFileTransferStats;
@@ -156,15 +160,25 @@ export async function resolveUploadRelays(
     for (const relay of relays) relayStatsFor(stats, relay);
     return relays;
   };
+  const excluded = new Set(
+    opts.excludeRelays.map((url) => normalizeRelayUrl(url) ?? url),
+  );
+  const isExcluded = (url: string) =>
+    excluded.has(normalizeRelayUrl(url) ?? url);
   if (opts.relayOverride && opts.relayOverride.length > 0) {
-    if (new Set(opts.relayOverride).size < MIN_UPLOAD_RELAYS) {
+    const usable = [...new Set(opts.relayOverride)].filter(
+      (url) => !isExcluded(url),
+    );
+    if (usable.length < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
-    return seedRing(opts.relayOverride);
+    return seedRing(usable);
   }
   onProgress({ phase: 'discovering', stats });
   const discoverStarted = Date.now();
-  const candidates = await getRelayCandidates(pool, storage);
+  const candidates = (await getRelayCandidates(pool, storage)).filter(
+    (url) => !isExcluded(url),
+  );
   stats.candidates = candidates.length;
   stats.phaseMs.discover = Date.now() - discoverStarted;
   throwIfCancelled();

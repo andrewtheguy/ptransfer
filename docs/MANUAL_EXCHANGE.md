@@ -129,7 +129,8 @@ Differences from normal Manual Exchange:
 - Relays see only encrypted pieces, sizes, timing, and the small encrypted coordination
   messages — never the file name, contents, or the decryption key. Signaling and storage
   use separate relays: the coordination channel rides a few proven signaling relays,
-  while the pieces go to relays that passed a full-size health check
+  while the pieces go to relays that passed a full-size health check — never the same
+  relay for both
 
 ## Tips
 

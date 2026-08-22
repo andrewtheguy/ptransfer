@@ -20,7 +20,8 @@ Two separate relay sets do two different jobs:
   the encrypted control channel — a relay that caps event sizes or rate-limits large
   writes (fine for signaling, useless for 32 KiB chunks) still serves perfectly here.
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
-  ring is *not* in the payload — the sender announces it over the control channel.
+  ring is *not* in the payload — the sender announces it over the control channel. The
+  transfer's control relays are excluded from the ring, so the two sets never overlap.
 
 The sender hands out the code (payload `type: 'nostr-file-live'`) as soon as the control
 relays pass their probe — storage-relay discovery runs in the background while the user
@@ -61,9 +62,12 @@ handed out, so it stays quick.
    Per-relay round-trip time is measured (`HealthyRelay.rttMs`) and the fastest passers
    are kept.
 3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a rotating cursor
-   persisted with the candidate cache, load-balancing across uploads. The minimum viable
-   batch is two relays. The batch order **is the placement ring**, announced to the
-   receiver inside every `avail` control message (never stored in the manifest).
+   persisted with the candidate cache, load-balancing across uploads. The transfer's
+   control relays are excluded from the candidates first — the two sets are mutually
+   exclusive, so chunk traffic never competes with the control channel on a shared
+   relay. The minimum viable batch is two relays. The batch order **is the placement
+   ring**, announced to the receiver inside every `avail` control message (never stored
+   in the manifest).
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 
@@ -196,7 +200,11 @@ not serve them (ephemeral or read-restricted relays pass the write→read health
 behave this way under load), so new chunks and re-sends skip it while any other relay
 remains, and the placement walk tries healthy relays first. Without this, a ring with
 several such relays re-sends a third or more of a large file; with it, only the chunks
-already placed there before the first acknowledgement need a second copy.
+already placed there before the first acknowledgement need a second copy. Publish-side
+failure demotes too: a relay that gives up `LIVE_RELAY_DEMOTE_GIVEUPS` (3) publishes
+(every retry rejected — a rate limiter or size cap that surfaced only after the health
+probe) stops being walked first, since each chunk starting its walk there otherwise burns
+the whole retry-with-backoff schedule before landing elsewhere.
 
 **Abort conditions.** A chunk re-sent more than `max(N, LIVE_MIN_RETRANSMITS_PER_CHUNK)`
 times, a chunk no relay accepts, expiry, or the receiver falling silent for
@@ -283,6 +291,7 @@ sequenceDiagram
 | `LIVE_IDLE_TIMEOUT_MS` | 3 min | Give up on a silent peer |
 | `LIVE_MIN_RETRANSMITS_PER_CHUNK` | 4 | Floor on re-sends per chunk before failing (actual: `max(N, 4)`) |
 | `LIVE_RELAY_DEMOTE_MISSES` | 2 | Reported misses before a relay is demoted |
+| `LIVE_RELAY_DEMOTE_GIVEUPS` | 3 | Publish give-ups (all retries rejected) before a relay is demoted |
 | `CLOCK_SKEW_TOLERANCE_SEC` | ±600 | Tolerated sender/receiver wall-clock disagreement |
 
 ## Code Map

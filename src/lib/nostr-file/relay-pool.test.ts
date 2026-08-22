@@ -12,7 +12,11 @@ import {
   selectUploadRelays,
 } from './relay-pool';
 import { createTransferStats } from './stats';
-import { NOT_ENOUGH_RELAYS_MESSAGE, resolveControlRelays } from './upload';
+import {
+  NOT_ENOUGH_RELAYS_MESSAGE,
+  resolveControlRelays,
+  resolveUploadRelays,
+} from './upload';
 
 function makeEvent(kind: number, tags: string[][]): Event {
   return {
@@ -196,5 +200,46 @@ describe('resolveControlRelays', () => {
     expect(relays).not.toContain(DEFAULT_RELAYS[0]);
     for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
     expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('resolveUploadRelays', () => {
+  const opts = () => ({
+    isCancelled: () => false,
+    onProgress: () => {},
+    stats: createTransferStats('sender'),
+  });
+
+  it('keeps the control relays out of a discovered ring', async () => {
+    const pool = createMockPool();
+    const relays = await resolveUploadRelays(pool, memoryStorage(), {
+      ...opts(),
+      // Trailing slash on purpose: exclusion matches normalized URLs.
+      excludeRelays: [`${DEFAULT_RELAYS[0]}/`, DEFAULT_RELAYS[1]],
+    });
+    // Discovery degrades to the DEFAULT_RELAYS seeds in the mock network,
+    // minus the two claimed by the control channel.
+    expect(relays).not.toContain(DEFAULT_RELAYS[0]);
+    expect(relays).not.toContain(DEFAULT_RELAYS[1]);
+    expect(relays.length).toBeGreaterThanOrEqual(2);
+    for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
+  });
+
+  it('filters the override and refuses a ring the exclusion leaves too small', async () => {
+    const pool = createMockPool();
+    const override = ['wss://a.example', 'wss://b.example', 'wss://c.example'];
+    const relays = await resolveUploadRelays(pool, memoryStorage(), {
+      ...opts(),
+      relayOverride: override,
+      excludeRelays: ['wss://c.example'],
+    });
+    expect(relays).toEqual(['wss://a.example', 'wss://b.example']);
+    await expect(
+      resolveUploadRelays(pool, memoryStorage(), {
+        ...opts(),
+        relayOverride: override,
+        excludeRelays: ['wss://b.example', 'wss://c.example'],
+      }),
+    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
   });
 });
