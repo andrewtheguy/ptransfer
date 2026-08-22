@@ -21,13 +21,18 @@ export function NostrRelayStatsPanel({
   const [open, setOpen] = useState(false);
 
   const isSender = stats.role === 'sender';
-  // Deflate can shrink well below the raw size, so a signed "overhead %"
-  // turns negative and reads badly; "% of file size" is unambiguous in both
-  // directions (6% for compressible data, ~250% for a stored upload).
   const ofFileSize = (bytes: number): string | null => {
     if (stats.fileBytes <= 0 || bytes <= 0) return null;
     const pct = (bytes / stats.fileBytes) * 100;
     return `${pct.toFixed(pct < 10 ? 1 : 0)}% of file size`;
+  };
+  // The one number people ask for: encoded chunks (deflate + AES-GCM + Z85,
+  // one copy each) as a ratio of the original file, with 100% = original —
+  // below 100% deflate shrank it more than Z85 grew it, above 100% it grew.
+  const encodedVsOriginal = (): string | null => {
+    if (stats.fileBytes <= 0 || stats.encodedBytes <= 0) return null;
+    const pct = (stats.encodedBytes / stats.fileBytes) * 100;
+    return `${pct.toFixed(1)}% (100% = original size)`;
   };
   const ms = (value: number | undefined): string | null =>
     value === undefined ? null : `${(value / 1000).toFixed(1)}s`;
@@ -50,10 +55,9 @@ export function NostrRelayStatsPanel({
     rows.push(
       [
         'Encoded size',
-        stats.encodedBytes > 0
-          ? `${formatFileSize(stats.encodedBytes)} (${ofFileSize(stats.encodedBytes)})`
-          : null,
+        stats.encodedBytes > 0 ? formatFileSize(stats.encodedBytes) : null,
       ],
+      ['Encoded vs original', encodedVsOriginal()],
       [
         'Published to relays',
         stats.bytesPublished > 0
