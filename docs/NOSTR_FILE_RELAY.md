@@ -176,7 +176,7 @@ Anti-replay/misuse properties:
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|
 | `hello` | receiver → sender | `n` | Receiver is online and subscribed |
-| `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET`, bounding the ring at 64 relays); `gens` lists re-sent chunks with their current generation |
+| `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET` — 64 positions of encoding headroom; the actual ring is capped at `UPLOAD_RELAY_COUNT` = 16); `gens` lists re-sent chunks with their current generation |
 | `ack` | receiver → sender | `n`, `avail`, `have`, `missing` | Outcome of fetching what avail `avail` announced: total chunks held, plus `missing` as `[index, pos, gen]` triples — tried at that exact placement and not found / not decryptable |
 | `done` | receiver → sender | `n` | Whole-file SHA-256 verified |
 | `cancel` | either side | `n` | Abort |

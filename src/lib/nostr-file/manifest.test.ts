@@ -48,6 +48,15 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(false);
   });
 
+  it('rejects duplicate control relays', () => {
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        controlRelays: ['wss://relay.one', 'wss://relay.one'],
+      }),
+    ).toBe(false);
+  });
+
   it('rejects the previous wire format', () => {
     expect(isValidNostrFileManifest({ ...manifest, v: 3 })).toBe(false);
     const { controlRelays, ...rest } = manifest;

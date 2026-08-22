@@ -106,7 +106,11 @@ export async function resolveControlRelays(
     return relays;
   };
   if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
-    const distinct = [...new Set(opts.controlRelayOverride)];
+    const distinct = [
+      ...new Set(
+        opts.controlRelayOverride.map((url) => normalizeRelayUrl(url) ?? url),
+      ),
+    ];
     if (distinct.length < MIN_CONTROL_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
@@ -174,9 +178,11 @@ export async function resolveUploadRelays(
   const isExcluded = (url: string) =>
     excluded.has(normalizeRelayUrl(url) ?? url);
   if (opts.relayOverride && opts.relayOverride.length > 0) {
-    const usable = [...new Set(opts.relayOverride)].filter(
-      (url) => !isExcluded(url),
-    );
+    const usable = [
+      ...new Set(
+        opts.relayOverride.map((url) => normalizeRelayUrl(url) ?? url),
+      ),
+    ].filter((url) => !isExcluded(url));
     if (usable.length < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }

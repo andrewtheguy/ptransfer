@@ -189,6 +189,13 @@ describe('resolveControlRelays', () => {
         controlRelayOverride: ['wss://c1.example', 'wss://c1.example'],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
+    // Equivalent URL forms collapse before the distinct-relay count.
+    await expect(
+      resolveControlRelays(pool, {
+        ...opts(),
+        controlRelayOverride: ['wss://c1.example', 'wss://c1.example/'],
+      }),
+    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
   });
 
   it('picks probed default relays, skipping ones that serve nothing', async () => {
@@ -268,6 +275,14 @@ describe('resolveUploadRelays', () => {
         ...opts(),
         relayOverride: override,
         excludeRelays: ['wss://b.example', 'wss://c.example'],
+      }),
+    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
+    // A trailing-slash variant is the same relay, not a second one.
+    await expect(
+      resolveUploadRelays(pool, memoryStorage(), {
+        ...opts(),
+        relayOverride: ['wss://a.example', 'wss://a.example/'],
+        excludeRelays: [],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
   });

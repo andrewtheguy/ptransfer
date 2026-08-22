@@ -107,6 +107,7 @@ export function isValidNostrFileManifest(
     !Array.isArray(m.controlRelays) ||
     m.controlRelays.length < MIN_CONTROL_RELAYS ||
     m.controlRelays.length > CONTROL_RELAY_COUNT ||
+    new Set(m.controlRelays).size !== m.controlRelays.length ||
     !m.controlRelays.every(
       (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
     )
