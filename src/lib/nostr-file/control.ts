@@ -13,6 +13,7 @@ import {
 } from './constants';
 import { isWssUrl } from './manifest';
 import type { NostrFilePool, PoolSubscription } from './pool';
+import { normalizeRelayUrl } from './relay-pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /**
@@ -266,8 +267,13 @@ export function parseSenderMessage(
       !Array.isArray(m.relays) ||
       m.relays.length > UPLOAD_RELAY_COUNT ||
       !m.relays.every(
-        (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
-      )
+        (r): r is string =>
+          typeof r === 'string' && r.length < 200 && isWssUrl(r),
+      ) ||
+      // Ring positions index into the list, so a relay repeated under an
+      // equivalent URL form (e.g. trailing slash) is forged or corrupt.
+      new Set(m.relays.map((r) => normalizeRelayUrl(r) ?? r)).size !==
+        m.relays.length
     ) {
       return null;
     }

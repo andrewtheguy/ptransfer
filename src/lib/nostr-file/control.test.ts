@@ -220,6 +220,19 @@ describe('control message validation', () => {
         4,
       ),
     ).toBeNull();
+    // A duplicated relay — exact or under an equivalent URL form — is no ring.
+    expect(
+      parseSenderMessage(
+        avail({ relays: [RELAYS[0], RELAYS[0], RELAYS[1]] }),
+        4,
+      ),
+    ).toBeNull();
+    expect(
+      parseSenderMessage(
+        avail({ relays: [`${RELAYS[0]}/`, ...RELAYS.slice(0, 2)] }),
+        4,
+      ),
+    ).toBeNull();
     // Empty ring is presence-only: valid with upto 0, never with chunks.
     expect(
       parseSenderMessage(avail({ relays: [], upto: 0, map: '' }), 4),

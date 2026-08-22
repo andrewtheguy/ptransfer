@@ -48,11 +48,17 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(false);
   });
 
-  it('rejects duplicate control relays', () => {
+  it('rejects duplicate control relays, equivalent URL forms included', () => {
     expect(
       isValidNostrFileManifest({
         ...manifest,
         controlRelays: ['wss://relay.one', 'wss://relay.one'],
+      }),
+    ).toBe(false);
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        controlRelays: ['wss://relay.one', 'wss://relay.one/'],
       }),
     ).toBe(false);
   });

@@ -5,6 +5,7 @@ import {
   NOSTR_FILE_MANIFEST_VERSION,
   NOSTR_FILE_MAX_BYTES,
 } from './constants';
+import { normalizeRelayUrl } from './relay-pool';
 
 /**
  * Retrieval metadata for a file saved to nostr relays. Travels inside the
@@ -107,10 +108,13 @@ export function isValidNostrFileManifest(
     !Array.isArray(m.controlRelays) ||
     m.controlRelays.length < MIN_CONTROL_RELAYS ||
     m.controlRelays.length > CONTROL_RELAY_COUNT ||
-    new Set(m.controlRelays).size !== m.controlRelays.length ||
     !m.controlRelays.every(
-      (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
-    )
+      (r): r is string =>
+        typeof r === 'string' && r.length < 200 && isWssUrl(r),
+    ) ||
+    // Distinct after normalization: a trailing-slash variant is the same relay.
+    new Set(m.controlRelays.map((r) => normalizeRelayUrl(r) ?? r)).size !==
+      m.controlRelays.length
   ) {
     return false;
   }
