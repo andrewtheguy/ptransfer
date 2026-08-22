@@ -1,4 +1,3 @@
-import { SimplePool } from 'nostr-tools';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wipeBufferSource } from '@/lib/crypto';
 import {
@@ -7,7 +6,11 @@ import {
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import { uint8ArrayToBase64 } from '@/lib/nostr/events';
-import { NostrFileCancelledError, sendFileLive } from '@/lib/nostr-file';
+import {
+  createTransferPool,
+  NostrFileCancelledError,
+  sendFileLive,
+} from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 import {
   chunkBytesEstimate,
@@ -36,7 +39,6 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   // keep seeing its own cancellation (and stop touching the shared state).
   const runRef = useRef<{ cancelled: boolean } | null>(null);
   const sendingRef = useRef(false);
-  const poolRef = useRef<SimplePool | null>(null);
 
   const cancel = useCallback(() => {
     if (runRef.current) runRef.current.cancelled = true;
@@ -79,10 +81,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       if (run.cancelled) return;
 
       const fileMetadata = { fileName, fileSize: data.length, mimeType };
-      // Reconnect dropped sockets: the control channel subscription has to
-      // outlive transient relay hiccups.
-      const pool = new SimplePool({ enableReconnect: true });
-      poolRef.current = pool;
+      const pool = createTransferPool();
 
       let payloadBinary: Uint8Array | null = null;
       let expiresAt = 0;
@@ -196,7 +195,6 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       } finally {
         // Close this run's sockets — never a newer run's pool.
         pool.destroy();
-        if (poolRef.current === pool) poolRef.current = null;
       }
       if (run.cancelled) return;
 

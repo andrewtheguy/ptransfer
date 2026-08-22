@@ -15,7 +15,6 @@
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.
  */
-import { SimplePool } from 'nostr-tools';
 import {
   generateNostrFilePayloadBinary,
   type NostrFileLivePayload,
@@ -29,6 +28,7 @@ import type {
   RelayPoolState,
   RelayPoolStorage,
 } from '../src/lib/nostr-file/relay-pool';
+import { createTransferPool } from '../src/lib/nostr-file/transfer-pool';
 import { sendFileLive } from '../src/lib/nostr-file/upload-live';
 
 const FILE_MB = Number(process.env.NOSTR_E2E_FILE_MB ?? '0.1');
@@ -75,8 +75,8 @@ async function verify(sent: Uint8Array, got: Uint8Array): Promise<void> {
 }
 
 async function runLive(data: Uint8Array) {
-  const senderPool = new SimplePool({ enableReconnect: true });
-  const receiverPool = new SimplePool({ enableReconnect: true });
+  const senderPool = createTransferPool();
+  const receiverPool = createTransferPool();
   // Shared deadline: both engines poll this as their cancellation check, so a
   // stalled run winds down on both sides instead of hanging forever.
   const deadline = Date.now() + TIMEOUT_MS;

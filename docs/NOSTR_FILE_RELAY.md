@@ -65,7 +65,10 @@ handed out, so it stays quick.
    are kept. Sockets are dropped as soon as a relay has no further job — a failed probe,
    a pass after the target filled, a seed once discovery finishes, a healthy relay the
    batch selection skipped — because with reconnect enabled a lingering dead socket
-   would retry forever, spamming connections for the rest of the transfer.
+   would retry forever, spamming connections for the rest of the transfer. Both engines
+   run on a tracked pool (`createTransferPool`) that force-closes even sockets still
+   mid-handshake — nostr-tools only closes fully open ones — and refuses new sockets
+   after `destroy()`, so no connection or reconnect loop outlives the transfer.
 3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a rotating cursor
    persisted with the candidate cache, load-balancing across uploads. The transfer's
    control relays and the whole `DEFAULT_RELAYS` signaling pool are filtered out of the
@@ -310,6 +313,7 @@ sequenceDiagram
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
+| `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
 | `src/lib/nostr-file/upload.ts` | Publish-with-retry, control-relay probe (`resolveControlRelays`), storage-ring resolution (`resolveUploadRelays`) |
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
