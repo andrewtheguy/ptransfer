@@ -7,10 +7,8 @@ import {
   generateNostrFilePayloadBinary,
   isMutualPayload,
   isValidNostrFileLivePayload,
-  isValidNostrFilePayload,
   isValidSignalingPayload,
   type NostrFileLivePayload,
-  type NostrFilePayload,
   parseAnyManualPayload,
   parseClipboardPayload,
   parseMutualPayload,
@@ -161,9 +159,9 @@ describe('Nostr file payload', () => {
   mockPublicKey[0] = 4;
   const mockSalt = new Uint8Array(16).fill(2);
   const createdAt = Math.floor(Date.now() / 1000);
-  const validPayload: NostrFilePayload = {
-    type: 'nostr-file',
-    v: 2,
+  const validPayload: NostrFileLivePayload = {
+    type: 'nostr-file-live',
+    v: 3,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
@@ -174,7 +172,6 @@ describe('Nostr file payload', () => {
     totalChunks: Math.ceil((5 * 1024 * 1024) / 32768),
     enc: 1,
     relays: ['wss://relay.one', 'wss://relay.two'],
-    replication: 2,
     createdAt,
     expiresAt: createdAt + 3600,
     key: `${'K'.repeat(43)}=`,
@@ -184,12 +181,14 @@ describe('Nostr file payload', () => {
     const binary = generateNostrFilePayloadBinary(validPayload);
     expect(isMutualPayload(binary)).toBe(true);
     const parsed = parseAnyManualPayload(binary);
-    expect(parsed?.kind).toBe('nostr-file');
+    expect(parsed?.kind).toBe('nostr-file-live');
     expect(parsed?.payload).toEqual(validPayload);
+    // A nostr-file payload is not a signaling payload.
+    expect(parseMutualPayload(binary)).toBeNull();
   });
 
   it('encodes a 3200-chunk, 16-relay manifest into a compact payload', () => {
-    const large: NostrFilePayload = {
+    const large: NostrFileLivePayload = {
       ...validPayload,
       fileSize: 100 * 1024 * 1024,
       totalChunks: 3200,
@@ -231,88 +230,64 @@ describe('Nostr file payload', () => {
     expect(parseAnyManualPayload(offerBinary)?.kind).toBe('signaling');
 
     const nostrBinary = generateNostrFilePayloadBinary(validPayload);
-    expect(parseAnyManualPayload(nostrBinary)?.kind).toBe('nostr-file');
+    expect(parseAnyManualPayload(nostrBinary)?.kind).toBe('nostr-file-live');
 
     expect(parseAnyManualPayload(new Uint8Array([1, 2, 3, 4, 5]))).toBeNull();
     // A nostr-file payload is not a signaling payload.
     expect(parseMutualPayload(nostrBinary)).toBeNull();
   });
 
-  it('round-trips and discriminates the live variant', () => {
-    const live: NostrFileLivePayload = {
-      ...validPayload,
-      type: 'nostr-file-live',
-      replication: 1,
-    };
-    const binary = generateNostrFilePayloadBinary(live);
-    const parsed = parseAnyManualPayload(binary);
-    expect(parsed?.kind).toBe('nostr-file-live');
-    expect(parsed?.payload).toEqual(live);
-    expect(isValidNostrFilePayload(live)).toBe(false);
-    expect(parseMutualPayload(binary)).toBeNull();
-  });
-
-  it('rejects a live payload that claims redundancy', () => {
-    const live = { ...validPayload, type: 'nostr-file-live', replication: 1 };
-    expect(isValidNostrFileLivePayload(live)).toBe(true);
-    expect(isValidNostrFileLivePayload({ ...live, replication: 2 })).toBe(
-      false,
-    );
-    expect(isValidNostrFileLivePayload({ ...live, key: 'short' })).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...live, type: 'nostr-file' })).toBe(
-      false,
-    );
-  });
-
   it('rejects malformed nostr-file payloads', () => {
-    expect(isValidNostrFilePayload(validPayload)).toBe(true);
-    expect(isValidNostrFilePayload({ ...validPayload, key: 'short' })).toBe(
+    expect(isValidNostrFileLivePayload(validPayload)).toBe(true);
+    expect(isValidNostrFileLivePayload({ ...validPayload, key: 'short' })).toBe(
       false,
     );
     expect(
-      isValidNostrFilePayload({
+      isValidNostrFileLivePayload({
         ...validPayload,
         fileSize: 101 * 1024 * 1024,
         totalChunks: Math.ceil((101 * 1024 * 1024) / 32768),
       }),
     ).toBe(false);
-    expect(isValidNostrFilePayload({ ...validPayload, replication: 3 })).toBe(
-      false,
-    );
-    expect(isValidNostrFilePayload({ ...validPayload, totalChunks: 3 })).toBe(
-      false,
-    );
-    expect(isValidNostrFilePayload({ ...validPayload, transferId: 'zz' })).toBe(
-      false,
-    );
-    expect(isValidNostrFilePayload({ ...validPayload, relays: [] })).toBe(
+    expect(
+      isValidNostrFileLivePayload({ ...validPayload, totalChunks: 3 }),
+    ).toBe(false);
+    expect(
+      isValidNostrFileLivePayload({ ...validPayload, transferId: 'zz' }),
+    ).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, relays: [] })).toBe(
       false,
     );
     expect(
-      isValidNostrFilePayload({
+      isValidNostrFileLivePayload({
         ...validPayload,
         relays: ['http://not-wss.example'],
       }),
     ).toBe(false);
     expect(
-      isValidNostrFilePayload({
+      isValidNostrFileLivePayload({
         ...validPayload,
         expiresAt: validPayload.createdAt + 7200,
       }),
     ).toBe(false);
-    expect(isValidNostrFilePayload({ ...validPayload, type: 'offer' })).toBe(
+    expect(
+      isValidNostrFileLivePayload({ ...validPayload, type: 'offer' }),
+    ).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, v: 2 })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, enc: 2 })).toBe(
       false,
     );
-    expect(isValidNostrFilePayload({ ...validPayload, v: 1 })).toBe(false);
-    expect(isValidNostrFilePayload({ ...validPayload, enc: 2 })).toBe(false);
     expect(
-      isValidNostrFilePayload({ ...validPayload, pubkey: 'Z'.repeat(64) }),
+      isValidNostrFileLivePayload({ ...validPayload, pubkey: 'Z'.repeat(64) }),
     ).toBe(false);
     expect(
-      isValidNostrFilePayload({ ...validPayload, fileHash: 'not base64!!' }),
+      isValidNostrFileLivePayload({
+        ...validPayload,
+        fileHash: 'not base64!!',
+      }),
     ).toBe(false);
-    expect(isValidNostrFilePayload({ ...validPayload, chunkSize: 100 })).toBe(
-      false,
-    );
+    expect(
+      isValidNostrFileLivePayload({ ...validPayload, chunkSize: 100 }),
+    ).toBe(false);
   });
 });

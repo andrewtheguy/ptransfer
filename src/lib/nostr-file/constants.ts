@@ -1,4 +1,5 @@
-// Experimental Nostr file relay (store-and-forward for Manual Exchange).
+// Experimental Nostr file relay (live single-copy transfer for Manual
+// Exchange).
 
 // Hard cap on the plaintext payload relayed through nostr events.
 export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
@@ -17,23 +18,19 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 2;
+export const NOSTR_FILE_MANIFEST_VERSION = 3;
 
 // Codec identity: deflate then AES-256-GCM (nonce||ct||tag) then Z85.
 export const NOSTR_FILE_ENCRYPTION_LABEL = 'deflate+aes-256-gcm';
 export const NOSTR_FILE_AAD_PREFIX = 'ptransfer-nostr-file:v1';
 
-// Relay batch selected per upload. Chunks are striped across the batch: chunk
-// i is placed on CHUNK_REPLICATION consecutive relays starting at
-// relays[i % N], so each relay stores only CHUNK_REPLICATION / N of the file.
+// Relay batch selected per upload. Chunks are spread across the batch: chunk
+// i is placed on one relay starting at relays[i % N], walking the ring on
+// rejection, so each relay stores only ~1/N of the file.
 export const UPLOAD_RELAY_COUNT = 16;
 
-// Copies kept per chunk. Two is enough for data that lives one hour; the
-// remaining batch relays only serve as fallbacks when a placed relay rejects.
-export const CHUNK_REPLICATION = 2;
-
-// A chunk counts as saved once this many relays acknowledged it.
-export const MIN_CHUNK_RELAY_SUCCESS = 2;
+// Fewer usable relays than this and an upload refuses to start.
+export const MIN_UPLOAD_RELAYS = 2;
 
 // Per-relay publish retry policy.
 export const PUBLISH_MAX_RETRIES = 3;
@@ -62,15 +59,9 @@ export const D_TAG_FILTER_BATCH = 50;
 
 export const RELAY_QUERY_MAX_WAIT_MS = 15000;
 
-// After the placement pass, full sweeps over every relay for still-missing
-// chunks (fallback placements and transient failures).
-export const DOWNLOAD_SWEEP_PASSES = 2;
-// Pause before each sweep pass.
-export const DOWNLOAD_RETRY_PASS_DELAY_MS = 1000;
-
-// Live (single-copy) variant: the sender uploads each chunk to one relay
-// and announces availability over an encrypted control channel; the receiver
-// acknowledges and only pieces it could not fetch are sent again.
+// The sender uploads each chunk to one relay and announces availability over
+// an encrypted control channel; the receiver acknowledges and only pieces it
+// could not fetch are sent again.
 //
 // Chunks per availability announcement (64 × 32 KiB = 2 MiB).
 export const LIVE_BATCH_CHUNKS = 64;

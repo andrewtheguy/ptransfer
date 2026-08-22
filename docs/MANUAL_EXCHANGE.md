@@ -16,9 +16,9 @@ then a single receiver `ACK` once `DONE` validates the chunk count and final byt
 authenticated and reassembled).
 
 This guide describes that **direct flow** unless it says otherwise. The experimental
-[Relay file through Nostr](#experimental-relay-file-through-nostr) options replace it
+[Relay file through Nostr](#experimental-relay-file-through-nostr) option replaces it
 entirely: there is no offer/answer, no WebRTC connection between the two devices, and no
-direct route between them is needed — see that section for how they differ.
+direct route between them is needed — see that section for how it differs.
 
 ## When to Use This
 
@@ -92,61 +92,41 @@ AES-GCM plus a whole-file checksum.)
 Under **Advanced options** (visible when Manual Exchange is selected on the send tab), the
 **Relay file through Nostr** switch replaces the direct connection with encrypted pieces
 carried through public Nostr relays, for files up to **100 MB**. (This page describes the
-user-facing behavior; the technical design of both methods is documented in
-[NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).) Two choices appear under the switch:
+user-facing behavior; the technical design is documented in
+[NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
 
-### Stored, two copies
-
-1. The sender's file is encrypted with a random key and uploaded in full to a set of
-   discovered Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a
-   deletion request that compliant relays honor by pruning the events, not guaranteed
-   erasure; the file stays protected by its encryption regardless. The encrypted pieces
-   are spread across up to 16 relays with two copies each, so the upload costs about
-   twice the file size in bandwidth and, with a normal-sized relay set, each relay holds
-   only a fraction of the pieces. If few relays pass the health check (the minimum is
-   two), or relays reject pieces and the copies fall back to the others, individual
-   relays can end up holding every piece — still encrypted
-2. Only after the complete upload is confirmed does the sender get a single exchange code
-   (multi-QR or copy/paste) containing the download manifest **and the decryption key**
-3. The receiver pastes/scans that code in the normal Manual Exchange receive flow — it is
-   detected automatically — and downloads and decrypts the file from the relays
-
-### Live, single copy
-
-1. The sender gets the exchange code **right away**, as soon as working relays are found,
-   and keeps the page open. The encrypted pieces upload in the background, **one copy
-   each**, so the upload costs about the file size in bandwidth
-2. The receiver pastes/scans the code in the normal receive flow and starts downloading
-   the pieces while the sender is still uploading. The two sides coordinate over a small
-   **encrypted side channel on the same relays** (keyed from the code, so only the two of
-   you can read it): the sender announces which pieces are up, the receiver acknowledges
-   and names any piece it could not fetch, and **only those pieces are sent again**, to
-   another relay — nothing is duplicated up front
+1. The sender's file is encrypted with a random key and uploaded to a set of discovered
+   Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a deletion
+   request that compliant relays honor by pruning the events, not guaranteed erasure; the
+   file stays protected by its encryption regardless. The sender gets the exchange code
+   (multi-QR or copy/paste) **right away**, as soon as working relays are found, and
+   keeps the page open. The encrypted pieces upload in the background, **one copy each**,
+   so the upload costs about the file size in bandwidth
+2. The receiver pastes/scans the code in the normal Manual Exchange receive flow — it is
+   detected automatically — and starts downloading the pieces while the sender is still
+   uploading. The two sides coordinate over a small **encrypted side channel on the same
+   relays** (keyed from the code, so only the two of you can read it): the sender
+   announces which pieces are up, the receiver acknowledges and names any piece it could
+   not fetch, and **only those pieces are sent again**, to another relay — nothing is
+   duplicated up front
 3. The sender's page completes on its own once the receiver has verified the whole file
-
-Use *Stored* when the receiver may not be around right now or you want to close your page
-after handing over the code; use *Live* when you are both online and want to save upload
-bandwidth or start the handover before a large upload finishes.
 
 Differences from normal Manual Exchange:
 
-- **No answer step**: the receiver never sends a code back. In the Stored variant the
-  sender also gets no in-app delivery confirmation; in the Live variant the sender's page
-  shows the receiver's progress and completes when the receiver has the verified file
-- **Connectivity**: no WebRTC connection is made — the peers never connect to each other, and
-  both only need internet access to the relays. With Stored, not necessarily at the same time;
-  with Live, both pages must stay open until the transfer completes (a side that goes silent
-  for a few minutes ends it)
+- **No answer step**: the receiver never sends a code back. The sender's page shows the
+  receiver's progress and completes when the receiver has the verified file
+- **Connectivity**: no WebRTC connection is made — the peers never connect to each other,
+  and both only need internet access to the relays. Both pages must stay open until the
+  transfer completes (a side that goes silent for a few minutes ends it)
 - **Time limit**: everything must finish within 1 hour of the transfer *start* — the app
   enforces this deadline, and expired pieces are pruned by compliant relays (deletion is
-  requested via NIP-40, not cryptographically guaranteed). With Stored, a large file on a
-  slow connection eats into that hour before the code even exists, so hand the code over
-  promptly; both screens show the remaining time
+  requested via NIP-40, not cryptographically guaranteed); both screens show the
+  remaining time
 - **The code IS the key**: unlike signaling payloads, this code contains the decryption key.
   Anyone who obtains it before expiry can download and decrypt the file — share it only over
   a trusted channel (in person, or an end-to-end encrypted messenger)
-- Relays see only encrypted pieces, sizes, and timing (and, in the Live variant, the small
-  encrypted coordination messages) — never the file name, contents, or the decryption key
+- Relays see only encrypted pieces, sizes, timing, and the small encrypted coordination
+  messages — never the file name, contents, or the decryption key
 
 ## Tips
 

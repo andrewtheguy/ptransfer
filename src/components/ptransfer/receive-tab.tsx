@@ -78,13 +78,12 @@ export function ReceiveTab() {
   const { startReceive, submitOffer } = manualHook;
 
   // Route a pasted/scanned Manual Exchange payload to the right flow: a
-  // Nostr file relay payload (stored or live) starts the relay download
-  // directly (no answer step); anything else follows the normal signaling
-  // path.
+  // Nostr file relay payload starts the relay download directly (no answer
+  // step); anything else follows the normal signaling path.
   const handleOfferSubmit = useCallback(
     (binary: Uint8Array) => {
       const parsed = parseAnyManualPayload(binary);
-      if (parsed?.kind === 'nostr-file' || parsed?.kind === 'nostr-file-live') {
+      if (parsed?.kind === 'nostr-file-live') {
         manualHook.cancel();
         setManualFlow('nostr-file');
         void nostrFileHook.start(parsed.payload);

@@ -283,7 +283,7 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 2,
+      v: 3,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',
@@ -294,7 +294,6 @@ describe('live single-copy relay transfer', () => {
       totalChunks: 1,
       enc: 1,
       relays: RELAYS,
-      replication: 1,
       createdAt,
       expiresAt: createdAt + 3600,
     };

@@ -6,7 +6,7 @@ import {
 } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
-/** Shared input handling for the stored and live Nostr relay send hooks. */
+/** Input handling for the Nostr relay send hook. */
 
 export async function readSourceFully(
   source: TransferSource,

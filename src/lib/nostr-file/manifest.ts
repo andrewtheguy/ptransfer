@@ -27,14 +27,12 @@ export interface NostrFileManifest {
   /** codec version: 1 = deflate + AES-256-GCM (nonce||ct||tag) + Z85 */
   enc: 1;
   /**
-   * Relay ring, in placement order: chunk i was placed on `replication`
-   * consecutive relays starting at relays[i % relays.length] (see
-   * stripeRelays). A relay that rejected a chunk was skipped for the next
-   * relays in the ring, so the placement is a hint, not a guarantee.
+   * Relay ring, in placement order: chunk i starts at
+   * relays[i % relays.length], walking the ring when a relay rejects it, so
+   * the placement is a hint, not a guarantee. The control channel announces
+   * where each chunk actually landed.
    */
   relays: string[];
-  /** copies per chunk; 1 <= replication <= relays.length */
-  replication: number;
   /** unix seconds */
   createdAt: number;
   /** unix seconds; createdAt + NOSTR_FILE_EXPIRATION_SEC */
@@ -48,25 +46,6 @@ export const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
 const MAX_RELAYS = 16;
 const MIN_CHUNK_SIZE = 1024;
 const MAX_CHUNK_SIZE = 65408;
-
-/**
- * Relays a chunk is placed on: `replication` consecutive ring positions
- * starting at `index % relays.length`, so consecutive chunks land on
- * different relays and every relay carries an equal share.
- */
-export function stripeRelays(
-  relays: readonly string[],
-  replication: number,
-  index: number,
-): string[] {
-  const n = relays.length;
-  const copies = Math.min(replication, n);
-  const out: string[] = [];
-  for (let j = 0; j < copies; j++) {
-    out.push(relays[(index + j) % n]);
-  }
-  return out;
-}
 
 function isWssUrl(raw: string): boolean {
   try {
@@ -130,15 +109,6 @@ export function isValidNostrFileManifest(
     !m.relays.every(
       (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
     )
-  ) {
-    return false;
-  }
-
-  if (
-    typeof m.replication !== 'number' ||
-    !Number.isInteger(m.replication) ||
-    m.replication < 1 ||
-    m.replication > m.relays.length
   ) {
     return false;
   }

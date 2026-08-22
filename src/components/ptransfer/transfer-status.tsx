@@ -168,7 +168,7 @@ export function TransferStatus({
  * Countdown to a NIP-40 expiry timestamp (unix seconds). Isolated so its
  * 1-second tick re-renders only this row.
  */
-export function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
+function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
   const [remaining, setRemaining] = useState(() =>
     Math.max(0, expiresAt - Math.floor(Date.now() / 1000)),
   );

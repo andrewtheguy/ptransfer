@@ -87,7 +87,7 @@ export async function receiveFileLive(
   let lastPeerAt = 0;
   const startedAt = Date.now();
 
-  const stats = createTransferStats('receiver', 'live');
+  const stats = createTransferStats('receiver');
   stats.fileBytes = manifest.fileSize;
   stats.chunkSize = manifest.chunkSize;
   stats.chunksTotal = total;

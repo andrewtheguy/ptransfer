@@ -119,7 +119,7 @@ Receivers choose the matching receive mode:
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
 - [Manual Exchange](./docs/MANUAL_EXCHANGE.md) - User guide for the Manual Exchange mode
-- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the experimental relay-file-through-Nostr methods (Stored and Live)
+- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the experimental relay-file-through-Nostr transfer
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
 
 ## License
