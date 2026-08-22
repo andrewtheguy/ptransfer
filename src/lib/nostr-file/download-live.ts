@@ -1,7 +1,11 @@
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { assembleChunks, sha256 } from './codec';
-import { CLOCK_SKEW_TOLERANCE_SEC, LIVE_IDLE_TIMEOUT_MS } from './constants';
+import {
+  CLOCK_SKEW_TOLERANCE_SEC,
+  LIVE_FETCH_RETRY_MS,
+  LIVE_IDLE_TIMEOUT_MS,
+} from './constants';
 import {
   type ChunkPlacement,
   type ControlChannel,
@@ -39,11 +43,16 @@ export interface LiveReceiveProgress {
 /**
  * Live (single-copy) relay transfer, receiver side.
  *
- * Joins the control channel, then follows the sender's availability
- * announcements: each announced chunk is fetched from the one relay it was
- * placed on; whatever cannot be fetched or decrypted is reported back with
- * the placement that was tried, and retried only once the sender announces a
- * new placement for it. Resolves with the verified file.
+ * Joins the control channel on the manifest's control relays, then follows
+ * the sender's availability announcements: the announcements carry the data
+ * ring (adopted on first sight; empty while the sender is still discovering
+ * storage relays), and each announced chunk is fetched from the one ring
+ * relay it was placed on; whatever cannot be fetched or decrypted is
+ * reported back with the placement that was tried, and retried when the
+ * sender announces a new placement for it — or from the same placement once
+ * LIVE_FETCH_RETRY_MS has passed, on the receiver's own clock, so a piece
+ * whose fetch merely timed out recovers even when no announcement arrives.
+ * Resolves with the verified file.
  */
 export async function receiveFileLive(
   manifest: NostrFileManifest,
@@ -71,8 +80,9 @@ export async function receiveFileLive(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
-  const relays = manifest.relays;
-  const n = relays.length;
+  const controlRelays = manifest.controlRelays;
+  // Data ring, adopted from the first availability announcement carrying one.
+  let ring: string[] = [];
   const total = manifest.totalChunks;
   const chunks: (Uint8Array | null)[] = new Array(total).fill(null);
   let chunksDone = 0;
@@ -81,8 +91,11 @@ export async function receiveFileLive(
   // generation for the chunks that were re-sent.
   let map = '';
   const gens = new Map<number, number>();
-  // Placement ([pos, gen]) last tried for a chunk still missing.
+  // Placement ([pos, gen]) last tried for a chunk still missing, and when
+  // that attempt finished — after LIVE_FETCH_RETRY_MS the same placement
+  // becomes retryable (a transient fetch failure must not need a re-send).
   const lastTried: ([number, number] | null)[] = new Array(total).fill(null);
+  const lastTriedAt = new Float64Array(total);
   let lastSenderN = 0;
   let lastPeerAt = 0;
   const startedAt = Date.now();
@@ -91,12 +104,13 @@ export async function receiveFileLive(
   stats.fileBytes = manifest.fileSize;
   stats.chunkSize = manifest.chunkSize;
   stats.chunksTotal = total;
-  for (const relay of relays) relayStatsFor(stats, relay);
+  for (const relay of controlRelays) relayStatsFor(stats, relay, 'control');
 
   let finished = false;
   let succeeded = false;
   let cycleRunning = false;
   let cyclePending = false;
+  let lastCycleStartedAt = 0;
   let cyclePromise: Promise<void> = Promise.resolve();
   const outcome = new Deferred<Uint8Array>();
 
@@ -136,6 +150,7 @@ export async function receiveFileLive(
       try {
         do {
           cyclePending = false;
+          lastCycleStartedAt = Date.now();
           stats.ackCycles++;
           const availN = lastSenderN;
           const byPos = new Map<number, number[]>();
@@ -144,7 +159,14 @@ export async function receiveFileLive(
             if (chunks[i]) continue;
             const [pos, gen] = placementOf(i);
             const prev = lastTried[i];
-            if (prev && prev[0] === pos && prev[1] === gen) continue;
+            if (
+              prev &&
+              prev[0] === pos &&
+              prev[1] === gen &&
+              lastCycleStartedAt - lastTriedAt[i] < LIVE_FETCH_RETRY_MS
+            ) {
+              continue;
+            }
             tried.set(i, [pos, gen]);
             const list = byPos.get(pos) ?? [];
             list.push(i);
@@ -152,27 +174,23 @@ export async function receiveFileLive(
           }
           await Promise.all(
             [...byPos].map(([pos, indices]) =>
-              fetchChunksFromRelay(
-                pool,
-                manifest,
-                aesKey,
-                relays[pos],
-                indices,
-                {
-                  have: (index) => chunks[index] !== null,
-                  onChunk: (index, plaintext) => {
-                    chunks[index] = plaintext;
-                    chunksDone++;
-                    report();
-                  },
-                  throwIfCancelled,
-                  stats,
+              fetchChunksFromRelay(pool, manifest, aesKey, ring[pos], indices, {
+                have: (index) => chunks[index] !== null,
+                onChunk: (index, plaintext) => {
+                  chunks[index] = plaintext;
+                  chunksDone++;
+                  report();
                 },
-              ),
+                throwIfCancelled,
+                stats,
+              }),
             ),
           );
           for (const [index, placement] of tried) {
-            if (!chunks[index]) lastTried[index] = placement;
+            if (!chunks[index]) {
+              lastTried[index] = placement;
+              lastTriedAt[index] = Date.now();
+            }
           }
           if (finished) return;
           // Report the placement actually tried, never the latest announced
@@ -227,7 +245,7 @@ export async function receiveFileLive(
       cyclePromise = runCycle(channel).catch(fail);
     };
 
-    channel = openControlChannel(pool, relays, {
+    channel = openControlChannel(pool, controlRelays, {
       transferId: manifest.transferId,
       key: controlKey,
       role: 'receiver',
@@ -238,8 +256,21 @@ export async function receiveFileLive(
       stats,
       onMessage: (raw, pubkey) => {
         if (finished || pubkey !== manifest.pubkey) return;
-        const msg = parseSenderMessage(raw, total, n);
+        const msg = parseSenderMessage(raw, total);
         if (!msg || msg.n <= lastSenderN) return;
+        if (msg.t === 'avail' && msg.relays.length > 0) {
+          if (ring.length === 0) {
+            ring = msg.relays;
+            for (const relay of ring) relayStatsFor(stats, relay, 'storage');
+          } else if (
+            msg.relays.length !== ring.length ||
+            msg.relays.some((r, i) => r !== ring[i])
+          ) {
+            // The sender never changes its ring — a different one is forged
+            // or corrupt. Dropped before bumping lastSenderN.
+            return;
+          }
+        }
         lastSenderN = msg.n;
         lastPeerAt = Date.now();
         if (msg.t === 'cancel') {
@@ -251,7 +282,8 @@ export async function receiveFileLive(
         gens.clear();
         for (const [index, gen] of msg.gens) gens.set(index, gen);
         report();
-        scheduleCycle();
+        // An empty-ring announcement is presence only — nothing to fetch.
+        if (ring.length > 0 && upto > 0) scheduleCycle();
       },
     });
     const openChannel = channel;
@@ -280,6 +312,19 @@ export async function receiveFileLive(
               : "No response from the sender. Make sure the sender's page is still open and showing the code.",
           ),
         );
+        return;
+      }
+      // Retry clock: with announced pieces still missing, run a cycle even
+      // when no new announcement arrives — cooled-down placements are fetched
+      // again and the missing list is re-asked, so a piece whose fetch timed
+      // out never waits on the sender forever.
+      if (
+        ring.length > 0 &&
+        upto > chunksDone &&
+        !cycleRunning &&
+        now - lastCycleStartedAt >= LIVE_FETCH_RETRY_MS
+      ) {
+        scheduleCycle();
       }
     }, 1000);
 

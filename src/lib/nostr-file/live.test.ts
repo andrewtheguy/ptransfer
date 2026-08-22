@@ -1,9 +1,21 @@
 import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
+import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
+import { DEFAULT_RELAYS } from '../nostr/relays';
+import { chunkAad, encodeChunkContent, sha256 } from './codec';
 import { LIVE_BATCH_CHUNKS } from './constants';
+import {
+  type AckMessage,
+  deriveControlKey,
+  encodePosition,
+  openControlChannel,
+  parseReceiverMessage,
+} from './control';
 import { type LiveReceiveProgress, receiveFileLive } from './download-live';
+import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
+import type { RelayPoolState, RelayPoolStorage } from './relay-pool';
 import { type LiveSendProgress, sendFileLive } from './upload-live';
 
 // crypto.getRandomValues caps at 65536 bytes per call
@@ -16,16 +28,37 @@ function randomBytes(size: number): Uint8Array {
 }
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
+const CONTROL_RELAYS = ['wss://c1.example', 'wss://c2.example'];
 const META = { fileName: 'live.bin', mimeType: 'application/octet-stream' };
 const never = () => false;
 const noProgress = () => {};
 
+function memoryStorage(
+  initial: RelayPoolState | null = null,
+): RelayPoolStorage {
+  let state: RelayPoolState | null = initial;
+  return {
+    get: () => state,
+    set(s) {
+      state = s;
+    },
+  };
+}
+
+function isControlEvent(event: Event): boolean {
+  const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
+  return dTag.includes(':ctl:');
+}
+
 function chunkIndexOf(event: Event): number | null {
+  // Health probes carry a chunk tag too but live under the probe x-tag.
+  if (event.tags.some((t) => t[0] === 'x' && t[1] === 'probe')) return null;
   const chunkTag = event.tags.find((t) => t[0] === 'chunk');
   return chunkTag ? Number(chunkTag[1]) : null;
 }
 
-// Map of chunk index -> relays holding a copy (control events excluded).
+// Map of chunk index -> relays holding a copy (control and probe events
+// excluded).
 function chunkPlacements(pool: MockPool): Map<number, string[]> {
   const out = new Map<number, string[]>();
   for (const [relay, events] of pool.store) {
@@ -62,7 +95,8 @@ async function liveRoundTrip(
   const sendDone = sendFileLive(data, META, {
     pool,
     isCancelled: opts.senderCancelled ?? never,
-    relayOverride: opts.relays ?? RELAYS,
+    controlRelayOverride: CONTROL_RELAYS,
+    dataRelayOverride: opts.relays ?? RELAYS,
     onProgress: opts.onSend ?? noProgress,
     onReady: (m, keyBytes) =>
       readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) }),
@@ -93,29 +127,55 @@ describe('live single-copy relay transfer', () => {
     const sendProgress: LiveSendProgress[] = [];
     let chunksUploadedAtHandover = -1;
 
-    const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
-      onSend: (p) => {
-        sendProgress.push(p);
-        if (chunksUploadedAtHandover < 0 && p.phase === 'transfer') {
-          chunksUploadedAtHandover = p.chunksDone ?? 0;
-        }
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(
+      pool,
+      data,
+      {
+        onSend: (p) => {
+          sendProgress.push(p);
+          if (chunksUploadedAtHandover < 0 && p.phase === 'transfer') {
+            chunksUploadedAtHandover = p.chunksDone ?? 0;
+          }
+        },
       },
-    });
+    );
     const [received] = await Promise.all([receiveDone, sendDone]);
 
     expect(received).toEqual(data);
     expect(chunksUploadedAtHandover).toBe(0);
+    // The payload names the control relays only; the ring travels in avails.
+    expect(manifest.controlRelays).toEqual(CONTROL_RELAYS);
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
     for (let i = 0; i < 4; i++) {
       // One copy, on the default ring position.
       expect(placed.get(i)).toEqual([RELAYS[i % RELAYS.length]]);
     }
+    // Control traffic and chunk traffic never share a relay.
+    for (const relay of CONTROL_RELAYS) {
+      const events = pool.store.get(relay) ?? [];
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.every(isControlEvent)).toBe(true);
+    }
+    for (const relay of RELAYS) {
+      const events = pool.store.get(relay) ?? [];
+      expect(events.some(isControlEvent)).toBe(false);
+    }
     const last = sendProgress.at(-1);
     expect(last?.phase).toBe('transfer');
     expect(last?.receiverConnected).toBe(true);
     expect(last?.receiverHave).toBe(4);
     expect(last?.resent).toBe(0);
+    // Stats rows are split by job, and control publishes are tallied per
+    // relay too (every control message fans out to all control relays).
+    const rowsByRole = (role: string) =>
+      (last?.stats.relays ?? []).filter((r) => r.role === role);
+    expect(rowsByRole('control').map((r) => r.url)).toEqual(CONTROL_RELAYS);
+    expect(rowsByRole('storage').map((r) => r.url)).toEqual(RELAYS);
+    for (const row of rowsByRole('control')) {
+      expect(row.eventsAccepted).toBeGreaterThan(0);
+      expect(row.bytesUp).toBeGreaterThan(0);
+    }
   });
 
   it('re-sends only the pieces the receiver could not fetch, to the next relay', async () => {
@@ -147,6 +207,32 @@ describe('live single-copy relay transfer', () => {
     }
     expect(sendProgress.at(-1)?.resent).toBe(2);
   }, 15000);
+
+  it('demotes a relay that keeps rejecting publishes', async () => {
+    // r2 rejects every publish. Chunks whose ring walk starts there give up
+    // after the retry schedule and land elsewhere; after enough give-ups the
+    // relay is demoted without the receiver ever reporting a miss.
+    const bad = RELAYS[1];
+    const pool = createMockPool({ failRelays: new Set([bad]) });
+    const data = randomBytes(12 * 32768); // chunks 1, 4, 7, 10 start on r2
+    const sendProgress: LiveSendProgress[] = [];
+    const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
+      onSend: (p) => sendProgress.push(p),
+    });
+    const [received] = await Promise.all([receiveDone, sendDone]);
+    expect(received).toEqual(data);
+
+    for (const copies of chunkPlacements(pool).values()) {
+      expect(copies).toHaveLength(1);
+      expect(copies).not.toContain(bad);
+    }
+    const stats = sendProgress.at(-1)?.stats;
+    const badRow = stats?.relays.find((r) => r.url === bad);
+    expect(badRow?.demoted).toBe(true);
+    expect(badRow?.eventsAccepted).toBe(0);
+    // A give-up demotion is publish-side only — no re-sends were needed.
+    expect(sendProgress.at(-1)?.resent).toBe(0);
+  }, 20000);
 
   it('demotes a relay the receiver keeps missing chunks on', async () => {
     // r2 blackholes reads. Publishes of the second batch are held until the
@@ -279,11 +365,180 @@ describe('live single-copy relay transfer', () => {
     await expect(receiveDone).rejects.toThrow(/sender cancelled/i);
   }, 15000);
 
+  it('hands out the code before storage-relay discovery', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(100_000); // 4 chunks
+    const phasesBeforeReady: string[] = [];
+    let discoveringAfterReady = false;
+    let ready = false;
+
+    type Handover = { manifest: NostrFileManifest; keyBytes: Uint8Array };
+    let readyResolve!: (v: Handover) => void;
+    const handover = new Promise<Handover>((resolve) => {
+      readyResolve = resolve;
+    });
+    // No dataRelayOverride: the ring resolves for real from the candidate
+    // cache (fresh, so discovery is skipped). The cache still lists a
+    // signaling seed — the whole DEFAULT_RELAYS pool must never be rung.
+    const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
+    const storageRing = ['wss://s1.example', 'wss://s2.example'];
+    const sendDone = sendFileLive(data, META, {
+      pool,
+      isCancelled: never,
+      controlRelayOverride: controlRelays,
+      storage: memoryStorage({
+        candidates: [DEFAULT_RELAYS[2], ...storageRing],
+        discoveredAt: Date.now(),
+        cursor: 0,
+      }),
+      onProgress: (p) => {
+        if (!ready) phasesBeforeReady.push(p.phase);
+        else if (p.phase === 'discovering' || p.phase === 'health_check') {
+          discoveringAfterReady = true;
+        }
+      },
+      onReady: (m, keyBytes) => {
+        ready = true;
+        readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) });
+      },
+    });
+    sendDone.catch(() => {});
+    const { manifest, keyBytes } = await Promise.race([
+      handover,
+      sendDone.then<Handover>(() => {
+        throw new Error('sender finished before handing over the code');
+      }),
+    ]);
+    // Discovery had not started when the code went out.
+    expect(phasesBeforeReady).not.toContain('discovering');
+    expect(phasesBeforeReady).not.toContain('health_check');
+
+    const received = await receiveFileLive(manifest, keyBytes, {
+      pool,
+      isCancelled: never,
+      onProgress: noProgress,
+    });
+    await sendDone;
+    expect(received).toEqual(data);
+    expect(discoveringAfterReady).toBe(true);
+    // The ring the receiver adopted from the avails is the resolved one:
+    // every chunk landed on a storage candidate, never on a signaling relay.
+    const placed = chunkPlacements(pool);
+    expect(placed.size).toBe(4);
+    for (const relays of placed.values()) {
+      expect(relays).toHaveLength(1);
+      expect(storageRing).toContain(relays[0]);
+    }
+  }, 15000);
+
+  it('re-fetches a timed-out piece on its own clock, without a new announcement', async () => {
+    // Scripted sender: announce the only chunk as available before the relay
+    // actually serves it (late propagation), then go silent — no further
+    // avails, no re-send. Only the receiver's own retry clock can recover.
+    const pool = createMockPool();
+    const data = randomBytes(1000); // 1 chunk
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const transferId = 'ab'.repeat(16);
+    const createdAt = Math.floor(Date.now() / 1000);
+    const manifest: NostrFileManifest = {
+      v: 4,
+      fileName: 'late.bin',
+      fileSize: data.length,
+      mimeType: 'application/octet-stream',
+      fileHash: uint8ArrayToBase64(await sha256(data)),
+      transferId,
+      pubkey: publicKey,
+      chunkSize: 32768,
+      totalChunks: 1,
+      enc: 1,
+      controlRelays: CONTROL_RELAYS,
+      createdAt,
+      expiresAt: createdAt + 3600,
+    };
+    const storageRelay = 'wss://s1.example';
+    const controlKey = await deriveControlKey(keyBytes, transferId);
+    const acks: AckMessage[] = [];
+    let done = false;
+    const channel = openControlChannel(pool, CONTROL_RELAYS, {
+      transferId,
+      key: controlKey,
+      role: 'sender',
+      secretKey,
+      since: createdAt - 600,
+      expiresAt: manifest.expiresAt,
+      onMessage: (raw) => {
+        const msg = parseReceiverMessage(raw, 1, 1);
+        if (msg?.t === 'ack') acks.push(msg);
+        if (msg?.t === 'done') done = true;
+      },
+    });
+    try {
+      await channel.send({
+        t: 'avail',
+        upto: 1,
+        relays: [storageRelay],
+        map: encodePosition(0),
+        gens: [],
+      });
+
+      const receiveDone = receiveFileLive(manifest, new Uint8Array(keyBytes), {
+        pool,
+        isCancelled: never,
+        onProgress: noProgress,
+      });
+      receiveDone.catch(() => {});
+
+      // The first fetch finds nothing and the miss is reported...
+      const deadline = Date.now() + 5000;
+      while (!acks.some((a) => a.missing.length > 0)) {
+        if (Date.now() > deadline) throw new Error('missing never reported');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(acks.some((a) => a.missing.length > 0)).toBe(true);
+
+      // ...now the copy lands on the announced relay. The scripted sender
+      // stays silent, so only a receiver-clock re-fetch of the very same
+      // placement can complete the transfer.
+      const aesKey = await crypto.subtle.importKey(
+        'raw',
+        keyBytes as BufferSource,
+        'AES-GCM',
+        false,
+        ['encrypt'],
+      );
+      const content = await encodeChunkContent(
+        aesKey,
+        data,
+        chunkAad(transferId, 0, 1),
+      );
+      const event = buildChunkEvent(secretKey, {
+        transferId,
+        index: 0,
+        total: 1,
+        content,
+        createdAt,
+      });
+      await Promise.all(pool.publish([storageRelay], event));
+
+      const received = await receiveDone;
+      expect(received).toEqual(data);
+      // The verified file is handed over first; the courtesy `done` follows.
+      const doneDeadline = Date.now() + 5000;
+      while (!done) {
+        if (Date.now() > doneDeadline) throw new Error('done never arrived');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    } finally {
+      channel.close();
+    }
+  }, 25000);
+
   it('rejects an expired manifest without joining the channel', async () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 3,
+      v: 4,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',
@@ -293,7 +548,7 @@ describe('live single-copy relay transfer', () => {
       chunkSize: 32768,
       totalChunks: 1,
       enc: 1,
-      relays: RELAYS,
+      controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,
     };

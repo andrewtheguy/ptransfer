@@ -18,7 +18,7 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 3;
+export const NOSTR_FILE_MANIFEST_VERSION = 4;
 
 // Codec identity: deflate then AES-256-GCM (nonce||ct||tag) then Z85.
 export const NOSTR_FILE_ENCRYPTION_LABEL = 'deflate+aes-256-gcm';
@@ -50,6 +50,21 @@ export const HEALTH_CHECK_TARGET_COUNT = UPLOAD_RELAY_COUNT + 4;
 // a real chunk fails the probe instead of rejecting every chunk placed on it.
 export const HEALTH_CHECK_PROBE_BYTES = NOSTR_FILE_CHUNK_SIZE;
 
+// The encrypted control channel rides its own small set of proven signaling
+// relays (seeded from DEFAULT_RELAYS), embedded in the manual payload — the
+// chunk ring is announced over the channel instead. Control relays are picked
+// with a small probe: they only ever carry control-sized events.
+export const CONTROL_RELAY_COUNT = 4;
+// Fewer usable control relays than this and a send refuses to start.
+export const MIN_CONTROL_RELAYS = 2;
+// Control probe payload size — a sealed control message is a few hundred
+// bytes, so a size-capped relay that would reject chunks may still pass.
+export const CONTROL_PROBE_BYTES = 256;
+// Control probes race all seeds concurrently and the check waits out every
+// in-flight probe, so a dead seed delays code handout by this full amount —
+// keep it short.
+export const CONTROL_PROBE_TIMEOUT_MS = 4000;
+
 // NIP-66 / NIP-65 discovery query limit per kind.
 export const DISCOVERY_CANDIDATE_LIMIT = 100;
 export const DISCOVERY_CANDIDATE_CAP = 150;
@@ -73,9 +88,20 @@ export const LIVE_HEARTBEAT_MS = 15000;
 export const LIVE_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 // Floor on how many times one chunk may be re-sent before the transfer fails.
 export const LIVE_MIN_RETRANSMITS_PER_CHUNK = 4;
+// Receiver retry clock. A piece still missing this long after its last fetch
+// attempt is fetched again from the same placement (a transient failure —
+// slow relay, reconnect, propagation delay — recovers without burning a
+// re-send), and the receiver runs a fetch cycle on this clock even when no
+// new announcement arrives, so a timed-out piece is re-fetched and re-asked
+// instead of waiting on the sender forever.
+export const LIVE_FETCH_RETRY_MS = 10_000;
 // A relay the receiver reports this many misses against (it acknowledged the
 // chunk but does not serve it) stops receiving new chunks and re-sends.
 export const LIVE_RELAY_DEMOTE_MISSES = 2;
+// A relay that gives up this many publishes (every retry rejected) is demoted
+// too: each chunk whose ring walk starts there otherwise burns the whole
+// retry-with-backoff schedule before moving on.
+export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
 // Decompression bound for a control message body (a full 3200-chunk map

@@ -1,4 +1,3 @@
-import { SimplePool } from 'nostr-tools';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wipeBufferSource } from '@/lib/crypto';
 import {
@@ -7,7 +6,11 @@ import {
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import { uint8ArrayToBase64 } from '@/lib/nostr/events';
-import { NostrFileCancelledError, sendFileLive } from '@/lib/nostr-file';
+import {
+  createTransferPool,
+  NostrFileCancelledError,
+  sendFileLive,
+} from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 import {
   chunkBytesEstimate,
@@ -22,8 +25,9 @@ export interface UseNostrRelayLiveSendReturn {
 }
 
 /**
- * Live (single-copy) Nostr relay send. The code is shown as soon as relays
- * are selected (`showing_payload`) and stays up while the upload and the
+ * Live (single-copy) Nostr relay send. The code is shown as soon as the
+ * control relays pass their quick probe (`showing_payload`) — storage-relay
+ * discovery runs behind it — and stays up while the upload and the
  * receiver's download run side by side; the state completes on its own when
  * the receiver confirms the verified file.
  */
@@ -35,7 +39,6 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   // keep seeing its own cancellation (and stop touching the shared state).
   const runRef = useRef<{ cancelled: boolean } | null>(null);
   const sendingRef = useRef(false);
-  const poolRef = useRef<SimplePool | null>(null);
 
   const cancel = useCallback(() => {
     if (runRef.current) runRef.current.cancelled = true;
@@ -78,10 +81,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       if (run.cancelled) return;
 
       const fileMetadata = { fileName, fileSize: data.length, mimeType };
-      // Reconnect dropped sockets: the control channel subscription has to
-      // outlive transient relay hiccups.
-      const pool = new SimplePool({ enableReconnect: true });
-      poolRef.current = pool;
+      const pool = createTransferPool();
 
       let payloadBinary: Uint8Array | null = null;
       let expiresAt = 0;
@@ -100,7 +100,7 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
             wipeBufferSource(keyBytes);
             payloadBinary = generateNostrFilePayloadBinary(payload);
             expiresAt = manifest.expiresAt;
-            relays = manifest.relays;
+            relays = manifest.controlRelays;
           },
           onProgress: (p) => {
             if (run.cancelled) return;
@@ -114,22 +114,44 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                   stats: p.stats,
                 });
                 break;
+              case 'connecting':
+                setState({
+                  status: 'discovering_relays',
+                  message: 'Connecting to Nostr relays...',
+                  fileMetadata,
+                  stats: p.stats,
+                });
+                break;
+              // Storage-relay discovery runs after the code is handed out:
+              // keep the code on screen while it works.
               case 'discovering':
+              case 'health_check': {
+                const working =
+                  p.phase === 'discovering'
+                    ? 'finding storage relays for your file...'
+                    : `testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`;
+                if (!payloadBinary) {
+                  setState({
+                    status: 'discovering_relays',
+                    message: `Code pending — ${working}`,
+                    fileMetadata,
+                    stats: p.stats,
+                  });
+                  break;
+                }
                 setState({
-                  status: 'discovering_relays',
-                  message: 'Discovering Nostr relays...',
+                  status: 'showing_payload',
+                  message: `Code ready — ${working}`,
+                  payloadData: payloadBinary,
+                  expiresAt,
+                  progress: { current: 0, total: data.length },
+                  contentType: 'file',
                   fileMetadata,
+                  currentRelays: relays,
                   stats: p.stats,
                 });
                 break;
-              case 'health_check':
-                setState({
-                  status: 'discovering_relays',
-                  message: `Testing relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
-                  fileMetadata,
-                  stats: p.stats,
-                });
-                break;
+              }
               case 'transfer': {
                 if (!payloadBinary) break;
                 const chunksDone = p.chunksDone ?? 0;
@@ -173,7 +195,6 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       } finally {
         // Close this run's sockets — never a newer run's pool.
         pool.destroy();
-        if (poolRef.current === pool) poolRef.current = null;
       }
       if (run.cancelled) return;
 

@@ -1,10 +1,11 @@
-import { SimplePool } from 'nostr-tools';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NostrFileLivePayload } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import {
+  createTransferPool,
   decodePayloadKey,
   NostrFileCancelledError,
+  type NostrFilePool,
   receiveFileLive,
 } from '@/lib/nostr-file';
 import type { ReceivedContent } from '@/lib/types';
@@ -68,7 +69,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
       contentType: 'file' as const,
       fileMetadata,
       expiresAt: payload.expiresAt,
-      currentRelays: payload.relays,
+      currentRelays: payload.controlRelays,
     };
     let lastStats: TransferState['stats'];
 
@@ -80,9 +81,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
         ...baseState,
       });
 
-      // Reconnect dropped sockets: the control channel subscription has to
-      // outlive transient relay hiccups.
-      const pool = new SimplePool({ enableReconnect: true });
+      const pool = createTransferPool();
       const keyBytes = decodePayloadKey(payload.key);
       try {
         await doReceive(pool, keyBytes);
@@ -105,7 +104,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
     }
 
     async function doReceive(
-      pool: SimplePool,
+      pool: NostrFilePool,
       keyBytes: Uint8Array,
     ): Promise<void> {
       const chunkBytes = chunkBytesEstimate(

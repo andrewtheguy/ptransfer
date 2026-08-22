@@ -1,8 +1,11 @@
 import {
+  CONTROL_RELAY_COUNT,
+  MIN_CONTROL_RELAYS,
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
   NOSTR_FILE_MAX_BYTES,
 } from './constants';
+import { normalizeRelayUrl } from './relay-pool';
 
 /**
  * Retrieval metadata for a file saved to nostr relays. Travels inside the
@@ -27,12 +30,12 @@ export interface NostrFileManifest {
   /** codec version: 1 = deflate + AES-256-GCM (nonce||ct||tag) + Z85 */
   enc: 1;
   /**
-   * Relay ring, in placement order: chunk i starts at
-   * relays[i % relays.length], walking the ring when a relay rejects it, so
-   * the placement is a hint, not a guarantee. The control channel announces
-   * where each chunk actually landed.
+   * Relays carrying the encrypted control channel — a small set of proven
+   * signaling relays that only ever see control-sized events. The chunk ring
+   * is not in the manifest: the sender announces it (and where each chunk
+   * landed) over the control channel in every availability message.
    */
-  relays: string[];
+  controlRelays: string[];
   /** unix seconds */
   createdAt: number;
   /** unix seconds; createdAt + NOSTR_FILE_EXPIRATION_SEC */
@@ -43,11 +46,10 @@ const HEX_32 = /^[0-9a-f]{32}$/;
 const HEX_64 = /^[0-9a-f]{64}$/;
 // base64 of 32 bytes: 43 chars + '=' padding
 export const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
-const MAX_RELAYS = 16;
 const MIN_CHUNK_SIZE = 1024;
 const MAX_CHUNK_SIZE = 65408;
 
-function isWssUrl(raw: string): boolean {
+export function isWssUrl(raw: string): boolean {
   try {
     const url = new URL(raw);
     return url.protocol === 'wss:' && url.hostname.length > 0;
@@ -103,12 +105,16 @@ export function isValidNostrFileManifest(
   if (typeof m.pubkey !== 'string' || !HEX_64.test(m.pubkey)) return false;
 
   if (
-    !Array.isArray(m.relays) ||
-    m.relays.length === 0 ||
-    m.relays.length > MAX_RELAYS ||
-    !m.relays.every(
-      (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
-    )
+    !Array.isArray(m.controlRelays) ||
+    m.controlRelays.length < MIN_CONTROL_RELAYS ||
+    m.controlRelays.length > CONTROL_RELAY_COUNT ||
+    !m.controlRelays.every(
+      (r): r is string =>
+        typeof r === 'string' && r.length < 200 && isWssUrl(r),
+    ) ||
+    // Distinct after normalization: a trailing-slash variant is the same relay.
+    new Set(m.controlRelays.map((r) => normalizeRelayUrl(r) ?? r)).size !==
+      m.controlRelays.length
   ) {
     return false;
   }

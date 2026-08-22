@@ -8,6 +8,8 @@ import type { NostrFilePool } from './pool';
  */
 export interface MockPool extends NostrFilePool {
   store: Map<string, Event[]>;
+  /** Relays passed to close(), in call order (duplicates included). */
+  closedRelays: string[];
 }
 
 export interface MockPoolOptions {
@@ -48,6 +50,7 @@ export function createMockPool(opts: MockPoolOptions = {}): MockPool {
   const blackholeRelays = opts.blackholeRelays ?? new Set<string>();
   const store = new Map<string, Event[]>();
   const subscriptions = new Set<Subscription>();
+  const closedRelays: string[] = [];
 
   const deliver = (relay: string, event: Event) => {
     for (const sub of subscriptions) {
@@ -63,6 +66,11 @@ export function createMockPool(opts: MockPoolOptions = {}): MockPool {
 
   return {
     store,
+    closedRelays,
+    close(relays) {
+      // Connection teardown only — stored events stay, like a real relay.
+      closedRelays.push(...relays);
+    },
     publish(relays, event) {
       return relays.map(async (relay) => {
         await opts.beforePublish?.(relay, event);

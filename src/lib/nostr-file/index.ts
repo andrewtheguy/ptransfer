@@ -8,6 +8,7 @@ export * from './manifest';
 export type * from './pool';
 export * from './relay-pool';
 export * from './stats';
+export * from './transfer-pool';
 export * from './upload';
 export * from './upload-live';
 export * from './z85';

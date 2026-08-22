@@ -15,7 +15,6 @@
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.
  */
-import { SimplePool } from 'nostr-tools';
 import {
   generateNostrFilePayloadBinary,
   type NostrFileLivePayload,
@@ -29,6 +28,7 @@ import type {
   RelayPoolState,
   RelayPoolStorage,
 } from '../src/lib/nostr-file/relay-pool';
+import { createTransferPool } from '../src/lib/nostr-file/transfer-pool';
 import { sendFileLive } from '../src/lib/nostr-file/upload-live';
 
 const FILE_MB = Number(process.env.NOSTR_E2E_FILE_MB ?? '0.1');
@@ -75,8 +75,8 @@ async function verify(sent: Uint8Array, got: Uint8Array): Promise<void> {
 }
 
 async function runLive(data: Uint8Array) {
-  const senderPool = new SimplePool({ enableReconnect: true });
-  const receiverPool = new SimplePool({ enableReconnect: true });
+  const senderPool = createTransferPool();
+  const receiverPool = createTransferPool();
   // Shared deadline: both engines poll this as their cancellation check, so a
   // stalled run winds down on both sides instead of hanging forever.
   const deadline = Date.now() + TIMEOUT_MS;
@@ -102,8 +102,8 @@ async function runLive(data: Uint8Array) {
         isCancelled: deadlineExceeded,
         onReady: (manifest: NostrFileManifest, keyBytes) => {
           console.log(
-            `\nCode ready after ${Date.now() - started}ms; relays (${manifest.relays.length}):`,
-            manifest.relays.join(', '),
+            `\nCode ready after ${Date.now() - started}ms; control relays (${manifest.controlRelays.length}):`,
+            manifest.controlRelays.join(', '),
           );
           const payloadBinary = generateNostrFilePayloadBinary({
             ...manifest,
@@ -118,9 +118,13 @@ async function runLive(data: Uint8Array) {
           handoverResolve(parsed.payload);
         },
         onProgress: (p) => {
-          if (p.phase === 'health_check') {
+          if (p.phase === 'connecting') {
             process.stdout.write(
-              `\rhealth check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+              `\rcontrol probe: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+            );
+          } else if (p.phase === 'health_check') {
+            process.stdout.write(
+              `\rstorage health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
             );
           } else if (p.phase === 'transfer') {
             process.stdout.write(

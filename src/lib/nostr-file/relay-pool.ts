@@ -76,7 +76,13 @@ export function createLocalStorageRelayPool(): RelayPoolStorage {
   };
 }
 
-function normalizeRelayUrl(raw: string): string | null {
+// RFC 2606/6761 names that never resolve on the public internet — a listed
+// "relay" there is placeholder junk. `.example` (TLD) stays usable: it is
+// this codebase's own test-fixture convention and never appears in the wild.
+const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+const RESERVED_TLDS = ['.test', '.invalid'];
+
+export function normalizeRelayUrl(raw: string): string | null {
   let url: URL;
   try {
     url = new URL(raw.trim());
@@ -90,7 +96,9 @@ function normalizeRelayUrl(raw: string): string | null {
     host === 'localhost' ||
     host.endsWith('.localhost') ||
     host.endsWith('.onion') ||
-    host.endsWith('.local')
+    host.endsWith('.local') ||
+    RESERVED_TLDS.some((tld) => host.endsWith(tld)) ||
+    RESERVED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
   ) {
     return null;
   }
@@ -127,8 +135,10 @@ export function parseRelayCandidates(events: Event[]): string[] {
 
 /**
  * Discover relay candidates from the seed relays via NIP-66/NIP-65 queries.
- * The seeds themselves are always part of the result — discovery failure
- * degrades to the default relay list, never to nothing.
+ * The seeds are only queried, never returned: `DEFAULT_RELAYS` is the
+ * signaling pool and must never carry chunks, so a seed named by a discovery
+ * event is dropped too, and a failed discovery yields an empty list (the
+ * upload then refuses to start) rather than degrading to the seeds.
  */
 export async function discoverRelayCandidates(
   pool: NostrFilePool,
@@ -144,13 +154,10 @@ export async function discoverRelayCandidates(
   const events = results.flatMap((r) =>
     r.status === 'fulfilled' ? r.value : [],
   );
-  const discovered = parseRelayCandidates(events);
-  const seedSet = seeds
-    .map((s) => normalizeRelayUrl(s))
-    .filter((s): s is string => s !== null);
-  // Seeds first so health-check early-stop favors known-good relays.
-  const merged = [...new Set([...seedSet, ...discovered])];
-  return merged.slice(0, DISCOVERY_CANDIDATE_CAP);
+  const seedSet = new Set(seeds.map((s) => normalizeRelayUrl(s) ?? s));
+  return parseRelayCandidates(events)
+    .filter((url) => !seedSet.has(url))
+    .slice(0, DISCOVERY_CANDIDATE_CAP);
 }
 
 /**
@@ -163,6 +170,7 @@ async function probeRelay(
   pool: NostrFilePool,
   url: string,
   timeoutMs: number,
+  probeBytes: number,
 ): Promise<number | null> {
   const started = Date.now();
   const keyBytes = crypto.getRandomValues(new Uint8Array(32));
@@ -174,9 +182,7 @@ async function probeRelay(
       false,
       ['encrypt', 'decrypt'],
     );
-    const payload = crypto.getRandomValues(
-      new Uint8Array(HEALTH_CHECK_PROBE_BYTES),
-    );
+    const payload = crypto.getRandomValues(new Uint8Array(probeBytes));
     const aad = chunkAad('probe', 0, 1);
     const content = await encodeChunkContent(aesKey, payload, aad);
     const { secretKey, publicKey } = generateEphemeralKeys();
@@ -235,6 +241,7 @@ export async function healthCheckRelays(
     concurrency?: number;
     timeoutMs?: number;
     targetCount?: number;
+    probeBytes?: number;
     isCancelled?: () => boolean;
     onProgress?: (checked: number, healthy: number) => void;
   } = {},
@@ -242,6 +249,7 @@ export async function healthCheckRelays(
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
   const timeoutMs = opts.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
   const targetCount = opts.targetCount ?? HEALTH_CHECK_TARGET_COUNT;
+  const probeBytes = opts.probeBytes ?? HEALTH_CHECK_PROBE_BYTES;
 
   const healthy: HealthyRelay[] = [];
   let nextIndex = 0;
@@ -254,11 +262,15 @@ export async function healthCheckRelays(
       const index = nextIndex++;
       if (index >= candidates.length) return;
       const url = candidates[index];
-      const rttMs = await probeRelay(pool, url, timeoutMs);
+      const rttMs = await probeRelay(pool, url, timeoutMs, probeBytes);
       checked++;
       // Re-check the target: sibling probes may have filled it in flight.
       if (rttMs !== null && healthy.length < targetCount) {
         healthy.push({ url, rttMs });
+      } else {
+        // Failed the probe, or passed after the target filled: this relay
+        // will not be used, so stop its socket (and its reconnect loop) now.
+        pool.close?.([url]);
       }
       opts.onProgress?.(checked, healthy.length);
     }
