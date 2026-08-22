@@ -94,7 +94,7 @@ export async function receiveFileLive(
   stats.fileBytes = manifest.fileSize;
   stats.chunkSize = manifest.chunkSize;
   stats.chunksTotal = total;
-  for (const relay of controlRelays) relayStatsFor(stats, relay);
+  for (const relay of controlRelays) relayStatsFor(stats, relay, 'control');
 
   let finished = false;
   let succeeded = false;
@@ -239,7 +239,7 @@ export async function receiveFileLive(
         if (msg.t === 'avail' && msg.relays.length > 0) {
           if (ring.length === 0) {
             ring = msg.relays;
-            for (const relay of ring) relayStatsFor(stats, relay);
+            for (const relay of ring) relayStatsFor(stats, relay, 'storage');
           } else if (
             msg.relays.length !== ring.length ||
             msg.relays.some((r, i) => r !== ring[i])

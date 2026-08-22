@@ -6,6 +6,7 @@ export const DEFAULT_RELAYS = [
   'wss://nostr.rocks',
   'wss://relay.nostr.pub',
   'wss://relay.snort.social',
+  'wss://temp.iris.to',
 ] as const;
 
 export const MIN_CONNECTED_RELAYS = 2;

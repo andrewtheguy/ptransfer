@@ -58,7 +58,7 @@ export async function publishWithRetry(
   isCancelled: () => boolean,
   stats: NostrFileTransferStats,
 ): Promise<boolean> {
-  const relayStats = relayStatsFor(stats, relay);
+  const relayStats = relayStatsFor(stats, relay, 'storage');
   for (let attempt = 0; attempt <= PUBLISH_MAX_RETRIES; attempt++) {
     if (isCancelled()) return false;
     stats.publishAttempts++;
@@ -102,7 +102,7 @@ export async function resolveControlRelays(
 ): Promise<string[]> {
   const { stats } = opts;
   const seedStats = (relays: string[]) => {
-    for (const relay of relays) relayStatsFor(stats, relay);
+    for (const relay of relays) relayStatsFor(stats, relay, 'control');
     return relays;
   };
   if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
@@ -157,7 +157,7 @@ export async function resolveUploadRelays(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
   const seedRing = (relays: string[]) => {
-    for (const relay of relays) relayStatsFor(stats, relay);
+    for (const relay of relays) relayStatsFor(stats, relay, 'storage');
     return relays;
   };
   const excluded = new Set(

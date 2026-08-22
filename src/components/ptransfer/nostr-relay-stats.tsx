@@ -144,30 +144,50 @@ export function NostrRelayStatsPanel({
               ),
             )}
           </dl>
-          {stats.relays.length > 0 && (
-            <div className="space-y-1">
-              <p className="font-medium text-muted-foreground">
-                Relays ({stats.relays.length})
-              </p>
-              <ul className="space-y-1">
-                {stats.relays.map((relay) => (
-                  <li key={relay.url} className="text-muted-foreground">
-                    <p className="truncate" title={relay.url}>
-                      • {relay.url.replace('wss://', '')}
-                      {relay.demoted && (
-                        <span className="text-destructive"> (demoted)</span>
-                      )}
-                    </p>
-                    <p className="pl-3 tabular-nums">
-                      {relayDetail(relay, isSender)}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <RelayList
+            title="Signaling relays"
+            relays={stats.relays.filter((r) => r.role === 'control')}
+            isSender={isSender}
+          />
+          <RelayList
+            title="Storage relays"
+            relays={stats.relays.filter((r) => r.role === 'storage')}
+            isSender={isSender}
+          />
         </div>
       )}
+    </div>
+  );
+}
+
+function RelayList({
+  title,
+  relays,
+  isSender,
+}: {
+  title: string;
+  relays: NostrFileRelayStats[];
+  isSender: boolean;
+}) {
+  if (relays.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <p className="font-medium text-muted-foreground">
+        {title} ({relays.length})
+      </p>
+      <ul className="space-y-1">
+        {relays.map((relay) => (
+          <li key={relay.url} className="text-muted-foreground">
+            <p className="truncate" title={relay.url}>
+              • {relay.url.replace('wss://', '')}
+              {relay.demoted && (
+                <span className="text-destructive"> (demoted)</span>
+              )}
+            </p>
+            <p className="pl-3 tabular-nums">{relayDetail(relay, isSender)}</p>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -175,6 +195,18 @@ export function NostrRelayStatsPanel({
 function relayDetail(relay: NostrFileRelayStats, isSender: boolean): string {
   const parts: string[] = [];
   if (relay.rttMs !== undefined) parts.push(`probe ${relay.rttMs}ms`);
+  if (relay.role === 'control') {
+    // Both roles publish control messages; downstream control traffic is not
+    // attributable per relay (the subscription pools all of them).
+    parts.push(
+      `${relay.eventsAccepted} messages / ${formatFileSize(relay.bytesUp)} up`,
+    );
+    const retries = relay.publishAttempts - relay.eventsAccepted;
+    if (retries > 0) parts.push(`${retries} failed attempts`);
+    if (relay.publishesFailed > 0)
+      parts.push(`${relay.publishesFailed} given up`);
+    return parts.join(' · ');
+  }
   if (isSender) {
     parts.push(
       `${relay.eventsAccepted} events / ${formatFileSize(relay.bytesUp)} up`,

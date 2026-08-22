@@ -13,7 +13,7 @@ import {
 } from './constants';
 import { isWssUrl } from './manifest';
 import type { NostrFilePool, PoolSubscription } from './pool';
-import type { NostrFileTransferStats } from './stats';
+import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /**
  * Encrypted control channel for the live (single-copy) relay transfer.
@@ -345,13 +345,15 @@ const DELIVERY_FAILED_MESSAGE =
 
 /**
  * Publish to every relay; resolve on the first acceptance, keep retrying the
- * rest in the background, reject only when all relays gave up.
+ * rest in the background, reject only when all relays gave up. Per-relay
+ * attempts, acceptances, bytes, and give-ups are tallied into `stats`.
  */
 function publishToAny(
   pool: NostrFilePool,
   relays: string[],
   event: Event,
   isClosed: () => boolean,
+  stats?: NostrFileTransferStats,
 ): Promise<void> {
   // A channel closed before the first attempt says so, rather than blaming
   // relays it never tried; an empty ring has to settle too, or the caller
@@ -366,8 +368,14 @@ function publishToAny(
       void (async () => {
         for (let attempt = 0; attempt <= PUBLISH_MAX_RETRIES; attempt++) {
           if (isClosed()) break;
+          if (stats) relayStatsFor(stats, relay, 'control').publishAttempts++;
           try {
             await Promise.all(pool.publish([relay], event));
+            if (stats) {
+              const row = relayStatsFor(stats, relay, 'control');
+              row.eventsAccepted++;
+              row.bytesUp += event.content.length;
+            }
             resolve();
             return;
           } catch {
@@ -375,6 +383,9 @@ function publishToAny(
               await sleep(PUBLISH_BACKOFF_BASE_MS * 2 ** attempt);
             }
           }
+        }
+        if (stats && !isClosed()) {
+          relayStatsFor(stats, relay, 'control').publishesFailed++;
         }
         failures++;
         if (failures === relays.length) {
@@ -465,7 +476,7 @@ export function openControlChannel(
         content,
         expiresAt: opts.expiresAt,
       });
-      await publishToAny(pool, relays, event, () => closed);
+      await publishToAny(pool, relays, event, () => closed, opts.stats);
       if (opts.stats) opts.stats.controlSent++;
     },
     close() {

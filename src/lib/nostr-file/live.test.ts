@@ -154,6 +154,16 @@ describe('live single-copy relay transfer', () => {
     expect(last?.receiverConnected).toBe(true);
     expect(last?.receiverHave).toBe(4);
     expect(last?.resent).toBe(0);
+    // Stats rows are split by job, and control publishes are tallied per
+    // relay too (every control message fans out to all control relays).
+    const rowsByRole = (role: string) =>
+      (last?.stats.relays ?? []).filter((r) => r.role === role);
+    expect(rowsByRole('control').map((r) => r.url)).toEqual(CONTROL_RELAYS);
+    expect(rowsByRole('storage').map((r) => r.url)).toEqual(RELAYS);
+    for (const row of rowsByRole('control')) {
+      expect(row.eventsAccepted).toBeGreaterThan(0);
+      expect(row.bytesUp).toBeGreaterThan(0);
+    }
   });
 
   it('re-sends only the pieces the receiver could not fetch, to the next relay', async () => {

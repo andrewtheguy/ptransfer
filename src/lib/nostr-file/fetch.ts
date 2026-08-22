@@ -74,7 +74,7 @@ export async function fetchChunksFromRelay(
   },
 ): Promise<void> {
   const { stats } = opts;
-  const relayStats = relayStatsFor(stats, relay);
+  const relayStats = relayStatsFor(stats, relay, 'storage');
   const filters = buildChunkFilters(
     manifest.pubkey,
     manifest.transferId,

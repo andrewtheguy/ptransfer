@@ -10,15 +10,20 @@
 
 export interface NostrFileRelayStats {
   url: string;
-  /** Health-probe write→read round trip, ms (discovered relays only). */
+  /**
+   * The job this relay does for the transfer: 'control' carries the sealed
+   * signaling messages, 'storage' holds chunks. The sets never overlap.
+   */
+  role: 'control' | 'storage';
+  /** Health-probe write→read round trip, ms (probed relays only). */
   rttMs?: number;
-  /** Sender: chunk publish attempts, retries included. */
+  /** Publish attempts, retries included (chunks or control messages). */
   publishAttempts: number;
-  /** Sender: chunk events this relay acknowledged. */
+  /** Events this relay acknowledged (chunks or control messages). */
   eventsAccepted: number;
-  /** Sender: publishes given up after all retries. */
+  /** Publishes given up after all retries. */
   publishesFailed: number;
-  /** Sender: encoded content bytes this relay accepted. */
+  /** Content bytes this relay accepted (encoded chunks or sealed control). */
   bytesUp: number;
   /** Receiver: chunk queries sent to this relay. */
   queries: number;
@@ -84,9 +89,13 @@ export interface NostrFileTransferStats {
   relays: NostrFileRelayStats[];
 }
 
-export function createRelayStats(url: string): NostrFileRelayStats {
+export function createRelayStats(
+  url: string,
+  role: NostrFileRelayStats['role'],
+): NostrFileRelayStats {
   return {
     url,
+    role,
     publishAttempts: 0,
     eventsAccepted: 0,
     publishesFailed: 0,
@@ -135,14 +144,19 @@ export function createTransferStats(
   };
 }
 
-/** Per-relay entry for `url`, created in place on first use. */
+/**
+ * Per-relay entry for `url`, created in place on first use. `role` applies
+ * only on creation — the seeding call fixes it, later tallies just find the
+ * row (control and storage relays never share a URL).
+ */
 export function relayStatsFor(
   stats: NostrFileTransferStats,
   url: string,
+  role: NostrFileRelayStats['role'],
 ): NostrFileRelayStats {
   let entry = stats.relays.find((r) => r.url === url);
   if (!entry) {
-    entry = createRelayStats(url);
+    entry = createRelayStats(url, role);
     stats.relays.push(entry);
   }
   return entry;

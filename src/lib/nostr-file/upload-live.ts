@@ -259,7 +259,7 @@ export async function sendFileLive(
     const demote = (pos: number) => {
       if (demoted.size >= ringSize - 1) return;
       demoted.add(pos);
-      relayStatsFor(stats, ring[pos]).demoted = true;
+      relayStatsFor(stats, ring[pos], 'storage').demoted = true;
     };
 
     const handleAck = (msg: AckMessage) => {
@@ -270,7 +270,7 @@ export async function sendFileLive(
         if (placedPos[index] !== pos || gen[index] !== g) continue;
         if (pendingRetry.has(index)) continue;
         misses[pos]++;
-        relayStatsFor(stats, ring[pos]).missesReported++;
+        relayStatsFor(stats, ring[pos], 'storage').missesReported++;
         if (misses[pos] >= LIVE_RELAY_DEMOTE_MISSES) demote(pos);
         if (gen[index] >= maxRetransmits) {
           fail(
