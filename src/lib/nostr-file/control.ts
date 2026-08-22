@@ -9,7 +9,9 @@ import {
   NOSTR_FILE_AAD_PREFIX,
   PUBLISH_BACKOFF_BASE_MS,
   PUBLISH_MAX_RETRIES,
+  UPLOAD_RELAY_COUNT,
 } from './constants';
+import { isWssUrl } from './manifest';
 import type { NostrFilePool, PoolSubscription } from './pool';
 import type { NostrFileTransferStats } from './stats';
 
@@ -18,11 +20,13 @@ import type { NostrFileTransferStats } from './stats';
  *
  * Both peers derive the same AES-GCM key from the file key that travels in
  * the manual payload (HKDF, distinct info label), so only the holder of the
- * code can read or forge control messages. Messages ride on the same relay
- * ring as the chunks, as addressable events of the chunk kind (the kind the
- * health probe validated) with a unique `d` tag per message and the usual
- * NIP-40 expiration, so a peer that subscribes late — or whose socket
- * dropped — gets the stored backlog via the `since` filter.
+ * code can read or forge control messages. Messages ride on the dedicated
+ * control relays carried in the manual payload — a small set of proven
+ * signaling relays, probed with a control-sized event (the chunk ring is
+ * announced over this channel instead) — as addressable events of the chunk
+ * kind with a unique `d` tag per message and the usual NIP-40 expiration, so
+ * a peer that subscribes late — or whose socket dropped — gets the stored
+ * backlog via the `since` filter.
  *
  * The AAD binds every message to the transfer and to the sending role, so a
  * receiver message can never be replayed as a sender message. Replay within
@@ -39,18 +43,21 @@ export type ControlRole = 'sender' | 'receiver';
 export type ChunkPlacement = [index: number, pos: number, gen: number];
 
 /**
- * Sender → receiver: chunks [0, upto) are uploaded. `map` holds one
- * character per chunk — the ring position of the relay it is on, encoded
- * with POSITION_ALPHABET — and `gens` lists the chunks that were re-sent
- * with their current generation (everything else is generation 0). The
- * whole placement travels in every announcement, so a lost one costs
- * nothing; control bodies are deflated before sealing, which squeezes the
- * near-periodic map to a few hundred bytes.
+ * Sender → receiver: chunks [0, upto) are uploaded. `relays` is the data
+ * ring in placement order — empty while the sender is still discovering
+ * storage relays, which only signals presence. `map` holds one character per
+ * chunk — the position in THIS message's `relays` of the relay it is on,
+ * encoded with POSITION_ALPHABET — and `gens` lists the chunks that were
+ * re-sent with their current generation (everything else is generation 0).
+ * The whole ring and placement travel in every announcement, so a lost one
+ * costs nothing; control bodies are deflated before sealing, which squeezes
+ * the near-periodic map and shared-prefix relay URLs to a few hundred bytes.
  */
 export interface AvailMessage {
   t: 'avail';
   n: number;
   upto: number;
+  relays: string[];
   map: string;
   gens: [index: number, gen: number][];
 }
@@ -240,22 +247,36 @@ function isPlacementList(
   );
 }
 
-/** Shape-check a decrypted sender message; null if it is not one. */
+/**
+ * Shape-check a decrypted sender message; null if it is not one. Avail
+ * messages are self-describing: `map` positions are validated against the
+ * `relays` list travelling in the same message.
+ */
 export function parseSenderMessage(
   value: unknown,
   totalChunks: number,
-  relayCount: number,
 ): SenderMessage | null {
   if (!value || typeof value !== 'object') return null;
   const m = value as Record<string, unknown>;
   if (!isCount(m.n, Number.MAX_SAFE_INTEGER)) return null;
   if (m.t === 'cancel') return { t: 'cancel', n: m.n };
   if (m.t === 'avail') {
+    if (
+      !Array.isArray(m.relays) ||
+      m.relays.length > UPLOAD_RELAY_COUNT ||
+      !m.relays.every(
+        (r) => typeof r === 'string' && r.length < 200 && isWssUrl(r),
+      )
+    ) {
+      return null;
+    }
     if (!isCount(m.upto, totalChunks)) return null;
+    // No ring yet (still discovering) is presence-only: nothing placed.
+    if (m.relays.length === 0 && m.upto > 0) return null;
     if (typeof m.map !== 'string' || m.map.length !== m.upto) return null;
     for (const char of m.map) {
       const pos = decodePosition(char);
-      if (pos < 0 || pos >= relayCount) return null;
+      if (pos < 0 || pos >= m.relays.length) return null;
     }
     if (!Array.isArray(m.gens) || m.gens.length > m.upto) return null;
     const upto = m.upto;
@@ -272,6 +293,7 @@ export function parseSenderMessage(
       t: 'avail',
       n: m.n,
       upto,
+      relays: m.relays as string[],
       map: m.map,
       gens: m.gens as [number, number][],
     };

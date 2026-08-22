@@ -1,9 +1,11 @@
 import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_RELAYS } from '../nostr/relays';
 import { LIVE_BATCH_CHUNKS } from './constants';
 import { type LiveReceiveProgress, receiveFileLive } from './download-live';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
+import type { RelayPoolState, RelayPoolStorage } from './relay-pool';
 import { type LiveSendProgress, sendFileLive } from './upload-live';
 
 // crypto.getRandomValues caps at 65536 bytes per call
@@ -16,16 +18,35 @@ function randomBytes(size: number): Uint8Array {
 }
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
+const CONTROL_RELAYS = ['wss://c1.example', 'wss://c2.example'];
 const META = { fileName: 'live.bin', mimeType: 'application/octet-stream' };
 const never = () => false;
 const noProgress = () => {};
 
+function memoryStorage(): RelayPoolStorage {
+  let state: RelayPoolState | null = null;
+  return {
+    get: () => state,
+    set(s) {
+      state = s;
+    },
+  };
+}
+
+function isControlEvent(event: Event): boolean {
+  const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
+  return dTag.includes(':ctl:');
+}
+
 function chunkIndexOf(event: Event): number | null {
+  // Health probes carry a chunk tag too but live under the probe x-tag.
+  if (event.tags.some((t) => t[0] === 'x' && t[1] === 'probe')) return null;
   const chunkTag = event.tags.find((t) => t[0] === 'chunk');
   return chunkTag ? Number(chunkTag[1]) : null;
 }
 
-// Map of chunk index -> relays holding a copy (control events excluded).
+// Map of chunk index -> relays holding a copy (control and probe events
+// excluded).
 function chunkPlacements(pool: MockPool): Map<number, string[]> {
   const out = new Map<number, string[]>();
   for (const [relay, events] of pool.store) {
@@ -62,7 +83,8 @@ async function liveRoundTrip(
   const sendDone = sendFileLive(data, META, {
     pool,
     isCancelled: opts.senderCancelled ?? never,
-    relayOverride: opts.relays ?? RELAYS,
+    controlRelayOverride: CONTROL_RELAYS,
+    dataRelayOverride: opts.relays ?? RELAYS,
     onProgress: opts.onSend ?? noProgress,
     onReady: (m, keyBytes) =>
       readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) }),
@@ -93,23 +115,39 @@ describe('live single-copy relay transfer', () => {
     const sendProgress: LiveSendProgress[] = [];
     let chunksUploadedAtHandover = -1;
 
-    const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
-      onSend: (p) => {
-        sendProgress.push(p);
-        if (chunksUploadedAtHandover < 0 && p.phase === 'transfer') {
-          chunksUploadedAtHandover = p.chunksDone ?? 0;
-        }
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(
+      pool,
+      data,
+      {
+        onSend: (p) => {
+          sendProgress.push(p);
+          if (chunksUploadedAtHandover < 0 && p.phase === 'transfer') {
+            chunksUploadedAtHandover = p.chunksDone ?? 0;
+          }
+        },
       },
-    });
+    );
     const [received] = await Promise.all([receiveDone, sendDone]);
 
     expect(received).toEqual(data);
     expect(chunksUploadedAtHandover).toBe(0);
+    // The payload names the control relays only; the ring travels in avails.
+    expect(manifest.controlRelays).toEqual(CONTROL_RELAYS);
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
     for (let i = 0; i < 4; i++) {
       // One copy, on the default ring position.
       expect(placed.get(i)).toEqual([RELAYS[i % RELAYS.length]]);
+    }
+    // Control traffic and chunk traffic never share a relay.
+    for (const relay of CONTROL_RELAYS) {
+      const events = pool.store.get(relay) ?? [];
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.every(isControlEvent)).toBe(true);
+    }
+    for (const relay of RELAYS) {
+      const events = pool.store.get(relay) ?? [];
+      expect(events.some(isControlEvent)).toBe(false);
     }
     const last = sendProgress.at(-1);
     expect(last?.phase).toBe('transfer');
@@ -279,11 +317,70 @@ describe('live single-copy relay transfer', () => {
     await expect(receiveDone).rejects.toThrow(/sender cancelled/i);
   }, 15000);
 
+  it('hands out the code before storage-relay discovery', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(100_000); // 4 chunks
+    const phasesBeforeReady: string[] = [];
+    let discoveringAfterReady = false;
+    let ready = false;
+
+    type Handover = { manifest: NostrFileManifest; keyBytes: Uint8Array };
+    let readyResolve!: (v: Handover) => void;
+    const handover = new Promise<Handover>((resolve) => {
+      readyResolve = resolve;
+    });
+    // No dataRelayOverride: discovery runs for real and degrades to the
+    // DEFAULT_RELAYS seeds, which the mock pool all passes.
+    const sendDone = sendFileLive(data, META, {
+      pool,
+      isCancelled: never,
+      controlRelayOverride: CONTROL_RELAYS,
+      storage: memoryStorage(),
+      onProgress: (p) => {
+        if (!ready) phasesBeforeReady.push(p.phase);
+        else if (p.phase === 'discovering' || p.phase === 'health_check') {
+          discoveringAfterReady = true;
+        }
+      },
+      onReady: (m, keyBytes) => {
+        ready = true;
+        readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) });
+      },
+    });
+    sendDone.catch(() => {});
+    const { manifest, keyBytes } = await Promise.race([
+      handover,
+      sendDone.then<Handover>(() => {
+        throw new Error('sender finished before handing over the code');
+      }),
+    ]);
+    // Discovery had not started when the code went out.
+    expect(phasesBeforeReady).not.toContain('discovering');
+    expect(phasesBeforeReady).not.toContain('health_check');
+
+    const received = await receiveFileLive(manifest, keyBytes, {
+      pool,
+      isCancelled: never,
+      onProgress: noProgress,
+    });
+    await sendDone;
+    expect(received).toEqual(data);
+    expect(discoveringAfterReady).toBe(true);
+    // The ring the receiver adopted from the avails is the discovered one:
+    // every chunk landed on a seed relay, none on the control relays.
+    const placed = chunkPlacements(pool);
+    expect(placed.size).toBe(4);
+    for (const relays of placed.values()) {
+      expect(relays).toHaveLength(1);
+      expect(DEFAULT_RELAYS).toContain(relays[0]);
+    }
+  }, 15000);
+
   it('rejects an expired manifest without joining the channel', async () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 3,
+      v: 4,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',
@@ -293,7 +390,7 @@ describe('live single-copy relay transfer', () => {
       chunkSize: 32768,
       totalChunks: 1,
       enc: 1,
-      relays: RELAYS,
+      controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,
     };

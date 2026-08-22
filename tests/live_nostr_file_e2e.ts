@@ -102,8 +102,8 @@ async function runLive(data: Uint8Array) {
         isCancelled: deadlineExceeded,
         onReady: (manifest: NostrFileManifest, keyBytes) => {
           console.log(
-            `\nCode ready after ${Date.now() - started}ms; relays (${manifest.relays.length}):`,
-            manifest.relays.join(', '),
+            `\nCode ready after ${Date.now() - started}ms; control relays (${manifest.controlRelays.length}):`,
+            manifest.controlRelays.join(', '),
           );
           const payloadBinary = generateNostrFilePayloadBinary({
             ...manifest,
@@ -118,9 +118,13 @@ async function runLive(data: Uint8Array) {
           handoverResolve(parsed.payload);
         },
         onProgress: (p) => {
-          if (p.phase === 'health_check') {
+          if (p.phase === 'connecting') {
             process.stdout.write(
-              `\rhealth check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+              `\rcontrol probe: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+            );
+          } else if (p.phase === 'health_check') {
+            process.stdout.write(
+              `\rstorage health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
             );
           } else if (p.phase === 'transfer') {
             process.stdout.write(

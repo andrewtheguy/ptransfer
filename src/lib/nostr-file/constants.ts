@@ -18,7 +18,7 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 3;
+export const NOSTR_FILE_MANIFEST_VERSION = 4;
 
 // Codec identity: deflate then AES-256-GCM (nonce||ct||tag) then Z85.
 export const NOSTR_FILE_ENCRYPTION_LABEL = 'deflate+aes-256-gcm';
@@ -49,6 +49,21 @@ export const HEALTH_CHECK_TARGET_COUNT = UPLOAD_RELAY_COUNT + 4;
 // Probe payload size. A full-size chunk, so a relay that caps event size below
 // a real chunk fails the probe instead of rejecting every chunk placed on it.
 export const HEALTH_CHECK_PROBE_BYTES = NOSTR_FILE_CHUNK_SIZE;
+
+// The encrypted control channel rides its own small set of proven signaling
+// relays (seeded from DEFAULT_RELAYS), embedded in the manual payload — the
+// chunk ring is announced over the channel instead. Control relays are picked
+// with a small probe: they only ever carry control-sized events.
+export const CONTROL_RELAY_COUNT = 4;
+// Fewer usable control relays than this and a send refuses to start.
+export const MIN_CONTROL_RELAYS = 2;
+// Control probe payload size — a sealed control message is a few hundred
+// bytes, so a size-capped relay that would reject chunks may still pass.
+export const CONTROL_PROBE_BYTES = 256;
+// Control probes race all seeds concurrently and the check waits out every
+// in-flight probe, so a dead seed delays code handout by this full amount —
+// keep it short.
+export const CONTROL_PROBE_TIMEOUT_MS = 4000;
 
 // NIP-66 / NIP-65 discovery query limit per kind.
 export const DISCOVERY_CANDIDATE_LIMIT = 100;

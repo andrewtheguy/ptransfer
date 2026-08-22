@@ -107,6 +107,7 @@ export function NostrRelayStatsPanel({
 
   const timings = [
     ['hash', ms(stats.phaseMs.hash)],
+    ['control probe', ms(stats.phaseMs.controlProbe)],
     ['discover', ms(stats.phaseMs.discover)],
     ['health check', ms(stats.phaseMs.healthCheck)],
     [isSender ? 'upload' : 'download', ms(stats.phaseMs.transfer)],
@@ -146,7 +147,7 @@ export function NostrRelayStatsPanel({
           {stats.relays.length > 0 && (
             <div className="space-y-1">
               <p className="font-medium text-muted-foreground">
-                Relays ({stats.relays.length}, placement order)
+                Relays ({stats.relays.length})
               </p>
               <ul className="space-y-1">
                 {stats.relays.map((relay) => (

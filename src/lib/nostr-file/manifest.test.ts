@@ -4,7 +4,7 @@ import { isValidNostrFileManifest, type NostrFileManifest } from './manifest';
 describe('isValidNostrFileManifest', () => {
   const createdAt = 1_700_000_000;
   const manifest: NostrFileManifest = {
-    v: 3,
+    v: 4,
     fileName: 'big.bin',
     fileSize: 100 * 1024 * 1024,
     mimeType: 'application/octet-stream',
@@ -14,7 +14,7 @@ describe('isValidNostrFileManifest', () => {
     chunkSize: 32768,
     totalChunks: 3200,
     enc: 1,
-    relays: ['wss://relay.one', 'wss://relay.two', 'wss://relay.three'],
+    controlRelays: ['wss://relay.one', 'wss://relay.two', 'wss://relay.three'],
     createdAt,
     expiresAt: createdAt + 3600,
   };
@@ -23,11 +23,20 @@ describe('isValidNostrFileManifest', () => {
     expect(isValidNostrFileManifest(manifest)).toBe(true);
   });
 
-  it('rejects more than 16 relays and files over 100 MB', () => {
+  it('rejects control-relay lists outside 2..4 and files over 100 MB', () => {
     expect(
       isValidNostrFileManifest({
         ...manifest,
-        relays: Array.from({ length: 17 }, (_, i) => `wss://r${i}.example`),
+        controlRelays: Array.from(
+          { length: 5 },
+          (_, i) => `wss://r${i}.example`,
+        ),
+      }),
+    ).toBe(false);
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        controlRelays: ['wss://relay.one'],
       }),
     ).toBe(false);
     expect(
@@ -37,5 +46,13 @@ describe('isValidNostrFileManifest', () => {
         totalChunks: 3201,
       }),
     ).toBe(false);
+  });
+
+  it('rejects the previous wire format', () => {
+    expect(isValidNostrFileManifest({ ...manifest, v: 3 })).toBe(false);
+    const { controlRelays, ...rest } = manifest;
+    expect(isValidNostrFileManifest({ ...rest, relays: controlRelays })).toBe(
+      false,
+    );
   });
 });

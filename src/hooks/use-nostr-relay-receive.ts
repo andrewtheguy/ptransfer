@@ -68,7 +68,7 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
       contentType: 'file' as const,
       fileMetadata,
       expiresAt: payload.expiresAt,
-      currentRelays: payload.relays,
+      currentRelays: payload.controlRelays,
     };
     let lastStats: TransferState['stats'];
 

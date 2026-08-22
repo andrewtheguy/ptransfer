@@ -1,12 +1,18 @@
 import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_RELAYS } from '../nostr/relays';
+import { CONTROL_PROBE_BYTES, CONTROL_RELAY_COUNT } from './constants';
+import { createMockPool } from './mock-pool';
 import {
   type HealthyRelay,
+  healthCheckRelays,
   parseRelayCandidates,
   type RelayPoolState,
   type RelayPoolStorage,
   selectUploadRelays,
 } from './relay-pool';
+import { createTransferStats } from './stats';
+import { NOT_ENOUGH_RELAYS_MESSAGE, resolveControlRelays } from './upload';
 
 function makeEvent(kind: number, tags: string[][]): Event {
   return {
@@ -121,5 +127,74 @@ describe('selectUploadRelays', () => {
     selectUploadRelays(healthy, 2, storage);
     expect(storage.state?.candidates).toEqual(['wss://cached']);
     expect(storage.state?.discoveredAt).toBe(123);
+  });
+});
+
+describe('control relay probe', () => {
+  it('probes with a control-sized event and still requires read-back', async () => {
+    const probeSizes: number[] = [];
+    const pool = createMockPool({
+      blackholeRelays: new Set([DEFAULT_RELAYS[1]]),
+      beforePublish: (_relay, event) => {
+        probeSizes.push(event.content.length);
+      },
+    });
+    const healthy = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
+      probeBytes: CONTROL_PROBE_BYTES,
+      targetCount: DEFAULT_RELAYS.length,
+    });
+    // Small probe on the wire — nowhere near the 32 KiB chunk probe.
+    expect(probeSizes.length).toBeGreaterThan(0);
+    for (const size of probeSizes) expect(size).toBeLessThan(1000);
+    // A relay that accepts writes but serves nothing back fails the probe.
+    const urls = healthy.map((r) => r.url);
+    expect(urls).not.toContain(DEFAULT_RELAYS[1]);
+    expect(urls).toHaveLength(DEFAULT_RELAYS.length - 1);
+  });
+});
+
+describe('resolveControlRelays', () => {
+  const opts = () => ({
+    isCancelled: () => false,
+    onProgress: () => {},
+    stats: createTransferStats('sender'),
+  });
+
+  it('returns a deduped override and seeds its stats rows', async () => {
+    const pool = createMockPool();
+    const o = opts();
+    const relays = await resolveControlRelays(pool, {
+      ...o,
+      controlRelayOverride: [
+        'wss://c1.example',
+        'wss://c1.example',
+        'wss://c2.example',
+      ],
+    });
+    expect(relays).toEqual(['wss://c1.example', 'wss://c2.example']);
+    expect(o.stats.relays.map((r) => r.url)).toEqual(relays);
+  });
+
+  it('rejects an override with fewer than two distinct relays', async () => {
+    const pool = createMockPool();
+    await expect(
+      resolveControlRelays(pool, {
+        ...opts(),
+        controlRelayOverride: ['wss://c1.example', 'wss://c1.example'],
+      }),
+    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
+  });
+
+  it('picks probed default relays, skipping ones that serve nothing', async () => {
+    const pool = createMockPool({
+      blackholeRelays: new Set([DEFAULT_RELAYS[0]]),
+    });
+    const o = opts();
+    const relays = await resolveControlRelays(pool, o);
+    expect(relays.length).toBeLessThanOrEqual(CONTROL_RELAY_COUNT);
+    expect(relays.length).toBeGreaterThanOrEqual(2);
+    expect(relays).not.toContain(DEFAULT_RELAYS[0]);
+    for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
+    expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
   });
 });

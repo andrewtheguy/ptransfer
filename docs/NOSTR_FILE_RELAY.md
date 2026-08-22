@@ -13,17 +13,37 @@ All code lives in [`src/lib/nostr-file/`](../src/lib/nostr-file/) (see the
 
 ## Overview
 
-The sender hands out the code (payload `type: 'nostr-file-live'`) as soon as relays are
-selected and then keeps running: each piece is uploaded **once** while the receiver
-downloads alongside, and the two sides coordinate over an encrypted control channel on the
-same relays. Redundancy is created on demand — a piece is re-sent only after the receiver
+Two separate relay sets do two different jobs:
+
+- **Control relays** (2–4, embedded in the payload): a small set of proven signaling
+  relays, picked from `DEFAULT_RELAYS` after a quick small-event probe. They carry only
+  the encrypted control channel — a relay that caps event sizes or rate-limits large
+  writes (fine for signaling, useless for 32 KiB chunks) still serves perfectly here.
+- **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
+  ring is *not* in the payload — the sender announces it over the control channel.
+
+The sender hands out the code (payload `type: 'nostr-file-live'`) as soon as the control
+relays pass their probe — storage-relay discovery runs in the background while the user
+shares the code — and then keeps running: each piece is uploaded **once** while the
+receiver downloads alongside, and the two sides coordinate over the control channel.
+Redundancy is created on demand — a piece is re-sent only after the receiver
 reports it could not fetch it, so the upload costs ~1× the file size plus the failed
 pieces. Both pages stay open until the receiver confirms the verified file; the receiver
 gets the full hour because the clock and the code start together.
 
 ## Shared Foundations
 
-### Relay discovery and health check (`relay-pool.ts`)
+### Control relay probe (`upload.ts`, `relay-pool.ts`)
+
+`resolveControlRelays` probes the `DEFAULT_RELAYS` seeds with the same write→read
+round trip as the storage health check but at `CONTROL_PROBE_BYTES` (256 B) and a short
+`CONTROL_PROBE_TIMEOUT_MS` (4 s) — read-back matters because the control channel relies
+on relays *serving* the stored backlog, not just accepting writes. The fastest
+`CONTROL_RELAY_COUNT` (4) passers go into the payload; fewer than `MIN_CONTROL_RELAYS`
+(2) refuses the transfer. No discovery, no rotation — this runs before the code is
+handed out, so it stays quick.
+
+### Storage relay discovery and health check (`relay-pool.ts`)
 
 1. **Discover candidates** via NIP-66 relay-discovery events (kind 30166) and NIP-65 relay
    lists (kind 10002) queried against the seed relays (`DEFAULT_RELAYS` from
@@ -42,8 +62,8 @@ gets the full hour because the clock and the code start together.
    are kept.
 3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a rotating cursor
    persisted with the candidate cache, load-balancing across uploads. The minimum viable
-   batch is two relays. The batch order **is the placement ring** recorded in the
-   manifest.
+   batch is two relays. The batch order **is the placement ring**, announced to the
+   receiver inside every `avail` control message (never stored in the manifest).
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 
@@ -91,11 +111,12 @@ or failed upload are AES-256-GCM ciphertext under a key that was never published
 
 ### Manifest and payload (`manifest.ts`, `manual-signaling.ts`)
 
-The `NostrFileManifest` travels inside the PT01 manual payload and is never published:
-version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId` (16 random
-bytes, hex), the ephemeral pubkey, chunk size, total chunks, the relay ring in placement
-order, and created/expiry timestamps. The payload wrapper (`NostrFileLivePayload`) adds
-`type` and the base64 AES key — ~700 bytes total, 2–3 QR codes.
+The `NostrFileManifest` (v4) travels inside the PT01 manual payload and is never
+published: version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId`
+(16 random bytes, hex), the ephemeral pubkey, chunk size, total chunks, the control
+relays (2–4), and created/expiry timestamps. The storage ring is not in it — it arrives
+over the control channel. The payload wrapper (`NostrFileLivePayload`) adds `type` and
+the base64 AES key — ~300 bytes total, a single QR code.
 
 Because chunk `d` tags are derived from `transferId` and index, the manifest needs no
 per-chunk event pointers; integrity comes from the per-chunk GCM tags plus the whole-file
@@ -119,13 +140,15 @@ Both peers derive an AES-256-GCM control key from the file key in the payload (H
 `ptransfer-nostr-file:v1:control`, salt = `transferId`), so only the code holder can read
 or forge control messages.
 
-Messages are addressable events of the chunk kind (the kind the health probe validated)
-with a unique `d` tag per message (`<transferId>:ctl:<role>:<n>`), an `x` tag
-`<transferId>:ctl` for the subscription filter, and the usual NIP-40 expiration; they
-carry the sealed, deflated JSON as base64. Because they are stored, a peer that subscribes
-late or whose socket dropped (`SimplePool` runs with reconnect enabled) recovers the
-backlog through the `since` filter. Control messages publish to every ring relay and count
-as delivered at the first acceptance.
+Messages ride the payload's dedicated **control relays** (probed with a control-sized
+event, so the same relay never has to accept both signaling and 32 KiB chunks) as
+addressable events of the chunk kind with a unique `d` tag per message
+(`<transferId>:ctl:<role>:<n>`), an `x` tag `<transferId>:ctl` for the subscription
+filter, and the usual NIP-40 expiration; they carry the sealed, deflated JSON as base64.
+Because they are stored, a peer that subscribes late or whose socket dropped
+(`SimplePool` runs with reconnect enabled) recovers the backlog through the `since`
+filter. Control messages publish to every control relay and count as delivered at the
+first acceptance.
 
 Anti-replay/misuse properties:
 
@@ -140,18 +163,21 @@ Anti-replay/misuse properties:
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|
 | `hello` | receiver → sender | `n` | Receiver is online and subscribed |
-| `avail` | sender → receiver | `n`, `upto`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `map` has one character per chunk giving the ring position of the relay holding it (`POSITION_ALPHABET`, bounding the ring at 64 relays); `gens` lists re-sent chunks with their current generation |
+| `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET`, bounding the ring at 64 relays); `gens` lists re-sent chunks with their current generation |
 | `ack` | receiver → sender | `n`, `avail`, `have`, `missing` | Outcome of fetching what avail `avail` announced: total chunks held, plus `missing` as `[index, pos, gen]` triples — tried at that exact placement and not found / not decryptable |
 | `done` | receiver → sender | `n` | Whole-file SHA-256 verified |
 | `cancel` | either side | `n` | Abort |
 
-The complete placement travels in every `avail`, so a lost announcement costs nothing;
-bodies are deflated before sealing, which collapses the near-periodic map to a few hundred
-bytes even for 3200 chunks.
+The complete ring and placement travel in every `avail`, so a lost announcement costs
+nothing; bodies are deflated before sealing, which collapses the near-periodic map and
+the shared-prefix relay URLs to a few hundred bytes even for 3200 chunks.
 
 ### Sender loop
 
-Chunk `i` is published to `relays[i % N]`, walking the ring on rejection until one relay
+The control channel opens and the code goes out right after the control probe; the first
+`avail` (empty ring) is sent immediately so a receiver who pastes the code early sees the
+sender is online while storage discovery finishes. Once the ring is selected, chunk `i`
+is published to `ring[i % N]`, walking the ring on rejection until one relay
 accepts (16 in flight); each publish retries up to 3× per relay with exponential backoff
 (500 ms base, 5 s cap, 250 ms jitter). An `avail` is announced every `LIVE_BATCH_CHUNKS`
 (64) chunks (2 MiB) and on completion, and repeated as a `LIVE_HEARTBEAT_MS` (15 s)
@@ -192,26 +218,29 @@ Expiry, or a sender silent for 3 minutes, aborts.
 ```mermaid
 sequenceDiagram
     participant S as Sender
-    participant R as Relay ring
+    participant C as Control relays
+    participant R as Storage ring
     participant V as Receiver
 
-    Note over S: Relays selected → show PT01 code immediately
+    Note over S: Control relays probed → show PT01 code immediately
     S-->>V: manifest + key via QR / copy-paste (trusted channel)
-    V->>R: subscribe #35;x = transferId:ctl
-    V->>R: hello (sealed control event)
-    R->>S: hello
+    S->>C: avail {upto: 0, relays: []} (sender online, still discovering)
+    Note over S: discover + health-check storage relays in background
+    V->>C: subscribe #35;x = transferId:ctl
+    V->>C: hello (sealed control event)
+    C->>S: hello
     loop upload, 16 in flight
-        S->>R: chunk i → relays[i % N] (walk ring on rejection)
-        S->>R: avail {upto, map, gens} every 64 chunks + 15s heartbeat
-        R->>V: avail
+        S->>R: chunk i → ring[i % N] (walk ring on rejection)
+        S->>C: avail {upto, relays: ring, map, gens} every 64 chunks + 15s heartbeat
+        C->>V: avail (receiver adopts the ring on first sight)
         V->>R: fetch announced chunks from their placed relays
-        V->>R: ack {avail, have, missing[index,pos,gen]}
-        R->>S: ack
+        V->>C: ack {avail, have, missing[index,pos,gen]}
+        C->>S: ack
         Note over S: re-send missing chunks to next ring position,<br/>bump gen, demote relays with 2+ misses
     end
     Note over V: all chunks present → SHA-256 verifies
-    V->>R: done
-    R->>S: done
+    V->>C: done
+    C->>S: done
     Note over S,V: both sides complete
 ```
 
@@ -239,8 +268,12 @@ sequenceDiagram
 | `NOSTR_FILE_CHUNK_SIZE` | 32 KiB | Plaintext chunk size (~41 KB encoded) |
 | `EVENT_KIND_FILE_CHUNK` | 30078 | NIP-78 addressable kind for chunks, probes, and control |
 | `NOSTR_FILE_EXPIRATION_SEC` | 3600 | NIP-40 lifetime on every event; transfer deadline |
-| `UPLOAD_RELAY_COUNT` | 16 | Relay batch per upload (placement ring size) |
-| `MIN_UPLOAD_RELAYS` | 2 | Fewest usable relays for an upload to start |
+| `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
+| `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
+| `CONTROL_RELAY_COUNT` | 4 | Control relays embedded in the payload |
+| `MIN_CONTROL_RELAYS` | 2 | Fewest usable control relays for a send to start |
+| `CONTROL_PROBE_BYTES` | 256 | Control probe payload (a sealed control message is a few hundred bytes) |
+| `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
 | `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop probing once this many relays pass |
@@ -262,7 +295,7 @@ sequenceDiagram
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
-| `src/lib/nostr-file/upload.ts` | Publish-with-retry and relay-ring resolution |
+| `src/lib/nostr-file/upload.ts` | Publish-with-retry, control-relay probe (`resolveControlRelays`), storage-ring resolution (`resolveUploadRelays`) |
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
 | `src/lib/nostr-file/sync.ts` | `Deferred`/`Signal` async helpers |

@@ -300,10 +300,11 @@ export function generateMutualClipboardData(binary: Uint8Array): string {
 /**
  * Live (single-copy) Nostr file relay payload: the manifest of the transfer
  * plus the decryption key, handed out *before* the upload. The sender stays
- * online and the two sides coordinate over an encrypted control channel on
- * the same relays (keyed off `key`), so both need the relays at the same
- * time. Because the key rides in it, this payload must only ever travel over
- * the trusted manual channel (QR / direct copy-paste).
+ * online and the two sides coordinate over an encrypted control channel
+ * (keyed off `key`) on the payload's `controlRelays`; the storage-relay ring
+ * is announced over that channel, not carried here. Because the key rides in
+ * it, this payload must only ever travel over the trusted manual channel
+ * (QR / direct copy-paste).
  */
 export interface NostrFileLivePayload extends NostrFileManifest {
   type: 'nostr-file-live';

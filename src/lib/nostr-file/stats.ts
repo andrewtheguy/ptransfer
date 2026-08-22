@@ -75,9 +75,12 @@ export interface NostrFileTransferStats {
   relaysHealthy: number;
   /** Wall-clock phase durations, ms. */
   phaseMs: Partial<
-    Record<'hash' | 'discover' | 'healthCheck' | 'transfer', number>
+    Record<
+      'hash' | 'controlProbe' | 'discover' | 'healthCheck' | 'transfer',
+      number
+    >
   >;
-  /** Ring relays in placement order. */
+  /** Control relays first, then ring relays in placement order. */
   relays: NostrFileRelayStats[];
 }
 

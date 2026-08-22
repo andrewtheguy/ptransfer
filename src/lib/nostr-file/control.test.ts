@@ -30,39 +30,53 @@ describe('control channel key and sealing', () => {
       t: 'avail',
       n: 1,
       upto: 3,
+      relays: RELAYS,
       map: 'ABC',
       gens: [],
     });
     expect(
       await decodeControlMessage(b, TRANSFER_ID, 'sender', sealed),
-    ).toEqual({ t: 'avail', n: 1, upto: 3, map: 'ABC', gens: [] });
+    ).toEqual({
+      t: 'avail',
+      n: 1,
+      upto: 3,
+      relays: RELAYS,
+      map: 'ABC',
+      gens: [],
+    });
   });
 
   it('keeps a full 3200-chunk placement map small on the wire', async () => {
     const key = await deriveControlKey(fixedKeyBytes(), TRANSFER_ID);
+    const ring = Array.from(
+      { length: 16 },
+      (_, i) => `wss://relay-${i}.example.com`,
+    );
     let map = '';
     for (let i = 0; i < 3200; i++) map += encodePosition(i % 16);
     const sealed = await encodeControlMessage(key, TRANSFER_ID, 'sender', {
       t: 'avail',
       n: 50,
       upto: 3200,
+      relays: ring,
       map,
       gens: [
         [17, 1],
         [900, 2],
       ],
     });
-    // Deflate collapses the periodic map: a few hundred bytes, not 3.2 KB.
-    expect(sealed.length).toBeLessThan(600);
+    // Deflate collapses the periodic map and the shared-prefix ring URLs:
+    // a few hundred bytes, not 3.2 KB + 16 URLs.
+    expect(sealed.length).toBeLessThan(800);
     expect(
       parseSenderMessage(
         await decodeControlMessage(key, TRANSFER_ID, 'sender', sealed),
         3200,
-        16,
       ),
     ).toMatchObject({
       t: 'avail',
       upto: 3200,
+      relays: ring,
       gens: [
         [17, 1],
         [900, 2],
@@ -110,63 +124,37 @@ describe('control channel key and sealing', () => {
 });
 
 describe('control message validation', () => {
+  const avail = (overrides: Record<string, unknown>) => ({
+    t: 'avail',
+    n: 1,
+    upto: 4,
+    relays: RELAYS,
+    map: 'ABCB',
+    gens: [],
+    ...overrides,
+  });
+
   it('accepts well-formed messages and rejects out-of-range fields', () => {
-    expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 4, map: 'ABCB', gens: [[2, 1]] },
-        4,
-        3,
-      ),
-    ).toEqual({ t: 'avail', n: 1, upto: 4, map: 'ABCB', gens: [[2, 1]] });
+    expect(parseSenderMessage(avail({ gens: [[2, 1]] }), 4)).toEqual(
+      avail({ gens: [[2, 1]] }),
+    );
     // upto past the chunk count
-    expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 5, map: 'ABCAB', gens: [] },
-        4,
-        3,
-      ),
-    ).toBeNull();
+    expect(parseSenderMessage(avail({ upto: 5, map: 'ABCAB' }), 4)).toBeNull();
     // map length must equal upto
-    expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 4, map: 'ABC', gens: [] },
-        4,
-        3,
-      ),
-    ).toBeNull();
+    expect(parseSenderMessage(avail({ map: 'ABC' }), 4)).toBeNull();
     // placement at a relay position outside the ring, or not a position
-    expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 4, map: 'ABCD', gens: [] },
-        4,
-        3,
-      ),
-    ).toBeNull();
-    expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 4, map: 'AB!C', gens: [] },
-        4,
-        3,
-      ),
-    ).toBeNull();
+    expect(parseSenderMessage(avail({ map: 'ABCD' }), 4)).toBeNull();
+    expect(parseSenderMessage(avail({ map: 'AB!C' }), 4)).toBeNull();
     // generation for a chunk not yet announced, or a zero generation
     expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 2, map: 'AB', gens: [[3, 1]] },
-        4,
-        3,
-      ),
+      parseSenderMessage(avail({ upto: 2, map: 'AB', gens: [[3, 1]] }), 4),
     ).toBeNull();
     expect(
-      parseSenderMessage(
-        { t: 'avail', n: 1, upto: 2, map: 'AB', gens: [[1, 0]] },
-        4,
-        3,
-      ),
+      parseSenderMessage(avail({ upto: 2, map: 'AB', gens: [[1, 0]] }), 4),
     ).toBeNull();
-    expect(parseSenderMessage({ t: 'ack', n: 1 }, 4, 3)).toBeNull();
-    expect(parseSenderMessage({ t: 'cancel', n: 1.5 }, 4, 3)).toBeNull();
-    expect(parseSenderMessage('nope', 4, 3)).toBeNull();
+    expect(parseSenderMessage({ t: 'ack', n: 1 }, 4)).toBeNull();
+    expect(parseSenderMessage({ t: 'cancel', n: 1.5 }, 4)).toBeNull();
+    expect(parseSenderMessage('nope', 4)).toBeNull();
 
     expect(
       parseReceiverMessage(
@@ -193,7 +181,50 @@ describe('control message validation', () => {
         3,
       ),
     ).toBeNull();
+    // Before the ring exists (relayCount 0) only an empty missing list fits.
+    expect(
+      parseReceiverMessage(
+        { t: 'ack', n: 3, avail: 2, have: 0, missing: [[1, 0, 0]] },
+        4,
+        0,
+      ),
+    ).toBeNull();
+    expect(
+      parseReceiverMessage(
+        { t: 'ack', n: 3, avail: 2, have: 0, missing: [] },
+        4,
+        0,
+      ),
+    ).toEqual({ t: 'ack', n: 3, avail: 2, have: 0, missing: [] });
     expect(parseReceiverMessage({ t: 'avail', n: 1 }, 4, 3)).toBeNull();
+  });
+
+  it('requires the avail relays list to be a valid ring', () => {
+    // The ring travels in every avail; positions index into it.
+    expect(parseSenderMessage(avail({ relays: undefined }), 4)).toBeNull();
+    expect(parseSenderMessage(avail({ relays: 'wss://r1' }), 4)).toBeNull();
+    expect(
+      parseSenderMessage(avail({ relays: RELAYS.slice(0, 2) }), 4),
+    ).toBeNull(); // map position C needs 3 relays
+    expect(
+      parseSenderMessage(
+        avail({ relays: ['http://r1.example', ...RELAYS] }),
+        4,
+      ),
+    ).toBeNull();
+    expect(
+      parseSenderMessage(
+        avail({
+          relays: Array.from({ length: 17 }, (_, i) => `wss://r${i}.example`),
+        }),
+        4,
+      ),
+    ).toBeNull();
+    // Empty ring is presence-only: valid with upto 0, never with chunks.
+    expect(
+      parseSenderMessage(avail({ relays: [], upto: 0, map: '' }), 4),
+    ).toEqual(avail({ relays: [], upto: 0, map: '' }));
+    expect(parseSenderMessage(avail({ relays: [] }), 4)).toBeNull();
   });
 });
 
@@ -231,7 +262,13 @@ describe('openControlChannel', () => {
       expiresAt,
       onMessage: (message, pubkey) => toSender.push({ message, pubkey }),
     });
-    await senderChannel.send({ t: 'avail', upto: 2, map: 'AB', gens: [] });
+    await senderChannel.send({
+      t: 'avail',
+      upto: 2,
+      relays: RELAYS,
+      map: 'AB',
+      gens: [],
+    });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(toSender).toEqual([
@@ -240,7 +277,7 @@ describe('openControlChannel', () => {
     // Our own events never loop back; the peer's arrive once despite being
     // stored on three relays.
     expect(toReceiver).toEqual([
-      { t: 'avail', upto: 2, map: 'AB', gens: [], n: 1 },
+      { t: 'avail', upto: 2, relays: RELAYS, map: 'AB', gens: [], n: 1 },
     ]);
 
     senderChannel.close();

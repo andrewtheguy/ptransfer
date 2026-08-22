@@ -96,19 +96,20 @@ user-facing behavior; the technical design is documented in
 [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
 
 1. The sender's file is encrypted with a random key and uploaded to a set of discovered
-   Nostr relays as **temporary events with a 1-hour NIP-40 expiration** — a deletion
+   storage relays as **temporary events with a 1-hour NIP-40 expiration** — a deletion
    request that compliant relays honor by pruning the events, not guaranteed erasure; the
    file stays protected by its encryption regardless. The sender gets the exchange code
-   (multi-QR or copy/paste) **right away**, as soon as working relays are found, and
-   keeps the page open. The encrypted pieces upload in the background, **one copy each**,
-   so the upload costs about the file size in bandwidth
+   (a single QR or copy/paste) **right away**, after a quick check of a few signaling
+   relays — the storage relays are found in the background while the code is shared —
+   and keeps the page open. The encrypted pieces upload in the background, **one copy
+   each**, so the upload costs about the file size in bandwidth
 2. The receiver pastes/scans the code in the normal Manual Exchange receive flow — it is
    detected automatically — and starts downloading the pieces while the sender is still
-   uploading. The two sides coordinate over a small **encrypted side channel on the same
-   relays** (keyed from the code, so only the two of you can read it): the sender
-   announces which pieces are up, the receiver acknowledges and names any piece it could
-   not fetch, and **only those pieces are sent again**, to another relay — nothing is
-   duplicated up front
+   uploading. The two sides coordinate over a small **encrypted side channel on a few
+   dedicated signaling relays** named in the code (keyed from the code, so only the two
+   of you can read it): the sender announces which storage relays hold which pieces, the
+   receiver acknowledges and names any piece it could not fetch, and **only those pieces
+   are sent again**, to another relay — nothing is duplicated up front
 3. The sender's page completes on its own once the receiver has verified the whole file
 
 Differences from normal Manual Exchange:
@@ -126,7 +127,9 @@ Differences from normal Manual Exchange:
   Anyone who obtains it before expiry can download and decrypt the file — share it only over
   a trusted channel (in person, or an end-to-end encrypted messenger)
 - Relays see only encrypted pieces, sizes, timing, and the small encrypted coordination
-  messages — never the file name, contents, or the decryption key
+  messages — never the file name, contents, or the decryption key. Signaling and storage
+  use separate relays: the coordination channel rides a few proven signaling relays,
+  while the pieces go to relays that passed a full-size health check
 
 ## Tips
 

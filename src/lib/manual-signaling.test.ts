@@ -161,7 +161,7 @@ describe('Nostr file payload', () => {
   const createdAt = Math.floor(Date.now() / 1000);
   const validPayload: NostrFileLivePayload = {
     type: 'nostr-file-live',
-    v: 3,
+    v: 4,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
@@ -171,7 +171,7 @@ describe('Nostr file payload', () => {
     chunkSize: 32768,
     totalChunks: Math.ceil((5 * 1024 * 1024) / 32768),
     enc: 1,
-    relays: ['wss://relay.one', 'wss://relay.two'],
+    controlRelays: ['wss://relay.one', 'wss://relay.two'],
     createdAt,
     expiresAt: createdAt + 3600,
     key: `${'K'.repeat(43)}=`,
@@ -187,34 +187,23 @@ describe('Nostr file payload', () => {
     expect(parseMutualPayload(binary)).toBeNull();
   });
 
-  it('encodes a 3200-chunk, 16-relay manifest into a compact payload', () => {
+  it('encodes a 3200-chunk manifest into a single-QR-frame payload', () => {
     const large: NostrFileLivePayload = {
       ...validPayload,
       fileSize: 100 * 1024 * 1024,
       totalChunks: 3200,
-      relays: [
+      controlRelays: [
         'wss://relay.example-one.com',
         'wss://relay.example-two.net',
         'wss://relay.example-three.io',
         'wss://relay.example-four.org',
-        'wss://relay.example-five.dev',
-        'wss://relay.example-six.social',
-        'wss://relay.example-seven.com',
-        'wss://relay.example-eight.net',
-        'wss://relay.example-nine.io',
-        'wss://relay.example-ten.org',
-        'wss://relay.example-eleven.dev',
-        'wss://relay.example-twelve.social',
-        'wss://relay.example-thirteen.com',
-        'wss://relay.example-fourteen.net',
-        'wss://relay.example-fifteen.io',
-        'wss://relay.example-sixteen.org',
       ],
     };
     const binary = generateNostrFilePayloadBinary(large);
-    // Target capacity: two ~400-byte QR frames for the worst-case payload.
-    const TWO_QR_CAPACITY_BYTES = 800;
-    expect(binary.length).toBeLessThan(TWO_QR_CAPACITY_BYTES);
+    // Without the 16-relay ring (it travels over the control channel now)
+    // the payload fits one ~400-byte QR frame with headroom.
+    const ONE_QR_CAPACITY_BYTES = 400;
+    expect(binary.length).toBeLessThan(ONE_QR_CAPACITY_BYTES);
   });
 
   it('discriminates all payload types', () => {
@@ -255,13 +244,13 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, transferId: 'zz' }),
     ).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, relays: [] })).toBe(
-      false,
-    );
+    expect(
+      isValidNostrFileLivePayload({ ...validPayload, controlRelays: [] }),
+    ).toBe(false);
     expect(
       isValidNostrFileLivePayload({
         ...validPayload,
-        relays: ['http://not-wss.example'],
+        controlRelays: ['http://not-wss.example', 'wss://relay.one'],
       }),
     ).toBe(false);
     expect(
@@ -273,7 +262,7 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, type: 'offer' }),
     ).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, v: 2 })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, v: 3 })).toBe(false);
     expect(isValidNostrFileLivePayload({ ...validPayload, enc: 2 })).toBe(
       false,
     );

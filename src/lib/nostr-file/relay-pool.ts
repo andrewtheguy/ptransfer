@@ -163,6 +163,7 @@ async function probeRelay(
   pool: NostrFilePool,
   url: string,
   timeoutMs: number,
+  probeBytes: number,
 ): Promise<number | null> {
   const started = Date.now();
   const keyBytes = crypto.getRandomValues(new Uint8Array(32));
@@ -174,9 +175,7 @@ async function probeRelay(
       false,
       ['encrypt', 'decrypt'],
     );
-    const payload = crypto.getRandomValues(
-      new Uint8Array(HEALTH_CHECK_PROBE_BYTES),
-    );
+    const payload = crypto.getRandomValues(new Uint8Array(probeBytes));
     const aad = chunkAad('probe', 0, 1);
     const content = await encodeChunkContent(aesKey, payload, aad);
     const { secretKey, publicKey } = generateEphemeralKeys();
@@ -235,6 +234,7 @@ export async function healthCheckRelays(
     concurrency?: number;
     timeoutMs?: number;
     targetCount?: number;
+    probeBytes?: number;
     isCancelled?: () => boolean;
     onProgress?: (checked: number, healthy: number) => void;
   } = {},
@@ -242,6 +242,7 @@ export async function healthCheckRelays(
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
   const timeoutMs = opts.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
   const targetCount = opts.targetCount ?? HEALTH_CHECK_TARGET_COUNT;
+  const probeBytes = opts.probeBytes ?? HEALTH_CHECK_PROBE_BYTES;
 
   const healthy: HealthyRelay[] = [];
   let nextIndex = 0;
@@ -254,7 +255,7 @@ export async function healthCheckRelays(
       const index = nextIndex++;
       if (index >= candidates.length) return;
       const url = candidates[index];
-      const rttMs = await probeRelay(pool, url, timeoutMs);
+      const rttMs = await probeRelay(pool, url, timeoutMs, probeBytes);
       checked++;
       // Re-check the target: sibling probes may have filled it in flight.
       if (rttMs !== null && healthy.length < targetCount) {
