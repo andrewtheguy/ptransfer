@@ -39,7 +39,7 @@ export function chunkAad(
 /**
  * Chunk plaintext -> nostr event content string.
  * Pipeline: deflate -> AES-256-GCM (nonce||ct||tag, AAD-bound) -> Z85
- * (base85, like nostrsave: smaller than base64 and JSON-escape-free).
+ * (base85: smaller than base64 and JSON-escape-free).
  */
 export async function encodeChunkContent(
   key: CryptoKey,

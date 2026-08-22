@@ -26,8 +26,7 @@ All code lives in [`src/lib/nostr-file/`](../src/lib/nostr-file/) (see the
 | Entry points | `upload.ts` / `download.ts` | `upload-live.ts` / `download-live.ts` / `control.ts` |
 
 Both methods share the chunk events, codec, relay discovery/health check, manifest, and
-payload framing described next; they differ only in choreography. The stored flow follows
-nostrsave's design, adapted for explicitly temporary data.
+payload framing described next; they differ only in choreography.
 
 ## Shared Foundations
 
@@ -67,8 +66,8 @@ deflate → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
 - AAD = `ptransfer-nostr-file:v1:<transferId>:<index>:<total>` binds every chunk to its
   transfer and position — a tampered, substituted, or misplaced chunk fails GCM and is
   simply treated as missing.
-- Z85 (base85) matches nostrsave: ~1.25× expansion vs base64's ~1.33×, and JSON-escape
-  free. A 32 KiB incompressible chunk encodes to ~41 KB, comfortably under the ~64 KB
+- Z85 (base85): ~1.25× expansion vs base64's ~1.33×, and JSON-escape free. A 32 KiB
+  incompressible chunk encodes to ~41 KB, comfortably under the ~64 KB
   event-content ceiling the public relay population is known to accept. A 100 MB file is
   3200 chunks.
 
@@ -307,7 +306,7 @@ and the timing of the two peers' activity.
 - **Availability is best-effort**: relays may drop data before the 1-hour expiry. Stored
   mitigates with two copies per chunk; live mitigates with targeted re-sends. Neither
   guarantees delivery — the data is temporary by design, so durability is traded for
-  relay load (unlike nostrsave's full replication)
+  relay load
 
 ## Limits and Tunables (`constants.ts`)
 

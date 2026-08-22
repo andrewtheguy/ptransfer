@@ -1,6 +1,6 @@
-// Z85 (ZeroMQ base85) with partial final blocks, matching nostrsave's use of
-// base85 for event content: ~1.25x expansion vs base64's ~1.33x, and the
-// alphabet contains no characters JSON needs to escape.
+// Z85 (ZeroMQ base85) with partial final blocks, used for event content:
+// ~1.25x expansion vs base64's ~1.33x, and the alphabet contains no
+// characters JSON needs to escape.
 
 const Z85_ALPHABET =
   '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#';
