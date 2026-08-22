@@ -500,6 +500,9 @@ export function SendTransferPage() {
               </p>
             </div>
           </div>
+          {'stats' in state && state.stats && (
+            <NostrRelayStatsPanel stats={state.stats} />
+          )}
           <Button onClick={handleSendAnother} className="w-full">
             <RotateCcw className="mr-2 h-4 w-4" />
             Send Another
@@ -517,6 +520,9 @@ export function SendTransferPage() {
               <p className="text-sm text-muted-foreground">{error}</p>
             </div>
           </div>
+          {'stats' in state && state.stats && (
+            <NostrRelayStatsPanel stats={state.stats} />
+          )}
           <div className="flex gap-2">
             <Button onClick={handleRetry} className="flex-1">
               Retry

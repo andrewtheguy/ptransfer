@@ -184,6 +184,7 @@ export function useNostrRelaySend(): UseNostrRelaySendReturn {
               status: 'error',
               message:
                 'The relay copies expired. Start a new transfer to send this file.',
+              stats: lastStats,
             });
           }
         }, msUntilExpiry);
