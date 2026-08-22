@@ -38,7 +38,8 @@ export type ControlRole = 'sender' | 'receiver';
 /**
  * Placement of one chunk: ring position of the relay holding it and the
  * re-send generation (0 = first placement). A receiver retries a chunk it
- * could not fetch only when either value changes.
+ * could not fetch when either value changes — or from the same placement
+ * after LIVE_FETCH_RETRY_MS, so a transient fetch failure heals on its own.
  */
 export type ChunkPlacement = [index: number, pos: number, gen: number];
 

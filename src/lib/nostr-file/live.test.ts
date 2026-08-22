@@ -1,8 +1,18 @@
 import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
+import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { DEFAULT_RELAYS } from '../nostr/relays';
+import { chunkAad, encodeChunkContent, sha256 } from './codec';
 import { LIVE_BATCH_CHUNKS } from './constants';
+import {
+  type AckMessage,
+  deriveControlKey,
+  encodePosition,
+  openControlChannel,
+  parseReceiverMessage,
+} from './control';
 import { type LiveReceiveProgress, receiveFileLive } from './download-live';
+import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
 import type { RelayPoolState, RelayPoolStorage } from './relay-pool';
@@ -420,6 +430,109 @@ describe('live single-copy relay transfer', () => {
       expect(storageRing).toContain(relays[0]);
     }
   }, 15000);
+
+  it('re-fetches a timed-out piece on its own clock, without a new announcement', async () => {
+    // Scripted sender: announce the only chunk as available before the relay
+    // actually serves it (late propagation), then go silent — no further
+    // avails, no re-send. Only the receiver's own retry clock can recover.
+    const pool = createMockPool();
+    const data = randomBytes(1000); // 1 chunk
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const transferId = 'ab'.repeat(16);
+    const createdAt = Math.floor(Date.now() / 1000);
+    const manifest: NostrFileManifest = {
+      v: 4,
+      fileName: 'late.bin',
+      fileSize: data.length,
+      mimeType: 'application/octet-stream',
+      fileHash: uint8ArrayToBase64(await sha256(data)),
+      transferId,
+      pubkey: publicKey,
+      chunkSize: 32768,
+      totalChunks: 1,
+      enc: 1,
+      controlRelays: CONTROL_RELAYS,
+      createdAt,
+      expiresAt: createdAt + 3600,
+    };
+    const storageRelay = 'wss://s1.example';
+    const controlKey = await deriveControlKey(keyBytes, transferId);
+    const acks: AckMessage[] = [];
+    let done = false;
+    const channel = openControlChannel(pool, CONTROL_RELAYS, {
+      transferId,
+      key: controlKey,
+      role: 'sender',
+      secretKey,
+      since: createdAt - 600,
+      expiresAt: manifest.expiresAt,
+      onMessage: (raw) => {
+        const msg = parseReceiverMessage(raw, 1, 1);
+        if (msg?.t === 'ack') acks.push(msg);
+        if (msg?.t === 'done') done = true;
+      },
+    });
+    try {
+      await channel.send({
+        t: 'avail',
+        upto: 1,
+        relays: [storageRelay],
+        map: encodePosition(0),
+        gens: [],
+      });
+
+      const receiveDone = receiveFileLive(manifest, new Uint8Array(keyBytes), {
+        pool,
+        isCancelled: never,
+        onProgress: noProgress,
+      });
+      receiveDone.catch(() => {});
+
+      // The first fetch finds nothing and the miss is reported...
+      const deadline = Date.now() + 5000;
+      while (!acks.some((a) => a.missing.length > 0)) {
+        if (Date.now() > deadline) throw new Error('missing never reported');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(acks.some((a) => a.missing.length > 0)).toBe(true);
+
+      // ...now the copy lands on the announced relay. The scripted sender
+      // stays silent, so only a receiver-clock re-fetch of the very same
+      // placement can complete the transfer.
+      const aesKey = await crypto.subtle.importKey(
+        'raw',
+        keyBytes as BufferSource,
+        'AES-GCM',
+        false,
+        ['encrypt'],
+      );
+      const content = await encodeChunkContent(
+        aesKey,
+        data,
+        chunkAad(transferId, 0, 1),
+      );
+      const event = buildChunkEvent(secretKey, {
+        transferId,
+        index: 0,
+        total: 1,
+        content,
+        createdAt,
+      });
+      await Promise.all(pool.publish([storageRelay], event));
+
+      const received = await receiveDone;
+      expect(received).toEqual(data);
+      // The verified file is handed over first; the courtesy `done` follows.
+      const doneDeadline = Date.now() + 5000;
+      while (!done) {
+        if (Date.now() > doneDeadline) throw new Error('done never arrived');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    } finally {
+      channel.close();
+    }
+  }, 25000);
 
   it('rejects an expired manifest without joining the channel', async () => {
     const pool = createMockPool();

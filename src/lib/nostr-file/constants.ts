@@ -88,6 +88,13 @@ export const LIVE_HEARTBEAT_MS = 15000;
 export const LIVE_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 // Floor on how many times one chunk may be re-sent before the transfer fails.
 export const LIVE_MIN_RETRANSMITS_PER_CHUNK = 4;
+// Receiver retry clock. A piece still missing this long after its last fetch
+// attempt is fetched again from the same placement (a transient failure —
+// slow relay, reconnect, propagation delay — recovers without burning a
+// re-send), and the receiver runs a fetch cycle on this clock even when no
+// new announcement arrives, so a timed-out piece is re-fetched and re-asked
+// instead of waiting on the sender forever.
+export const LIVE_FETCH_RETRY_MS = 10_000;
 // A relay the receiver reports this many misses against (it acknowledged the
 // chunk but does not serve it) stops receiving new chunks and re-sends.
 export const LIVE_RELAY_DEMOTE_MISSES = 2;

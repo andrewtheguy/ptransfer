@@ -225,12 +225,17 @@ sender completes on `done`.
 On each `avail`, the receiver fetches every announced chunk it lacks from the one relay it
 was placed on (grouped per relay, in parallel, `authors` + `#d` filters, ≤
 `D_TAG_FILTER_BATCH` (50) ids per filter, ~2 MB of content per query), skipping chunks
-whose `(pos, gen)` it already tried, then answers with an `ack` listing what is still
-missing at the placement it actually asked — never the newest announced one, so an
-announcement landing mid-fetch cannot blame a relay this cycle never queried.
-Announcements that arrive mid-fetch coalesce into one more cycle. When every chunk is
-present the assembled file must match the manifest's SHA-256 before `done` is sent.
-Expiry, or a sender silent for 3 minutes, aborts.
+whose `(pos, gen)` it already tried within the last `LIVE_FETCH_RETRY_MS` (10 s), then
+answers with an `ack` listing what is still missing at the placement it actually asked —
+never the newest announced one, so an announcement landing mid-fetch cannot blame a relay
+this cycle never queried. Announcements that arrive mid-fetch coalesce into one more
+cycle. The receiver also runs on its own retry clock: when announced pieces are still
+missing and no cycle has started for `LIVE_FETCH_RETRY_MS`, it runs one anyway — a
+cooled-down placement is fetched again (a timed-out or not-yet-propagated copy recovers
+without costing a re-send) and the missing list is re-asked, so a lost announcement or
+acknowledgement never strands a piece. When every chunk is present the assembled file
+must match the manifest's SHA-256 before `done` is sent. Expiry, or a sender silent for
+3 minutes, aborts.
 
 ```mermaid
 sequenceDiagram
@@ -297,6 +302,7 @@ sequenceDiagram
 | `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~2 MB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (2 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |
+| `LIVE_FETCH_RETRY_MS` | 10 s | Receiver retry clock: re-fetch a still-missing placement and re-run a cycle without a new announcement |
 | `LIVE_IDLE_TIMEOUT_MS` | 3 min | Give up on a silent peer |
 | `LIVE_MIN_RETRANSMITS_PER_CHUNK` | 4 | Floor on re-sends per chunk before failing (actual: `max(N, 4)`) |
 | `LIVE_RELAY_DEMOTE_MISSES` | 2 | Reported misses before a relay is demoted |
