@@ -91,8 +91,9 @@ AES-GCM plus a whole-file checksum.)
 
 Under **Advanced options** (visible when Manual Exchange is selected on the send tab), the
 **Relay file through Nostr** switch replaces the direct connection with encrypted pieces
-carried through public Nostr relays, for files up to **100 MB**. Two choices appear under
-the switch:
+carried through public Nostr relays, for files up to **100 MB**. (This page describes the
+user-facing behavior; the technical design of both methods is documented in
+[NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).) Two choices appear under the switch:
 
 ### Stored, two copies
 
