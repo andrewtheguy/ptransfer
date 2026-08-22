@@ -4,10 +4,10 @@
 // Hard cap on the plaintext payload relayed through nostr events.
 export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
-// Plaintext chunk size. Encoded content per event is bounded by
-// z85((chunk + deflate overhead) + 12B nonce + 16B tag) ~= 41 KB for
-// incompressible data, comfortably under the ~64 KB content size the public
-// relay population is known to accept.
+// Payload chunk size (the payload is the whole file deflated once — or the
+// raw file when deflate would not shrink it). Encoded content per event is
+// bounded by z85(chunk + 12B nonce + 16B tag) ~= 41 KB, comfortably under
+// the ~64 KB content size the public relay population is known to accept.
 export const NOSTR_FILE_CHUNK_SIZE = 32768;
 
 // NIP-78 addressable event kind used for chunk (and probe) events.
@@ -18,10 +18,11 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 4;
+export const NOSTR_FILE_MANIFEST_VERSION = 5;
 
-// Codec identity: deflate then AES-256-GCM (nonce||ct||tag) then Z85.
-export const NOSTR_FILE_ENCRYPTION_LABEL = 'deflate+aes-256-gcm';
+// Codec identity: whole-payload deflate (skipped when it would not shrink)
+// before chunking, then per chunk AES-256-GCM (nonce||ct||tag) then Z85.
+export const NOSTR_FILE_ENCRYPTION_LABEL = 'aes-256-gcm';
 export const NOSTR_FILE_AAD_PREFIX = 'ptransfer-nostr-file:v1';
 
 // Relay batch selected per upload. Chunks are spread across the batch: chunk

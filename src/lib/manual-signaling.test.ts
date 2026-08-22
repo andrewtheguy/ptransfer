@@ -161,16 +161,18 @@ describe('Nostr file payload', () => {
   const createdAt = Math.floor(Date.now() / 1000);
   const validPayload: NostrFileLivePayload = {
     type: 'nostr-file-live',
-    v: 4,
+    v: 5,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
     fileHash: `${'B'.repeat(43)}=`,
     transferId: 'a'.repeat(32),
     pubkey: 'c'.repeat(64),
+    compression: 'none',
+    payloadSize: 5 * 1024 * 1024,
     chunkSize: 32768,
     totalChunks: Math.ceil((5 * 1024 * 1024) / 32768),
-    enc: 1,
+    enc: 2,
     controlRelays: ['wss://relay.one', 'wss://relay.two'],
     createdAt,
     expiresAt: createdAt + 3600,
@@ -191,6 +193,7 @@ describe('Nostr file payload', () => {
     const large: NostrFileLivePayload = {
       ...validPayload,
       fileSize: 100 * 1024 * 1024,
+      payloadSize: 100 * 1024 * 1024,
       totalChunks: 3200,
       controlRelays: [
         'wss://relay.example-one.com',
@@ -235,6 +238,7 @@ describe('Nostr file payload', () => {
       isValidNostrFileLivePayload({
         ...validPayload,
         fileSize: 101 * 1024 * 1024,
+        payloadSize: 101 * 1024 * 1024,
         totalChunks: Math.ceil((101 * 1024 * 1024) / 32768),
       }),
     ).toBe(false);
@@ -262,8 +266,8 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, type: 'offer' }),
     ).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, v: 3 })).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, enc: 2 })).toBe(
+    expect(isValidNostrFileLivePayload({ ...validPayload, v: 4 })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, enc: 1 })).toBe(
       false,
     );
     expect(

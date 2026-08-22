@@ -25,10 +25,20 @@ export interface NostrFileManifest {
   transferId: string;
   /** 64 hex chars — ephemeral nostr pubkey; authors filter + signature auth */
   pubkey: string;
+  /**
+   * Whole-payload compression applied before chunking: the file is deflated
+   * once as a whole, or sent as-is ('none') when deflate would not shrink it
+   * (already-compressed data is never recompressed).
+   */
+  compression: 'deflate' | 'none';
+  /** bytes actually chunked onto relays: deflate output size, or fileSize
+   * when compression is 'none' */
+  payloadSize: number;
   chunkSize: number;
   totalChunks: number;
-  /** codec version: 1 = deflate + AES-256-GCM (nonce||ct||tag) + Z85 */
-  enc: 1;
+  /** codec version: 2 = whole-payload deflate + AES-256-GCM (nonce||ct||tag)
+   * + Z85 per chunk */
+  enc: 2;
   /**
    * Relays carrying the encrypted control channel — a small set of proven
    * signaling relays that only ever see control-sized events. The chunk ring
@@ -65,7 +75,7 @@ export function isValidNostrFileManifest(
   const m = value as Record<string, unknown>;
 
   if (m.v !== NOSTR_FILE_MANIFEST_VERSION) return false;
-  if (m.enc !== 1) return false;
+  if (m.enc !== 2) return false;
 
   if (typeof m.fileName !== 'string' || m.fileName.length === 0) return false;
   if (typeof m.mimeType !== 'string') return false;
@@ -75,6 +85,21 @@ export function isValidNostrFileManifest(
     !Number.isInteger(m.fileSize) ||
     m.fileSize <= 0 ||
     m.fileSize > NOSTR_FILE_MAX_BYTES
+  ) {
+    return false;
+  }
+
+  if (m.compression !== 'deflate' && m.compression !== 'none') return false;
+
+  // The chunked payload never exceeds the plaintext: 'none' means the file
+  // travels as-is, and 'deflate' is only chosen when it strictly shrinks.
+  if (
+    typeof m.payloadSize !== 'number' ||
+    !Number.isInteger(m.payloadSize) ||
+    m.payloadSize <= 0 ||
+    (m.compression === 'none'
+      ? m.payloadSize !== m.fileSize
+      : m.payloadSize >= m.fileSize)
   ) {
     return false;
   }
@@ -91,7 +116,7 @@ export function isValidNostrFileManifest(
   if (
     typeof m.totalChunks !== 'number' ||
     !Number.isInteger(m.totalChunks) ||
-    m.totalChunks !== Math.ceil(m.fileSize / m.chunkSize)
+    m.totalChunks !== Math.ceil(m.payloadSize / m.chunkSize)
   ) {
     return false;
   }

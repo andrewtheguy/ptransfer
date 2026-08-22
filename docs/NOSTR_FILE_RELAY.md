@@ -80,21 +80,30 @@ handed out, so it stays quick.
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 
-The plaintext (file or ZIP, materialized in memory, ≤ 100 MB) is split into
+The plaintext (file or ZIP, materialized in memory, ≤ 100 MB) is **deflated once as a
+whole** (`compressPayload`), then the compressed payload is split into
 `NOSTR_FILE_CHUNK_SIZE` = 32 KiB chunks. Each chunk goes through:
 
 ```
-deflate → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
+whole-file deflate → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
 ```
 
+- Compressing before chunking means a highly compressible file collapses into a few
+  chunks instead of one event per 32 KiB of plaintext. When deflate would not shrink
+  the file (media, archives with compressed entries), the file is chunked as-is and the
+  manifest says `compression: 'none'` — already-compressed data is never recompressed.
+  The manifest carries `payloadSize` (the chunked byte count) next to `fileSize`; the
+  receiver assembles `payloadSize` bytes, inflates with the output bounded by
+  `fileSize` (decompression-bomb guard, exact-size match required), then verifies the
+  plaintext hash.
 - The AES-256-GCM key is random per transfer and travels **only** inside the manual
   payload, never to relays.
 - AAD = `ptransfer-nostr-file:v1:<transferId>:<index>:<total>` binds every chunk to its
   transfer and position — a tampered, substituted, or misplaced chunk fails GCM and is
   simply treated as missing.
 - Z85 (base85): ~1.25× expansion vs base64's ~1.33×, and JSON-escape free. A 32 KiB
-  incompressible chunk encodes to ~41 KB, comfortably under the ~64 KB
-  event-content ceiling the public relay population is known to accept. A 100 MB file is
+  chunk encodes to ~41 KB, comfortably under the ~64 KB event-content ceiling the
+  public relay population is known to accept. A 100 MB incompressible file is
   3200 chunks.
 
 ### Chunk event schema (`events.ts`)
@@ -106,7 +115,7 @@ Chunks (and health probes) are NIP-78 addressable events, kind `30078`:
 | `d` | `<transferId>:<chunkIndex>` (derived — the manifest needs no per-chunk event ids) |
 | `x` | `<transferId>` |
 | `chunk` | `<index> <totalChunks>` |
-| `encryption` | `deflate+aes-256-gcm` |
+| `encryption` | `aes-256-gcm` |
 | `expiration` | `created_at + 3600` (NIP-40) |
 
 Events are signed by an ephemeral Nostr identity generated per transfer, and deliberately
@@ -124,10 +133,11 @@ or failed upload are AES-256-GCM ciphertext under a key that was never published
 
 ### Manifest and payload (`manifest.ts`, `manual-signaling.ts`)
 
-The `NostrFileManifest` (v4) travels inside the PT01 manual payload and is never
+The `NostrFileManifest` (v5) travels inside the PT01 manual payload and is never
 published: version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId`
-(16 random bytes, hex), the ephemeral pubkey, chunk size, total chunks, the control
-relays (2–4), and created/expiry timestamps. The storage ring is not in it — it arrives
+(16 random bytes, hex), the ephemeral pubkey, the whole-payload compression mode
+(`deflate` or `none`) and the compressed payload size, chunk size, total chunks, the
+control relays (2–4), and created/expiry timestamps. The storage ring is not in it — it arrives
 over the control channel. The payload wrapper (`NostrFileLivePayload`) adds `type` and
 the base64 AES key — ~300 bytes total, a single QR code.
 
@@ -314,7 +324,7 @@ sequenceDiagram
 | File | Role |
 |---|---|
 | `src/lib/nostr-file/constants.ts` | All tunables above, with rationale comments |
-| `src/lib/nostr-file/codec.ts`, `z85.ts` | Chunk content pipeline (deflate → AES-256-GCM → Z85) |
+| `src/lib/nostr-file/codec.ts`, `z85.ts` | Whole-payload deflate + chunk content pipeline (AES-256-GCM → Z85) |
 | `src/lib/nostr-file/events.ts` | Chunk/probe event construction and fetch filters |
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |

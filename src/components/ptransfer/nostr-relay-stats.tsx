@@ -26,9 +26,10 @@ export function NostrRelayStatsPanel({
     const pct = (bytes / stats.fileBytes) * 100;
     return `${pct.toFixed(pct < 10 ? 1 : 0)}% of file size`;
   };
-  // The one number people ask for: encoded chunks (deflate + AES-GCM + Z85,
-  // one copy each) as a ratio of the original file, with 100% = original —
-  // below 100% deflate shrank it more than Z85 grew it, above 100% it grew.
+  // The one number people ask for: encoded chunks (whole-file deflate, then
+  // AES-GCM + Z85 per chunk, one copy each) as a ratio of the original file,
+  // with 100% = original — below 100% deflate shrank it more than Z85 grew
+  // it, above 100% it grew.
   const encodedVsOriginal = (): string | null => {
     if (stats.fileBytes <= 0 || stats.encodedBytes <= 0) return null;
     const pct = (stats.encodedBytes / stats.fileBytes) * 100;
@@ -40,6 +41,15 @@ export function NostrRelayStatsPanel({
   const rows: [string, string | null][] = [
     ['Role', stats.role],
     ['File size', formatFileSize(stats.fileBytes)],
+    [
+      // Only shown when the whole-file deflate actually shrank the payload;
+      // incompressible files travel as-is and the row would just repeat the
+      // file size.
+      'Compressed size',
+      stats.payloadBytes > 0 && stats.payloadBytes < stats.fileBytes
+        ? `${formatFileSize(stats.payloadBytes)} (${ofFileSize(stats.payloadBytes)})`
+        : null,
+    ],
     [
       'Chunks',
       stats.chunksTotal > 0
@@ -107,6 +117,7 @@ export function NostrRelayStatsPanel({
 
   const timings = [
     ['hash', ms(stats.phaseMs.hash)],
+    ['compress', ms(stats.phaseMs.compress)],
     ['control probe', ms(stats.phaseMs.controlProbe)],
     ['discover', ms(stats.phaseMs.discover)],
     ['health check', ms(stats.phaseMs.healthCheck)],

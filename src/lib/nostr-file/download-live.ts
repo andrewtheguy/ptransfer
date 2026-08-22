@@ -1,6 +1,6 @@
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
-import { assembleChunks, sha256 } from './codec';
+import { assembleChunks, decompressPayload, sha256 } from './codec';
 import {
   CLOCK_SKEW_TOLERANCE_SEC,
   LIVE_FETCH_RETRY_MS,
@@ -102,6 +102,7 @@ export async function receiveFileLive(
 
   const stats = createTransferStats('receiver');
   stats.fileBytes = manifest.fileSize;
+  stats.payloadBytes = manifest.payloadSize;
   stats.chunkSize = manifest.chunkSize;
   stats.chunksTotal = total;
   for (const relay of controlRelays) relayStatsFor(stats, relay, 'control');
@@ -212,7 +213,14 @@ export async function receiveFileLive(
             missing,
           });
           if (chunksDone === total) {
-            const data = assembleChunks(chunks, manifest.fileSize);
+            // Chunks carry the compressed payload; the file hash covers the
+            // decompressed plaintext, so inflate first (bounded by the
+            // manifest's fileSize), then verify.
+            const data = decompressPayload(
+              assembleChunks(chunks, manifest.payloadSize),
+              manifest.compression,
+              manifest.fileSize,
+            );
             const hash = uint8ArrayToBase64(await sha256(data));
             if (hash !== manifest.fileHash) {
               throw new Error(

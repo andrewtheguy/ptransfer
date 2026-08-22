@@ -46,6 +46,9 @@ export interface NostrFileRelayStats {
 export interface NostrFileTransferStats {
   role: 'sender' | 'receiver';
   fileBytes: number;
+  /** Bytes chunked onto relays after whole-payload compression; equals
+   * fileBytes when deflate would not shrink the file. */
+  payloadBytes: number;
   chunkSize: number;
   chunksTotal: number;
   /** Sender: encoded size of one copy of every chunk (codec output). */
@@ -81,7 +84,12 @@ export interface NostrFileTransferStats {
   /** Wall-clock phase durations, ms. */
   phaseMs: Partial<
     Record<
-      'hash' | 'controlProbe' | 'discover' | 'healthCheck' | 'transfer',
+      | 'hash'
+      | 'compress'
+      | 'controlProbe'
+      | 'discover'
+      | 'healthCheck'
+      | 'transfer',
       number
     >
   >;
@@ -117,6 +125,7 @@ export function createTransferStats(
   return {
     role,
     fileBytes: 0,
+    payloadBytes: 0,
     chunkSize: 0,
     chunksTotal: 0,
     encodedBytes: 0,
