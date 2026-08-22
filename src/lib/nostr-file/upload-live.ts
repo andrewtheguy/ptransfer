@@ -63,7 +63,7 @@ export interface LiveSendProgress {
 /**
  * Live (single-copy) relay transfer, sender side.
  *
- * Unlike uploadFileToNostr, the manual payload is handed out *before* the
+ * The manual payload is handed out *before* the
  * upload (`onReady`), and the sender stays online: each chunk is published to
  * one ring relay (chunk i → relays[i % N], walking the ring on rejection),
  * availability is announced over the encrypted control channel after every
@@ -105,7 +105,7 @@ export async function sendFileLive(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
-  const stats = createTransferStats('sender', 'live');
+  const stats = createTransferStats('sender');
   stats.fileBytes = data.length;
   stats.chunkSize = NOSTR_FILE_CHUNK_SIZE;
 
@@ -156,7 +156,6 @@ export async function sendFileLive(
       totalChunks: total,
       enc: 1,
       relays: [...relays],
-      replication: 1,
       createdAt,
       expiresAt,
     };

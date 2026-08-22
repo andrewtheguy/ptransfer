@@ -7,11 +7,11 @@ import type {
 } from '@/lib/nostr-file';
 
 /**
- * Detailed statistics for a Nostr file relay transfer (stored or live, both
- * roles): chunk and byte totals, overhead versus the raw file, retry/re-send
- * counts, control-channel traffic, and a per-relay breakdown. Values come
- * from the live accumulator in TransferState.stats, so the panel updates as
- * the transfer runs and freezes at its final values on completion.
+ * Detailed statistics for a Nostr file relay transfer (both roles): chunk and
+ * byte totals, overhead versus the raw file, re-send counts, control-channel
+ * traffic, and a per-relay breakdown. Values come from the live accumulator
+ * in TransferState.stats, so the panel updates as the transfer runs and
+ * freezes at its final values on completion.
  */
 export function NostrRelayStatsPanel({
   stats,
@@ -38,10 +38,7 @@ export function NostrRelayStatsPanel({
     value === undefined ? null : `${(value / 1000).toFixed(1)}s`;
 
   const rows: [string, string | null][] = [
-    [
-      'Method',
-      `${stats.variant === 'live' ? 'Live, single copy' : 'Stored, two copies'} (${stats.role})`,
-    ],
+    ['Role', stats.role],
     ['File size', formatFileSize(stats.fileBytes)],
     [
       'Chunks',
@@ -70,18 +67,9 @@ export function NostrRelayStatsPanel({
           ? `${stats.publishAttempts}${stats.publishesFailed > 0 ? ` (${stats.publishesFailed} gave up after retries)` : ''}`
           : null,
       ],
+      ['Chunks re-sent', String(stats.chunksResent)],
+      ['Relays demoted', String(stats.relaysDemoted)],
     );
-    if (stats.variant === 'stored') {
-      rows.push([
-        'Fallback copies',
-        stats.fallbackPublishes > 0 ? String(stats.fallbackPublishes) : '0',
-      ]);
-    } else {
-      rows.push(
-        ['Chunks re-sent', String(stats.chunksResent)],
-        ['Relays demoted', String(stats.relaysDemoted)],
-      );
-    }
   } else {
     rows.push(
       [
@@ -100,23 +88,15 @@ export function NostrRelayStatsPanel({
         'Duplicate / corrupt events',
         `${stats.duplicateEvents} / ${stats.corruptEvents}`,
       ],
+      ['Fetch cycles', String(stats.ackCycles)],
+      ['Missing pieces reported', String(stats.missingReported)],
     );
-    if (stats.variant === 'stored') {
-      rows.push(['Sweep passes', String(stats.sweepPasses)]);
-    } else {
-      rows.push(
-        ['Fetch cycles', String(stats.ackCycles)],
-        ['Missing pieces reported', String(stats.missingReported)],
-      );
-    }
   }
 
-  if (stats.variant === 'live') {
-    rows.push([
-      'Control messages',
-      `${stats.controlSent} sent / ${stats.controlReceived} received`,
-    ]);
-  }
+  rows.push([
+    'Control messages',
+    `${stats.controlSent} sent / ${stats.controlReceived} received`,
+  ]);
 
   if (stats.relaysChecked > 0) {
     rows.push([

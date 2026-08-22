@@ -14,7 +14,7 @@ import type { NostrFilePool, PoolSubscription } from './pool';
 import type { NostrFileTransferStats } from './stats';
 
 /**
- * Encrypted control channel for the live (single-copy) relay variant.
+ * Encrypted control channel for the live (single-copy) relay transfer.
  *
  * Both peers derive the same AES-GCM key from the file key that travels in
  * the manual payload (HKDF, distinct info label), so only the holder of the

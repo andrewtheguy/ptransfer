@@ -130,8 +130,6 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                   stats: p.stats,
                 });
                 break;
-              case 'uploading':
-                break;
               case 'transfer': {
                 if (!payloadBinary) break;
                 const chunksDone = p.chunksDone ?? 0;

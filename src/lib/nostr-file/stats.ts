@@ -1,11 +1,11 @@
 /**
- * Detailed transfer statistics for the Nostr file relay flows (stored and
- * live, both roles). One mutable accumulator is created per transfer and
- * threaded through the relay/codec layers, which bump counters in place;
+ * Detailed transfer statistics for the Nostr file relay flow (both roles).
+ * One mutable accumulator is created per transfer and threaded through the
+ * relay/codec layers, which bump counters in place;
  * every progress callback carries the same object so the UI always renders
  * the current totals. Byte counters measure event *content* (the Z85 text),
  * not the surrounding event JSON, so overhead ratios compare what the codec
- * and replication actually cost against the raw file size.
+ * and re-sends actually cost against the raw file size.
  */
 
 export interface NostrFileRelayStats {
@@ -32,31 +32,28 @@ export interface NostrFileRelayStats {
   chunksSupplied: number;
   /** Receiver: events that failed to parse or decrypt. */
   corruptEvents: number;
-  /** Live sender: receiver-reported misses against this relay. */
+  /** Sender: receiver-reported misses against this relay. */
   missesReported: number;
-  /** Live sender: demoted after repeated misses. */
+  /** Sender: demoted after repeated misses. */
   demoted: boolean;
 }
 
 export interface NostrFileTransferStats {
   role: 'sender' | 'receiver';
-  variant: 'stored' | 'live';
   fileBytes: number;
   chunkSize: number;
   chunksTotal: number;
   /** Sender: encoded size of one copy of every chunk (codec output). */
   encodedBytes: number;
-  /** Sender: chunk-event publishes accepted — all copies and re-sends. */
+  /** Sender: chunk-event publishes accepted — first placements and re-sends. */
   eventsPublished: number;
   publishAttempts: number;
   publishesFailed: number;
   /** Sender: encoded content bytes accepted by relays. */
   bytesPublished: number;
-  /** Stored sender: accepted copies placed beyond the planned stripe. */
-  fallbackPublishes: number;
-  /** Live sender: chunks re-sent after the receiver reported them missing. */
+  /** Sender: chunks re-sent after the receiver reported them missing. */
   chunksResent: number;
-  /** Live sender: relays demoted for not serving acknowledged writes. */
+  /** Sender: relays demoted for not serving acknowledged writes. */
   relaysDemoted: number;
   /** Receiver: chunk events received (duplicates included). */
   eventsReceived: number;
@@ -65,13 +62,11 @@ export interface NostrFileTransferStats {
   corruptEvents: number;
   queries: number;
   queryFailures: number;
-  /** Stored receiver: sweep passes actually run after the placement pass. */
-  sweepPasses: number;
-  /** Live receiver: fetch/ack cycles run. */
+  /** Receiver: fetch/ack cycles run. */
   ackCycles: number;
-  /** Live receiver: missing placements reported to the sender. */
+  /** Receiver: missing placements reported to the sender. */
   missingReported: number;
-  /** Live: control-channel events published / peer messages unsealed. */
+  /** Control-channel events published / peer messages unsealed. */
   controlSent: number;
   controlReceived: number;
   /** Relay discovery: candidates found, probed, and passing. */
@@ -106,11 +101,9 @@ export function createRelayStats(url: string): NostrFileRelayStats {
 
 export function createTransferStats(
   role: NostrFileTransferStats['role'],
-  variant: NostrFileTransferStats['variant'],
 ): NostrFileTransferStats {
   return {
     role,
-    variant,
     fileBytes: 0,
     chunkSize: 0,
     chunksTotal: 0,
@@ -119,7 +112,6 @@ export function createTransferStats(
     publishAttempts: 0,
     publishesFailed: 0,
     bytesPublished: 0,
-    fallbackPublishes: 0,
     chunksResent: 0,
     relaysDemoted: 0,
     eventsReceived: 0,
@@ -128,7 +120,6 @@ export function createTransferStats(
     corruptEvents: 0,
     queries: 0,
     queryFailures: 0,
-    sweepPasses: 0,
     ackCycles: 0,
     missingReported: 0,
     controlSent: 0,

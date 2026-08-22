@@ -298,51 +298,17 @@ export function generateMutualClipboardData(binary: Uint8Array): string {
 }
 
 /**
- * Nostr file relay payload: the manifest of a file already saved to nostr
- * relays plus the decryption key. One-way — the receiver needs nothing else
- * and sends nothing back. Because the key rides in it, this payload must only
- * ever travel over the trusted manual channel (QR / direct copy-paste).
- */
-export interface NostrFilePayload extends NostrFileManifest {
-  type: 'nostr-file';
-  /** base64(32-byte AES-256-GCM key) */
-  key: string;
-}
-
-/**
- * Live (single-copy) Nostr file relay payload: the same manifest, handed out
- * *before* the upload. The sender stays online and the two sides coordinate
- * over an encrypted control channel on the same relays (keyed off `key`), so
- * both need the relays at the same time. `replication` is always 1 — pieces
- * a receiver cannot fetch are re-sent individually instead of being stored
- * twice up front.
+ * Live (single-copy) Nostr file relay payload: the manifest of the transfer
+ * plus the decryption key, handed out *before* the upload. The sender stays
+ * online and the two sides coordinate over an encrypted control channel on
+ * the same relays (keyed off `key`), so both need the relays at the same
+ * time. Because the key rides in it, this payload must only ever travel over
+ * the trusted manual channel (QR / direct copy-paste).
  */
 export interface NostrFileLivePayload extends NostrFileManifest {
   type: 'nostr-file-live';
   /** base64(32-byte AES-256-GCM key) */
   key: string;
-}
-
-function hasValidKeyAndManifest(
-  payload: unknown,
-): payload is NostrFileManifest & { key: string } {
-  if (!payload || typeof payload !== 'object') return false;
-  const p = payload as Record<string, unknown>;
-  if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
-    return false;
-  }
-  return isValidNostrFileManifest(payload);
-}
-
-/**
- * Validate NostrFilePayload structure
- */
-export function isValidNostrFilePayload(
-  payload: unknown,
-): payload is NostrFilePayload {
-  if (!payload || typeof payload !== 'object') return false;
-  if ((payload as Record<string, unknown>).type !== 'nostr-file') return false;
-  return hasValidKeyAndManifest(payload);
 }
 
 /**
@@ -354,22 +320,23 @@ export function isValidNostrFileLivePayload(
   if (!payload || typeof payload !== 'object') return false;
   const p = payload as Record<string, unknown>;
   if (p.type !== 'nostr-file-live') return false;
-  if (p.replication !== 1) return false;
-  return hasValidKeyAndManifest(payload);
+  if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
+    return false;
+  }
+  return isValidNostrFileManifest(payload);
 }
 
 /**
- * Generate a nostr file relay payload (stored or live) as PT01 binary data
+ * Generate a nostr file relay payload as PT01 binary data
  */
 export function generateNostrFilePayloadBinary(
-  payload: NostrFilePayload | NostrFileLivePayload,
+  payload: NostrFileLivePayload,
 ): Uint8Array {
   return encodeManualPayload(payload);
 }
 
 export type ParsedManualPayload =
   | { kind: 'signaling'; payload: SignalingPayload }
-  | { kind: 'nostr-file'; payload: NostrFilePayload }
   | { kind: 'nostr-file-live'; payload: NostrFileLivePayload };
 
 /**
@@ -381,9 +348,6 @@ export function parseAnyManualPayload(
 ): ParsedManualPayload | null {
   try {
     const payload = decodeManualPayload(binary);
-    if (isValidNostrFilePayload(payload)) {
-      return { kind: 'nostr-file', payload };
-    }
     if (isValidNostrFileLivePayload(payload)) {
       return { kind: 'nostr-file-live', payload };
     }

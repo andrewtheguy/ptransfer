@@ -1,7 +1,6 @@
 export * from './codec';
 export * from './constants';
 export * from './control';
-export * from './download';
 export * from './download-live';
 export * from './events';
 export * from './fetch';

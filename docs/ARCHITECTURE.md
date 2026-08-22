@@ -453,12 +453,9 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 
 ### Nostr File Relay (`src/lib/nostr-file/`) — Experimental
 
-An opt-in Manual Exchange variant (Advanced options → "Relay file through Nostr", max 100 MB) that replaces the direct WebRTC connection with encrypted pieces carried through public Nostr relays — the peers never connect to each other. It comes in two flavors, chosen under the switch:
+An opt-in Manual Exchange variant (Advanced options → "Relay file through Nostr", max 100 MB) that replaces the direct WebRTC connection with encrypted pieces carried through public Nostr relays — the peers never connect to each other. The payload (`nostr-file-live`) is handed out *before* the upload, each piece is stored once, and an encrypted control channel on the same relays lets the receiver report the pieces it could not fetch so only those are re-sent. Both sides stay online.
 
-- **Stored, two copies** (`nostr-file` payload): store-and-forward. The sender uploads the complete file first with two copies of every piece striped across up to 16 health-checked relays, and only after every piece is confirmed does the payload hand the receiver everything needed to download and decrypt — no live connection between the peers.
-- **Live, single copy** (`nostr-file-live` payload): the payload is handed out *before* the upload, each piece is stored once, and an encrypted control channel on the same relays lets the receiver report the pieces it could not fetch so only those are re-sent. Both sides stay online.
-
-Both flavors share the chunk pipeline (`deflate → AES-256-GCM → Z85`, 32 KiB chunks as kind-30078 events with a 1-hour NIP-40 expiration), NIP-66/65 relay discovery with full-chunk-size write→read health probes, and a manifest that travels only inside the PT01 payload — which, unlike the signaling payloads, **contains the decryption key**, so it must only travel over a trusted channel. Relays see only ciphertext, sizes, timing, and an ephemeral pubkey.
+The chunk pipeline is `deflate → AES-256-GCM → Z85`, 32 KiB chunks as kind-30078 events with a 1-hour NIP-40 expiration, over NIP-66/65 relay discovery with full-chunk-size write→read health probes; the manifest travels only inside the PT01 payload — which, unlike the signaling payloads, **contains the decryption key**, so it must only travel over a trusted channel. Relays see only ciphertext, sizes, timing, and an ephemeral pubkey.
 
 The full architecture — relay discovery and placement ring, chunk event schema, manifest format, the live control-channel protocol (message vocabulary, re-sends, relay demotion), sequence diagrams, security model, and all tunables — is documented in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
 

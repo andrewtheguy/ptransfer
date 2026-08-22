@@ -1,4 +1,5 @@
 import { wipeBufferSource } from '../crypto/memory';
+import { base64ToUint8Array } from '../nostr/events';
 import { chunkAad, decodeChunkContent } from './codec';
 import { CLOCK_SKEW_TOLERANCE_SEC, RELAY_QUERY_MAX_WAIT_MS } from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
@@ -6,7 +7,12 @@ import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
-/** Shared receiver-side pieces of the stored and live relay flows. */
+/** Receiver-side pieces of the relay flow. */
+
+/** Decode the payload's base64 key field into raw bytes. */
+export function decodePayloadKey(key: string): Uint8Array {
+  return base64ToUint8Array(key);
+}
 
 /**
  * Reject a manifest whose window is over (or not yet begun, by a device

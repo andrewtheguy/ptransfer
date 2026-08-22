@@ -105,7 +105,7 @@ All signaling methods share the same **data-channel transfer protocol**: P2P tra
 - **Nostr** (default): Requires internet. Decentralized relay signaling. Devices can be on different networks.
 - **Manual Exchange**: No internet required. Exchange signaling via QR scan or copy/paste (camera optional). With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
 
-**Data Transfer**: WebRTC P2P only. STUN may help the peers discover a direct route, but TURN relaying is not supported. If a direct P2P connection cannot be established, the transfer does not complete — there is no automatic in-app fallback. When this happens, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices.
+**Data Transfer**: WebRTC P2P only. STUN may help the peers discover a direct route, but TURN relaying is not supported. If a direct P2P connection cannot be established, the transfer does not complete — there is no automatic in-app fallback. When this happens, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. The one exception is the experimental opt-in **Relay file through Nostr** option in Manual Exchange (`nostr-file-live` payload): it makes no WebRTC connection at all and instead carries the encrypted pieces through public Nostr relays — see [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md).
 
 See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encryption specifics.
 
@@ -119,7 +119,7 @@ Receivers choose the matching receive mode:
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
 - [Manual Exchange](./docs/MANUAL_EXCHANGE.md) - User guide for the Manual Exchange mode
-- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the experimental relay-file-through-Nostr methods (Stored and Live)
+- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the experimental relay-file-through-Nostr transfer
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
 
 ## License

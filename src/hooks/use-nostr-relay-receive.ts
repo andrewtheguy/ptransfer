@@ -1,13 +1,9 @@
 import { SimplePool } from 'nostr-tools';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  NostrFileLivePayload,
-  NostrFilePayload,
-} from '@/lib/manual-signaling';
+import type { NostrFileLivePayload } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import {
   decodePayloadKey,
-  downloadFileFromNostr,
   NostrFileCancelledError,
   receiveFileLive,
 } from '@/lib/nostr-file';
@@ -17,7 +13,7 @@ import { chunkBytesEstimate } from './nostr-relay-source';
 export interface UseNostrRelayReceiveReturn {
   state: TransferState;
   receivedContent: ReceivedContent | null;
-  start: (payload: NostrFilePayload | NostrFileLivePayload) => Promise<void>;
+  start: (payload: NostrFileLivePayload) => Promise<void>;
   cancel: () => void;
   reset: () => void;
 }
@@ -27,21 +23,17 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
   const [receivedContent, setReceivedContent] =
     useState<ReceivedContent | null>(null);
 
-  const cancelledRef = useRef(false);
+  // Cancellation is per run: cancel() unlocks receivingRef, so a new receive
+  // can start while the previous one is still winding down, and that run has
+  // to keep seeing its own cancellation (and stop touching the shared state).
+  const runRef = useRef<{ cancelled: boolean } | null>(null);
   const receivingRef = useRef(false);
-  const poolRef = useRef<SimplePool | null>(null);
-  const liveRef = useRef(false);
 
+  // The engine sends the sender a cancel notice first and closes its pool in
+  // start()'s finally once it winds down.
   const cancel = useCallback(() => {
-    cancelledRef.current = true;
+    if (runRef.current) runRef.current.cancelled = true;
     receivingRef.current = false;
-    // The stored download has nothing to tell anyone: drop the sockets now.
-    // The live flow sends the sender a cancel notice first and closes its
-    // own pool when it winds down.
-    if (!liveRef.current && poolRef.current) {
-      poolRef.current.destroy();
-      poolRef.current = null;
-    }
     setState({ status: 'idle' });
   }, []);
 
@@ -54,146 +46,116 @@ export function useNostrRelayReceive(): UseNostrRelayReceiveReturn {
   // winds down and its pool is closed in start()'s finally (no setState here).
   useEffect(
     () => () => {
-      cancelledRef.current = true;
-      receivingRef.current = false;
-      if (!liveRef.current && poolRef.current) {
-        poolRef.current.destroy();
-        poolRef.current = null;
-      }
+      if (runRef.current) runRef.current.cancelled = true;
     },
     [],
   );
 
-  const start = useCallback(
-    async (payload: NostrFilePayload | NostrFileLivePayload) => {
-      // Guard against concurrent invocations
-      if (receivingRef.current) return;
-      receivingRef.current = true;
-      cancelledRef.current = false;
-      setReceivedContent(null);
+  const start = useCallback(async (payload: NostrFileLivePayload) => {
+    // Guard against concurrent invocations
+    if (receivingRef.current) return;
+    receivingRef.current = true;
+    const run = { cancelled: false };
+    runRef.current = run;
+    setReceivedContent(null);
 
-      const live = payload.type === 'nostr-file-live';
-      liveRef.current = live;
-      const fileMetadata = {
-        fileName: payload.fileName,
-        fileSize: payload.fileSize,
-        mimeType: payload.mimeType,
-      };
-      const baseState = {
-        contentType: 'file' as const,
-        fileMetadata,
-        expiresAt: payload.expiresAt,
-        currentRelays: payload.relays,
-      };
-      let lastStats: TransferState['stats'];
+    const fileMetadata = {
+      fileName: payload.fileName,
+      fileSize: payload.fileSize,
+      mimeType: payload.mimeType,
+    };
+    const baseState = {
+      contentType: 'file' as const,
+      fileMetadata,
+      expiresAt: payload.expiresAt,
+      currentRelays: payload.relays,
+    };
+    let lastStats: TransferState['stats'];
 
+    try {
+      setState({
+        status: 'fetching',
+        message: 'Connecting to the sender through Nostr relays...',
+        progress: { current: 0, total: payload.fileSize },
+        ...baseState,
+      });
+
+      // Reconnect dropped sockets: the control channel subscription has to
+      // outlive transient relay hiccups.
+      const pool = new SimplePool({ enableReconnect: true });
+      const keyBytes = decodePayloadKey(payload.key);
       try {
-        setState({
-          status: 'fetching',
-          message: live
-            ? 'Connecting to the sender through Nostr relays...'
-            : 'Fetching encrypted pieces from Nostr relays...',
-          progress: { current: 0, total: payload.fileSize },
-          ...baseState,
-        });
-
-        const pool = new SimplePool(live ? { enableReconnect: true } : {});
-        poolRef.current = pool;
-        const keyBytes = decodePayloadKey(payload.key);
-        try {
-          await run(pool, keyBytes);
-        } finally {
-          // Close this run's sockets — never a newer run's pool.
-          pool.destroy();
-          if (poolRef.current === pool) poolRef.current = null;
-        }
-      } catch (error) {
-        if (
-          !cancelledRef.current &&
-          !(error instanceof NostrFileCancelledError)
-        ) {
-          setState({
-            status: 'error',
-            message:
-              error instanceof Error ? error.message : 'Failed to receive',
-            stats: lastStats,
-          });
-        }
+        await doReceive(pool, keyBytes);
       } finally {
-        receivingRef.current = false;
+        // Close this run's sockets — never a newer run's pool.
+        pool.destroy();
       }
-
-      async function run(
-        pool: SimplePool,
-        keyBytes: Uint8Array,
-      ): Promise<void> {
-        const chunkBytes = chunkBytesEstimate(
-          payload.fileSize,
-          payload.totalChunks,
-        );
-        const isCancelled = () => cancelledRef.current;
-        const progressOf = (chunksDone: number) => ({
-          current: Math.min(chunksDone * chunkBytes, payload.fileSize),
-          total: payload.fileSize,
-        });
-
-        const data = live
-          ? await receiveFileLive(payload, keyBytes, {
-              pool,
-              isCancelled,
-              onProgress: (p) => {
-                if (cancelledRef.current) return;
-                lastStats = p.stats;
-                setState({
-                  status: 'fetching',
-                  message: !p.senderConnected
-                    ? 'Waiting for the sender...'
-                    : p.chunksDone === p.chunksTotal
-                      ? 'All pieces received — verifying...'
-                      : `Receiving pieces... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
-                  progress: progressOf(p.chunksDone),
-                  ...baseState,
-                  stats: p.stats,
-                });
-              },
-            })
-          : await downloadFileFromNostr(payload, keyBytes, {
-              pool,
-              isCancelled,
-              onProgress: (p) => {
-                if (cancelledRef.current) return;
-                lastStats = p.stats;
-                setState({
-                  status: 'fetching',
-                  message: `Fetching encrypted pieces... ${p.chunksDone}/${p.chunksTotal}`,
-                  progress: progressOf(p.chunksDone),
-                  ...baseState,
-                  stats: p.stats,
-                });
-              },
-            });
-        if (cancelledRef.current) return;
-
-        setReceivedContent({
-          contentType: 'file',
-          data: new Blob([data as BlobPart], {
-            type: payload.mimeType || 'application/octet-stream',
-          }),
-          fileName: payload.fileName,
-          fileSize: data.length,
-          mimeType: payload.mimeType,
-        });
+    } catch (error) {
+      if (!run.cancelled && !(error instanceof NostrFileCancelledError)) {
         setState({
-          status: 'complete',
-          message: 'File received via Nostr!',
-          contentType: 'file',
-          fileMetadata,
+          status: 'error',
+          message: error instanceof Error ? error.message : 'Failed to receive',
           stats: lastStats,
         });
       }
-    },
-    [],
-  );
+    } finally {
+      // A cancelled run may have been superseded already; only the current
+      // one may unlock receiving.
+      if (runRef.current === run) receivingRef.current = false;
+    }
+
+    async function doReceive(
+      pool: SimplePool,
+      keyBytes: Uint8Array,
+    ): Promise<void> {
+      const chunkBytes = chunkBytesEstimate(
+        payload.fileSize,
+        payload.totalChunks,
+      );
+      const isCancelled = () => run.cancelled;
+
+      const data = await receiveFileLive(payload, keyBytes, {
+        pool,
+        isCancelled,
+        onProgress: (p) => {
+          if (run.cancelled) return;
+          lastStats = p.stats;
+          setState({
+            status: 'fetching',
+            message: !p.senderConnected
+              ? 'Waiting for the sender...'
+              : p.chunksDone === p.chunksTotal
+                ? 'All pieces received — verifying...'
+                : `Receiving pieces... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
+            progress: {
+              current: Math.min(p.chunksDone * chunkBytes, payload.fileSize),
+              total: payload.fileSize,
+            },
+            ...baseState,
+            stats: p.stats,
+          });
+        },
+      });
+      if (run.cancelled) return;
+
+      setReceivedContent({
+        contentType: 'file',
+        data: new Blob([data as BlobPart], {
+          type: payload.mimeType || 'application/octet-stream',
+        }),
+        fileName: payload.fileName,
+        fileSize: data.length,
+        mimeType: payload.mimeType,
+      });
+      setState({
+        status: 'complete',
+        message: 'File received via Nostr!',
+        contentType: 'file',
+        fileMetadata,
+        stats: lastStats,
+      });
+    }
+  }, []);
 
   return useMemo(
     () => ({ state, receivedContent, start, cancel, reset }),
