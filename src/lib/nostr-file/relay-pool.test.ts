@@ -4,6 +4,7 @@ import { DEFAULT_RELAYS } from '../nostr/relays';
 import { CONTROL_PROBE_BYTES, CONTROL_RELAY_COUNT } from './constants';
 import { createMockPool } from './mock-pool';
 import {
+  getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
   parseRelayCandidates,
@@ -90,6 +91,45 @@ describe('parseRelayCandidates', () => {
     expect(
       parseRelayCandidates([makeEvent(1, [['r', 'wss://relay.example']])]),
     ).toEqual([]);
+  });
+});
+
+describe('getRelayCandidates', () => {
+  it('re-filters cached candidates through the current normalization rules', async () => {
+    // A cache written before a rule tightened (here: reserved domains) can
+    // still be fresh — its entries must not reach the health check.
+    const storage = memoryStorage({
+      candidates: [
+        'wss://relay.example.com',
+        'wss://good.example/',
+        'wss://good.example',
+      ],
+      discoveredAt: 1000,
+      cursor: 0,
+    });
+    const candidates = await getRelayCandidates(
+      createMockPool(),
+      storage,
+      2000,
+    );
+    expect(candidates).toEqual(['wss://good.example']);
+  });
+
+  it('falls through to discovery when the cache filters to nothing', async () => {
+    const storage = memoryStorage({
+      candidates: ['wss://relay.example.com'],
+      discoveredAt: 1000,
+      cursor: 3,
+    });
+    const candidates = await getRelayCandidates(
+      createMockPool(),
+      storage,
+      2000,
+    );
+    expect(candidates).toEqual([]);
+    // Discovery ran and persisted its (empty) result, keeping the cursor.
+    expect(storage.state?.discoveredAt).toBe(2000);
+    expect(storage.state?.cursor).toBe(3);
   });
 });
 
