@@ -2,7 +2,7 @@
  * A repeatable, lazily-opened payload for the P2P transfer pipeline.
  *
  * `size` is null when the source does not determine its final length up front
- * (for example, a ZIP packaged while it is being sent). `estimatedSize` is
+ * (for example, a ZIP compressed while it is being sent). `estimatedSize` is
  * only a progress/storage hint; the transfer protocol validates the actual
  * byte count at end of stream.
  */

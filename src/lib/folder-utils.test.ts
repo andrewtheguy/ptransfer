@@ -58,10 +58,24 @@ function readCentralEntries(archive: Uint8Array): Map<string, CentralEntry> {
   return entries;
 }
 
-function expectStoredEntriesWithValidCrc(
+async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  const decompressor = new DecompressionStream('deflate-raw');
+  const writer = decompressor.writable.getWriter();
+  void writer.write(data.slice()).catch(() => {});
+  void writer.close().catch(() => {});
+  return readAll(decompressor.readable);
+}
+
+/**
+ * Strict validation equivalent to what macOS Archive Utility performs:
+ * every entry must be deflated, inflate cleanly with an implementation
+ * independent of the compressor's caller (the platform inflater here,
+ * fflate's in unzipSync round-trips), and match the recorded CRC and sizes.
+ */
+async function expectDeflatedEntriesWithValidCrc(
   archive: Uint8Array,
   expected: Record<string, Uint8Array>,
-): void {
+): Promise<void> {
   const view = new DataView(
     archive.buffer,
     archive.byteOffset,
@@ -73,8 +87,7 @@ function expectStoredEntriesWithValidCrc(
   for (const [name, bytes] of Object.entries(expected)) {
     const entry = centralEntries.get(name);
     expect(entry, `missing central entry for ${name}`).toBeDefined();
-    expect(entry?.method, `compression method for ${name}`).toBe(0);
-    expect(entry?.compressedSize).toBe(bytes.length);
+    expect(entry?.method, `compression method for ${name}`).toBe(8);
     expect(entry?.uncompressedSize).toBe(bytes.length);
     expect(entry?.crc, `central CRC for ${name}`).toBe(crc32(bytes));
 
@@ -83,10 +96,15 @@ function expectStoredEntriesWithValidCrc(
     const nameLength = view.getUint16(localOffset + 26, true);
     const extraLength = view.getUint16(localOffset + 28, true);
     const dataOffset = localOffset + 30 + nameLength + extraLength;
-    expect(
-      archive.subarray(dataOffset, dataOffset + entry!.compressedSize),
-      `stored bytes for ${name}`,
-    ).toEqual(bytes);
+    const compressed = archive.subarray(
+      dataOffset,
+      dataOffset + entry!.compressedSize,
+    );
+    const inflated = await inflateRaw(compressed);
+    expect(inflated, `inflated bytes for ${name}`).toEqual(bytes);
+    expect(entry?.crc, `CRC of inflated bytes for ${name}`).toBe(
+      crc32(inflated),
+    );
   }
 }
 
@@ -200,7 +218,33 @@ describe('createZipTransferSource', () => {
     for (const [name, data] of Object.entries(expected)) {
       expect(entries[name]).toEqual(data);
     }
-    expectStoredEntriesWithValidCrc(archive, expected);
+    await expectDeflatedEntriesWithValidCrc(archive, expected);
+  });
+
+  it('compresses input that breaks fflate streaming deflate (fflate#260)', async () => {
+    // 234-byte EMF prefix from 101arrowz/fflate#260: fflate's streaming
+    // ZipDeflate emits an invalid back-reference for this input at every
+    // compression level, so the entry cannot be inflated even though its
+    // recorded CRC is correct. Native CompressionStream must handle it.
+    const emfPrefix = Uint8Array.from(
+      atob(
+        'AQAAAGwAAAAAAAAAAAAAAM0AAAAcAAAAAAAAAAAAAABqHAAA/gMAACBFTUYAAAEAAAsAADIAAAAH' +
+          'AAAAAAAAAAAAAAAAAAAAAAUAAAAEAADEAQAAaQEAAAAAAAAAAAAAAAAAAOPjBgAcgwUARgAAAGQC' +
+          'AABWAgAAR0RJQwEAAIAAAwAAfQ+OiAAAAAA+AgAAAQAJAAADHwEAAAYAKwAAAAAABAAAAAMBCAAF' +
+          'AAAACwIAAAAABQAAAAwCHQDOAAMAAAAeAAcAAAD8AgAAaWlpAAAABAAAAC0BAAAJAAAAHQYhAPAA' +
+          'HQABAAAA',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    const files = [new File([emfPrefix as BlobPart], 'image.emf')];
+
+    const archive = await readAll(
+      createZipTransferSource(files, 'emf').stream(),
+    );
+    await expectDeflatedEntriesWithValidCrc(archive, {
+      'image.emf': emfPrefix,
+    });
+    expect(unzipSync(archive)['image.emf']).toEqual(emfPrefix);
   });
 
   it('uses webkitRelativePath as the entry path when present', async () => {

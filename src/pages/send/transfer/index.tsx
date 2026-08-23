@@ -146,7 +146,7 @@ export function SendTransferPage() {
           setStep('ready');
         } else {
           // Multiple files, or a folder selection whose structure must be
-          // preserved: create a lazy ZIP source. Packaging starts only once
+          // preserved: create a lazy ZIP source. Compression starts only once
           // the data channel is ready and its output is sent immediately.
           if (cancelled) return;
           const archiveName = `${getArchiveBaseName(files)}_${archiveTimestamp()}`;

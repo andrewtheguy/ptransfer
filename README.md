@@ -18,7 +18,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Browser Requirements
 
-Receiving a payload over 100MB uses the origin-private file system (OPFS). Senders never need OPFS: direct files are read lazily from the picker, and multi-file/folder ZIP output is packaged and sent on the fly. OPFS requires:
+Receiving a payload over 100MB uses the origin-private file system (OPFS). Senders never need OPFS: direct files are read lazily from the picker, and multi-file/folder ZIP output is compressed and sent on the fly. OPFS requires:
 
 - **A secure context**: the app must be served over HTTPS (or `localhost`) — OPFS and the Web Crypto API are unavailable otherwise
 - **`FileSystemFileHandle.createWritable`**: available in Chromium browsers since 86, Firefox since 111 (desktop and Android), Samsung Internet since 21, and Safari/iOS since 26 — see the [support matrix](https://caniuse.com/mdn-api_filesystemfilehandle_createwritable). Note this is a stricter requirement than the general OPFS feature (Baseline since March 2023): Safari had OPFS from 16.4 but only gained `createWritable`, the part this app needs, in 26
