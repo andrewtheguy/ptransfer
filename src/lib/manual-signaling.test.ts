@@ -60,6 +60,7 @@ describe('Manual Signaling Utils', () => {
     expect(parsed?.candidates).toHaveLength(1);
     expect(parsed?.candidates[0]).toBe(mockCandidates[0].candidate);
     expect(parsed?.fileName).toBe(metadata.fileName);
+    expect(parsed?.contentEncoding).toBe(metadata.contentEncoding);
     expect(parsed?.publicKey).toEqual(Array.from(mockPublicKey));
   });
 

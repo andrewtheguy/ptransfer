@@ -602,12 +602,12 @@ flowchart TD
     Signaling --> DTLS[WebRTC handshake<br/>DTLS]
     DTLS --> Channel[P2P data channel]
     Channel --> Chunks[128KB encrypted chunks]
-    Key --> Write[Decrypt + direct buffer write at idx * 128KB]
+    Key --> Write[Decrypt + append/inflate in data-channel order]
     Chunks --> Write
     Write --> Ack[Data-channel ACK]
 ```
 
-Both receive modes reject extra, duplicate, out-of-range, malformed, and oversized encrypted chunks against the advertised transfer size before completion is acknowledged.
+Both receive modes reject duplicate, out-of-order, malformed, and oversized encrypted frames as each arrives, then verify the chunk count and total wire bytes announced by `DONE` before completion is acknowledged. The metadata `fileSize` is only a progress hint, never a bound on the payload.
 
 ## Size Limits
 

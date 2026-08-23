@@ -262,11 +262,15 @@ export function useManualReceive(): UseManualReceiveReturn {
       const iceCandidates: RTCIceCandidate[] = [];
       let answerSDP: RTCSessionDescriptionInit | null = null;
 
-      // Decrypted chunks land in the receive sink as they arrive.
+      // Decrypted chunks land in the receive sink as they arrive. A cancel
+      // during its creation cannot see it through sinkRef yet, so discard it
+      // here instead of leaving its scratch storage orphaned.
       const sink = await createAdaptiveAppendSink(fileSize);
+      if (cancelledRef.current) {
+        void sink.discard();
+        return;
+      }
       sinkRef.current = sink;
-
-      if (cancelledRef.current) return;
 
       // Streaming receiver: decrypts each chunk into the sink as it arrives
       // (inflating deflated payloads in between) and resolves once DONE

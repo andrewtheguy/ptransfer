@@ -764,11 +764,15 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           salt,
         );
 
-        // Decrypted chunks land in the receive sink as they arrive.
+        // Decrypted chunks land in the receive sink as they arrive. A cancel
+        // during its creation cannot see it through sinkRef yet, so discard
+        // it here instead of leaving its scratch storage orphaned.
         const sink = await createAdaptiveAppendSink(resolvedFileSize);
+        if (cancelledRef.current) {
+          void sink.discard();
+          return;
+        }
         sinkRef.current = sink;
-
-        if (cancelledRef.current) return;
 
         // Listener for the P2P transfer
         const transferResult = await new Promise<Blob>((resolve, reject) => {
