@@ -12,7 +12,11 @@ import {
   sealHandshakePayload,
   uint8ArrayToBase64,
 } from './events';
-import type { RendezvousPayload } from './types';
+import {
+  EVENT_KIND_DATA_TRANSFER,
+  EVENT_KIND_RENDEZVOUS,
+  type RendezvousPayload,
+} from './types';
 
 async function generateAesKey(): Promise<CryptoKey> {
   return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
@@ -44,6 +48,9 @@ describe('Nostr events', () => {
     );
 
     const parsed = parseRendezvousEvent(event);
+    expect(event.kind).toBe(EVENT_KIND_RENDEZVOUS);
+    expect(event.kind).toBeGreaterThanOrEqual(1000);
+    expect(event.kind).toBeLessThan(10000);
     expect(parsed).not.toBeNull();
     expect(parsed?.hint).toBe('hint');
     expect(parsed?.transferId).toBe('transfer-id');
@@ -109,6 +116,9 @@ describe('Nostr events', () => {
     );
 
     const parsed = parseHandshakeEvent(event);
+    expect(event.kind).toBe(EVENT_KIND_DATA_TRANSFER);
+    expect(event.kind).toBeGreaterThanOrEqual(20000);
+    expect(event.kind).toBeLessThan(30000);
     expect(parsed).toMatchObject({
       recipientPubkey: 'sender-pubkey',
       transferId: 'transfer-id',

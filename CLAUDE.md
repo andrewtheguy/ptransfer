@@ -7,3 +7,5 @@ Always run npm run lint and then npx tsc -b for any javascript changes to check 
 run cargo clippy and cargo test after rust changes
 
 no cargo fmt
+
+always bump by patch version only for breaking changes, but only one bump per branch

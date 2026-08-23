@@ -1,9 +1,11 @@
 import type { NostrFileTransferStats } from '../nostr-file/stats';
 import type { WireEncoding } from '../transfer-source';
 
-// Event kinds (matching wormhole-rs)
-export const EVENT_KIND_DATA_TRANSFER = 24242;
-export const EVENT_KIND_RENDEZVOUS = 24243;
+// Rendezvous must be a regular event so a receiver can fetch a PIN that was
+// published before it connected. Handshake and signaling events are live-only
+// and use an ephemeral kind.
+export const EVENT_KIND_RENDEZVOUS = 4243;
+export const EVENT_KIND_DATA_TRANSFER = 24243;
 
 // Content types
 export type ContentType = 'file';
@@ -82,7 +84,7 @@ export interface TransferStateOther extends TransferStateBase {
 export type TransferState = TransferStateError | TransferStateOther;
 
 /**
- * Rendezvous payload (plaintext JSON inside the kind-24243 event). Republished
+ * Rendezvous payload (plaintext JSON inside the kind-4243 event). Republished
  * with a fresh PIN, hint, nonce, and SPAKE2 element on every rotation;
  * transferId and senderPubkey stay stable for the transfer's lifetime.
  *

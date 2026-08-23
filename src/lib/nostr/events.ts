@@ -37,7 +37,7 @@ export function generateHandshakeNonce(): string {
 }
 
 /**
- * Create rendezvous event (kind 24243).
+ * Create rendezvous event (regular kind 4243).
  * The payload is plaintext JSON: with SPAKE2 nothing in it is sensitive (the
  * element is password-blinded, the nonce and relay hints carry no authority),
  * and encrypting it under a PIN-derived key would reintroduce the offline
@@ -131,7 +131,7 @@ export function parseRendezvousEvent(event: Event): {
 export type HandshakeType = 'claim' | 'confirm';
 
 /**
- * Create a handshake event (kind 24242, type=claim|confirm).
+ * Create a handshake event (ephemeral kind 24243, type=claim|confirm).
  *
  * The content is a JSON envelope: the sealed body, plus — for claims — the
  * receiver's SPAKE2 element in plaintext, since the sender must finish its
@@ -263,7 +263,7 @@ export async function openHandshakePayload(
 }
 
 /**
- * Create Signaling event (kind 24242 with type=signal)
+ * Create Signaling event (ephemeral kind 24243 with type=signal)
  */
 export function createSignalingEvent(
   secretKey: Uint8Array,
