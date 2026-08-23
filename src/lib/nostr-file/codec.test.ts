@@ -10,6 +10,7 @@ import {
   sha256,
   splitIntoChunks,
 } from './codec';
+import { NOSTR_FILE_CHUNK_SIZE } from './constants';
 
 async function makeKey(): Promise<CryptoKey> {
   return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
@@ -81,7 +82,7 @@ describe('splitIntoChunks / assembleChunks', () => {
 describe('chunk content codec', () => {
   it('round-trips through AES-GCM + Z85', async () => {
     const key = await makeKey();
-    const chunk = crypto.getRandomValues(new Uint8Array(32768));
+    const chunk = crypto.getRandomValues(new Uint8Array(NOSTR_FILE_CHUNK_SIZE));
     const aad = chunkAad('a'.repeat(32), 3, 10);
     const content = await encodeChunkContent(key, chunk, aad);
     expect(typeof content).toBe('string');
@@ -89,12 +90,12 @@ describe('chunk content codec', () => {
     expect(decoded).toEqual(chunk);
   });
 
-  it('encoded 32 KiB chunk stays under 64 KB', async () => {
+  it('encoded full-size chunk stays under the ~63 KB relay content cap', async () => {
     const key = await makeKey();
-    const chunk = crypto.getRandomValues(new Uint8Array(32768));
+    const chunk = crypto.getRandomValues(new Uint8Array(NOSTR_FILE_CHUNK_SIZE));
     const aad = chunkAad('a'.repeat(32), 0, 1);
     const content = await encodeChunkContent(key, chunk, aad);
-    expect(content.length).toBeLessThan(64 * 1024);
+    expect(content.length).toBeLessThan(63_000);
   });
 
   it('rejects a chunk larger than maxSize', async () => {

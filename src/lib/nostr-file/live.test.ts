@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { DEFAULT_RELAYS } from '../nostr/relays';
 import { chunkAad, encodeChunkContent, sha256 } from './codec';
-import { LIVE_BATCH_CHUNKS } from './constants';
+import { LIVE_BATCH_CHUNKS, NOSTR_FILE_CHUNK_SIZE } from './constants';
 import {
   type AckMessage,
   deriveControlKey,
@@ -135,7 +135,7 @@ async function liveRoundTrip(
 describe('live single-copy relay transfer', () => {
   it('hands over the code before uploading and stores exactly one copy per chunk', async () => {
     const pool = createMockPool();
-    const data = randomBytes(100_000); // 4 chunks
+    const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks
     const sendProgress: LiveSendProgress[] = [];
     let chunksUploadedAtHandover = -1;
 
@@ -194,8 +194,8 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool();
     // 20 chunks raw; deflates to a fraction of one chunk.
     const data = new TextEncoder()
-      .encode('the same line of text, over and over\n'.repeat(17_700))
-      .slice(0, 20 * 32768);
+      .encode('the same line of text, over and over\n'.repeat(26_600))
+      .slice(0, 20 * NOSTR_FILE_CHUNK_SIZE);
     const { manifest, sendDone, receiveDone } = await liveRoundTrip(
       pool,
       data,
@@ -232,7 +232,7 @@ describe('live single-copy relay transfer', () => {
 
   it('never recompresses a payload from the multi-file/folder flow', async () => {
     const pool = createMockPool();
-    const data = randomBytes(100_000);
+    const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000);
     const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
@@ -247,7 +247,7 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool({
       blackholeRelays: new Set(['wss://r2.example']),
     });
-    const data = randomBytes(200_000); // 7 chunks: 1, 4 land on r2 first
+    const data = randomBytes(7 * NOSTR_FILE_CHUNK_SIZE - 5000); // 7 chunks: 1, 4 land on r2 first
     const sendProgress: LiveSendProgress[] = [];
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       onSend: (p) => sendProgress.push(p),
@@ -277,7 +277,7 @@ describe('live single-copy relay transfer', () => {
     // relay is demoted without the receiver ever reporting a miss.
     const bad = RELAYS[1];
     const pool = createMockPool({ failRelays: new Set([bad]) });
-    const data = randomBytes(12 * 32768); // chunks 1, 4, 7, 10 start on r2
+    const data = randomBytes(12 * NOSTR_FILE_CHUNK_SIZE); // chunks 1, 4, 7, 10 start on r2
     const sendProgress: LiveSendProgress[] = [];
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       onSend: (p) => sendProgress.push(p),
@@ -329,7 +329,7 @@ describe('live single-copy relay transfer', () => {
         publishes.push({ relay, index });
       },
     });
-    const data = randomBytes(chunks * 32768 - 10);
+    const data = randomBytes(chunks * NOSTR_FILE_CHUNK_SIZE - 10);
     const sendProgress: LiveSendProgress[] = [];
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       onSend: (p) => {
@@ -372,7 +372,7 @@ describe('live single-copy relay transfer', () => {
   it('announces availability per batch and completes a multi-batch file', async () => {
     const pool = createMockPool();
     const chunks = LIVE_BATCH_CHUNKS + 6;
-    const data = randomBytes(chunks * 32768 - 100);
+    const data = randomBytes(chunks * NOSTR_FILE_CHUNK_SIZE - 100);
     const availableSeen = new Set<number>();
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       onReceive: (p) => availableSeen.add(p.available),
@@ -387,7 +387,7 @@ describe('live single-copy relay transfer', () => {
 
   it('falls back around the ring when a relay rejects uploads', async () => {
     const pool = createMockPool({ failRelays: new Set(['wss://r1.example']) });
-    const data = randomBytes(100_000); // 4 chunks: 0 and 3 would go to r1
+    const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks: 0 and 3 would go to r1
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data);
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
@@ -413,7 +413,7 @@ describe('live single-copy relay transfer', () => {
 
   it('tells the receiver when the sender cancels', async () => {
     const pool = createMockPool();
-    const data = randomBytes(400_000); // 13 chunks
+    const data = randomBytes(13 * NOSTR_FILE_CHUNK_SIZE - 5000); // 13 chunks
     let senderCancelled = false;
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       senderCancelled: () => senderCancelled,
@@ -430,7 +430,7 @@ describe('live single-copy relay transfer', () => {
 
   it('hands out the code before storage-relay discovery', async () => {
     const pool = createMockPool();
-    const data = randomBytes(100_000); // 4 chunks
+    const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks
     const phasesBeforeReady: string[] = [];
     let discoveringAfterReady = false;
     let ready = false;

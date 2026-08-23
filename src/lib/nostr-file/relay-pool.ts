@@ -318,12 +318,18 @@ export async function getRelayCandidates(
   now: number = Date.now(),
 ): Promise<string[]> {
   const state = storage.get();
-  if (
-    state &&
-    state.candidates.length > 0 &&
-    now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
-  ) {
-    return state.candidates;
+  if (state && now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS) {
+    // Cached candidates must re-pass the *current* normalization rules: the
+    // rules can tighten (reserved domains, IP literals) while a cache written
+    // under the old rules is still fresh.
+    const cached = [
+      ...new Set(
+        state.candidates
+          .map((url) => normalizeRelayUrl(url))
+          .filter((url): url is string => url !== null),
+      ),
+    ];
+    if (cached.length > 0) return cached;
   }
   const candidates = await discoverRelayCandidates(pool);
   storage.set({

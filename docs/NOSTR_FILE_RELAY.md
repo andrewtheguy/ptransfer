@@ -18,7 +18,7 @@ Two separate relay sets do two different jobs:
 - **Control relays** (2–4, embedded in the payload): a small set of proven signaling
   relays, picked from `DEFAULT_RELAYS` after a quick small-event probe. They carry only
   the encrypted control channel — a relay that caps event sizes or rate-limits large
-  writes (fine for signaling, useless for 32 KiB chunks) still serves perfectly here.
+  writes (fine for signaling, useless for 48 KiB chunks) still serves perfectly here.
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
   ring is *not* in the payload — the sender announces it over the control channel. The
   whole `DEFAULT_RELAYS` signaling pool is barred from the ring, so the two sets never
@@ -56,7 +56,7 @@ handed out, so it stays quick.
    localStorage for 24 h (`ptransfer:nostr-file:relay-pool:v1`).
 2. **Health-check candidates** with a real write→read round trip per relay: a
    production-shaped probe event through the full codec at the full chunk size
-   (`HEALTH_CHECK_PROBE_BYTES` = 32 KiB), read back and byte-compared. A relay with a
+   (`HEALTH_CHECK_PROBE_BYTES` = 48 KiB), read back and byte-compared. A relay with a
    small event-size cap therefore fails here instead of rejecting real chunks mid-upload.
    Probes carry the same NIP-40 expiration as everything else. Checking stops once
    `HEALTH_CHECK_TARGET_COUNT` (20) relays pass — some rotation headroom without probing
@@ -82,14 +82,14 @@ handed out, so it stays quick.
 
 The plaintext (file or ZIP, materialized in memory, ≤ 100 MB) is **deflated once as a
 whole** (`compressPayload`), then the compressed payload is split into
-`NOSTR_FILE_CHUNK_SIZE` = 32 KiB chunks. Each chunk goes through:
+`NOSTR_FILE_CHUNK_SIZE` = 48 KiB chunks. Each chunk goes through:
 
 ```
 whole-file deflate → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
 ```
 
 - Compressing before chunking means a highly compressible file collapses into a few
-  chunks instead of one event per 32 KiB of plaintext. When deflate would not shrink
+  chunks instead of one event per 48 KiB of plaintext. When deflate would not shrink
   the file (media, archives with compressed entries), the file is chunked as-is and the
   manifest says `compression: 'none'` — already-compressed data is never recompressed.
   The manifest carries `payloadSize` (the chunked byte count) next to `fileSize`; the
@@ -101,10 +101,10 @@ whole-file deflate → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → 
 - AAD = `ptransfer-nostr-file:v1:<transferId>:<index>:<total>` binds every chunk to its
   transfer and position — a tampered, substituted, or misplaced chunk fails GCM and is
   simply treated as missing.
-- Z85 (base85): ~1.25× expansion vs base64's ~1.33×, and JSON-escape free. A 32 KiB
-  chunk encodes to ~41 KB, comfortably under the ~64 KB event-content ceiling the
-  public relay population is known to accept. A 100 MB incompressible file is
-  3200 chunks.
+- Z85 (base85): ~1.25× expansion vs base64's ~1.33×, and JSON-escape free. A 48 KiB
+  chunk encodes to ~60 KB, just under the ~63 KB event-content ceiling measured
+  against the public relay population. A 100 MB incompressible file is
+  ~2134 chunks.
 
 ### Chunk event schema (`events.ts`)
 
@@ -164,7 +164,7 @@ Both peers derive an AES-256-GCM control key from the file key in the payload (H
 or forge control messages.
 
 Messages ride the payload's dedicated **control relays** (probed with a control-sized
-event, so the same relay never has to accept both signaling and 32 KiB chunks) as
+event, so the same relay never has to accept both signaling and 48 KiB chunks) as
 addressable events of the chunk kind with a unique `d` tag per message
 (`<transferId>:ctl:<role>:<n>`), an `x` tag `<transferId>:ctl` for the subscription
 filter, and the usual NIP-40 expiration; they carry the sealed, deflated JSON as base64.
@@ -193,7 +193,7 @@ Anti-replay/misuse properties:
 
 The complete ring and placement travel in every `avail`, so a lost announcement costs
 nothing; bodies are deflated before sealing, which collapses the near-periodic map and
-the shared-prefix relay URLs to a few hundred bytes even for 3200 chunks.
+the shared-prefix relay URLs to a few hundred bytes even for ~2100 chunks.
 
 ### Sender loop
 
@@ -203,7 +203,7 @@ sender is online while storage discovery finishes. Once the ring is selected, ch
 is published to `ring[i % N]`, walking the ring on rejection until one relay
 accepts (16 in flight); each publish retries up to 3× per relay with exponential backoff
 (500 ms base, 5 s cap, 250 ms jitter). An `avail` is announced every `LIVE_BATCH_CHUNKS`
-(64) chunks (2 MiB) and on completion, and repeated as a `LIVE_HEARTBEAT_MS` (15 s)
+(64) chunks (3 MiB) and on completion, and repeated as a `LIVE_HEARTBEAT_MS` (15 s)
 heartbeat so a lost announcement or acknowledgement in either direction is recovered on
 the next beat.
 
@@ -234,7 +234,7 @@ sender completes on `done`.
 
 On each `avail`, the receiver fetches every announced chunk it lacks from the one relay it
 was placed on (grouped per relay, in parallel, `authors` + `#d` filters, ≤
-`D_TAG_FILTER_BATCH` (50) ids per filter, ~2 MB of content per query), skipping chunks
+`D_TAG_FILTER_BATCH` (50) ids per filter, ~3 MB of content per query), skipping chunks
 whose `(pos, gen)` it already tried within the last `LIVE_FETCH_RETRY_MS` (10 s), then
 answers with an `ack` listing what is still missing at the placement it actually asked —
 never the newest announced one, so an announcement landing mid-fetch cannot blame a relay
@@ -297,7 +297,7 @@ sequenceDiagram
 | Constant | Value | Meaning |
 |---|---|---|
 | `NOSTR_FILE_MAX_BYTES` | 100 MiB | Hard cap on the plaintext payload |
-| `NOSTR_FILE_CHUNK_SIZE` | 32 KiB | Plaintext chunk size (~41 KB encoded) |
+| `NOSTR_FILE_CHUNK_SIZE` | 48 KiB | Plaintext chunk size (~60 KB encoded) |
 | `EVENT_KIND_FILE_CHUNK` | 30078 | NIP-78 addressable kind for chunks, probes, and control |
 | `NOSTR_FILE_EXPIRATION_SEC` | 3600 | NIP-40 lifetime on every event; transfer deadline |
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
@@ -309,8 +309,8 @@ sequenceDiagram
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
 | `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop probing once this many relays pass |
-| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~2 MB per query) |
-| `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (2 MiB) |
+| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MB per query) |
+| `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |
 | `LIVE_FETCH_RETRY_MS` | 10 s | Receiver retry clock: re-fetch a still-missing placement and re-run a cycle without a new announcement |
 | `LIVE_IDLE_TIMEOUT_MS` | 3 min | Give up on a silent peer |
