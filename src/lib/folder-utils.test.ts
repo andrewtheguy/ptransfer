@@ -144,6 +144,9 @@ describe('createZipTransferSource', () => {
     expect(source.type).toBe('application/zip');
     expect(source.size).toBeNull();
     expect(source.estimatedSize).toBe(11 + big.length);
+    // Entries are already deflated; the transfer pipeline must not
+    // recompress this payload.
+    expect(source.precompressed).toBe(true);
 
     const entries = unzipSync(await readAll(source.stream()));
     expect(Object.keys(entries).sort()).toEqual(['big.bin', 'hello.txt']);

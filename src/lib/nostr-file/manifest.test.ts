@@ -4,7 +4,7 @@ import { isValidNostrFileManifest, type NostrFileManifest } from './manifest';
 describe('isValidNostrFileManifest', () => {
   const createdAt = 1_700_000_000;
   const manifest: NostrFileManifest = {
-    v: 5,
+    v: 6,
     fileName: 'big.bin',
     fileSize: 100 * 1024 * 1024,
     mimeType: 'application/octet-stream',
@@ -36,6 +36,19 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(true);
   });
 
+  it('accepts a deflated payload slightly larger than the file (incompressible input)', () => {
+    // Single-file payloads always deflate; raw deflate adds stored-block
+    // framing when the input does not shrink.
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        compression: 'deflate',
+        payloadSize: manifest.fileSize + 10,
+        totalChunks: Math.ceil((manifest.fileSize + 10) / manifest.chunkSize),
+      }),
+    ).toBe(true);
+  });
+
   it('rejects inconsistent compression fields', () => {
     // Unknown scheme.
     expect(isValidNostrFileManifest({ ...manifest, compression: 'gzip' })).toBe(
@@ -48,9 +61,14 @@ describe('isValidNostrFileManifest', () => {
         payloadSize: manifest.fileSize - 1,
       }),
     ).toBe(false);
-    // 'deflate' is only chosen when it strictly shrinks.
+    // 'deflate' output is bounded by raw deflate's worst-case expansion.
     expect(
-      isValidNostrFileManifest({ ...manifest, compression: 'deflate' }),
+      isValidNostrFileManifest({
+        ...manifest,
+        compression: 'deflate',
+        payloadSize: manifest.fileSize * 2,
+        totalChunks: Math.ceil((manifest.fileSize * 2) / manifest.chunkSize),
+      }),
     ).toBe(false);
     // Chunk count must cover the payload, not the plaintext.
     expect(
@@ -104,7 +122,7 @@ describe('isValidNostrFileManifest', () => {
   });
 
   it('rejects the previous wire format', () => {
-    expect(isValidNostrFileManifest({ ...manifest, v: 4 })).toBe(false);
+    expect(isValidNostrFileManifest({ ...manifest, v: 5 })).toBe(false);
     expect(isValidNostrFileManifest({ ...manifest, enc: 1 })).toBe(false);
     const { compression, payloadSize, ...perChunkDeflate } = manifest;
     expect(isValidNostrFileManifest(perChunkDeflate)).toBe(false);

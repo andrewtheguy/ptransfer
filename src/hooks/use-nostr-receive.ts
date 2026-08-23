@@ -46,12 +46,7 @@ import {
   type TransferState,
 } from '@/lib/nostr';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
-import {
-  type AppendSink,
-  createAdaptiveAppendSink,
-  createReceiveSink,
-  type ReceiveSink,
-} from '@/lib/scratch-sink';
+import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -141,7 +136,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
   // Storage backing the in-flight or completed transfer. Discarded whenever
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
-  const sinkRef = useRef<ReceiveSink | AppendSink | null>(null);
+  const sinkRef = useRef<AppendSink | null>(null);
 
   const discardSink = useCallback(() => {
     const sink = sinkRef.current;
@@ -562,7 +557,8 @@ export function useNostrReceive(): UseNostrReceiveReturn {
                   typeof m.fileSize !== 'number' ||
                   !Number.isFinite(m.fileSize) ||
                   m.fileSize < 0 ||
-                  typeof m.fileSizeExact !== 'boolean'
+                  (m.contentEncoding !== 'deflate-raw' &&
+                    m.contentEncoding !== 'identity')
                 ) {
                   continue;
                 }
@@ -717,7 +713,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
 
         const resolvedFileName = metadata.fileName || 'unknown';
         const resolvedFileSize = metadata.fileSize;
-        const resolvedFileSizeExact = metadata.fileSizeExact;
+        const resolvedContentEncoding = metadata.contentEncoding;
         const resolvedMimeType =
           metadata.mimeType || 'application/octet-stream';
 
@@ -769,9 +765,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         );
 
         // Decrypted chunks land in the receive sink as they arrive.
-        const sink = resolvedFileSizeExact
-          ? await createReceiveSink(resolvedFileSize)
-          : await createAdaptiveAppendSink(resolvedFileSize);
+        const sink = await createAdaptiveAppendSink(resolvedFileSize);
         sinkRef.current = sink;
 
         if (cancelledRef.current) return;
@@ -782,11 +776,12 @@ export function useNostrReceive(): UseNostrReceiveReturn {
           let settled = false;
 
           // Streaming receiver: decrypts each chunk into the sink as it
-          // arrives. Nostr is not involved past signaling; the data-channel
-          // ACK below confirms completion.
+          // arrives (inflating deflated payloads in between). Nostr is not
+          // involved past signaling; the data-channel ACK below confirms
+          // completion.
           const receiver = createDataChannelReceiver(
             sessionKeys.content,
-            resolvedFileSizeExact ? resolvedFileSize : null,
+            resolvedContentEncoding,
             sink,
             {
               estimatedBytes: resolvedFileSize,

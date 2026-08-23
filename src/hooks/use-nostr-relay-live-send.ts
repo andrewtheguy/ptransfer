@@ -88,110 +88,114 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
       let relays: string[] = [];
 
       try {
-        await sendFileLive(data, fileMetadata, {
-          pool,
-          isCancelled,
-          onReady: (manifest, keyBytes) => {
-            const payload: NostrFileLivePayload = {
-              ...manifest,
-              type: 'nostr-file-live',
-              key: uint8ArrayToBase64(keyBytes),
-            };
-            wipeBufferSource(keyBytes);
-            payloadBinary = generateNostrFilePayloadBinary(payload);
-            expiresAt = manifest.expiresAt;
-            relays = manifest.controlRelays;
-          },
-          onProgress: (p) => {
-            if (run.cancelled) return;
-            lastStats = p.stats;
-            switch (p.phase) {
-              case 'hashing':
-                setState({
-                  status: 'preparing',
-                  message: 'Encrypting file...',
-                  fileMetadata,
-                  stats: p.stats,
-                });
-                break;
-              case 'connecting':
-                setState({
-                  status: 'discovering_relays',
-                  message: 'Connecting to Nostr relays...',
-                  fileMetadata,
-                  stats: p.stats,
-                });
-                break;
-              // Storage-relay discovery runs after the code is handed out:
-              // keep the code on screen while it works.
-              case 'discovering':
-              case 'health_check': {
-                const working =
-                  p.phase === 'discovering'
-                    ? 'finding storage relays for your file...'
-                    : `testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`;
-                if (!payloadBinary) {
+        await sendFileLive(
+          data,
+          { fileName, mimeType, precompressed: content.precompressed },
+          {
+            pool,
+            isCancelled,
+            onReady: (manifest, keyBytes) => {
+              const payload: NostrFileLivePayload = {
+                ...manifest,
+                type: 'nostr-file-live',
+                key: uint8ArrayToBase64(keyBytes),
+              };
+              wipeBufferSource(keyBytes);
+              payloadBinary = generateNostrFilePayloadBinary(payload);
+              expiresAt = manifest.expiresAt;
+              relays = manifest.controlRelays;
+            },
+            onProgress: (p) => {
+              if (run.cancelled) return;
+              lastStats = p.stats;
+              switch (p.phase) {
+                case 'hashing':
                   setState({
-                    status: 'discovering_relays',
-                    message: `Code pending — ${working}`,
+                    status: 'preparing',
+                    message: 'Encrypting file...',
                     fileMetadata,
                     stats: p.stats,
                   });
                   break;
+                case 'connecting':
+                  setState({
+                    status: 'discovering_relays',
+                    message: 'Connecting to Nostr relays...',
+                    fileMetadata,
+                    stats: p.stats,
+                  });
+                  break;
+                // Storage-relay discovery runs after the code is handed out:
+                // keep the code on screen while it works.
+                case 'discovering':
+                case 'health_check': {
+                  const working =
+                    p.phase === 'discovering'
+                      ? 'finding storage relays for your file...'
+                      : `testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`;
+                  if (!payloadBinary) {
+                    setState({
+                      status: 'discovering_relays',
+                      message: `Code pending — ${working}`,
+                      fileMetadata,
+                      stats: p.stats,
+                    });
+                    break;
+                  }
+                  setState({
+                    status: 'showing_payload',
+                    message: `Code ready — ${working}`,
+                    payloadData: payloadBinary,
+                    expiresAt,
+                    progress: { current: 0, total: data.length },
+                    contentType: 'file',
+                    fileMetadata,
+                    currentRelays: relays,
+                    stats: p.stats,
+                  });
+                  break;
                 }
-                setState({
-                  status: 'showing_payload',
-                  message: `Code ready — ${working}`,
-                  payloadData: payloadBinary,
-                  expiresAt,
-                  progress: { current: 0, total: data.length },
-                  contentType: 'file',
-                  fileMetadata,
-                  currentRelays: relays,
-                  stats: p.stats,
-                });
-                break;
-              }
-              case 'transfer': {
-                if (!payloadBinary) break;
-                const chunksDone = p.chunksDone ?? 0;
-                const chunksTotal = p.chunksTotal ?? 1;
-                const have = p.receiverHave ?? 0;
-                const uploaded = chunksDone === chunksTotal;
-                let message: string;
-                if (!p.receiverConnected) {
-                  message = uploaded
-                    ? 'All pieces uploaded. Waiting for the receiver to enter the code...'
-                    : `Uploading pieces (${chunksDone}/${chunksTotal})... waiting for the receiver to enter the code.`;
-                } else if (have >= chunksTotal) {
-                  message = 'Receiver has every piece — verifying...';
-                } else {
-                  message = `Receiver connected — has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
-                    p.resent ? `, re-sent ${p.resent}` : ''
-                  }).`;
+                case 'transfer': {
+                  if (!payloadBinary) break;
+                  const chunksDone = p.chunksDone ?? 0;
+                  const chunksTotal = p.chunksTotal ?? 1;
+                  const have = p.receiverHave ?? 0;
+                  const uploaded = chunksDone === chunksTotal;
+                  let message: string;
+                  if (!p.receiverConnected) {
+                    message = uploaded
+                      ? 'All pieces uploaded. Waiting for the receiver to enter the code...'
+                      : `Uploading pieces (${chunksDone}/${chunksTotal})... waiting for the receiver to enter the code.`;
+                  } else if (have >= chunksTotal) {
+                    message = 'Receiver has every piece — verifying...';
+                  } else {
+                    message = `Receiver connected — has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
+                      p.resent ? `, re-sent ${p.resent}` : ''
+                    }).`;
+                  }
+                  setState({
+                    status: 'showing_payload',
+                    message,
+                    payloadData: payloadBinary,
+                    expiresAt,
+                    progress: {
+                      current: Math.min(
+                        have * chunkBytesEstimate(data.length, chunksTotal),
+                        data.length,
+                      ),
+                      total: data.length,
+                    },
+                    contentType: 'file',
+                    fileMetadata,
+                    currentRelays: relays,
+                    stats: p.stats,
+                  });
+                  break;
                 }
-                setState({
-                  status: 'showing_payload',
-                  message,
-                  payloadData: payloadBinary,
-                  expiresAt,
-                  progress: {
-                    current: Math.min(
-                      have * chunkBytesEstimate(data.length, chunksTotal),
-                      data.length,
-                    ),
-                    total: data.length,
-                  },
-                  contentType: 'file',
-                  fileMetadata,
-                  currentRelays: relays,
-                  stats: p.stats,
-                });
-                break;
               }
-            }
+            },
           },
-        });
+        );
       } finally {
         // Close this run's sockets — never a newer run's pool.
         pool.destroy();

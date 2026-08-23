@@ -43,8 +43,8 @@ export function NostrRelayStatsPanel({
     ['File size', formatFileSize(stats.fileBytes)],
     [
       // Only shown when the whole-file deflate actually shrank the payload;
-      // incompressible files travel as-is and the row would just repeat the
-      // file size.
+      // otherwise (precompressed archives sent as-is, incompressible files
+      // whose deflate did not shrink) the row would just repeat the file size.
       'Compressed size',
       stats.payloadBytes > 0 && stats.payloadBytes < stats.fileBytes
         ? `${formatFileSize(stats.payloadBytes)} (${ofFileSize(stats.payloadBytes)})`

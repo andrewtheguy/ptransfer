@@ -3,7 +3,7 @@ import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import { MEMORY_SINK_MAX_BYTES } from './crypto/constants';
 import {
   createAppendSink,
-  createReceiveSink,
+  createInflatingAppendSink,
   sweepTransferScratch,
 } from './scratch-sink';
 
@@ -38,96 +38,28 @@ async function withoutOpfs<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-describe('createReceiveSink (memory, at or below threshold)', () => {
-  it('assembles out-of-order positional writes into the payload', async () => {
-    const sink = await createReceiveSink(8);
-    await sink.write(4, new Uint8Array([5, 6, 7, 8]));
-    await sink.write(0, new Uint8Array([1, 2, 3, 4]));
-    const blob = await sink.finish();
-    expect(blob.size).toBe(8);
-    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(
-      new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
-    );
-    await sink.discard();
-  });
-
-  it('produces an empty payload for a zero-byte transfer', async () => {
-    const sink = await createReceiveSink(0);
-    const blob = await sink.finish();
-    expect(blob.size).toBe(0);
-    await sink.discard();
-  });
-
-  it('preallocates the advertised size', async () => {
-    const sink = await createReceiveSink(6);
-    await sink.write(0, new Uint8Array([1, 2]));
-    const blob = await sink.finish();
-    // Unwritten tail stays zero-filled at the advertised length.
-    expect(blob.size).toBe(6);
-    await sink.discard();
-  });
-
-  it('rejects writes and finish after discard', async () => {
-    const sink = await createReceiveSink(4);
-    await sink.discard();
-    await expect(sink.write(0, new Uint8Array([1]))).rejects.toThrow();
-    await expect(sink.finish()).rejects.toThrow();
-  });
-
-  it('rejects writes after finish', async () => {
-    const sink = await createReceiveSink(1);
-    await sink.write(0, new Uint8Array([9]));
-    await sink.finish();
-    await expect(sink.write(0, new Uint8Array([1]))).rejects.toThrow();
-    await sink.discard();
-  });
-
-  it('never touches OPFS', async () => {
-    await withoutOpfs(async () => {
-      const sink = await createReceiveSink(4);
-      await sink.write(0, new Uint8Array([1, 2, 3, 4]));
-      const blob = await sink.finish();
-      expect(blob.size).toBe(4);
-      await sink.discard();
-    });
-    const sink = await createReceiveSink(MEMORY_SINK_MAX_BYTES);
-    expect(await scratchDirNames()).toHaveLength(0);
-    await sink.discard();
-  });
-});
-
-describe('createReceiveSink (OPFS, over threshold)', () => {
-  it('assembles positional writes into a disk-backed payload', async () => {
-    const sink = await createReceiveSink(OPFS_SIZE);
-    expect(await scratchDirNames()).toHaveLength(1);
-    await sink.write(OPFS_SIZE - 2, new Uint8Array([7, 8]));
-    await sink.write(0, new Uint8Array([1, 2]));
-    const blob = await sink.finish();
-    expect(blob.size).toBe(OPFS_SIZE);
-    expect(new Uint8Array(await blob.slice(0, 2).arrayBuffer())).toEqual(
-      new Uint8Array([1, 2]),
-    );
-    expect(
-      new Uint8Array(await blob.slice(OPFS_SIZE - 2).arrayBuffer()),
-    ).toEqual(new Uint8Array([7, 8]));
-    await sink.discard();
-  });
-
-  it('tolerates repeated discard calls and removes the scratch entry', async () => {
-    const sink = await createReceiveSink(OPFS_SIZE);
-    expect(await scratchDirNames()).toHaveLength(1);
-    await sink.discard();
-    await expect(sink.discard()).resolves.toBeUndefined();
-    expect(await scratchDirNames()).toHaveLength(0);
-  });
-
-  it('rejects when OPFS is unavailable', async () => {
-    await withoutOpfs(async () => {
-      await expect(createReceiveSink(OPFS_SIZE)).rejects.toThrow('OPFS');
-      await expect(createAppendSink(OPFS_SIZE)).rejects.toThrow('OPFS');
-    });
-  });
-});
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  const compressor = new CompressionStream('deflate-raw');
+  const writer = compressor.writable.getWriter();
+  void writer.write(data.slice()).catch(() => {});
+  void writer.close().catch(() => {});
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = compressor.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+  }
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
 
 describe('createAppendSink (memory, at or below threshold)', () => {
   it('concatenates appended chunks into the payload', async () => {
@@ -186,6 +118,75 @@ describe('createAppendSink (OPFS, over threshold)', () => {
     );
     await sink.discard();
     expect(await scratchDirNames()).toHaveLength(0);
+  });
+
+  it('tolerates repeated discard calls and removes the scratch entry', async () => {
+    const sink = await createAppendSink(OPFS_SIZE);
+    expect(await scratchDirNames()).toHaveLength(1);
+    await sink.discard();
+    await expect(sink.discard()).resolves.toBeUndefined();
+    expect(await scratchDirNames()).toHaveLength(0);
+  });
+
+  it('rejects when OPFS is unavailable', async () => {
+    await withoutOpfs(async () => {
+      await expect(createAppendSink(OPFS_SIZE)).rejects.toThrow('OPFS');
+    });
+  });
+});
+
+describe('createInflatingAppendSink', () => {
+  it('inflates appended raw-deflate bytes into the inner sink', async () => {
+    const original = new Uint8Array(100_000);
+    for (let i = 0; i < original.length; i++) original[i] = (i * 13 + 5) % 251;
+    const deflated = await deflateRaw(original);
+
+    const inner = await createAppendSink(original.length);
+    const sink = createInflatingAppendSink(inner, original.length);
+    // Feed in small pieces so inflation spans many appends.
+    for (let offset = 0; offset < deflated.length; offset += 4096) {
+      await sink.append(deflated.subarray(offset, offset + 4096));
+    }
+    const blob = await sink.finish();
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(original);
+    await sink.discard();
+  });
+
+  it('rejects inflated output beyond the size cap (decompression bomb)', async () => {
+    const bomb = await deflateRaw(new Uint8Array(1_000_000));
+    const inner = await createAppendSink(1024);
+    const sink = createInflatingAppendSink(inner, 1024);
+
+    await expect(
+      (async () => {
+        await sink.append(bomb);
+        await sink.finish();
+      })(),
+    ).rejects.toThrow('exceeds the size limit');
+    await sink.discard();
+  });
+
+  it('rejects data that is not a raw-deflate stream', async () => {
+    const inner = await createAppendSink(1024);
+    const sink = createInflatingAppendSink(inner, 1024);
+
+    await expect(
+      (async () => {
+        await sink.append(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+        await sink.finish();
+      })(),
+    ).rejects.toThrow();
+    await sink.discard();
+  });
+
+  it('rejects a truncated deflate stream at finish', async () => {
+    const deflated = await deflateRaw(new Uint8Array(50_000).fill(7));
+    const inner = await createAppendSink(50_000);
+    const sink = createInflatingAppendSink(inner, 50_000);
+
+    await sink.append(deflated.subarray(0, deflated.length - 4));
+    await expect(sink.finish()).rejects.toThrow();
+    await sink.discard();
   });
 });
 

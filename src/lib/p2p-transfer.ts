@@ -7,32 +7,42 @@
  * per-chunk validation live in exactly one place.
  *
  * Wire protocol:
+ *   - The payload bytes are the source's wire encoding (see
+ *     `wireEncodingFor`): a single-file source is deflated on the fly
+ *     ('deflate-raw') and restored by the receiver, while a source the
+ *     multi-file/folder flow already compressed travels as-is ('identity').
+ *     Either way the final wire length is unknown during signaling.
  *   - Binary chunk messages, each produced by `encryptChunk`:
  *       [2-byte chunk index (big-endian)][12-byte nonce][ciphertext][16-byte tag]
  *     The chunk index is also the AES-GCM additional authenticated data.
- *   - A trailing control string `DONE:<totalChunks>:<totalBytes>`.
+ *   - A trailing control string `DONE:<totalChunks>:<totalBytes>` carrying the
+ *     wire (encoded) byte count.
  *   - The receiver replies with the control string `ACK` once every chunk has
  *     authenticated and been written to its sink.
  *
  * Neither side materializes the whole file: the sender coalesces a lazy
- * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver writes
- * each decrypted chunk to scratch storage. Sources with unknown output size
- * (streamed ZIPs) are appended in order and finalized from the DONE byte count.
+ * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver
+ * appends each decrypted (and, for 'deflate-raw', inflated) chunk to scratch
+ * storage in the data channel's reliable order, finalizing from the DONE byte
+ * count.
  */
 
 import {
   AES_NONCE_LENGTH,
   AES_TAG_LENGTH,
   decryptChunk,
-  ENCRYPTED_CHUNK_OVERHEAD,
   ENCRYPTION_CHUNK_SIZE,
   encryptChunk,
   MAX_MESSAGE_SIZE,
   parseChunkMessage,
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
-import type { AppendSink, ReceiveSink } from '@/lib/scratch-sink';
-import type { TransferSource } from '@/lib/transfer-source';
+import { type AppendSink, createInflatingAppendSink } from '@/lib/scratch-sink';
+import {
+  type TransferSource,
+  type WireEncoding,
+  wireEncodingFor,
+} from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
 /** Control-message tokens exchanged over the data channel. */
@@ -94,7 +104,7 @@ function paceProgress(
 }
 
 export interface SendOptions {
-  /** Called after each chunk with cumulative bytes sent and the total. */
+  /** Called after each chunk with cumulative wire bytes sent and the total. */
   onProgress?: (current: number, total: number) => void;
   /** Return true to abort the transfer between chunks. */
   isCancelled?: () => boolean;
@@ -107,9 +117,9 @@ export interface SendOptions {
 }
 
 export interface ReceiverOptions {
-  /** Called after each chunk with cumulative decrypted bytes and the total. */
+  /** Called after each chunk with cumulative decrypted wire bytes and the total. */
   onProgress?: (current: number, total: number) => void;
-  /** Progress hint used only when the payload's final size is not yet known. */
+  /** Progress hint; the payload's final wire size is never known up front. */
   estimatedBytes?: number;
   /**
    * Idle window in ms: once `start()` is called, the transfer aborts if no
@@ -140,9 +150,10 @@ export interface DataChannelReceiver {
 }
 
 /**
- * Read a lazy payload, coalesce it into `ENCRYPTION_CHUNK_SIZE` chunks, and
- * encrypt/send each chunk immediately. ZIP sources therefore start sending
- * before their later entries have even been read.
+ * Read a lazy payload in its wire encoding, coalesce it into
+ * `ENCRYPTION_CHUNK_SIZE` chunks, and encrypt/send each chunk immediately.
+ * Sources start sending before they have been fully read or compressed.
+ * Returns the wire byte count.
  */
 export async function sendFileOverDataChannel(
   rtc: WebRTCConnection,
@@ -154,7 +165,19 @@ export async function sendFileOverDataChannel(
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
   const progressTotal = source.size ?? source.estimatedSize;
-  const reader = source.stream().getReader();
+  const encoding = wireEncodingFor(source);
+  const reader = (
+    encoding === 'deflate-raw'
+      ? source.stream().pipeThrough(
+          // lib.dom types the deflater's writable as BufferSource, which the
+          // invariant pipeThrough signature rejects even though every chunk
+          // (a Uint8Array) is one.
+          new CompressionStream(
+            'deflate-raw',
+          ) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>,
+        )
+      : source.stream()
+  ).getReader();
   const plainChunk = new Uint8Array(ENCRYPTION_CHUNK_SIZE);
   let plainChunkLength = 0;
   let totalBytes = 0;
@@ -211,7 +234,13 @@ export async function sendFileOverDataChannel(
     if (plainChunkLength > 0) {
       await sendChunk(plainChunk.slice(0, plainChunkLength));
     }
-    if (source.size !== null && totalBytes !== source.size) {
+    // A deflated wire stream has no size to check against; the source's own
+    // length only binds when the bytes travel as-is.
+    if (
+      encoding === 'identity' &&
+      source.size !== null &&
+      totalBytes !== source.size
+    ) {
       throw new Error(
         `Transfer source size changed: expected ${source.size} bytes, got ${totalBytes}`,
       );
@@ -222,8 +251,8 @@ export async function sendFileOverDataChannel(
     reader.releaseLock();
   }
 
-  // The byte count authenticates the final length for sources whose streamed
-  // output was not known during signaling.
+  // The byte count authenticates the final wire length, which was not known
+  // during signaling.
   rtc.send(`${DONE_PREFIX}${chunkIndex}:${totalBytes}`);
   reportProgress(totalBytes, totalBytes);
 
@@ -316,64 +345,34 @@ function waitForAckMessage(rtc: WebRTCConnection): Promise<void> {
   });
 }
 
-type DataChannelSink = ReceiveSink | AppendSink;
-
-function isAppendSink(sink: DataChannelSink): sink is AppendSink {
-  return 'append' in sink;
-}
-
 /**
- * Create a streaming receiver. `totalBytes` is null when the sender is
- * producing a ZIP whose final streamed length is not known during signaling.
- *
- * Exact-size payloads retain positional writes and may arrive out of order.
- * Unknown-size payloads use the data channel's reliable ordering and append to
- * an adaptive sink. In both modes DONE supplies a final authenticated chunk
- * count and byte count before the sink is sealed.
+ * Create a streaming receiver for a payload of unknown wire size. Chunks must
+ * arrive in the data channel's reliable order and are appended to `sink` as
+ * they authenticate; for a 'deflate-raw' wire encoding they are inflated in
+ * between, so the sealed Blob is the original file. DONE supplies the final
+ * authenticated chunk count and wire byte count before the sink is sealed.
  */
 export function createDataChannelReceiver(
   key: CryptoKey,
-  totalBytes: number | null,
-  sink: DataChannelSink,
+  encoding: WireEncoding,
+  sink: AppendSink,
   opts: ReceiverOptions = {},
 ): DataChannelReceiver {
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
-  const sizeKnown = totalBytes !== null;
-  const progressTotal = sizeKnown ? totalBytes : (opts.estimatedBytes ?? 0);
+  const progressTotal = opts.estimatedBytes ?? 0;
+  // The size cap on the inflated output is the decompression-bomb guard: the
+  // in-band DONE byte count only covers the compressed wire bytes.
+  const target =
+    encoding === 'deflate-raw'
+      ? createInflatingAppendSink(sink, MAX_MESSAGE_SIZE)
+      : sink;
 
-  if (
-    totalBytes !== null &&
-    (!Number.isInteger(totalBytes) ||
-      totalBytes < 0 ||
-      totalBytes > MAX_MESSAGE_SIZE)
-  ) {
-    throw new Error('Invalid transfer size');
-  }
-  if (sizeKnown && isAppendSink(sink)) {
-    throw new Error('Exact-size transfers require a positional receive sink');
-  }
-  if (!sizeKnown && !isAppendSink(sink)) {
-    throw new Error('Unknown-size transfers require an append sink');
-  }
-
-  const expectedChunks = sizeKnown
-    ? Math.ceil(totalBytes / ENCRYPTION_CHUNK_SIZE)
-    : null;
-  if (expectedChunks !== null && expectedChunks > MAX_CHUNKS) {
-    throw new Error('Transfer size exceeds the supported chunk-index range');
-  }
-
-  const expectedEncryptedBytes = sizeKnown
-    ? totalBytes + expectedChunks! * ENCRYPTED_CHUNK_OVERHEAD
-    : null;
-
-  const receivedIndices = new Set<number>();
   const pending = new Set<Promise<void>>();
-  let receivedEncryptedBytes = 0;
-  let claimedPlaintextBytes = 0;
+  let receivedChunks = 0;
+  let claimedWireBytes = 0;
   let totalDecryptedBytes = 0;
-  let previousUnknownChunkLength: number | null = null;
+  let previousChunkLength: number | null = null;
   let appendChain = Promise.resolve();
   let settled = false;
 
@@ -420,71 +419,41 @@ export function createDataChannelReceiver(
   };
 
   const handleChunk = (data: ArrayBuffer) => {
-    const messageLength = data.byteLength;
     let chunkIndex: number;
     let encryptedData: Uint8Array;
     let expectedPlaintextLength: number;
-    let writePosition: number | null = null;
 
     try {
       ({ chunkIndex, encryptedData } = parseChunkMessage(data));
-      if (receivedIndices.has(chunkIndex)) {
-        throw new Error(`Duplicate chunk index: ${chunkIndex}`);
+      // RTCDataChannel is reliable and ordered by default. Requiring that
+      // order lets the receiver append without holding or seeking chunks, and
+      // rejects duplicates in the same stroke.
+      if (chunkIndex !== receivedChunks || chunkIndex >= MAX_CHUNKS) {
+        throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
       }
-
-      if (sizeKnown) {
-        if (chunkIndex >= expectedChunks!) {
-          throw new Error(`Chunk index out of range: ${chunkIndex}`);
-        }
-        writePosition = chunkIndex * ENCRYPTION_CHUNK_SIZE;
-        expectedPlaintextLength =
-          chunkIndex === expectedChunks! - 1
-            ? totalBytes - writePosition
-            : ENCRYPTION_CHUNK_SIZE;
-        const expectedEncryptedLength =
-          expectedPlaintextLength + AES_NONCE_LENGTH + AES_TAG_LENGTH;
-        if (encryptedData.length !== expectedEncryptedLength) {
-          throw new Error(
-            `Invalid encrypted chunk ${chunkIndex} length: expected ${expectedEncryptedLength}, got ${encryptedData.length}`,
-          );
-        }
-        receivedEncryptedBytes += messageLength;
-        if (receivedEncryptedBytes > expectedEncryptedBytes!) {
-          throw new Error('Transfer exceeds advertised size');
-        }
-      } else {
-        // RTCDataChannel is reliable and ordered by default. Requiring that
-        // order lets the receiver append without holding or seeking chunks.
-        if (chunkIndex !== receivedIndices.size || chunkIndex >= MAX_CHUNKS) {
-          throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
-        }
-        expectedPlaintextLength =
-          encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
-        if (
-          expectedPlaintextLength <= 0 ||
-          expectedPlaintextLength > ENCRYPTION_CHUNK_SIZE
-        ) {
-          throw new Error(`Invalid streamed chunk ${chunkIndex} length`);
-        }
-        if (
-          previousUnknownChunkLength !== null &&
-          previousUnknownChunkLength !== ENCRYPTION_CHUNK_SIZE
-        ) {
-          throw new Error('Only the final streamed chunk may be short');
-        }
-        if (
-          claimedPlaintextBytes + expectedPlaintextLength >
-          MAX_MESSAGE_SIZE
-        ) {
-          throw new Error('Transfer exceeds the supported size limit');
-        }
-        previousUnknownChunkLength = expectedPlaintextLength;
-        claimedPlaintextBytes += expectedPlaintextLength;
+      expectedPlaintextLength =
+        encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
+      if (
+        expectedPlaintextLength <= 0 ||
+        expectedPlaintextLength > ENCRYPTION_CHUNK_SIZE
+      ) {
+        throw new Error(`Invalid streamed chunk ${chunkIndex} length`);
       }
+      if (
+        previousChunkLength !== null &&
+        previousChunkLength !== ENCRYPTION_CHUNK_SIZE
+      ) {
+        throw new Error('Only the final streamed chunk may be short');
+      }
+      if (claimedWireBytes + expectedPlaintextLength > MAX_MESSAGE_SIZE) {
+        throw new Error('Transfer exceeds the supported size limit');
+      }
+      previousChunkLength = expectedPlaintextLength;
+      claimedWireBytes += expectedPlaintextLength;
 
-      // Claim the index before decrypting so duplicates and an in-order DONE
-      // cannot race the asynchronous crypto operation.
-      receivedIndices.add(chunkIndex);
+      // Claim the index before decrypting so an in-order DONE cannot race the
+      // asynchronous crypto operation.
+      receivedChunks++;
     } catch (error) {
       fail(error instanceof Error ? error : new Error('Invalid data chunk'));
       return;
@@ -499,30 +468,17 @@ export function createDataChannelReceiver(
         );
       }
 
-      if (sizeKnown) {
-        if (writePosition! + decryptedChunk.length > totalBytes) {
-          throw new Error(`Chunk ${chunkIndex} exceeds expected file size`);
-        }
-        await (sink as ReceiveSink).write(writePosition!, decryptedChunk);
-      } else {
-        await (sink as AppendSink).append(decryptedChunk);
-      }
+      await target.append(decryptedChunk);
       if (settled) return;
       totalDecryptedBytes += decryptedChunk.length;
 
       reportProgress(totalDecryptedBytes, progressTotal);
     };
 
-    // Appends must follow wire order even if Web Crypto resolves operations at
-    // different times. Exact-size positional writes remain parallel.
-    let work: Promise<void>;
-    if (sizeKnown) {
-      work = processChunk();
-    } else {
-      appendChain = appendChain.then(processChunk);
-      work = appendChain;
-    }
-    const promise = work.catch((error: unknown) => {
+    // Appends must follow wire order even if Web Crypto resolves operations
+    // at different times.
+    appendChain = appendChain.then(processChunk);
+    const promise = appendChain.catch((error: unknown) => {
       fail(
         error instanceof Error ? error : new Error('Failed to receive chunk'),
       );
@@ -533,21 +489,15 @@ export function createDataChannelReceiver(
   };
 
   const handleDone = async (count: number, finalBytes: number) => {
-    if (count !== receivedIndices.size) {
+    if (count !== receivedChunks) {
       fail(
         new Error(
-          `Invalid DONE message: received ${receivedIndices.size} chunks, got ${count}`,
+          `Invalid DONE message: received ${receivedChunks} chunks, got ${count}`,
         ),
       );
       return;
     }
-    if (sizeKnown && (count !== expectedChunks || finalBytes !== totalBytes)) {
-      fail(
-        new Error('Invalid DONE message: final size does not match metadata'),
-      );
-      return;
-    }
-    if (!sizeKnown && finalBytes !== claimedPlaintextBytes) {
+    if (finalBytes !== claimedWireBytes) {
       fail(new Error('Invalid DONE message: final size does not match chunks'));
       return;
     }
@@ -557,7 +507,7 @@ export function createDataChannelReceiver(
     }
     if (settled) return;
 
-    if (receivedIndices.size !== count || totalDecryptedBytes !== finalBytes) {
+    if (receivedChunks !== count || totalDecryptedBytes !== finalBytes) {
       fail(
         new Error(
           `Incomplete transfer: got ${totalDecryptedBytes} bytes, expected ${finalBytes}`,
@@ -568,7 +518,7 @@ export function createDataChannelReceiver(
 
     let payload: Blob;
     try {
-      payload = await sink.finish();
+      payload = await target.finish();
     } catch (error) {
       fail(
         error instanceof Error

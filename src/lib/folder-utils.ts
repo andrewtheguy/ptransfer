@@ -94,6 +94,9 @@ export function createZipTransferSource(
     // the input total remains useful as a progress/storage hint.
     size: null,
     estimatedSize: totalInputBytes,
+    // The entries are deflated below, so the transfer pipeline must not
+    // compress this payload again (the no-recompress rule).
+    precompressed: true,
     stream: () => createZipStream(files),
   };
 }

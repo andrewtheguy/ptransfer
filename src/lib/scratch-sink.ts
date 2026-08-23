@@ -3,12 +3,11 @@
  * payloads at or below `MEMORY_SINK_MAX_BYTES` are buffered in memory,
  * larger payloads stream through OPFS-backed scratch files.
  *
- * Two sink shapes are built on the same scratch machinery:
- * - `ReceiveSink`: positional writes into a preallocated file. Decrypted
- *   chunks land at their byte offset while a transfer is received, so
- *   receiving needs O(chunk) memory and the download streams from disk.
- * - `AppendSink`: sequential writes for received payloads whose final size was
- *   unknown during signaling (streamed ZIPs).
+ * All received payloads arrive as ordered streams of unknown final size
+ * (single files are deflated on the wire, ZIPs are generated while they are
+ * sent), so the one sink shape is `AppendSink`: sequential writes sealed into
+ * a Blob. `createInflatingAppendSink` layers the wire decompression for
+ * deflated payloads on top of any append sink.
  *
  * OPFS (`FileSystemFileHandle.createWritable`, secure contexts only) is
  * required for over-threshold payloads. Every current major browser ships
@@ -24,9 +23,10 @@
 
 import { MEMORY_SINK_MAX_BYTES } from './crypto/constants';
 
-export interface ReceiveSink {
-  /** Write plaintext bytes at a byte offset. Rejects on storage failure. */
-  write(position: number, bytes: Uint8Array): Promise<void>;
+/** Sequential sink for received payloads of unknown final size. */
+export interface AppendSink {
+  /** Append bytes at the end of the payload. Rejects on storage failure. */
+  append(bytes: Uint8Array): Promise<void>;
   /**
    * Flush everything and seal the payload. The returned Blob stays readable
    * until `discard()`. No writes are accepted afterwards.
@@ -38,16 +38,6 @@ export interface ReceiveSink {
    * memory-backed one is immutable and stays readable). Safe to call at any
    * point and more than once.
    */
-  discard(): Promise<void>;
-}
-
-/** Sequential variant of `ReceiveSink` for output of unknown final size. */
-export interface AppendSink {
-  /** Append bytes at the end of the payload. Rejects on storage failure. */
-  append(bytes: Uint8Array): Promise<void>;
-  /** Same contract as `ReceiveSink.finish`. */
-  finish(): Promise<Blob>;
-  /** Same contract as `ReceiveSink.discard`. */
   discard(): Promise<void>;
 }
 
@@ -160,27 +150,6 @@ function scratchLifecycle(scratch: ScratchFile, enqueue: OpQueue) {
   };
 }
 
-function createMemoryReceiveSink(totalBytes: number): ReceiveSink {
-  let buffer: Uint8Array | null = new Uint8Array(totalBytes);
-  return {
-    write(position, bytes) {
-      if (!buffer) return Promise.reject(new Error('Scratch sink discarded'));
-      buffer.set(bytes, position);
-      return Promise.resolve();
-    },
-    finish() {
-      if (!buffer) return Promise.reject(new Error('Scratch sink discarded'));
-      const blob = new Blob([buffer as BlobPart]);
-      buffer = null;
-      return Promise.resolve(blob);
-    },
-    discard() {
-      buffer = null;
-      return Promise.resolve();
-    },
-  };
-}
-
 function createMemoryAppendSink(): AppendSink {
   let chunks: Uint8Array[] | null = [];
   return {
@@ -199,44 +168,6 @@ function createMemoryAppendSink(): AppendSink {
       chunks = null;
       return Promise.resolve();
     },
-  };
-}
-
-/**
- * Create the positional sink for a transfer of `totalBytes` plaintext bytes.
- * At or below `MEMORY_SINK_MAX_BYTES` the payload is buffered in memory;
- * above it the sink is OPFS-backed and rejects when OPFS is unsupported or
- * fails (e.g. over quota).
- */
-export async function createReceiveSink(
-  totalBytes: number,
-): Promise<ReceiveSink> {
-  if (totalBytes <= MEMORY_SINK_MAX_BYTES) {
-    return createMemoryReceiveSink(totalBytes);
-  }
-  requireOpfs();
-  void sweepTransferScratch();
-  const scratch = await createScratchFile();
-  try {
-    // Size the file up front so an over-quota transfer fails before any data flows.
-    await scratch.writable.truncate(totalBytes);
-  } catch (error) {
-    await scratch.writable.abort().catch(() => {});
-    await scratch.remove();
-    throw error;
-  }
-  const enqueue = createOpQueue();
-  return {
-    write(position, bytes) {
-      return enqueue(() =>
-        scratch.writable.write({
-          type: 'write',
-          position,
-          data: bytes as BufferSource,
-        }),
-      );
-    },
-    ...scratchLifecycle(scratch, enqueue),
   };
 }
 
@@ -277,7 +208,7 @@ export async function createAppendSink(
  *
  * Unlike `createAppendSink`, the estimate is never trusted as a backend
  * decision for the lifetime of the sink. This matters on the receiving side,
- * where metadata came from the peer and streamed ZIP output can differ from
+ * where metadata came from the peer and the streamed payload can differ from
  * its input-size estimate.
  */
 export async function createAdaptiveAppendSink(
@@ -341,6 +272,62 @@ export async function createAdaptiveAppendSink(
         if (diskSink) await diskSink.discard();
         diskSink = null;
       });
+    },
+  };
+}
+
+/**
+ * Wrap an append sink so appended raw-deflate bytes land in the inner sink
+ * inflated: the sealed Blob is the original payload. `finish()` flushes the
+ * decompressor before sealing, so truncated or malformed deflate data rejects
+ * the transfer, and inflated output beyond `maxOutputBytes` rejects too — the
+ * size cap is what stops a decompression bomb from a malicious peer, since
+ * the in-band byte counts only cover the compressed bytes.
+ */
+export function createInflatingAppendSink(
+  inner: AppendSink,
+  maxOutputBytes: number,
+): AppendSink {
+  const decompressor = new DecompressionStream('deflate-raw');
+  const writer = decompressor.writable.getWriter();
+  let outputBytes = 0;
+
+  const pumped = (async () => {
+    const reader = decompressor.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      outputBytes += value.length;
+      if (outputBytes > maxOutputBytes) {
+        throw new Error('Decompressed transfer exceeds the size limit');
+      }
+      await inner.append(value);
+    }
+  })();
+  // A pump failure resurfaces on the next append()/finish() await; this only
+  // keeps it from reporting as unhandled meanwhile and unblocks a writer
+  // waiting on decompressor backpressure that will never drain.
+  pumped.catch(() => {
+    void writer.abort().catch(() => {});
+  });
+
+  return {
+    async append(bytes) {
+      // Race the pump so its failures (size cap, inner-sink errors) surface
+      // here instead of deadlocking a write the pump no longer drains;
+      // malformed deflate data rejects the write itself.
+      await Promise.race([writer.write(bytes.slice() as BufferSource), pumped]);
+    },
+    async finish() {
+      // Race here too: after a pump failure the decompressor is no longer
+      // drained, so close() alone would wait forever on its output queue.
+      await Promise.race([writer.close(), pumped]);
+      await pumped;
+      return inner.finish();
+    },
+    discard() {
+      void writer.abort().catch(() => {});
+      return inner.discard();
     },
   };
 }
