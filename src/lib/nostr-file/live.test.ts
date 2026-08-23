@@ -178,6 +178,33 @@ describe('live single-copy relay transfer', () => {
     }
   });
 
+  it('deflates a compressible file once, so it spans far fewer chunks', async () => {
+    const pool = createMockPool();
+    // 20 chunks raw; deflates to a fraction of one chunk.
+    const data = new TextEncoder()
+      .encode('the same line of text, over and over\n'.repeat(17_700))
+      .slice(0, 20 * 32768);
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
+    const [received] = await Promise.all([receiveDone, sendDone]);
+    expect(received).toEqual(data);
+    expect(manifest.compression).toBe('deflate');
+    expect(manifest.fileSize).toBe(data.length);
+    expect(manifest.payloadSize).toBeLessThan(data.length / 10);
+    expect(manifest.totalChunks).toBe(1);
+    expect(chunkPlacements(pool).size).toBe(1);
+  }, 15000);
+
+  it('stores incompressible data as-is instead of recompressing', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(100_000);
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
+    const [received] = await Promise.all([receiveDone, sendDone]);
+    expect(received).toEqual(data);
+    expect(manifest.compression).toBe('none');
+    expect(manifest.payloadSize).toBe(data.length);
+    expect(manifest.totalChunks).toBe(4);
+  }, 15000);
+
   it('re-sends only the pieces the receiver could not fetch, to the next relay', async () => {
     // r2 acknowledges uploads but never serves them: every chunk placed
     // there is reported missing by the receiver and must be re-sent.
@@ -442,16 +469,18 @@ describe('live single-copy relay transfer', () => {
     const transferId = 'ab'.repeat(16);
     const createdAt = Math.floor(Date.now() / 1000);
     const manifest: NostrFileManifest = {
-      v: 4,
+      v: 5,
       fileName: 'late.bin',
       fileSize: data.length,
       mimeType: 'application/octet-stream',
       fileHash: uint8ArrayToBase64(await sha256(data)),
       transferId,
       pubkey: publicKey,
+      compression: 'none',
+      payloadSize: data.length,
       chunkSize: 32768,
       totalChunks: 1,
-      enc: 1,
+      enc: 2,
       controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,
@@ -538,16 +567,18 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 4,
+      v: 5,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',
       fileHash: `${'B'.repeat(43)}=`,
       transferId: 'a'.repeat(32),
       pubkey: 'c'.repeat(64),
+      compression: 'none',
+      payloadSize: 10,
       chunkSize: 32768,
       totalChunks: 1,
-      enc: 1,
+      enc: 2,
       controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,

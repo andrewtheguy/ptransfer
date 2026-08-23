@@ -3,8 +3,60 @@ import { decrypt, encrypt } from '../crypto/aes-gcm';
 import { NOSTR_FILE_AAD_PREFIX, NOSTR_FILE_CHUNK_SIZE } from './constants';
 import { decodeZ85, encodeZ85 } from './z85';
 
+/** Whole-payload compression applied before chunking. */
+export type PayloadCompression = 'deflate' | 'none';
+
 /**
- * Split plaintext into fixed-size chunks (last chunk may be shorter).
+ * Compress the whole file once, before chunking. Deflating the entire file
+ * instead of each chunk lets a highly compressible file collapse into a few
+ * chunks rather than one event per 32 KiB of plaintext. Data that does not
+ * shrink (media, archives with compressed entries) is sent as-is under
+ * 'none' — never recompressed.
+ */
+export function compressPayload(data: Uint8Array): {
+  payload: Uint8Array;
+  compression: PayloadCompression;
+} {
+  const compressed = deflateSync(data);
+  return compressed.length < data.length
+    ? { payload: compressed, compression: 'deflate' }
+    : { payload: data, compression: 'none' };
+}
+
+/**
+ * Reverse compressPayload on the assembled payload. `fileSize` is the exact
+ * plaintext size the manifest promised: it bounds the inflate output
+ * (decompression-bomb guard) and anything but an exact match throws.
+ */
+export function decompressPayload(
+  payload: Uint8Array,
+  compression: PayloadCompression,
+  fileSize: number,
+): Uint8Array {
+  if (compression === 'none') {
+    if (payload.length !== fileSize) {
+      throw new Error(
+        `Payload size mismatch: expected ${fileSize}, got ${payload.length}`,
+      );
+    }
+    return payload;
+  }
+  // Fixed output buffer: fflate never grows a caller-provided buffer, so an
+  // over-sized decompression comes back at fileSize + 1 (or throws) and is
+  // rejected instead of ballooning memory or truncating silently.
+  const plaintext = inflateSync(payload, {
+    out: new Uint8Array(fileSize + 1),
+  });
+  if (plaintext.length !== fileSize) {
+    throw new Error(
+      `Decompressed size mismatch: expected ${fileSize}, got ${plaintext.length}`,
+    );
+  }
+  return plaintext;
+}
+
+/**
+ * Split payload bytes into fixed-size chunks (last chunk may be shorter).
  */
 export function splitIntoChunks(
   data: Uint8Array,
@@ -37,24 +89,24 @@ export function chunkAad(
 }
 
 /**
- * Chunk plaintext -> nostr event content string.
- * Pipeline: deflate -> AES-256-GCM (nonce||ct||tag, AAD-bound) -> Z85
- * (base85: smaller than base64 and JSON-escape-free).
+ * Payload chunk -> nostr event content string.
+ * Pipeline: AES-256-GCM (nonce||ct||tag, AAD-bound) -> Z85 (base85: smaller
+ * than base64 and JSON-escape-free). Compression happens once over the whole
+ * payload before chunking (compressPayload), not per chunk.
  */
 export async function encodeChunkContent(
   key: CryptoKey,
-  plaintext: Uint8Array,
+  chunk: Uint8Array,
   aad: Uint8Array,
 ): Promise<string> {
-  const compressed = deflateSync(plaintext);
-  const encrypted = await encrypt(key, compressed, undefined, aad);
+  const encrypted = await encrypt(key, chunk, undefined, aad);
   return encodeZ85(encrypted);
 }
 
 /**
- * Nostr event content string -> chunk plaintext.
- * Throws on tampering (GCM auth failure), wrong AAD, corrupt deflate data,
- * or a decompressed size above maxSize (decompression-bomb guard).
+ * Nostr event content string -> payload chunk.
+ * Throws on tampering (GCM auth failure), wrong AAD, or a chunk larger than
+ * maxSize.
  */
 export async function decodeChunkContent(
   key: CryptoKey,
@@ -63,17 +115,11 @@ export async function decodeChunkContent(
   maxSize: number = NOSTR_FILE_CHUNK_SIZE,
 ): Promise<Uint8Array> {
   const encrypted = decodeZ85(content);
-  const compressed = await decrypt(key, encrypted, aad);
-  // Fixed output buffer: fflate never grows a caller-provided buffer, so an
-  // over-sized decompression comes back at maxSize + 1 (or throws) and is
-  // rejected instead of ballooning memory or truncating silently.
-  const plaintext = inflateSync(compressed, {
-    out: new Uint8Array(maxSize + 1),
-  });
-  if (plaintext.length > maxSize) {
-    throw new Error('Decompressed chunk exceeds the chunk size');
+  const chunk = await decrypt(key, encrypted, aad);
+  if (chunk.length > maxSize) {
+    throw new Error('Chunk exceeds the chunk size');
   }
-  return plaintext;
+  return chunk;
 }
 
 export async function sha256(data: Uint8Array): Promise<Uint8Array> {
@@ -82,27 +128,27 @@ export async function sha256(data: Uint8Array): Promise<Uint8Array> {
 }
 
 /**
- * Assemble downloaded chunks into the original file bytes.
+ * Assemble downloaded chunks into the original payload bytes.
  * Throws if any chunk is missing or the total size does not match.
  */
 export function assembleChunks(
   chunks: (Uint8Array | null)[],
-  fileSize: number,
+  payloadSize: number,
 ): Uint8Array {
-  const result = new Uint8Array(fileSize);
+  const result = new Uint8Array(payloadSize);
   let offset = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     if (!chunk) throw new Error(`Missing chunk ${i} of ${chunks.length}`);
-    if (offset + chunk.length > fileSize) {
-      throw new Error('Assembled data exceeds expected file size');
+    if (offset + chunk.length > payloadSize) {
+      throw new Error('Assembled data exceeds expected payload size');
     }
     result.set(chunk, offset);
     offset += chunk.length;
   }
-  if (offset !== fileSize) {
+  if (offset !== payloadSize) {
     throw new Error(
-      `Assembled size mismatch: expected ${fileSize}, got ${offset}`,
+      `Assembled size mismatch: expected ${payloadSize}, got ${offset}`,
     );
   }
   return result;

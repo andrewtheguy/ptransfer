@@ -1,6 +1,12 @@
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
-import { chunkAad, encodeChunkContent, sha256, splitIntoChunks } from './codec';
+import {
+  chunkAad,
+  compressPayload,
+  encodeChunkContent,
+  sha256,
+  splitIntoChunks,
+} from './codec';
 import {
   CLOCK_SKEW_TOLERANCE_SEC,
   LIVE_BATCH_CHUNKS,
@@ -120,6 +126,13 @@ export async function sendFileLive(
   const hashStarted = Date.now();
   const fileHash = uint8ArrayToBase64(await sha256(data));
   stats.phaseMs.hash = Date.now() - hashStarted;
+  // One deflate pass over the whole file before chunking, so a compressible
+  // file collapses into few chunks; data that would not shrink (media, ZIPs
+  // with compressed entries) travels as-is instead of being recompressed.
+  const compressStarted = Date.now();
+  const { payload, compression } = compressPayload(data);
+  stats.phaseMs.compress = Date.now() - compressStarted;
+  stats.payloadBytes = payload.length;
   const transferId = Array.from(
     crypto.getRandomValues(new Uint8Array(16)),
     (b) => b.toString(16).padStart(2, '0'),
@@ -137,7 +150,7 @@ export async function sendFileLive(
       ['encrypt'],
     );
     const controlKey = await deriveControlKey(keyBytes, transferId);
-    const chunks = splitIntoChunks(data, NOSTR_FILE_CHUNK_SIZE);
+    const chunks = splitIntoChunks(payload, NOSTR_FILE_CHUNK_SIZE);
     const total = chunks.length;
     stats.chunksTotal = total;
     throwIfCancelled();
@@ -164,9 +177,11 @@ export async function sendFileLive(
       fileHash,
       transferId,
       pubkey: publicKey,
+      compression,
+      payloadSize: payload.length,
       chunkSize: NOSTR_FILE_CHUNK_SIZE,
       totalChunks: total,
-      enc: 1,
+      enc: 2,
       controlRelays: [...controlRelays],
       createdAt,
       expiresAt,

@@ -1,8 +1,11 @@
+import { deflateSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   assembleChunks,
   chunkAad,
+  compressPayload,
   decodeChunkContent,
+  decompressPayload,
   encodeChunkContent,
   sha256,
   splitIntoChunks,
@@ -14,6 +17,36 @@ async function makeKey(): Promise<CryptoKey> {
     'decrypt',
   ]);
 }
+
+describe('compressPayload / decompressPayload', () => {
+  it('deflates compressible data as a whole and round-trips it', () => {
+    const data = new TextEncoder().encode('hello world '.repeat(10_000));
+    const { payload, compression } = compressPayload(data);
+    expect(compression).toBe('deflate');
+    expect(payload.length).toBeLessThan(data.length);
+    expect(decompressPayload(payload, compression, data.length)).toEqual(data);
+  });
+
+  it('sends incompressible data as-is instead of recompressing', () => {
+    const data = crypto.getRandomValues(new Uint8Array(65536));
+    const { payload, compression } = compressPayload(data);
+    expect(compression).toBe('none');
+    expect(payload).toBe(data);
+    expect(decompressPayload(payload, compression, data.length)).toBe(data);
+  });
+
+  it('rejects a size mismatch in either mode (decompression-bomb guard)', () => {
+    const data = new Uint8Array(10_000).fill(97);
+    const deflated = deflateSync(data);
+    // Claimed plaintext smaller than the real inflate output.
+    expect(() => decompressPayload(deflated, 'deflate', 9_999)).toThrow();
+    expect(() => decompressPayload(deflated, 'deflate', 100)).toThrow();
+    // Claimed plaintext larger than the real inflate output.
+    expect(() => decompressPayload(deflated, 'deflate', 10_001)).toThrow();
+    expect(() => decompressPayload(data, 'none', 9_999)).toThrow();
+    expect(decompressPayload(deflated, 'deflate', 10_000)).toEqual(data);
+  });
+});
 
 describe('splitIntoChunks / assembleChunks', () => {
   it('round-trips exact and partial chunk sizes', () => {
@@ -39,22 +72,31 @@ describe('splitIntoChunks / assembleChunks', () => {
 });
 
 describe('chunk content codec', () => {
-  it('round-trips through deflate + AES-GCM + Z85', async () => {
+  it('round-trips through AES-GCM + Z85', async () => {
     const key = await makeKey();
-    const plaintext = crypto.getRandomValues(new Uint8Array(32768));
+    const chunk = crypto.getRandomValues(new Uint8Array(32768));
     const aad = chunkAad('a'.repeat(32), 3, 10);
-    const content = await encodeChunkContent(key, plaintext, aad);
+    const content = await encodeChunkContent(key, chunk, aad);
     expect(typeof content).toBe('string');
     const decoded = await decodeChunkContent(key, content, aad);
-    expect(decoded).toEqual(plaintext);
+    expect(decoded).toEqual(chunk);
   });
 
-  it('encoded incompressible 32 KiB chunk stays under 64 KB', async () => {
+  it('encoded 32 KiB chunk stays under 64 KB', async () => {
     const key = await makeKey();
-    const plaintext = crypto.getRandomValues(new Uint8Array(32768));
+    const chunk = crypto.getRandomValues(new Uint8Array(32768));
     const aad = chunkAad('a'.repeat(32), 0, 1);
-    const content = await encodeChunkContent(key, plaintext, aad);
+    const content = await encodeChunkContent(key, chunk, aad);
     expect(content.length).toBeLessThan(64 * 1024);
+  });
+
+  it('rejects a chunk larger than maxSize', async () => {
+    const key = await makeKey();
+    const aad = chunkAad('a'.repeat(32), 0, 1);
+    const content = await encodeChunkContent(key, new Uint8Array(200), aad);
+    await expect(decodeChunkContent(key, content, aad, 100)).rejects.toThrow(
+      /chunk size/,
+    );
   });
 
   it('rejects tampered content', async () => {

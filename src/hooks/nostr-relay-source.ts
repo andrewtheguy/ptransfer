@@ -89,7 +89,9 @@ export function validateNostrRelaySource(
   return { ok: true, fileName, mimeType };
 }
 
-// Progress in bytes from chunk counts (chunks are equal-sized except the last).
+// Plaintext bytes represented by one chunk, for progress display. Chunks
+// carry the compressed payload, so this maps the done/total chunk fraction
+// proportionally onto the original file size.
 export function chunkBytesEstimate(
   fileSize: number,
   totalChunks: number,
