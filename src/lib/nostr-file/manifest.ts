@@ -26,13 +26,16 @@ export interface NostrFileManifest {
   /** 64 hex chars — ephemeral nostr pubkey; authors filter + signature auth */
   pubkey: string;
   /**
-   * Whole-payload compression applied before chunking: the file is deflated
-   * once as a whole, or sent as-is ('none') when deflate would not shrink it
-   * (already-compressed data is never recompressed).
+   * Whole-payload compression applied before chunking, decided by flow, not
+   * content: 'none' marks a payload the multi-file/folder flow already
+   * compressed (a ZIP with deflated entries — never recompressed), 'deflate'
+   * a single-file payload deflated once as a whole, whether or not that
+   * shrank it.
    */
   compression: 'deflate' | 'none';
-  /** bytes actually chunked onto relays: deflate output size, or fileSize
-   * when compression is 'none' */
+  /** bytes actually chunked onto relays: deflate output size (which may
+   * slightly exceed fileSize for incompressible input), or fileSize when
+   * compression is 'none' */
   payloadSize: number;
   chunkSize: number;
   totalChunks: number;
@@ -91,15 +94,17 @@ export function isValidNostrFileManifest(
 
   if (m.compression !== 'deflate' && m.compression !== 'none') return false;
 
-  // The chunked payload never exceeds the plaintext: 'none' means the file
-  // travels as-is, and 'deflate' is only chosen when it strictly shrinks.
+  // 'none' chunks exactly the file bytes; 'deflate' output can exceed the
+  // plaintext for incompressible input, but never by more than raw deflate's
+  // worst case (5 bytes of stored-block framing per 64 KiB, plus slack).
+  const maxDeflatedSize = m.fileSize + Math.ceil(m.fileSize / 65535) * 5 + 64;
   if (
     typeof m.payloadSize !== 'number' ||
     !Number.isInteger(m.payloadSize) ||
     m.payloadSize <= 0 ||
     (m.compression === 'none'
       ? m.payloadSize !== m.fileSize
-      : m.payloadSize >= m.fileSize)
+      : m.payloadSize > maxDeflatedSize)
   ) {
     return false;
   }

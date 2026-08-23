@@ -15,12 +15,7 @@ import {
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
-import {
-  type AppendSink,
-  createAdaptiveAppendSink,
-  createReceiveSink,
-  type ReceiveSink,
-} from '@/lib/scratch-sink';
+import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -82,7 +77,7 @@ export function useManualReceive(): UseManualReceiveReturn {
   // Storage backing the in-flight or completed transfer. Discarded whenever
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
-  const sinkRef = useRef<ReceiveSink | AppendSink | null>(null);
+  const sinkRef = useRef<AppendSink | null>(null);
 
   // Resolve function for offer submission
   const offerResolverRef = useRef<((payload: SignalingPayload) => void) | null>(
@@ -200,7 +195,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       const {
         fileName,
         fileSize,
-        fileSizeExact,
+        contentEncoding,
         mimeType,
         salt: saltArray,
         publicKey: senderPublicKeyArray,
@@ -222,7 +217,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         typeof fileSize !== 'number' ||
         !Number.isFinite(fileSize) ||
         fileSize < 0 ||
-        typeof fileSizeExact !== 'boolean'
+        (contentEncoding !== 'deflate-raw' && contentEncoding !== 'identity')
       ) {
         setState({
           status: 'error',
@@ -267,26 +262,24 @@ export function useManualReceive(): UseManualReceiveReturn {
       const iceCandidates: RTCIceCandidate[] = [];
       let answerSDP: RTCSessionDescriptionInit | null = null;
 
-      // Decrypted chunks land in the receive sink as they arrive.
-      const sink = fileSizeExact
-        ? await createReceiveSink(fileSize)
-        : await createAdaptiveAppendSink(fileSize);
+      // Decrypted chunks land in the receive sink as they arrive. A cancel
+      // during its creation cannot see it through sinkRef yet, so discard it
+      // here instead of leaving its scratch storage orphaned.
+      const sink = await createAdaptiveAppendSink(fileSize);
+      if (cancelledRef.current) {
+        void sink.discard();
+        return;
+      }
       sinkRef.current = sink;
 
-      if (cancelledRef.current) return;
-
       // Streaming receiver: decrypts each chunk into the sink as it arrives
-      // and resolves once DONE arrives and all chunks authenticate.
-      const receiver = createDataChannelReceiver(
-        key,
-        fileSizeExact ? fileSize : null,
-        sink,
-        {
-          estimatedBytes: fileSize,
-          onProgress: (current, total) =>
-            setState((s) => ({ ...s, progress: { current, total } })),
-        },
-      );
+      // (inflating deflated payloads in between) and resolves once DONE
+      // arrives and all chunks authenticate.
+      const receiver = createDataChannelReceiver(key, contentEncoding, sink, {
+        estimatedBytes: fileSize,
+        onProgress: (current, total) =>
+          setState((s) => ({ ...s, progress: { current, total } })),
+      });
       let dataChannelResolver: (() => void) | null = null;
       let answerSDPResolver: (() => void) | null = null;
 

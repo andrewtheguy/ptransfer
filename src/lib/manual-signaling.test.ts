@@ -36,7 +36,7 @@ describe('Manual Signaling Utils', () => {
       createdAt: Date.now(),
       fileName: 'test.txt',
       fileSize: 1024,
-      fileSizeExact: true,
+      contentEncoding: 'deflate-raw' as const,
       mimeType: 'text/plain',
       publicKey: mockPublicKey,
       salt: mockSalt,
@@ -60,6 +60,7 @@ describe('Manual Signaling Utils', () => {
     expect(parsed?.candidates).toHaveLength(1);
     expect(parsed?.candidates[0]).toBe(mockCandidates[0].candidate);
     expect(parsed?.fileName).toBe(metadata.fileName);
+    expect(parsed?.contentEncoding).toBe(metadata.contentEncoding);
     expect(parsed?.publicKey).toEqual(Array.from(mockPublicKey));
   });
 
@@ -88,7 +89,7 @@ describe('Manual Signaling Utils', () => {
       salt: mockSalt,
       fileName: 'secret-file-name.txt',
       fileSize: 100,
-      fileSizeExact: true,
+      contentEncoding: 'deflate-raw' as const,
       mimeType: 'text/plain',
     };
 
@@ -161,7 +162,7 @@ describe('Nostr file payload', () => {
   const createdAt = Math.floor(Date.now() / 1000);
   const validPayload: NostrFileLivePayload = {
     type: 'nostr-file-live',
-    v: 5,
+    v: 6,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
@@ -214,7 +215,7 @@ describe('Nostr file payload', () => {
       createdAt: Date.now(),
       fileName: 'a.txt',
       fileSize: 1,
-      fileSizeExact: true,
+      contentEncoding: 'deflate-raw' as const,
       mimeType: 'text/plain',
       publicKey: mockPublicKey,
       salt: mockSalt,
@@ -266,7 +267,7 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, type: 'offer' }),
     ).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, v: 4 })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, v: 5 })).toBe(false);
     expect(isValidNostrFileLivePayload({ ...validPayload, enc: 1 })).toBe(
       false,
     );

@@ -4,6 +4,7 @@ import {
   isValidNostrFileManifest,
   type NostrFileManifest,
 } from './nostr-file/manifest';
+import type { WireEncoding } from './transfer-source';
 
 // Deterministic deflate helpers (avoid browser stream API stalls).
 function deflateCompress(data: Uint8Array): Uint8Array {
@@ -63,8 +64,10 @@ export interface SignalingPayload {
   publicKey: number[];
   // Offer-only fields:
   fileName?: string;
+  /** Input size of the payload; a progress hint, never the wire length. */
   fileSize?: number;
-  fileSizeExact?: boolean;
+  /** 'deflate-raw' payloads are inflated by the receiver after decryption. */
+  contentEncoding?: WireEncoding;
   mimeType?: string;
   salt?: number[]; // Salt for content encryption key derivation (from ECDH shared secret)
 }
@@ -206,7 +209,7 @@ export function generateMutualOfferBinary(
     createdAt: number;
     fileName: string;
     fileSize: number;
-    fileSizeExact: boolean;
+    contentEncoding: WireEncoding;
     mimeType: string;
     publicKey: Uint8Array; // ECDH public key (65 bytes)
     salt: Uint8Array; // Salt for AES key derivation
@@ -219,7 +222,7 @@ export function generateMutualOfferBinary(
     createdAt: metadata.createdAt,
     fileName: metadata.fileName,
     fileSize: metadata.fileSize,
-    fileSizeExact: metadata.fileSizeExact,
+    contentEncoding: metadata.contentEncoding,
     mimeType: metadata.mimeType,
     publicKey: Array.from(metadata.publicKey),
     salt: Array.from(metadata.salt),

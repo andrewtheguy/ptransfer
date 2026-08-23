@@ -15,7 +15,7 @@ import {
   type SignalingPayload,
 } from '@/lib/manual-signaling';
 import { sendFileOverDataChannel } from '@/lib/p2p-transfer';
-import type { TransferSource } from '@/lib/transfer-source';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
@@ -170,7 +170,7 @@ export function useManualSend(): UseManualSendReturn {
 
         const fileName = sanitizedFileName;
         const fileSize = content.size ?? content.estimatedSize;
-        const fileSizeExact = content.size !== null;
+        const contentEncoding = wireEncodingFor(content);
         const mimeType = content.type || 'application/octet-stream';
 
         if (
@@ -184,7 +184,7 @@ export function useManualSend(): UseManualSendReturn {
           return;
         }
 
-        if (fileSizeExact && fileSize <= 0) {
+        if (content.size !== null && fileSize <= 0) {
           setState({ status: 'error', message: 'File is empty' });
           sendingRef.current = false;
           return;
@@ -297,7 +297,7 @@ export function useManualSend(): UseManualSendReturn {
             createdAt: sessionStartTime,
             fileName,
             fileSize,
-            fileSizeExact,
+            contentEncoding,
             mimeType,
             publicKey: ecdhKeyPair.publicKeyBytes,
             salt,

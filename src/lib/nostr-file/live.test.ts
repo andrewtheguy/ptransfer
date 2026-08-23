@@ -29,7 +29,14 @@ function randomBytes(size: number): Uint8Array {
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
 const CONTROL_RELAYS = ['wss://c1.example', 'wss://c2.example'];
-const META = { fileName: 'live.bin', mimeType: 'application/octet-stream' };
+// Most tests here exercise relay mechanics with random (incompressible)
+// bytes; sending them as the precompressed multi-file flow keeps the
+// byte-to-chunk math exact. Compression-rule tests override `precompressed`.
+const META = {
+  fileName: 'live.bin',
+  mimeType: 'application/octet-stream',
+  precompressed: true,
+};
 const never = () => false;
 const noProgress = () => {};
 
@@ -80,6 +87,7 @@ async function liveRoundTrip(
   data: Uint8Array,
   opts: {
     relays?: string[];
+    precompressed?: boolean;
     onSend?: (p: LiveSendProgress) => void;
     onReceive?: (p: LiveReceiveProgress) => void;
     senderCancelled?: () => boolean;
@@ -92,15 +100,19 @@ async function liveRoundTrip(
     readyResolve = resolve;
   });
 
-  const sendDone = sendFileLive(data, META, {
-    pool,
-    isCancelled: opts.senderCancelled ?? never,
-    controlRelayOverride: CONTROL_RELAYS,
-    dataRelayOverride: opts.relays ?? RELAYS,
-    onProgress: opts.onSend ?? noProgress,
-    onReady: (m, keyBytes) =>
-      readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) }),
-  });
+  const sendDone = sendFileLive(
+    data,
+    { ...META, precompressed: opts.precompressed ?? META.precompressed },
+    {
+      pool,
+      isCancelled: opts.senderCancelled ?? never,
+      controlRelayOverride: CONTROL_RELAYS,
+      dataRelayOverride: opts.relays ?? RELAYS,
+      onProgress: opts.onSend ?? noProgress,
+      onReady: (m, keyBytes) =>
+        readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) }),
+    },
+  );
   // The caller awaits sendDone; this only keeps an early rejection from
   // being reported as unhandled meanwhile.
   sendDone.catch(() => {});
@@ -178,13 +190,19 @@ describe('live single-copy relay transfer', () => {
     }
   });
 
-  it('deflates a compressible file once, so it spans far fewer chunks', async () => {
+  it('deflates a compressible single-file payload once, so it spans far fewer chunks', async () => {
     const pool = createMockPool();
     // 20 chunks raw; deflates to a fraction of one chunk.
     const data = new TextEncoder()
       .encode('the same line of text, over and over\n'.repeat(17_700))
       .slice(0, 20 * 32768);
-    const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(
+      pool,
+      data,
+      {
+        precompressed: false,
+      },
+    );
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
     expect(manifest.compression).toBe('deflate');
@@ -194,7 +212,25 @@ describe('live single-copy relay transfer', () => {
     expect(chunkPlacements(pool).size).toBe(1);
   }, 15000);
 
-  it('stores incompressible data as-is instead of recompressing', async () => {
+  it('deflates a single-file payload even when that does not shrink it', async () => {
+    const pool = createMockPool();
+    const data = randomBytes(100_000);
+    const { manifest, sendDone, receiveDone } = await liveRoundTrip(
+      pool,
+      data,
+      {
+        precompressed: false,
+      },
+    );
+    const [received] = await Promise.all([receiveDone, sendDone]);
+    expect(received).toEqual(data);
+    expect(manifest.compression).toBe('deflate');
+    expect(manifest.fileSize).toBe(data.length);
+    // Random bytes do not compress; raw deflate adds stored-block framing.
+    expect(manifest.payloadSize).toBeGreaterThanOrEqual(data.length);
+  }, 15000);
+
+  it('never recompresses a payload from the multi-file/folder flow', async () => {
     const pool = createMockPool();
     const data = randomBytes(100_000);
     const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
@@ -469,7 +505,7 @@ describe('live single-copy relay transfer', () => {
     const transferId = 'ab'.repeat(16);
     const createdAt = Math.floor(Date.now() / 1000);
     const manifest: NostrFileManifest = {
-      v: 5,
+      v: 6,
       fileName: 'late.bin',
       fileSize: data.length,
       mimeType: 'application/octet-stream',
@@ -567,7 +603,7 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 5,
+      v: 6,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',

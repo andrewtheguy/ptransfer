@@ -20,7 +20,7 @@ const metadata: TransferMetadata = {
   contentType: 'file',
   fileName: 'quarterly-report.pdf',
   fileSize: 1048576,
-  fileSizeExact: true,
+  contentEncoding: 'deflate-raw',
   mimeType: 'application/pdf',
 };
 
@@ -90,9 +90,9 @@ describe('Transfer metadata hash', () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeTransferMetadataHash(metadata)).toBe(hash);
 
-    // Frozen pTransfer v1 vector, for the same reason as the rendezvous vector above.
+    // Frozen pTransfer v2 vector, for the same reason as the rendezvous vector above.
     expect(hash).toBe(
-      '6ebaf21fd32f1f01883abf53f3b87d3b682a85ec923577f91dddde3567d086b0',
+      'd71c5d4c12479dfb7e1e4f7c9fd169cddd73206e8c369d49a98f7b726a025f84',
     );
   });
 
@@ -105,7 +105,7 @@ describe('Transfer metadata hash', () => {
     const variants: TransferMetadata[] = [
       { ...metadata, fileName: 'quarterly-report.exe' },
       { ...metadata, fileSize: 1048577 },
-      { ...metadata, fileSizeExact: false },
+      { ...metadata, contentEncoding: 'identity' },
       { ...metadata, mimeType: 'text/html' },
     ];
 

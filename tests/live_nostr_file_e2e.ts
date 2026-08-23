@@ -95,7 +95,11 @@ async function runLive(data: Uint8Array) {
 
     const sendDone = sendFileLive(
       data,
-      { fileName: 'live-e2e.bin', mimeType: 'application/octet-stream' },
+      {
+        fileName: 'live-e2e.bin',
+        mimeType: 'application/octet-stream',
+        precompressed: false,
+      },
       {
         pool: senderPool,
         storage: memoryStorage(),

@@ -52,7 +52,7 @@ import {
   uint8ArrayToBase64,
 } from '@/lib/nostr';
 import { sendFileOverDataChannel } from '@/lib/p2p-transfer';
-import type { TransferSource } from '@/lib/transfer-source';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
@@ -213,7 +213,7 @@ export function useNostrSend(): UseNostrSendReturn {
 
       const fileName = sanitizedFileName;
       const fileSize = content.size ?? content.estimatedSize;
-      const fileSizeExact = content.size !== null;
+      const contentEncoding = wireEncodingFor(content);
       const mimeType = content.type || 'application/octet-stream';
 
       if (
@@ -227,7 +227,7 @@ export function useNostrSend(): UseNostrSendReturn {
         return;
       }
 
-      if (fileSizeExact && fileSize <= 0) {
+      if (content.size !== null && fileSize <= 0) {
         setState({ status: 'error', message: 'File is empty' });
         sendingRef.current = false;
         return;
@@ -258,7 +258,7 @@ export function useNostrSend(): UseNostrSendReturn {
         contentType,
         fileName,
         fileSize,
-        fileSizeExact,
+        contentEncoding,
         mimeType,
       };
 

@@ -1,4 +1,5 @@
 import type { NostrFileTransferStats } from '../nostr-file/stats';
+import type { WireEncoding } from '../transfer-source';
 
 // Event kinds (matching wormhole-rs)
 export const EVENT_KIND_DATA_TRANSFER = 24242;
@@ -114,9 +115,10 @@ export interface RendezvousPayload {
 export interface TransferMetadata {
   contentType: ContentType;
   fileName: string;
+  /** Input size of the payload; a progress hint, never the wire length. */
   fileSize: number;
-  /** False when fileSize is an input-size estimate for a streamed ZIP. */
-  fileSizeExact: boolean;
+  /** 'deflate-raw' payloads are inflated by the receiver after decryption. */
+  contentEncoding: WireEncoding;
   mimeType: string;
 }
 

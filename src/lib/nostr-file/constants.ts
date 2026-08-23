@@ -18,7 +18,7 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 5;
+export const NOSTR_FILE_MANIFEST_VERSION = 6;
 
 // Codec identity: whole-payload deflate (skipped when it would not shrink)
 // before chunking, then per chunk AES-256-GCM (nonce||ct||tag) then Z85.

@@ -19,17 +19,24 @@ async function makeKey(): Promise<CryptoKey> {
 }
 
 describe('compressPayload / decompressPayload', () => {
-  it('deflates compressible data as a whole and round-trips it', () => {
+  it('deflates a single-file payload as a whole and round-trips it', () => {
     const data = new TextEncoder().encode('hello world '.repeat(10_000));
-    const { payload, compression } = compressPayload(data);
+    const { payload, compression } = compressPayload(data, false);
     expect(compression).toBe('deflate');
     expect(payload.length).toBeLessThan(data.length);
     expect(decompressPayload(payload, compression, data.length)).toEqual(data);
   });
 
-  it('sends incompressible data as-is instead of recompressing', () => {
+  it('deflates an incompressible single-file payload too, and round-trips it', () => {
     const data = crypto.getRandomValues(new Uint8Array(65536));
-    const { payload, compression } = compressPayload(data);
+    const { payload, compression } = compressPayload(data, false);
+    expect(compression).toBe('deflate');
+    expect(decompressPayload(payload, compression, data.length)).toEqual(data);
+  });
+
+  it('never recompresses a precompressed payload (multi-file/folder ZIP flow)', () => {
+    const data = new TextEncoder().encode('hello world '.repeat(10_000));
+    const { payload, compression } = compressPayload(data, true);
     expect(compression).toBe('none');
     expect(payload).toBe(data);
     expect(decompressPayload(payload, compression, data.length)).toBe(data);
