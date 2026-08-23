@@ -153,7 +153,7 @@ describe('control relay probe', () => {
       probeBytes: CONTROL_PROBE_BYTES,
       targetCount: DEFAULT_RELAYS.length,
     });
-    // Small probe on the wire — nowhere near the 32 KiB chunk probe.
+    // Small probe on the wire — nowhere near the full-size chunk probe.
     expect(probeSizes.length).toBeGreaterThan(0);
     for (const size of probeSizes) expect(size).toBeLessThan(1000);
     // A relay that accepts writes but serves nothing back fails the probe.

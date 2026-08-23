@@ -6,9 +6,10 @@ export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
 // Payload chunk size (the payload is the whole file deflated once — or the
 // raw file when deflate would not shrink it). Encoded content per event is
-// bounded by z85(chunk + 12B nonce + 16B tag) ~= 41 KB, comfortably under
-// the ~64 KB content size the public relay population is known to accept.
-export const NOSTR_FILE_CHUNK_SIZE = 32768;
+// bounded by z85(chunk + 12B nonce + 16B tag) = 61,475 B (~60 KB), just
+// under the ~63 KB content size measured against the public relay
+// population — relays that cap lower fail the full-size health probe.
+export const NOSTR_FILE_CHUNK_SIZE = 49152;
 
 // NIP-78 addressable event kind used for chunk (and probe) events.
 export const EVENT_KIND_FILE_CHUNK = 30078;
@@ -70,7 +71,7 @@ export const CONTROL_PROBE_TIMEOUT_MS = 4000;
 export const DISCOVERY_CANDIDATE_LIMIT = 100;
 export const DISCOVERY_CANDIDATE_CAP = 150;
 
-// Max `d` identifiers per fetch filter (~2 MB of content per query).
+// Max `d` identifiers per fetch filter (~3 MB of content per query).
 export const D_TAG_FILTER_BATCH = 50;
 
 export const RELAY_QUERY_MAX_WAIT_MS = 15000;
@@ -79,7 +80,7 @@ export const RELAY_QUERY_MAX_WAIT_MS = 15000;
 // an encrypted control channel; the receiver acknowledges and only pieces it
 // could not fetch are sent again.
 //
-// Chunks per availability announcement (64 × 32 KiB = 2 MiB).
+// Chunks per availability announcement (64 × 48 KiB = 3 MiB).
 export const LIVE_BATCH_CHUNKS = 64;
 // The sender re-announces its latest availability when nothing changed, so a
 // lost announcement or acknowledgement is recovered on the next beat.
@@ -105,7 +106,7 @@ export const LIVE_RELAY_DEMOTE_MISSES = 2;
 export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
-// Decompression bound for a control message body (a full 3200-chunk map
+// Decompression bound for a control message body (a full ~2100-chunk map
 // with every chunk listed is well under this).
 export const CONTROL_MESSAGE_MAX_BYTES = 256 * 1024;
 

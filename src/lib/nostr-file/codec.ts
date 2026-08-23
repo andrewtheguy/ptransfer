@@ -9,7 +9,7 @@ export type PayloadCompression = 'deflate' | 'none';
 /**
  * Compress the whole file once, before chunking. Deflating the entire file
  * instead of each chunk lets a highly compressible file collapse into a few
- * chunks rather than one event per 32 KiB of plaintext.
+ * chunks rather than one event per 48 KiB of plaintext.
  *
  * The rule is flow-based, not content-sniffed: a `precompressed` payload came
  * out of the multiple file/folder flow as a ZIP whose entries are already

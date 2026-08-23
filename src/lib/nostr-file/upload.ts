@@ -145,7 +145,7 @@ export async function resolveControlRelays(
  * health check + rotating batch selection. Relays in `excludeRelays` (the
  * transfer's control relays) and the whole DEFAULT_RELAYS signaling pool
  * never join the ring, whichever path picks it — signaling relays are chosen
- * for small messages, not 32 KiB chunks, and chunk traffic must not compete
+ * for small messages, not full-size chunks, and chunk traffic must not compete
  * with the control channel. Throws when fewer than MIN_UPLOAD_RELAYS relays
  * are usable.
  */
