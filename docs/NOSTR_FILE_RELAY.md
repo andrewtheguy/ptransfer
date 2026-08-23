@@ -234,7 +234,7 @@ sender completes on `done`.
 
 On each `avail`, the receiver fetches every announced chunk it lacks from the one relay it
 was placed on (grouped per relay, in parallel, `authors` + `#d` filters, ≤
-`D_TAG_FILTER_BATCH` (50) ids per filter, ~2 MB of content per query), skipping chunks
+`D_TAG_FILTER_BATCH` (50) ids per filter, ~3 MB of content per query), skipping chunks
 whose `(pos, gen)` it already tried within the last `LIVE_FETCH_RETRY_MS` (10 s), then
 answers with an `ack` listing what is still missing at the placement it actually asked —
 never the newest announced one, so an announcement landing mid-fetch cannot blame a relay
@@ -309,7 +309,7 @@ sequenceDiagram
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
 | `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop probing once this many relays pass |
-| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~2 MB per query) |
+| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |
 | `LIVE_FETCH_RETRY_MS` | 10 s | Receiver retry clock: re-fetch a still-missing placement and re-run a cycle without a new announcement |
