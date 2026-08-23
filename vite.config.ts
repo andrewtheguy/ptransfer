@@ -19,6 +19,8 @@ export default defineConfig({
   },
   server: {
     allowedHosts: ['.trycloudflare.com'],
+    // Keep a page on one coherent module set when WASM is rebuilt during development.
+    hmr: false,
   },
   plugins: [
     tailwindcss(),
