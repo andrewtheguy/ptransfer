@@ -71,8 +71,16 @@ function openRelayCache(): Promise<IDBDatabase> {
       RELAY_CACHE_DATABASE_NAME,
       RELAY_CACHE_DATABASE_VERSION,
     );
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
+      // The relay cache is disposable. A database-version change always
+      // resets it to the current schema instead of migrating or retaining
+      // stores from an older version.
+      if (event.oldVersion !== 0) {
+        for (const storeName of Array.from(database.objectStoreNames)) {
+          database.deleteObjectStore(storeName);
+        }
+      }
       database.createObjectStore(RELAY_CACHE_STATE_STORE);
       database.createObjectStore(RELAY_CACHE_WORKING_STORE, {
         keyPath: 'url',

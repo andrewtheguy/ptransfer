@@ -1,9 +1,15 @@
-import type { Event } from 'nostr-tools';
-import { describe, expect, it } from 'vitest';
+import type { Event as NostrEvent } from 'nostr-tools';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RELAYS } from '../nostr/relays';
-import { CONTROL_PROBE_BYTES, CONTROL_RELAY_COUNT } from './constants';
+import {
+  CONTROL_PROBE_BYTES,
+  CONTROL_RELAY_COUNT,
+  RELAY_CACHE_STATE_STORE,
+  RELAY_CACHE_WORKING_STORE,
+} from './constants';
 import { createMockPool } from './mock-pool';
 import {
+  createIndexedDbRelayPool,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
@@ -21,7 +27,9 @@ import {
   resolveUploadRelays,
 } from './upload';
 
-function makeEvent(kind: number, tags: string[][]): Event {
+afterEach(() => vi.unstubAllGlobals());
+
+function makeEvent(kind: number, tags: string[][]): NostrEvent {
   return {
     kind,
     tags,
@@ -54,6 +62,103 @@ function memoryStorage(
   };
   return holder;
 }
+
+function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
+  type Handler<T extends Event = Event> = ((event: T) => void) | null;
+
+  const stores = [...initialStores];
+  const deleted: string[] = [];
+  const created: string[] = [];
+  const readRequest = {
+    result: undefined,
+    error: null,
+    onsuccess: null as Handler,
+    onerror: null as Handler,
+  };
+  const transaction = {
+    error: null,
+    oncomplete: null as Handler,
+    onerror: null as Handler,
+    onabort: null as Handler,
+    objectStore: () => ({
+      get: () => {
+        queueMicrotask(() => {
+          readRequest.onsuccess?.(new Event('success'));
+          queueMicrotask(() => transaction.oncomplete?.(new Event('complete')));
+        });
+        return readRequest as unknown as IDBRequest<unknown>;
+      },
+    }),
+  };
+  const database = {
+    objectStoreNames: stores,
+    deleteObjectStore: (name: string) => {
+      deleted.push(name);
+      const index = stores.indexOf(name);
+      if (index >= 0) stores.splice(index, 1);
+    },
+    createObjectStore: (name: string) => {
+      created.push(name);
+      stores.push(name);
+    },
+    transaction: () => transaction as unknown as IDBTransaction,
+    close: vi.fn(),
+  };
+  const openRequest = {
+    result: database as unknown as IDBDatabase,
+    error: null,
+    onupgradeneeded: null as Handler<IDBVersionChangeEvent>,
+    onsuccess: null as Handler,
+    onerror: null as Handler,
+    onblocked: null as Handler,
+  };
+  vi.stubGlobal('indexedDB', {
+    open: vi.fn(() => {
+      queueMicrotask(() => {
+        openRequest.onupgradeneeded?.({ oldVersion } as IDBVersionChangeEvent);
+        openRequest.onsuccess?.(new Event('success'));
+      });
+      return openRequest as unknown as IDBOpenDBRequest;
+    }),
+  });
+
+  return { stores, deleted, created, close: database.close };
+}
+
+describe('IndexedDB relay cache schema', () => {
+  it('creates the current stores for a new database', async () => {
+    const database = mockRelayCacheUpgrade(0, []);
+
+    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+
+    expect(database.deleted).toEqual([]);
+    expect(database.created).toEqual([
+      RELAY_CACHE_STATE_STORE,
+      RELAY_CACHE_WORKING_STORE,
+    ]);
+    expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
+  it('resets every store when the database version changes', async () => {
+    const previousStores = [
+      RELAY_CACHE_STATE_STORE,
+      RELAY_CACHE_WORKING_STORE,
+      'obsolete-store',
+    ];
+    const database = mockRelayCacheUpgrade(1, previousStores);
+
+    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+
+    expect(database.deleted).toEqual(previousStores);
+    expect(database.created).toEqual([
+      RELAY_CACHE_STATE_STORE,
+      RELAY_CACHE_WORKING_STORE,
+    ]);
+    expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+});
 
 describe('parseRelayCandidates', () => {
   it('extracts NIP-66 d tags and NIP-65 r tags, normalized and deduped', () => {
