@@ -220,11 +220,15 @@ export function AboutContent() {
                 Manual Exchange mode
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                Coordination happens by directly exchanging a signaling payload
-                with the recipient — by QR code or copy/paste — with no
-                third-party coordination servers. The signaling payload is
-                obfuscated, not encrypted, so exchange it only with the intended
-                recipient. STUN may be used when internet is available; without
+                Coordination starts by handing the recipient a signaling payload
+                — by QR code or copy/paste — with no account and no coordination
+                server holding it. That payload is obfuscated, not encrypted, so
+                hand it only to the intended recipient: it is also what secures
+                the response. The recipient's response normally comes back
+                through Nostr relays, encrypted with a key derived from your
+                payload, so the relays see only ciphertext; if they are
+                unreachable, the response comes back by QR or copy/paste
+                instead. STUN may be used when internet is available; without
                 internet, no third-party servers are involved at all. When STUN
                 is used, it only sees connection setup metadata such as IP
                 address and port, not file contents or encryption keys. File

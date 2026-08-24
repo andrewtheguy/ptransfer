@@ -30,6 +30,14 @@ import type { NostrFilePool } from './pool';
 const KIND_RELAY_DISCOVERY = 30166;
 const KIND_RELAY_LIST = 10002;
 
+/**
+ * What a probe proved about a relay. `storage` is a full-size chunk write; a
+ * relay that passes it necessarily takes a control-sized message too, so the
+ * two flags are not independent. `control` is the small write the signaling
+ * and answer channels need.
+ */
+export type RelayCapability = 'control' | 'storage';
+
 export interface HealthyRelay {
   url: string;
   rttMs: number;
@@ -641,6 +649,8 @@ export async function sweepRelayHealth(
   const concurrency = opts.concurrency ?? BACKGROUND_PROBE_CONCURRENCY;
   const timeoutMs = opts.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
   const probeBytes = opts.probeBytes ?? HEALTH_CHECK_PROBE_BYTES;
+  const sweepCapability: RelayCapability =
+    probeBytes >= HEALTH_CHECK_PROBE_BYTES ? 'storage' : 'control';
   const saveBatch = opts.saveBatch ?? BACKGROUND_PROBE_SAVE_BATCH;
   const stopped = () =>
     opts.signal?.aborted === true || opts.isCancelled?.() === true;
@@ -720,7 +730,9 @@ export async function sweepRelayHealth(
     healthy = [];
     failed = [];
     saving = saving.then(() =>
-      saveRelayHealth(storage, batchHealthy, batchFailed).catch(() => {}),
+      saveRelayHealth(storage, batchHealthy, batchFailed, {
+        capability: sweepCapability,
+      }).catch(() => {}),
     );
     return saving;
   };
@@ -787,8 +799,10 @@ export async function selectUploadRelays(
 export async function getRelayCandidates(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
-  now: number = Date.now(),
+  opts: { capability?: RelayCapability; now?: number } = {},
 ): Promise<string[]> {
+  const capability = opts.capability ?? 'storage';
+  const now = opts.now ?? Date.now();
   const [state, savedRelayHealth] = await Promise.all([
     storage.getState(),
     storage.getRelayHealth(),
@@ -824,7 +838,9 @@ export async function getRelayCandidates(
   const knownWorking = [...byUrl.values()]
     .filter(
       (relay) =>
-        relay.supportsStorage &&
+        (capability === 'storage'
+          ? relay.supportsStorage
+          : relay.supportsControl) &&
         relay.consecutiveFailures === 0 &&
         relay.lastSucceededAt !== null &&
         relay.lastSucceededAt <= now &&
@@ -868,16 +884,21 @@ export async function getRelayCandidates(
 }
 
 /**
- * Persist discovery and full-size probe history. A successful storage probe
- * also proves control-sized capability; a failed current probe clears both
- * capability flags but retains bounded failure history for candidate ranking.
+ * Persist discovery and probe history under the capability the probe actually
+ * proved. A full-size success proves both capabilities; a control-sized
+ * success proves only the small write and leaves any earlier full-size
+ * verdict alone, since 256 bytes says nothing either way about a chunk. A
+ * failure at either size clears both flags but retains bounded failure
+ * history for candidate ranking.
  */
 export async function saveRelayHealth(
   storage: RelayPoolStorage,
   healthy: HealthyRelay[],
   failedRelays: string[],
-  now: number = Date.now(),
+  opts: { capability: RelayCapability; now?: number },
 ): Promise<void> {
+  const { capability } = opts;
+  const now = opts.now ?? Date.now();
   const previous = await storage.getRelayHealth();
   const failed = new Set(
     failedRelays
@@ -925,7 +946,8 @@ export async function saveRelayHealth(
             rttMs,
             consecutiveFailures: 0,
             supportsControl: true,
-            supportsStorage: true,
+            supportsStorage:
+              capability === 'storage' ? true : relay.supportsStorage,
           },
     );
   }

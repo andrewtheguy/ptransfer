@@ -157,9 +157,9 @@ export async function resolveUploadRelays(
   }
   onProgress({ phase: 'discovering', stats });
   const discoverStarted = Date.now();
-  const candidates = (await getRelayCandidates(pool, storage)).filter(
-    (url) => !isExcluded(url),
-  );
+  const candidates = (
+    await getRelayCandidates(pool, storage, { capability: 'storage' })
+  ).filter((url) => !isExcluded(url));
   stats.candidates = candidates.length;
   stats.phaseMs.discover = Date.now() - discoverStarted;
   // Discovery connected to the seeds; the ones not carrying this transfer's
@@ -191,7 +191,9 @@ export async function resolveUploadRelays(
     },
   });
   stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
-  await saveRelayHealth(storage, successfulProbes, failedProbes);
+  await saveRelayHealth(storage, successfulProbes, failedProbes, {
+    capability: 'storage',
+  });
   // Whatever the early stop left untouched, handed back for a background
   // sweep rather than discarded.
   const probed = new Set([

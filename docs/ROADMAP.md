@@ -19,11 +19,13 @@ relays instead of a second QR scan / copy-paste:
   payload names the relays the answer will come back on, so both sides agree
   on the channel without a second out-of-band step.
 - Reuse the verified-relay logic from the Nostr file relay
-  (`src/lib/nostr-file/relay-pool.ts`): the write→read control-relay probe
-  (`resolveTransferRelays`), the canonical-keyed IndexedDB relay-health cache,
-  and the same NIP-40 expiration. Answers are small, so the control-sized
-  probe (256 B) is the right health bar — no full-size storage probe, no
-  storage ring.
+  (`src/lib/nostr-file/relay-pool.ts`) in full, minus the storage half: the
+  write→read probe of `DEFAULT_RELAYS`, NIP-66/NIP-65 discovery and the
+  IndexedDB candidate/health cache to backfill the set when defaults come up
+  short, and the same NIP-40 expiration. Answers are small, so the
+  control-sized probe (256 B) is the health bar throughout — no full-size
+  storage probe, no storage ring, and no background sweep behind a WebRTC
+  transfer.
 - The answer rides an **encrypted side channel keyed from the offer**, the
   same way the Nostr file relay's control channel is keyed from its code, so
   relays see only ciphertext and the exchange keeps its current security
@@ -34,6 +36,12 @@ relays instead of a second QR scan / copy-paste:
   its scan/paste input. The current two-hop flow remains the guaranteed path,
   never a dead end.
 - Still WebRTC: file bytes never touch a relay in this phase.
+
+Status: implemented (`src/lib/answer-channel.ts`, wired into
+`use-manual-send.ts` / `use-manual-receive.ts`, with the shared
+`AnswerReturn` receiver UI). The design as built is documented in
+[ARCHITECTURE.md](ARCHITECTURE.md#answer-return-channel-srclibanswer-channelts);
+the user-facing flow in [MANUAL_EXCHANGE.md](MANUAL_EXCHANGE.md).
 
 #### Phase 2 — automatic relay fallback for the data path
 

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { deriveAnswerChannel, publishAnswer } from '@/lib/answer-channel';
 import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
@@ -9,11 +10,13 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
+  answerChannelFromOffer,
   generateMutualAnswerBinary,
   parseMutualPayload,
   type SignalingPayload,
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
+import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ReceivedContent } from '@/lib/types';
@@ -50,6 +53,13 @@ export interface ManualReceiveState {
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
   clipboardData?: string; // Base64 for copy button
+  /**
+   * Outcome of returning the answer over the relays the offer named:
+   * 'sent' when at least one relay took it (the sender gets it without a
+   * second hand-carried hop), 'failed' when none did. Absent when the offer
+   * named no relays, which is the plain two-hop exchange.
+   */
+  answerRelayStatus?: 'sent' | 'failed';
 }
 
 export interface UseManualReceiveReturn {
@@ -378,11 +388,45 @@ export function useManualReceive(): UseManualReceiveReturn {
         ecdhKeyPair.publicKeyBytes,
       );
 
+      // When the offer named an answer channel, seal the same blob under the
+      // offer's secret and publish it there: the sender is already listening,
+      // so nothing has to be carried back by hand. A refusal is not fatal —
+      // the answer code is shown and the exchange finishes as it always did.
+      const answerChannel = answerChannelFromOffer(offerPayload);
+      let answerRelayStatus: 'sent' | 'failed' | undefined;
+      if (answerChannel) {
+        setState({
+          status: 'generating_answer',
+          message: 'Sending your response to the sender...',
+        });
+        const pool = createTransferPool();
+        try {
+          await publishAnswer(pool, answerChannel.relays, {
+            channel: await deriveAnswerChannel(answerChannel.secret),
+            answer: answerBinary,
+            expiresAt: Math.floor(
+              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
+            ),
+          });
+          answerRelayStatus = 'sent';
+        } catch {
+          answerRelayStatus = 'failed';
+        } finally {
+          pool.destroy();
+        }
+      }
+
+      if (cancelledRef.current) return;
+
       // Show answer and wait for connection
       setState({
         status: 'showing_answer',
-        message: 'Show this to sender and wait for connection',
+        message:
+          answerRelayStatus === 'sent'
+            ? 'Response sent — waiting for the sender to connect'
+            : 'Show this to sender and wait for connection',
         answerData: answerBinary,
+        answerRelayStatus,
         contentType: 'file',
         fileMetadata: {
           fileName: fileName!,

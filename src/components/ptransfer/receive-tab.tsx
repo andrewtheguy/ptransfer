@@ -19,9 +19,9 @@ import {
 } from '@/lib/file-utils';
 import { parseAnyManualPayload } from '@/lib/manual-signaling';
 import type { PinKeyMaterial } from '@/lib/types';
+import { AnswerReturn } from './answer-return';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { type PinChangePayload, PinInput, type PinInputRef } from './pin-input';
-import { QRDisplay } from './qr-display';
 import { QRInput } from './qr-input';
 import { TransferStatus } from './transfer-status';
 
@@ -29,7 +29,7 @@ const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const PIN_MODE_DESCRIPTION =
   'Most reliable option. Sets up the connection automatically through relays using the PIN the sender shares; the same end-to-end encrypted transfer, without the manual handoff.';
 const MANUAL_MODE_DESCRIPTION =
-  'You and the sender directly exchange a short signaling payload — by QR code or copy/paste — to establish the transfer. No third-party coordination servers; STUN may be used when internet is available. File data stays encrypted.';
+  'The sender hands you a short signaling payload — by QR code or copy/paste — and your response goes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for their code; STUN may be used when internet is available. File data stays encrypted.';
 
 type ReceiveMode = 'pin' | 'scan';
 
@@ -109,6 +109,11 @@ export function ReceiveTab() {
   const clipboardData: string | undefined =
     typeof rawStateAny.clipboardData === 'string'
       ? rawStateAny.clipboardData
+      : undefined;
+  const answerRelayStatus: 'sent' | 'failed' | undefined =
+    rawStateAny.answerRelayStatus === 'sent' ||
+    rawStateAny.answerRelayStatus === 'failed'
+      ? rawStateAny.answerRelayStatus
       : undefined;
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -434,46 +439,13 @@ export function ReceiveTab() {
             </div>
           )}
 
-          {/* Answer display: returned to the sender by QR or copy/paste */}
+          {/* The receiver's answer step: relayed, or carried back by hand */}
           {showQRDisplay && answerData && (
-            <div className="space-y-4">
-              <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
-                <p className="font-medium">
-                  Send your response back to the sender
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Get your response back to the sender by the QR code below or
-                  copy/paste the data:
-                </p>
-                <ul className="text-sm text-muted-foreground space-y-2">
-                  <li>
-                    <span className="font-medium text-foreground">
-                      QR code:
-                    </span>{' '}
-                    the sender scans the code below with their camera.
-                  </li>
-                  <li>
-                    <span className="font-medium text-foreground">
-                      Copy &amp; paste:
-                    </span>{' '}
-                    tap <strong>Copy Data</strong> below the code, then send the
-                    copied text back to the sender over the same secure channel
-                    for them to paste. If the button doesn&apos;t work, use{' '}
-                    <strong>Show text to copy manually</strong> to select and
-                    copy the response yourself.
-                  </li>
-                </ul>
-                <p className="text-sm text-muted-foreground">
-                  Keep this page open — the transfer connects automatically once
-                  the sender has your response.
-                </p>
-              </div>
-              <QRDisplay
-                data={answerData}
-                clipboardData={clipboardData}
-                label="Your response"
-              />
-            </div>
+            <AnswerReturn
+              answerData={answerData}
+              clipboardData={clipboardData}
+              answerRelayStatus={answerRelayStatus}
+            />
           )}
 
           {state.status === 'complete' && receivedContent && (

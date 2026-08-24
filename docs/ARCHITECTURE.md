@@ -2,7 +2,7 @@
 
 ## Overview
 
-pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling, a manual exchange method (QR or copy/paste with time-bucketed obfuscation), and direct P2P (WebRTC) data transfer. In Nostr mode the content-encryption key comes from a SPAKE2 password-authenticated key exchange driven by the PIN (fresh ephemeral scalars on both sides per run); in manual mode it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard path.
+pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling, a manual exchange method (QR or copy/paste with time-bucketed obfuscation, with the receiver's answer returned over Nostr relays so only the offer is carried by hand), and direct P2P (WebRTC) data transfer. In Nostr mode the content-encryption key comes from a SPAKE2 password-authenticated key exchange driven by the PIN (fresh ephemeral scalars on both sides per run); in manual mode it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard path.
 
 ## Core Principles
 
@@ -101,6 +101,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Sender
+    participant Relays as Nostr relays (answer only)
     participant Receiver
     Sender->>Sender: Generate ECDH keypair, create WebRTC offer
     Sender->>Sender: Obfuscate signaling payload (includes salt)
@@ -110,14 +111,22 @@ sequenceDiagram
     Receiver->>Receiver: Scan remaining QR codes in-app
     Receiver->>Receiver: Reassemble chunks, parse payload, derive shared secret
     Receiver->>Receiver: Create WebRTC answer
-    Receiver-->>Sender: Display Answer QR (single binary QR)
+    alt Offer named answer relays (default when relays are reachable)
+        Receiver->>Relays: Publish answer sealed under the offer's secret
+        Relays-->>Sender: Sealed answer (sender already subscribed)
+    else No relays proven, or none accepted the answer
+        Receiver-->>Sender: Display Answer QR (single binary QR) / Copy Data
+    end
     Sender->>Receiver: Process answer, establish WebRTC
     Sender->>Receiver: WebRTC data channel opens
 ```
 
+The relay hop replaces the second hand-carried code only. File bytes still
+travel exclusively over the direct WebRTC data channel.
+
 **Requirements:**
 - Receiver needs a phone camera to scan the sender's URL QR codes (or can use clipboard copy/paste as fallback)
-- Sender needs a camera OR clipboard to receive the answer back
+- Sender needs a camera OR clipboard only when the answer cannot come back over relays (offline, or no relay accepted it)
 
 **Network Requirements:**
 - **With internet**: Can work across different networks when ICE finds a direct route; STUN assists discovery but does not relay traffic
@@ -346,9 +355,12 @@ Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. 
 - Sender generates WebRTC offer with ICE candidates
 - Both offer and answer include a required `createdAt` timestamp; receivers refuse to proceed if the offer is expired or missing TTL
 - Payload is obfuscated using a time-bucketed seed to avoid casual inspection.
+- The offer additionally carries `answerRelays` + `answerSecret` when relays were proven while it was being built, and the receiver returns its answer over that channel instead of a second hand-carried code (see [Answer Return Channel](#answer-return-channel-srclibanswer-channelts)). The two fields travel together or not at all; an answer carrying them, or an offer carrying half of them, is rejected as malformed.
 
 > [!IMPORTANT]
-> **Security boundary**: Manual signaling payloads are not cryptographically confidential. The time-bucketed obfuscation deters casual inspection and the 1-hour TTL prevents stale offers from starting a session, but someone who captures the QR/clipboard payload can potentially recover metadata and SDP/ICE details. File-content confidentiality comes from the ECDH-derived AES-256-GCM key, assuming the offer and answer are exchanged over an authentic QR/clipboard path.
+> **Security boundary**: Manual signaling payloads are not cryptographically confidential. The time-bucketed obfuscation deters casual inspection and the 1-hour TTL prevents stale offers from starting a session, but someone who captures the QR/clipboard payload can potentially recover metadata and SDP/ICE details. File-content confidentiality comes from the ECDH-derived AES-256-GCM key, assuming the offer is delivered over an authentic QR/clipboard path.
+>
+> **The offer is the whole secret.** With the answer returning over relays, capturing the offer is enough to answer it: the captor derives the same channel from `answerSecret`, publishes its own answer, and becomes the receiver — the sender takes the first answer that opens under the channel key. The offer already had to be shared over a trusted channel; this makes that the *only* thing protecting the transfer, where before a captor also had to get its answer into the sender's hands. Relays themselves learn nothing beyond an opaque blob on a derived tag, both parties' IPs, and timing.
 
 **Binary Payload Format (PT01):**
 
@@ -436,7 +448,8 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 | Copy/Paste | Base64-encoded binary | No camera, text-safe for clipboard |
 
 **Key Features:**
-- No signaling server required - manual exchange via QR scan or copy/paste
+- Only one code is carried by hand: the answer normally returns over Nostr relays, and falls back to QR/copy-paste when they are unreachable or refuse it
+- No signaling server required for the offer, and none at all when relays are unavailable — the exchange completes hand-to-hand as before
 - Multi-QR offer: payload split into URL-based QR codes (~400 bytes each) for easy phone scanning
 - Receiver scans any QR code with phone camera → app opens at `/r` route with first chunk → scans remaining codes in-app
 - Copy/paste fallback for environments without camera
@@ -448,8 +461,64 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 
 **Security Model:**
 - **Nostr**: The rotating PIN drives a SPAKE2 exchange; the mutual claim/confirm handshake is sealed with session keys only matching PAKE peers hold, and signals and content are encrypted with keys off the same root. Nothing published can test a PIN offline, public transfer IDs cannot start the sender state machine, and a leaked PIN decrypts no content — file metadata is never exposed to relays in plaintext (the published confirm is sealed ciphertext relays cannot decrypt)
-- **Manual**: Signaling is obfuscated and time-limited, not encrypted; content confidentiality is provided by ECDH-derived AES-256-GCM over the data channel when the QR/clipboard exchange is authentic
+- **Manual**: Signaling is obfuscated and time-limited, not encrypted; content confidentiality is provided by ECDH-derived AES-256-GCM over the data channel when the offer's QR/clipboard delivery is authentic. The relayed answer *is* encrypted (AES-256-GCM under a key derived from the offer's secret), which makes the offer the single secret gating the exchange — see the security boundary note above
 - **All modes**: Once WebRTC connection is established, DTLS encrypts all data in transit, and file content is additionally encrypted with the shared chunk protocol
+
+### Answer Return Channel (`src/lib/answer-channel.ts`)
+
+Returns the receiver's answer over Nostr relays so Manual Exchange needs only
+one hand-carried code. It moves signaling, never file bytes.
+
+- **Relay selection.** This is the file relay's signaling resolution with the
+  storage half removed. While WebRTC creates the offer and gathers candidates,
+  the sender probes `DEFAULT_RELAYS` with the control-sized write→read round
+  trip (`healthCheckRelays` at `CONTROL_PROBE_BYTES` /
+  `CONTROL_PROBE_TIMEOUT_MS`, target `CONTROL_RELAY_COUNT`). Read-back matters:
+  the sender needs relays that *serve* the answer, not just accept it.
+- **Backfill.** When fewer than `CONTROL_RELAY_COUNT` defaults pass, the gap is
+  filled from the discovered relay population exactly as a Nostr file transfer
+  fills its signaling set — `getRelayCandidates` (NIP-66/NIP-65 discovery
+  merged into the cached candidate and health stores in IndexedDB), ranked for
+  `control` capability and probed at that size, with the verdicts written back
+  through `saveRelayHealth`. A manual exchange therefore both reads from and
+  feeds the same relay knowledge the file relay uses. What it does *not* do is
+  the storage half: no full-size probe, no storage ring, no background sweep —
+  an answer is a small message, and the sender is about to move the file over
+  WebRTC.
+- **Cache capability.** `CachedRelay` tracks `supportsControl` and
+  `supportsStorage` separately, and `saveRelayHealth` takes the capability the
+  probe actually proved. A full-size success sets both; a control-sized success
+  sets only `supportsControl` and leaves any earlier full-size verdict alone,
+  since 256 bytes says nothing either way about a chunk. A failure at either
+  size clears both.
+- **Cost and floor.** The default probe runs under the ICE gathering wait, so
+  it usually costs no extra time; backfill can outlast it, and since the offer
+  has to name its relays, the sender reports the phase and waits. Fewer than
+  `MIN_CONTROL_RELAYS` usable relays is not an error — the offer simply goes
+  out manual-only.
+- **Channel derivation.** The offer carries a random 32-byte secret. Both sides
+  run HKDF-SHA256 over it with distinct info labels to get a 16-byte channel
+  tag (hex, the public `x`/`d` identifier) and a non-extractable AES-256-GCM
+  key. The tag reveals nothing about the key, so a relay cannot link the two.
+- **Message.** One kind-30078 addressable event — the same kind the file relay
+  probes under, so a relay that passed accepts it — tagged
+  `['d', '<tag>:answer']`, `['x', '<tag>']`, and a NIP-40 `expiration` at the
+  offer's own 1-hour deadline. Content is base64 of AES-GCM over the *same*
+  PT01 answer blob the manual path would have shown, with AAD binding it to
+  the channel tag. Signed by a throwaway key.
+- **Delivery.** The receiver publishes to every named relay with the shared
+  retry/backoff policy, stops waiting once two accept (or all settle, or
+  `ANSWER_PUBLISH_TIMEOUT_MS` elapses), and fails only when none did. The
+  sender subscribes *before* it shows the offer, with `since` backdated by
+  `CLOCK_SKEW_TOLERANCE_SEC`, so nothing published early is missed; it takes
+  the first event that opens under the channel key and tears the pool down
+  immediately after.
+- **Fallback.** Nothing about the manual path is removed. No proven relays →
+  the offer names none and both sides run the two-hop exchange. Publishing
+  refused → the receiver shows its answer code with an explanation. Published
+  but no connection within 30 s → the receiver reveals the code anyway. On the
+  sender, the scan/paste input is always present, collapsed behind
+  "Response not arriving?" while the channel is live.
 
 ### Nostr File Relay (`src/lib/nostr-file/`) — Experimental
 
@@ -625,6 +694,9 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 | Nostr P2P connection | 30 seconds | Time to establish WebRTC connection after relay signaling starts |
 | Manual P2P connection | 120 seconds | Time to establish WebRTC connection after the answer is scanned/pasted |
 | ICE gathering | 5 seconds | Bounded wait while preparing Manual offer/answer QR payloads |
+| Answer-relay probe | 4 seconds | Per-relay write→read bound when proving the answer-return relays (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means a manual-only offer |
+| Answer publish | 10 seconds | Receiver's bound on getting its sealed answer onto the relays (`ANSWER_PUBLISH_TIMEOUT_MS`); ends early once two relays accept |
+| Answer code reveal | 30 seconds | How long a relayed answer stays collapsed on the receiver before the QR/copy-paste code is shown anyway |
 | Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
 | Data-channel ACK wait | 30 seconds | Sender wait after `DONE:<chunkCount>:<byteCount>` for receiver `ACK` |
 | P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |

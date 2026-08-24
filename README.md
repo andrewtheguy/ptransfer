@@ -8,7 +8,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 - **100% Static - No Backend Required**: The entire app is a static site that can be hosted on any static hosting service (GitHub Pages, Netlify, Vercel, S3, etc.). No server-side code, no database, no backend infrastructure needed.
 - **Works offline**: No internet required after page load when using Manual Exchange on same local network
-- **Flexible signaling**: Nostr (default) or Manual Exchange (QR/copy-paste). With internet, Manual Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
+- **Flexible signaling**: Nostr (default) or Manual Exchange — you hand over one code (QR/copy-paste) and the receiver's response returns over Nostr relays as ciphertext, falling back to QR/copy-paste when they are unreachable. With internet, Manual Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
 - **Rotating PIN pairing (Nostr)**: A case-sensitive 12-character PIN (letters and digits only) that rotates every 2 minutes locates the sender and drives a SPAKE2 password-authenticated key exchange; nothing published to relays can be used to guess the PIN offline
 - **Confirmation code (Nostr)**: After entering the PIN, the receiver is shown an 8-character code the sender must type in before anything is sent — so someone who spots the PIN over your shoulder cannot quietly take the file
 - **File or folder transfer**: Send a file, or a ZIP archive created from multiple files/a folder. Everything is compressed behind the scenes: a single file is deflated on the fly during the transfer and restored on receipt, while multi-file/folder ZIP output (whose entries are already deflated) is never recompressed. The 2GB limit is checked against the total size of the selected input files before compression — a selection over 2GB cannot be sent, even if it would compress smaller. The sender reads selected files lazily and streams payload bytes directly into the encrypted WebRTC transfer without scratch storage; receivers keep payloads up to 100MB in memory and spill larger payloads to OPFS. See [Browser Requirements](#browser-requirements)
@@ -40,7 +40,7 @@ identifiers to pTransfer and is incompatible with earlier releases.
 3. Choose Auto Exchange mode or Manual Exchange mode
 4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 12-character PIN with the receiver. The PIN rotates automatically every 2 minutes while keeping the immediately previous PIN bucket valid; a countdown under the PIN shows when the next one appears. Selecting "Generate a new PIN" replaces it immediately and invalidates all retained older PIN generations.
 5. Once someone claims the transfer, ask them for the confirmation code on their screen and enter it. Nothing is sent until it matches, so a stranger who saw the PIN cannot receive the file.
-6. For Manual Exchange, click "Start Manual Exchange" and exchange the QR/copy-paste signaling payloads with the receiver
+6. For Manual Exchange, click "Start Manual Exchange" and give the receiver the QR/copy-paste signaling payload; their response arrives on its own unless relays are unreachable
 
 ### Receiving
 
@@ -103,7 +103,7 @@ All signaling methods share the same **data-channel transfer protocol**: P2P tra
 
 **Signaling Methods** (sender chooses):
 - **Nostr** (default): Requires internet. Decentralized relay signaling. Devices can be on different networks.
-- **Manual Exchange**: No internet required. Exchange signaling via QR scan or copy/paste (camera optional). With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
+- **Manual Exchange**: No internet required. Hand over the sender's signaling payload via QR scan or copy/paste (camera optional); the receiver's response returns over Nostr relays when reachable — sealed with a key derived from the sender's payload — and by QR/copy-paste otherwise. With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
 
 **Data Transfer**: WebRTC P2P only. STUN may help the peers discover a direct route, but TURN relaying is not supported. If a direct P2P connection cannot be established, the transfer does not complete — there is no automatic in-app fallback. When this happens, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. The one exception is the experimental opt-in **Relay file through Nostr** option in Manual Exchange (`nostr-file-live` payload): it makes no WebRTC connection at all and instead carries the encrypted pieces through public Nostr relays — see [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md).
 
@@ -113,7 +113,7 @@ See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encry
 
 Receivers choose the matching receive mode:
 - **Auto Exchange mode**: Nostr signaling with the rotating PIN shown on the sender's screen.
-- **Manual Exchange mode**: Direct signaling exchange via QR scan or copy/paste (no relay).
+- **Manual Exchange mode**: The sender's signaling payload is handed over directly via QR scan or copy/paste; only the receiver's response uses relays, and only as ciphertext (with a QR/copy-paste fallback).
 
 ## Documentation
 

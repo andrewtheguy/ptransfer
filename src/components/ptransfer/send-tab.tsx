@@ -111,7 +111,7 @@ export function SendTab() {
   const pinModeHowItWorksDescription =
     'Same direct, end-to-end encrypted transfer as Manual Exchange — the difference is the handshake is exchanged automatically through relays, matched by your PIN, instead of by hand. Relays coordinate signaling and can see routing metadata, but they do not receive plaintext file contents or your decryption key.';
   const manualModeDescription =
-    'You and the recipient directly exchange a short signaling payload — by QR code or copy/paste — to establish the transfer. No third-party coordination servers; STUN may be used when internet is available. File data stays encrypted.';
+    'You hand the recipient a short signaling payload — by QR code or copy/paste — and their response comes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for your code; STUN may be used when internet is available. File data stays encrypted.';
   const manualModeHowItWorksDescription =
     'You and the recipient directly exchange a short signaling payload, either by scanning QR codes or by copy/paste. The signaling payload is obfuscated, not encrypted, so exchange it only with the intended recipient. If internet is available, STUN is used for connection setup metadata such as IP address and port; it does not receive your file contents or encryption keys. It also works without internet when the devices can reach each other over a network path, such as the same LAN/Wi-Fi.';
 

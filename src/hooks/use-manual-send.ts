@@ -1,5 +1,14 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  type AnswerChannel,
+  type AnswerRelayPhase,
+  type AnswerWatch,
+  deriveAnswerChannel,
+  generateAnswerSecret,
+  probeAnswerRelays,
+  watchForAnswer,
+} from '@/lib/answer-channel';
+import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
   generateECDHKeyPair,
@@ -14,6 +23,8 @@ import {
   parseMutualPayload,
   type SignalingPayload,
 } from '@/lib/manual-signaling';
+import { CLOCK_SKEW_TOLERANCE_SEC } from '@/lib/nostr-file/constants';
+import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { sendFileOverDataChannel } from '@/lib/p2p-transfer';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
@@ -46,6 +57,12 @@ interface ManualTransferStateBase {
   currentRelays?: string[];
   totalRelays?: number;
   offerData?: Uint8Array; // Binary data for QR code
+  /**
+   * Answer-return channel state while the offer is up: 'waiting' when the
+   * receiver's response will arrive over relays on its own, 'unavailable'
+   * when no relay set was proven and it has to be scanned or pasted back.
+   */
+  answerRelayStatus?: 'waiting' | 'unavailable';
   // Set on an error state when a direct P2P connection could not be established;
   // drives the offline-QR fallback suggestion in the UI.
   connectionFailed?: boolean;
@@ -76,6 +93,13 @@ export interface UseManualSendReturn {
 }
 
 const ICE_GATHER_TIMEOUT_MS = 5000;
+
+/** Shown only when relay resolution outlasts WebRTC offer creation. */
+const RELAY_PHASE_MESSAGES: Record<AnswerRelayPhase, string> = {
+  probing_defaults: 'Checking relays for the response...',
+  discovering: 'Looking for more relays...',
+  probing_discovered: 'Checking the relays we found...',
+};
 const MANUAL_CONNECTION_TIMEOUT_MS = 120000;
 
 export function useManualSend(): UseManualSendReturn {
@@ -98,6 +122,20 @@ export function useManualSend(): UseManualSendReturn {
   >(null);
   const answerRejectRef = useRef<((error: Error) => void) | null>(null);
 
+  // Relay pool and subscription carrying the receiver's answer back.
+  const poolRef = useRef<ReturnType<typeof createTransferPool> | null>(null);
+  const answerWatchRef = useRef<AnswerWatch | null>(null);
+  // A relayed answer that landed before the flow was ready for it. The watch
+  // stops at the first one, so it is held here rather than dropped.
+  const pendingAnswerRef = useRef<Uint8Array | null>(null);
+
+  const teardownAnswerRelay = useCallback(() => {
+    answerWatchRef.current?.close();
+    answerWatchRef.current = null;
+    poolRef.current?.destroy();
+    poolRef.current = null;
+  }, []);
+
   const clearExpirationTimeout = useCallback(() => {
     if (expirationTimeoutRef.current) {
       clearTimeout(expirationTimeoutRef.current);
@@ -109,6 +147,8 @@ export function useManualSend(): UseManualSendReturn {
     cancelledRef.current = true;
     sendingRef.current = false;
     clearExpirationTimeout();
+    teardownAnswerRelay();
+    pendingAnswerRef.current = null;
     answerResolverRef.current = null;
     answerRejectRef.current = null;
     ecdhPrivateKeyRef.current = null;
@@ -118,8 +158,10 @@ export function useManualSend(): UseManualSendReturn {
       rtcRef.current = null;
     }
     setState({ status: 'idle' });
-  }, [clearExpirationTimeout]);
+  }, [clearExpirationTimeout, teardownAnswerRelay]);
 
+  // Both paths to an answer — the relay channel and a scanned/pasted code —
+  // land here, so validation and TTL enforcement stay in one place.
   const submitAnswer = useCallback(async (answerBinary: Uint8Array) => {
     if (!answerResolverRef.current) return;
 
@@ -156,6 +198,7 @@ export function useManualSend(): UseManualSendReturn {
       if (sendingRef.current) return;
       sendingRef.current = true;
       cancelledRef.current = false;
+      pendingAnswerRef.current = null;
 
       try {
         // Validate and sanitize metadata
@@ -211,6 +254,38 @@ export function useManualSend(): UseManualSendReturn {
         const salt = generateSalt();
         saltRef.current = salt;
 
+        // Resolve the answer-return relays while WebRTC creates the offer
+        // and gathers candidates, so the probe of the defaults costs no extra
+        // wait. Backfilling from discovery can outlast ICE gathering, and the
+        // offer has to name its relays, so that part is reported and waited
+        // out. It never throws: without a usable relay set the offer simply
+        // goes out manual-only and the answer is scanned or pasted back as
+        // before.
+        teardownAnswerRelay();
+        const pool = createTransferPool();
+        poolRef.current = pool;
+        const answerSecret = generateAnswerSecret();
+        let relayPhase: AnswerRelayPhase = 'probing_defaults';
+        let relayDone = false;
+        let awaitingRelays = false;
+        const showRelayPhase = () => {
+          if (!awaitingRelays || cancelledRef.current) return;
+          setState({
+            status: 'generating_offer',
+            message: RELAY_PHASE_MESSAGES[relayPhase],
+          });
+        };
+        const relayProbe = probeAnswerRelays(pool, {
+          isCancelled: () => cancelledRef.current,
+          onProgress: (phase) => {
+            relayPhase = phase;
+            showRelayPhase();
+          },
+        }).then((relays) => {
+          relayDone = true;
+          return relays;
+        });
+
         // Set expiration timeout
         clearExpirationTimeout();
         expirationTimeoutRef.current = setTimeout(() => {
@@ -221,6 +296,7 @@ export function useManualSend(): UseManualSendReturn {
             });
             sendingRef.current = false;
             answerResolverRef.current = null;
+            teardownAnswerRelay();
             ecdhPrivateKeyRef.current = null;
             saltRef.current = null;
             if (rtcRef.current) {
@@ -289,6 +365,20 @@ export function useManualSend(): UseManualSendReturn {
 
         if (cancelledRef.current) return;
 
+        if (!relayDone) {
+          awaitingRelays = true;
+          showRelayPhase();
+        }
+        const answerRelays = await relayProbe;
+        awaitingRelays = false;
+        if (cancelledRef.current) return;
+        let channel: AnswerChannel | null = null;
+        if (answerRelays.length > 0) {
+          channel = await deriveAnswerChannel(answerSecret);
+        } else {
+          teardownAnswerRelay();
+        }
+
         // Generate binary offer data with ECDH public key
         const offerBinary = await generateMutualOfferBinary(
           offerSDP!,
@@ -301,16 +391,36 @@ export function useManualSend(): UseManualSendReturn {
             mimeType,
             publicKey: ecdhKeyPair.publicKeyBytes,
             salt,
+            ...(channel ? { answerRelays, answerSecret } : {}),
           },
         );
+
+        if (cancelledRef.current) return;
+
+        // Listen for the sealed answer before the code is shared, so one
+        // published while we were still preparing is not missed.
+        if (channel) {
+          answerWatchRef.current = watchForAnswer(pool, answerRelays, {
+            channel,
+            since:
+              Math.floor(sessionStartTime / 1000) - CLOCK_SKEW_TOLERANCE_SEC,
+            onAnswer: (binary) => {
+              if (answerResolverRef.current) void submitAnswer(binary);
+              else pendingAnswerRef.current = binary;
+            },
+          });
+        }
 
         // Show offer and wait for answer
         setState({
           status: 'showing_offer',
-          message: 'Show this to receiver, then scan/paste their response',
+          message: channel
+            ? 'Show this to receiver — their response comes back on its own'
+            : 'Show this to receiver, then scan/paste their response',
           offerData: offerBinary,
           contentType: 'file',
           fileMetadata: { fileName, fileSize, mimeType },
+          answerRelayStatus: channel ? 'waiting' : 'unavailable',
         });
 
         // Wait for answer to be submitted
@@ -318,6 +428,11 @@ export function useManualSend(): UseManualSendReturn {
           (resolve, reject) => {
             answerResolverRef.current = resolve;
             answerRejectRef.current = reject;
+
+            // An answer that beat this promise into existence.
+            const early = pendingAnswerRef.current;
+            pendingAnswerRef.current = null;
+            if (early) void submitAnswer(early);
 
             // Check periodically if cancelled
             const checkInterval = setInterval(() => {
@@ -328,6 +443,9 @@ export function useManualSend(): UseManualSendReturn {
             }, 500);
           },
         );
+
+        // The answer is in hand; the relay channel has nothing left to do.
+        teardownAnswerRelay();
 
         if (cancelledRef.current) return;
 
@@ -462,6 +580,8 @@ export function useManualSend(): UseManualSendReturn {
         }
       } finally {
         clearExpirationTimeout();
+        teardownAnswerRelay();
+        pendingAnswerRef.current = null;
         sendingRef.current = false;
         answerResolverRef.current = null;
         answerRejectRef.current = null;
@@ -473,7 +593,7 @@ export function useManualSend(): UseManualSendReturn {
         }
       }
     },
-    [clearExpirationTimeout],
+    [clearExpirationTimeout, submitAnswer, teardownAnswerRelay],
   );
 
   // Memoize return object to prevent unnecessary re-renders in consumers
