@@ -370,7 +370,7 @@ export async function healthCheckRelays(
     targetCount?: number;
     probeBytes?: number;
     isCancelled?: () => boolean;
-    onProgress?: (checked: number, healthy: number) => void;
+    onProgress?: (checked: number, healthy: number, url: string) => void;
   } = {},
 ): Promise<HealthyRelay[]> {
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
@@ -399,7 +399,7 @@ export async function healthCheckRelays(
         // will not be used, so stop its socket (and its reconnect loop) now.
         pool.close?.([url]);
       }
-      opts.onProgress?.(checked, healthy.length);
+      opts.onProgress?.(checked, healthy.length, url);
     }
   };
 
@@ -457,7 +457,11 @@ export async function getRelayCandidates(
     .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
     .map((relay) => normalizeRelayUrl(relay.url))
     .filter((url): url is string => url !== null);
-  if (state && now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS) {
+  if (
+    state &&
+    state.discoveredAt <= now &&
+    now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
+  ) {
     // Cached candidates must re-pass the *current* normalization rules: the
     // rules can tighten (reserved domains, IP literals) while a cache written
     // under the old rules is still fresh.
@@ -482,18 +486,33 @@ export async function getRelayCandidates(
   );
 }
 
-/** Persist recent health-check passes, newest first, for candidate priority. */
+/**
+ * Persist recent health-check passes and remove saved relays that just failed.
+ * Saved relays not probed in this run remain available until their TTL ends.
+ */
 export async function saveWorkingRelays(
   storage: RelayPoolStorage,
   healthy: HealthyRelay[],
+  probedCandidates: string[],
   now: number = Date.now(),
 ): Promise<void> {
   const previous = await storage.getWorkingRelays();
+  const probed = new Set(
+    probedCandidates
+      .map((url) => normalizeRelayUrl(url))
+      .filter((url): url is string => url !== null),
+  );
+  const healthyUrls = new Set(
+    healthy
+      .map((relay) => normalizeRelayUrl(relay.url))
+      .filter((url): url is string => url !== null),
+  );
   const byUrl = new Map<string, KnownWorkingRelay>();
   for (const relay of previous) {
     const url = normalizeRelayUrl(relay.url);
     if (
       url &&
+      (!probed.has(url) || healthyUrls.has(url)) &&
       relay.lastSavedAt <= now &&
       now - relay.lastSavedAt < RELAY_CANDIDATE_TTL_MS
     ) {

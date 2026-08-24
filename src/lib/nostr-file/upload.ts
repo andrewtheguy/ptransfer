@@ -205,9 +205,11 @@ export async function resolveUploadRelays(
   if (doneSeeds.length > 0) pool.close?.(doneSeeds);
   throwIfCancelled();
   const healthCheckStarted = Date.now();
+  const probedCandidates: string[] = [];
   const healthy = await healthCheckRelays(pool, candidates, {
     isCancelled,
-    onProgress: (relaysChecked, relaysHealthy) => {
+    onProgress: (relaysChecked, relaysHealthy, url) => {
+      probedCandidates.push(url);
       stats.relaysChecked = relaysChecked;
       stats.relaysHealthy = relaysHealthy;
       onProgress({
@@ -219,7 +221,7 @@ export async function resolveUploadRelays(
     },
   });
   stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
-  await saveWorkingRelays(storage, healthy);
+  await saveWorkingRelays(storage, healthy, probedCandidates);
   throwIfCancelled();
   if (healthy.length < MIN_UPLOAD_RELAYS) {
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);

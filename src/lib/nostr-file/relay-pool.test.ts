@@ -141,6 +141,21 @@ describe('getRelayCandidates', () => {
     expect(storage.state?.cursor).toBe(3);
   });
 
+  it('does not accept a candidate cache timestamped in the future', async () => {
+    const storage = memoryStorage({
+      candidates: ['wss://future.example'],
+      discoveredAt: 3_000,
+      cursor: 0,
+    });
+    const candidates = await getRelayCandidates(
+      createMockPool(),
+      storage,
+      2_000,
+    );
+    expect(candidates).toEqual([]);
+    expect(storage.state?.discoveredAt).toBe(2_000);
+  });
+
   it('prioritizes recently working relays and ignores stale ones', async () => {
     const now = 2 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(
@@ -211,10 +226,11 @@ describe('selectUploadRelays', () => {
 });
 
 describe('saveWorkingRelays', () => {
-  it('stores the last-saved date, dedupes, and removes stale relays', async () => {
+  it('updates healthy relays, removes probed failures, and retains unprobed relays', async () => {
     const now = 24 * 60 * 60 * 1000;
     const storage = memoryStorage(null, [
       { url: 'wss://stale.example', lastSavedAt: 0 },
+      { url: 'wss://failed.example/', lastSavedAt: now - 2 },
       { url: 'wss://still-good.example', lastSavedAt: now - 1 },
     ]);
     await saveWorkingRelays(
@@ -223,6 +239,7 @@ describe('saveWorkingRelays', () => {
         { url: 'wss://new.example', rttMs: 10 },
         { url: 'wss://new.example/', rttMs: 20 },
       ],
+      ['wss://failed.example', 'wss://new.example'],
       now,
     );
     expect(storage.workingRelays).toEqual([
