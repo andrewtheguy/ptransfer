@@ -7,10 +7,10 @@
  * Publishes real (expiring, NIP-40) events to public relays — run manually,
  * not part of `npm test`:
  *
- *   npx tsx tests/live_nostr_file_e2e.ts
+ *   npm run test:live:nostr-file
  *
  * NOSTR_E2E_FILE_MB overrides the file size (default 0.1, max 100), e.g.
- *   NOSTR_E2E_FILE_MB=100 npx tsx tests/live_nostr_file_e2e.ts
+ *   NOSTR_E2E_FILE_MB=100 npm run test:live:nostr-file
  *
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.
@@ -25,7 +25,7 @@ import { sha256 } from '../src/lib/nostr-file/codec';
 import { receiveFileLive } from '../src/lib/nostr-file/download-live';
 import type { NostrFileManifest } from '../src/lib/nostr-file/manifest';
 import type {
-  KnownWorkingRelay,
+  CachedRelay,
   RelayPoolState,
   RelayPoolStorage,
 } from '../src/lib/nostr-file/relay-pool';
@@ -45,15 +45,15 @@ if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS <= 0) {
 
 function memoryStorage(): RelayPoolStorage {
   let state: RelayPoolState | null = null;
-  let workingRelays: KnownWorkingRelay[] = [];
+  let relayHealth: CachedRelay[] = [];
   return {
     getState: async () => state,
     setState: async (s) => {
       state = s;
     },
-    getWorkingRelays: async () => workingRelays,
-    setWorkingRelays: async (relays) => {
-      workingRelays = relays;
+    getRelayHealth: async () => relayHealth,
+    setRelayHealth: async (relays) => {
+      relayHealth = relays;
     },
   };
 }

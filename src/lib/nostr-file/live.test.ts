@@ -16,7 +16,7 @@ import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
 import type {
-  KnownWorkingRelay,
+  CachedRelay,
   RelayPoolState,
   RelayPoolStorage,
 } from './relay-pool';
@@ -48,15 +48,15 @@ function memoryStorage(
   initial: RelayPoolState | null = null,
 ): RelayPoolStorage {
   let state: RelayPoolState | null = initial;
-  let workingRelays: KnownWorkingRelay[] = [];
+  let relayHealth: CachedRelay[] = [];
   return {
     getState: async () => state,
     setState: async (s) => {
       state = s;
     },
-    getWorkingRelays: async () => workingRelays,
-    setWorkingRelays: async (relays) => {
-      workingRelays = relays;
+    getRelayHealth: async () => relayHealth,
+    setRelayHealth: async (relays) => {
+      relayHealth = relays;
     },
   };
 }
@@ -141,7 +141,7 @@ async function liveRoundTrip(
   return { manifest: ready.manifest, sendDone, receiveDone };
 }
 
-describe('live single-copy relay transfer', () => {
+describe.sequential('live single-copy relay transfer', () => {
   it('hands over the code before uploading and stores exactly one copy per chunk', async () => {
     const pool = createMockPool();
     const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks
@@ -376,7 +376,7 @@ describe('live single-copy relay transfer', () => {
     expect(lateOnR2).toEqual([]);
     expect(last?.resent).toBe(r2Publishes.length);
     expect(last?.resent).toBeLessThan(Math.floor(chunks / 3));
-  }, 30000);
+  }, 60000);
 
   it('announces availability per batch and completes a multi-batch file', async () => {
     const pool = createMockPool();

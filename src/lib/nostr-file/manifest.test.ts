@@ -130,6 +130,19 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(false);
   });
 
+  it('rejects noncanonical control relay URLs', () => {
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        controlRelays: [
+          'wss://relay.one/',
+          'wss://relay.two',
+          'wss://relay.three',
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it('rejects the previous wire format', () => {
     expect(isValidNostrFileManifest({ ...manifest, v: 6 })).toBe(false);
     expect(isValidNostrFileManifest({ ...manifest, enc: 1 })).toBe(false);

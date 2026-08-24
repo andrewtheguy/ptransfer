@@ -12,8 +12,8 @@ Implement automatic relay discovery using Nostr relay list events:
 
 Status: implemented for the experimental Nostr file relay
 (`src/lib/nostr-file/relay-pool.ts` — NIP-66/NIP-65 discovery, write→read
-health probes, IndexedDB candidate and timestamped working-relay caches with
-24h TTL, rotating batch selection). Not yet used for Auto Exchange signaling
+health probes, canonical-keyed IndexedDB relay-health metadata with a 24h TTL,
+and rotating batch selection). Not yet used for Auto Exchange signaling
 relays.
 
 ### Custom Relay Configuration

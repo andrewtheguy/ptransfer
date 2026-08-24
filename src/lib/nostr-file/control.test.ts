@@ -50,7 +50,7 @@ describe('control channel key and sealing', () => {
     const key = await deriveControlKey(fixedKeyBytes(), TRANSFER_ID);
     const ring = Array.from(
       { length: 16 },
-      (_, i) => `wss://relay-${i}.example.com`,
+      (_, i) => `wss://relay-${i}.example`,
     );
     let map = '';
     for (let i = 0; i < 3200; i++) map += encodePosition(i % 16);
@@ -233,6 +233,12 @@ describe('control message validation', () => {
         4,
       ),
     ).toBeNull();
+    expect(
+      parseSenderMessage(
+        avail({ relays: RELAYS.map((relay) => `${relay}/`) }),
+        4,
+      ),
+    ).toEqual(avail({ relays: RELAYS }));
     // Empty ring is presence-only: valid with upto 0, never with chunks.
     expect(
       parseSenderMessage(avail({ relays: [], upto: 0, map: '' }), 4),

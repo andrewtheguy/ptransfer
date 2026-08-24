@@ -1,14 +1,19 @@
 {
   "name": "ptransfer",
   "private": true,
-  "version": "0.0.36",
+  "version": "0.0.37",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "npm run test:unit && npm run test:integration:nostr-file",
+    "test:unit": "vitest run --exclude src/lib/nostr-file/live.test.ts",
+    "test:integration:nostr-file": "vitest run src/lib/nostr-file/live.test.ts --no-file-parallelism",
+    "test:live": "npm run test:live:nostr-file && npm run test:live:web",
+    "test:live:nostr-file": "tsx tests/live_nostr_file_e2e.ts",
+    "test:live:web": "tsx tests/live_web_to_web_e2e.ts"
   },
   "dependencies": {
     "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",

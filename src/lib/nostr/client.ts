@@ -1,10 +1,5 @@
 import { type Event, type Filter, mergeFilters, SimplePool } from 'nostr-tools';
-import { DEFAULT_RELAYS } from './relays';
-
-/** Normalize relay URL by removing trailing slashes */
-function normalizeRelayUrl(url: string): string {
-  return url.replace(/\/+$/, '');
-}
+import { DEFAULT_RELAYS, normalizeRelayUrl } from './relays';
 
 export class NostrClient {
   private pool: SimplePool;
@@ -15,7 +10,13 @@ export class NostrClient {
   constructor(relays: string[] = [...DEFAULT_RELAYS]) {
     this.pool = new SimplePool();
     // Normalize and dedupe relay URLs
-    this.relays = [...new Set(relays.map(normalizeRelayUrl))];
+    this.relays = [
+      ...new Set(
+        relays
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
+      ),
+    ];
     this.subscriptions = new Map();
 
     // Pre-connect to all relays and wait for at least one to be ready
@@ -170,7 +171,13 @@ export class NostrClient {
    * Add additional relays to the pool (for backup relay fallback)
    */
   async addRelays(newRelays: string[]): Promise<void> {
-    const normalized = newRelays.map(normalizeRelayUrl);
+    const normalized = [
+      ...new Set(
+        newRelays
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
+      ),
+    ];
     const toAdd = normalized.filter((url) => !this.relays.includes(url));
 
     if (toAdd.length === 0) return;

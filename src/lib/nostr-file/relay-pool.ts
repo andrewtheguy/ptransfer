@@ -1,7 +1,7 @@
 import type { Event } from 'nostr-tools';
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys } from '../nostr/events';
-import { DEFAULT_RELAYS } from '../nostr/relays';
+import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
 import { chunkAad, decodeChunkContent, encodeChunkContent } from './codec';
 import {
   DISCOVERY_CANDIDATE_CAP,
@@ -13,8 +13,8 @@ import {
   HEALTH_CHECK_TIMEOUT_MS,
   RELAY_CACHE_DATABASE_NAME,
   RELAY_CACHE_DATABASE_VERSION,
+  RELAY_CACHE_HEALTH_STORE,
   RELAY_CACHE_STATE_STORE,
-  RELAY_CACHE_WORKING_STORE,
   RELAY_CANDIDATE_TTL_MS,
 } from './constants';
 import { buildProbeEvent } from './events';
@@ -35,17 +35,23 @@ export interface RelayPoolState {
   cursor: number;
 }
 
-export interface KnownWorkingRelay {
+export interface CachedRelay {
   url: string;
-  lastSavedAt: number;
+  lastDiscoveredAt: number;
+  lastCheckedAt: number | null;
+  lastSucceededAt: number | null;
+  rttMs: number | null;
+  consecutiveFailures: number;
+  supportsControl: boolean;
+  supportsStorage: boolean;
 }
 
 /** Injected persistence so node tests never touch IndexedDB. */
 export interface RelayPoolStorage {
   getState(): Promise<RelayPoolState | null>;
   setState(state: RelayPoolState): Promise<void>;
-  getWorkingRelays(): Promise<KnownWorkingRelay[]>;
-  setWorkingRelays(relays: KnownWorkingRelay[]): Promise<void>;
+  getRelayHealth(): Promise<CachedRelay[]>;
+  setRelayHealth(relays: CachedRelay[]): Promise<void>;
 }
 
 const RELAY_POOL_STATE_KEY = 'current';
@@ -71,10 +77,18 @@ function openRelayCache(): Promise<IDBDatabase> {
       RELAY_CACHE_DATABASE_NAME,
       RELAY_CACHE_DATABASE_VERSION,
     );
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
+      // The relay cache is disposable. A database-version change always
+      // resets it to the current schema instead of migrating or retaining
+      // stores from an older version.
+      if (event.oldVersion !== 0) {
+        for (const storeName of Array.from(database.objectStoreNames)) {
+          database.deleteObjectStore(storeName);
+        }
+      }
       database.createObjectStore(RELAY_CACHE_STATE_STORE);
-      database.createObjectStore(RELAY_CACHE_WORKING_STORE, {
+      database.createObjectStore(RELAY_CACHE_HEALTH_STORE, {
         keyPath: 'url',
       });
     };
@@ -105,21 +119,58 @@ function parseRelayPoolState(value: unknown): RelayPoolState | null {
   };
 }
 
-function parseWorkingRelays(value: unknown): KnownWorkingRelay[] {
+function validNullableTimestamp(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+  );
+}
+
+function parseRelayHealth(value: unknown): CachedRelay[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object') return [];
+  const byUrl = new Map<string, CachedRelay>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
     const relay = entry as Record<string, unknown>;
+    const url =
+      typeof relay.url === 'string' ? normalizeRelayUrl(relay.url) : null;
     if (
-      typeof relay.url !== 'string' ||
-      typeof relay.lastSavedAt !== 'number' ||
-      !Number.isFinite(relay.lastSavedAt) ||
-      relay.lastSavedAt < 0
+      !url ||
+      typeof relay.lastDiscoveredAt !== 'number' ||
+      !Number.isFinite(relay.lastDiscoveredAt) ||
+      relay.lastDiscoveredAt < 0 ||
+      !validNullableTimestamp(relay.lastCheckedAt) ||
+      !validNullableTimestamp(relay.lastSucceededAt) ||
+      !validNullableTimestamp(relay.rttMs) ||
+      typeof relay.consecutiveFailures !== 'number' ||
+      !Number.isInteger(relay.consecutiveFailures) ||
+      relay.consecutiveFailures < 0 ||
+      typeof relay.supportsControl !== 'boolean' ||
+      typeof relay.supportsStorage !== 'boolean'
     ) {
-      return [];
+      continue;
     }
-    return [{ url: relay.url, lastSavedAt: relay.lastSavedAt }];
-  });
+    const parsed: CachedRelay = {
+      url,
+      lastDiscoveredAt: relay.lastDiscoveredAt,
+      lastCheckedAt: relay.lastCheckedAt,
+      lastSucceededAt: relay.lastSucceededAt,
+      rttMs: relay.rttMs,
+      consecutiveFailures: relay.consecutiveFailures,
+      supportsControl: relay.supportsControl,
+      supportsStorage: relay.supportsStorage,
+    };
+    const previous = byUrl.get(url);
+    const freshness = Math.max(
+      parsed.lastDiscoveredAt,
+      parsed.lastSucceededAt ?? 0,
+    );
+    const previousFreshness = previous
+      ? Math.max(previous.lastDiscoveredAt, previous.lastSucceededAt ?? 0)
+      : -1;
+    if (freshness >= previousFreshness) byUrl.set(url, parsed);
+  }
+  return [...byUrl.values()];
 }
 
 export function createIndexedDbRelayPool(): RelayPoolStorage {
@@ -153,9 +204,16 @@ export function createIndexedDbRelayPool(): RelayPoolStorage {
           RELAY_CACHE_STATE_STORE,
           'readwrite',
         );
+        const candidates = [
+          ...new Set(
+            state.candidates
+              .map(normalizeRelayUrl)
+              .filter((url): url is string => url !== null),
+          ),
+        ];
         transaction
           .objectStore(RELAY_CACHE_STATE_STORE)
-          .put(state, RELAY_POOL_STATE_KEY);
+          .put({ ...state, candidates }, RELAY_POOL_STATE_KEY);
         await transactionDone(transaction);
       } catch {
         // Cache persistence never prevents a transfer.
@@ -163,36 +221,41 @@ export function createIndexedDbRelayPool(): RelayPoolStorage {
         database?.close();
       }
     },
-    async getWorkingRelays() {
+    async getRelayHealth() {
       let database: IDBDatabase | undefined;
       try {
         database = await openRelayCache();
         const transaction = database.transaction(
-          RELAY_CACHE_WORKING_STORE,
+          RELAY_CACHE_HEALTH_STORE,
           'readonly',
         );
         const value = await requestResult(
-          transaction.objectStore(RELAY_CACHE_WORKING_STORE).getAll(),
+          transaction.objectStore(RELAY_CACHE_HEALTH_STORE).getAll(),
         );
         await transactionDone(transaction);
-        return parseWorkingRelays(value);
+        return parseRelayHealth(value);
       } catch {
         return [];
       } finally {
         database?.close();
       }
     },
-    async setWorkingRelays(relays) {
+    async setRelayHealth(relays) {
       let database: IDBDatabase | undefined;
       try {
         database = await openRelayCache();
         const transaction = database.transaction(
-          RELAY_CACHE_WORKING_STORE,
+          RELAY_CACHE_HEALTH_STORE,
           'readwrite',
         );
-        const store = transaction.objectStore(RELAY_CACHE_WORKING_STORE);
+        const store = transaction.objectStore(RELAY_CACHE_HEALTH_STORE);
         store.clear();
-        for (const relay of relays) store.put(relay);
+        const byUrl = new Map<string, CachedRelay>();
+        for (const relay of relays) {
+          const url = normalizeRelayUrl(relay.url);
+          if (url) byUrl.set(url, { ...relay, url });
+        }
+        for (const relay of byUrl.values()) store.put(relay);
         await transactionDone(transaction);
       } catch {
         // Cache persistence never prevents a transfer.
@@ -201,39 +264,6 @@ export function createIndexedDbRelayPool(): RelayPoolStorage {
       }
     },
   };
-}
-
-// RFC 2606/6761 names that never resolve on the public internet — a listed
-// "relay" there is placeholder junk. `.example` (TLD) stays usable: it is
-// this codebase's own test-fixture convention and never appears in the wild.
-const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
-const RESERVED_TLDS = ['.test', '.invalid'];
-
-export function normalizeRelayUrl(raw: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'wss:') return null;
-  const host = url.hostname;
-  if (
-    !host ||
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.onion') ||
-    host.endsWith('.local') ||
-    RESERVED_TLDS.some((tld) => host.endsWith(tld)) ||
-    RESERVED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
-  ) {
-    return null;
-  }
-  // Drop IP literals (typically private/test relays not reachable for peers).
-  if (/^[\d.]+$/.test(host) || host.includes(':')) return null;
-  if (url.username || url.password) return null;
-  const normalized = `wss://${host}${url.port ? `:${url.port}` : ''}${url.pathname}`;
-  return normalized.replace(/\/+$/, '');
 }
 
 /**
@@ -271,17 +301,24 @@ export async function discoverRelayCandidates(
   pool: NostrFilePool,
   seeds: string[] = [...DEFAULT_RELAYS],
 ): Promise<string[]> {
+  const canonicalSeeds = [
+    ...new Set(
+      seeds.map(normalizeRelayUrl).filter((url): url is string => url !== null),
+    ),
+  ];
   const queries = [
     { kinds: [KIND_RELAY_DISCOVERY], limit: DISCOVERY_CANDIDATE_LIMIT },
     { kinds: [KIND_RELAY_LIST], limit: DISCOVERY_CANDIDATE_LIMIT },
   ];
   const results = await Promise.allSettled(
-    queries.map((filter) => pool.querySync(seeds, filter, { maxWait: 8000 })),
+    queries.map((filter) =>
+      pool.querySync(canonicalSeeds, filter, { maxWait: 8000 }),
+    ),
   );
   const events = results.flatMap((r) =>
     r.status === 'fulfilled' ? r.value : [],
   );
-  const seedSet = new Set(seeds.map((s) => normalizeRelayUrl(s) ?? s));
+  const seedSet = new Set(canonicalSeeds);
   return parseRelayCandidates(events)
     .filter((url) => !seedSet.has(url))
     .slice(0, DISCOVERY_CANDIDATE_CAP);
@@ -370,7 +407,12 @@ export async function healthCheckRelays(
     targetCount?: number;
     probeBytes?: number;
     isCancelled?: () => boolean;
-    onProgress?: (checked: number, healthy: number, url: string) => void;
+    onProgress?: (
+      checked: number,
+      healthy: number,
+      url: string,
+      rttMs: number | null,
+    ) => void;
   } = {},
 ): Promise<HealthyRelay[]> {
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
@@ -399,7 +441,7 @@ export async function healthCheckRelays(
         // will not be used, so stop its socket (and its reconnect loop) now.
         pool.close?.([url]);
       }
-      opts.onProgress?.(checked, healthy.length, url);
+      opts.onProgress?.(checked, healthy.length, url, rttMs);
     }
   };
 
@@ -437,7 +479,7 @@ export async function selectUploadRelays(
 
 /**
  * Candidate list with 24h caching. Every run merges fresh discovery results
- * into the still-valid candidate and known-working caches, so newly listed
+ * into the still-valid candidate and relay-health caches, so newly listed
  * relays become available without giving up cached fallbacks when discovery
  * is sparse or the default seeds are unreliable.
  */
@@ -446,19 +488,20 @@ export async function getRelayCandidates(
   storage: RelayPoolStorage,
   now: number = Date.now(),
 ): Promise<string[]> {
-  const [state, savedWorkingRelays] = await Promise.all([
+  const [state, savedRelayHealth] = await Promise.all([
     storage.getState(),
-    storage.getWorkingRelays(),
+    storage.getRelayHealth(),
   ]);
-  const knownWorking = savedWorkingRelays
-    .filter(
-      (relay) =>
-        relay.lastSavedAt <= now &&
-        now - relay.lastSavedAt < RELAY_CANDIDATE_TTL_MS,
-    )
-    .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
-    .map((relay) => normalizeRelayUrl(relay.url))
-    .filter((url): url is string => url !== null);
+  const relayFreshness = (relay: CachedRelay) =>
+    Math.max(relay.lastDiscoveredAt, relay.lastSucceededAt ?? 0);
+  const byUrl = new Map(
+    savedRelayHealth
+      .filter((relay) => {
+        const freshness = relayFreshness(relay);
+        return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
+      })
+      .map((relay) => [relay.url, relay]),
+  );
   const cachedCandidates =
     state &&
     state.discoveredAt <= now &&
@@ -468,59 +511,157 @@ export async function getRelayCandidates(
           .filter((url): url is string => url !== null)
       : [];
   const discovered = await discoverRelayCandidates(pool);
-  // Known-working relays stay first so a seed outage can fall back to relays
-  // already proven by a recent transfer. Fresh discoveries precede the rest
-  // of the generic cache, ensuring the merged list keeps evolving.
-  const merged = [
-    ...new Set([...knownWorking, ...discovered, ...cachedCandidates]),
-  ].slice(0, DISCOVERY_CANDIDATE_CAP);
-  await storage.setState({
-    candidates: merged,
-    discoveredAt: now,
-    cursor: state?.cursor ?? 0,
+  const emptyRelay = (url: string, lastDiscoveredAt: number): CachedRelay => ({
+    url,
+    lastDiscoveredAt,
+    lastCheckedAt: null,
+    lastSucceededAt: null,
+    rttMs: null,
+    consecutiveFailures: 0,
+    supportsControl: false,
+    supportsStorage: false,
   });
+  for (const url of cachedCandidates) {
+    if (!byUrl.has(url)) {
+      byUrl.set(url, emptyRelay(url, state?.discoveredAt ?? 0));
+    }
+  }
+  for (const url of discovered) {
+    const relay = byUrl.get(url) ?? emptyRelay(url, now);
+    byUrl.set(url, { ...relay, lastDiscoveredAt: now });
+  }
+  const knownWorking = [...byUrl.values()]
+    .filter(
+      (relay) =>
+        relay.supportsStorage &&
+        relay.consecutiveFailures === 0 &&
+        relay.lastSucceededAt !== null &&
+        relay.lastSucceededAt <= now &&
+        now - relay.lastSucceededAt < RELAY_CANDIDATE_TTL_MS,
+    )
+    .sort(
+      (a, b) =>
+        (a.rttMs ?? Number.POSITIVE_INFINITY) -
+          (b.rttMs ?? Number.POSITIVE_INFINITY) ||
+        (b.lastSucceededAt ?? 0) - (a.lastSucceededAt ?? 0),
+    )
+    .map((relay) => relay.url);
+  const rankedCandidates = [
+    ...new Set([...discovered, ...cachedCandidates]),
+  ].sort((a, b) => {
+    const relayA = byUrl.get(a);
+    const relayB = byUrl.get(b);
+    return (
+      (relayA?.consecutiveFailures ?? 0) - (relayB?.consecutiveFailures ?? 0) ||
+      (relayB?.lastDiscoveredAt ?? 0) - (relayA?.lastDiscoveredAt ?? 0)
+    );
+  });
+  // Recently proven low-latency relays stay first so a seed outage can fall
+  // back to them. Remaining candidates are failure-ranked, then newest-first.
+  const merged = [...new Set([...knownWorking, ...rankedCandidates])].slice(
+    0,
+    DISCOVERY_CANDIDATE_CAP,
+  );
+  await Promise.all([
+    storage.setState({
+      candidates: merged,
+      discoveredAt: now,
+      cursor: state?.cursor ?? 0,
+    }),
+    storage.setRelayHealth(
+      merged.map((url) => byUrl.get(url) ?? emptyRelay(url, now)),
+    ),
+  ]);
   return merged;
 }
 
 /**
- * Persist recent health-check passes and remove saved relays that just failed.
- * Saved relays not probed in this run remain available until their TTL ends.
+ * Persist discovery and full-size probe history. A successful storage probe
+ * also proves control-sized capability; a failed current probe clears both
+ * capability flags but retains bounded failure history for candidate ranking.
  */
-export async function saveWorkingRelays(
+export async function saveRelayHealth(
   storage: RelayPoolStorage,
   healthy: HealthyRelay[],
-  probedCandidates: string[],
+  failedRelays: string[],
   now: number = Date.now(),
 ): Promise<void> {
-  const previous = await storage.getWorkingRelays();
-  const probed = new Set(
-    probedCandidates
+  const previous = await storage.getRelayHealth();
+  const failed = new Set(
+    failedRelays
       .map((url) => normalizeRelayUrl(url))
       .filter((url): url is string => url !== null),
   );
-  const healthyUrls = new Set(
-    healthy
-      .map((relay) => normalizeRelayUrl(relay.url))
-      .filter((url): url is string => url !== null),
-  );
-  const byUrl = new Map<string, KnownWorkingRelay>();
-  for (const relay of previous) {
-    const url = normalizeRelayUrl(relay.url);
-    if (
-      url &&
-      (!probed.has(url) || healthyUrls.has(url)) &&
-      relay.lastSavedAt <= now &&
-      now - relay.lastSavedAt < RELAY_CANDIDATE_TTL_MS
-    ) {
-      byUrl.set(url, { url, lastSavedAt: relay.lastSavedAt });
-    }
-  }
+  const healthyByUrl = new Map<string, number>();
   for (const relay of healthy) {
     const url = normalizeRelayUrl(relay.url);
-    if (url) byUrl.set(url, { url, lastSavedAt: now });
+    if (url) {
+      healthyByUrl.set(
+        url,
+        Math.min(
+          healthyByUrl.get(url) ?? Number.POSITIVE_INFINITY,
+          relay.rttMs,
+        ),
+      );
+    }
+  }
+  const probed = new Set([...failed, ...healthyByUrl.keys()]);
+  const byUrl = new Map<string, CachedRelay>();
+  for (const relay of previous) {
+    const url = normalizeRelayUrl(relay.url);
+    if (url) byUrl.set(url, { ...relay, url });
+  }
+  for (const url of probed) {
+    const previousRelay = byUrl.get(url);
+    const relay: CachedRelay = previousRelay ?? {
+      url,
+      lastDiscoveredAt: now,
+      lastCheckedAt: null,
+      lastSucceededAt: null,
+      rttMs: null,
+      consecutiveFailures: 0,
+      supportsControl: false,
+      supportsStorage: false,
+    };
+    const rttMs = healthyByUrl.get(url);
+    byUrl.set(
+      url,
+      rttMs === undefined
+        ? {
+            ...relay,
+            lastCheckedAt: now,
+            rttMs: null,
+            consecutiveFailures: relay.consecutiveFailures + 1,
+            supportsControl: false,
+            supportsStorage: false,
+          }
+        : {
+            ...relay,
+            lastCheckedAt: now,
+            lastSucceededAt: now,
+            rttMs,
+            consecutiveFailures: 0,
+            supportsControl: true,
+            supportsStorage: true,
+          },
+    );
   }
   const saved = [...byUrl.values()]
-    .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
+    .filter((relay) => {
+      const freshness = Math.max(
+        relay.lastDiscoveredAt,
+        relay.lastSucceededAt ?? 0,
+      );
+      return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
+    })
+    .sort(
+      (a, b) =>
+        Number(b.supportsStorage) - Number(a.supportsStorage) ||
+        a.consecutiveFailures - b.consecutiveFailures ||
+        (a.rttMs ?? Number.POSITIVE_INFINITY) -
+          (b.rttMs ?? Number.POSITIVE_INFINITY) ||
+        b.lastDiscoveredAt - a.lastDiscoveredAt,
+    )
     .slice(0, DISCOVERY_CANDIDATE_CAP);
-  await storage.setWorkingRelays(saved);
+  await storage.setRelayHealth(saved);
 }

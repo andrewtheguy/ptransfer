@@ -1,17 +1,23 @@
-import type { Event } from 'nostr-tools';
-import { describe, expect, it } from 'vitest';
-import { DEFAULT_RELAYS } from '../nostr/relays';
-import { CONTROL_PROBE_BYTES, CONTROL_RELAY_COUNT } from './constants';
+import type { Event as NostrEvent } from 'nostr-tools';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
+import {
+  CONTROL_PROBE_BYTES,
+  CONTROL_RELAY_COUNT,
+  RELAY_CACHE_HEALTH_STORE,
+  RELAY_CACHE_STATE_STORE,
+} from './constants';
 import { createMockPool } from './mock-pool';
 import {
+  type CachedRelay,
+  createIndexedDbRelayPool,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
-  type KnownWorkingRelay,
   parseRelayCandidates,
   type RelayPoolState,
   type RelayPoolStorage,
-  saveWorkingRelays,
+  saveRelayHealth,
   selectUploadRelays,
 } from './relay-pool';
 import { createTransferStats } from './stats';
@@ -21,7 +27,9 @@ import {
   resolveUploadRelays,
 } from './upload';
 
-function makeEvent(kind: number, tags: string[][]): Event {
+afterEach(() => vi.unstubAllGlobals());
+
+function makeEvent(kind: number, tags: string[][]): NostrEvent {
   return {
     kind,
     tags,
@@ -35,27 +43,152 @@ function makeEvent(kind: number, tags: string[][]): Event {
 
 function memoryStorage(
   initial: RelayPoolState | null = null,
-  workingRelays: KnownWorkingRelay[] = [],
+  relayHealth: CachedRelay[] = [],
 ): RelayPoolStorage & {
   state: RelayPoolState | null;
-  workingRelays: KnownWorkingRelay[];
+  relayHealth: CachedRelay[];
 } {
   const holder = {
     state: initial,
-    workingRelays,
+    relayHealth,
     getState: async () => holder.state,
     setState: async (s: RelayPoolState) => {
       holder.state = s;
     },
-    getWorkingRelays: async () => holder.workingRelays,
-    setWorkingRelays: async (relays: KnownWorkingRelay[]) => {
-      holder.workingRelays = relays;
+    getRelayHealth: async () => holder.relayHealth,
+    setRelayHealth: async (relays: CachedRelay[]) => {
+      holder.relayHealth = relays;
     },
   };
   return holder;
 }
 
+function cachedRelay(
+  url: string,
+  overrides: Partial<Omit<CachedRelay, 'url'>> = {},
+): CachedRelay {
+  return {
+    url,
+    lastDiscoveredAt: 0,
+    lastCheckedAt: null,
+    lastSucceededAt: null,
+    rttMs: null,
+    consecutiveFailures: 0,
+    supportsControl: false,
+    supportsStorage: false,
+    ...overrides,
+  };
+}
+
+function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
+  type Handler<T extends Event = Event> = ((event: T) => void) | null;
+
+  const stores = [...initialStores];
+  const deleted: string[] = [];
+  const created: string[] = [];
+  const readRequest = {
+    result: undefined,
+    error: null,
+    onsuccess: null as Handler,
+    onerror: null as Handler,
+  };
+  const transaction = {
+    error: null,
+    oncomplete: null as Handler,
+    onerror: null as Handler,
+    onabort: null as Handler,
+    objectStore: () => ({
+      get: () => {
+        queueMicrotask(() => {
+          readRequest.onsuccess?.(new Event('success'));
+          queueMicrotask(() => transaction.oncomplete?.(new Event('complete')));
+        });
+        return readRequest as unknown as IDBRequest<unknown>;
+      },
+    }),
+  };
+  const database = {
+    objectStoreNames: stores,
+    deleteObjectStore: (name: string) => {
+      deleted.push(name);
+      const index = stores.indexOf(name);
+      if (index >= 0) stores.splice(index, 1);
+    },
+    createObjectStore: (name: string) => {
+      created.push(name);
+      stores.push(name);
+    },
+    transaction: () => transaction as unknown as IDBTransaction,
+    close: vi.fn(),
+  };
+  const openRequest = {
+    result: database as unknown as IDBDatabase,
+    error: null,
+    onupgradeneeded: null as Handler<IDBVersionChangeEvent>,
+    onsuccess: null as Handler,
+    onerror: null as Handler,
+    onblocked: null as Handler,
+  };
+  vi.stubGlobal('indexedDB', {
+    open: vi.fn(() => {
+      queueMicrotask(() => {
+        openRequest.onupgradeneeded?.({ oldVersion } as IDBVersionChangeEvent);
+        openRequest.onsuccess?.(new Event('success'));
+      });
+      return openRequest as unknown as IDBOpenDBRequest;
+    }),
+  });
+
+  return { stores, deleted, created, close: database.close };
+}
+
+describe('IndexedDB relay cache schema', () => {
+  it('creates the current stores for a new database', async () => {
+    const database = mockRelayCacheUpgrade(0, []);
+
+    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+
+    expect(database.deleted).toEqual([]);
+    expect(database.created).toEqual([
+      RELAY_CACHE_STATE_STORE,
+      RELAY_CACHE_HEALTH_STORE,
+    ]);
+    expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
+  it('resets every store when the database version changes', async () => {
+    const previousStores = [
+      RELAY_CACHE_STATE_STORE,
+      'working-relays',
+      'obsolete-store',
+    ];
+    const database = mockRelayCacheUpgrade(1, previousStores);
+
+    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+
+    expect(database.deleted).toEqual(previousStores);
+    expect(database.created).toEqual([
+      RELAY_CACHE_STATE_STORE,
+      RELAY_CACHE_HEALTH_STORE,
+    ]);
+    expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+});
+
 describe('parseRelayCandidates', () => {
+  it('uses one canonical relay identity for cache keys and connections', () => {
+    expect(
+      normalizeRelayUrl(
+        '  WSS://Relay.Example:443/path///?tenant=one#ignored  ',
+      ),
+    ).toBe('wss://relay.example/path?tenant=one');
+    expect(normalizeRelayUrl('wss://relay.example/')).toBe(
+      normalizeRelayUrl('wss://RELAY.EXAMPLE:443'),
+    );
+  });
+
   it('extracts NIP-66 d tags and NIP-65 r tags, normalized and deduped', () => {
     const events = [
       makeEvent(30166, [['d', 'wss://relay.one/']]),
@@ -165,13 +298,34 @@ describe('getRelayCandidates', () => {
         cursor: 0,
       },
       [
-        { url: 'wss://stale.example', lastSavedAt: 0 },
-        { url: 'wss://working.example', lastSavedAt: now - 500 },
+        cachedRelay('wss://stale.example', {
+          lastSucceededAt: 0,
+          rttMs: 100,
+          supportsControl: true,
+          supportsStorage: true,
+        }),
+        cachedRelay('wss://working.example', {
+          lastDiscoveredAt: now - 500,
+          lastCheckedAt: now - 500,
+          lastSucceededAt: now - 500,
+          rttMs: 25,
+          supportsControl: true,
+          supportsStorage: true,
+        }),
+        cachedRelay('wss://slower.example', {
+          lastDiscoveredAt: now - 100,
+          lastCheckedAt: now - 100,
+          lastSucceededAt: now - 100,
+          rttMs: 90,
+          supportsControl: true,
+          supportsStorage: true,
+        }),
       ],
     );
     const candidates = await getRelayCandidates(createMockPool(), storage, now);
     expect(candidates).toEqual([
       'wss://working.example',
+      'wss://slower.example',
       'wss://candidate.example',
     ]);
   });
@@ -196,6 +350,38 @@ describe('getRelayCandidates', () => {
       discoveredAt: now,
       cursor: 3,
     });
+    expect(storage.relayHealth).toEqual([
+      cachedRelay('wss://new.example', { lastDiscoveredAt: now }),
+      cachedRelay('wss://cached.example', { lastDiscoveredAt: 1_000 }),
+    ]);
+  });
+
+  it('ranks unfailed cached candidates ahead of repeated failures', async () => {
+    const now = 2_000;
+    const storage = memoryStorage(
+      {
+        candidates: ['wss://failed.example', 'wss://unfailed.example'],
+        discoveredAt: 1_000,
+        cursor: 0,
+      },
+      [
+        cachedRelay('wss://failed.example', {
+          lastDiscoveredAt: 1_000,
+          lastCheckedAt: 1_500,
+          consecutiveFailures: 2,
+        }),
+        cachedRelay('wss://unfailed.example', {
+          lastDiscoveredAt: 1_000,
+        }),
+      ],
+    );
+
+    const candidates = await getRelayCandidates(createMockPool(), storage, now);
+
+    expect(candidates).toEqual([
+      'wss://unfailed.example',
+      'wss://failed.example',
+    ]);
   });
 });
 
@@ -247,26 +433,64 @@ describe('selectUploadRelays', () => {
   });
 });
 
-describe('saveWorkingRelays', () => {
-  it('updates healthy relays, removes probed failures, and retains unprobed relays', async () => {
+describe('saveRelayHealth', () => {
+  it('records probe metadata, canonicalizes keys, and retains bounded failure history', async () => {
     const now = 24 * 60 * 60 * 1000;
     const storage = memoryStorage(null, [
-      { url: 'wss://stale.example', lastSavedAt: 0 },
-      { url: 'wss://failed.example/', lastSavedAt: now - 2 },
-      { url: 'wss://still-good.example', lastSavedAt: now - 1 },
+      cachedRelay('wss://stale.example', {
+        lastSucceededAt: 0,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://failed.example/', {
+        lastDiscoveredAt: now - 2,
+        lastCheckedAt: now - 2,
+        lastSucceededAt: now - 2,
+        rttMs: 20,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://still-good.example', {
+        lastDiscoveredAt: now - 1,
+        lastCheckedAt: now - 1,
+        lastSucceededAt: now - 1,
+        rttMs: 30,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
     ]);
-    await saveWorkingRelays(
+    await saveRelayHealth(
       storage,
       [
         { url: 'wss://new.example', rttMs: 10 },
         { url: 'wss://new.example/', rttMs: 20 },
       ],
-      ['wss://failed.example', 'wss://new.example'],
+      ['wss://failed.example'],
       now,
     );
-    expect(storage.workingRelays).toEqual([
-      { url: 'wss://new.example', lastSavedAt: now },
-      { url: 'wss://still-good.example', lastSavedAt: now - 1 },
+    expect(storage.relayHealth).toEqual([
+      cachedRelay('wss://new.example', {
+        lastDiscoveredAt: now,
+        lastCheckedAt: now,
+        lastSucceededAt: now,
+        rttMs: 10,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://still-good.example', {
+        lastDiscoveredAt: now - 1,
+        lastCheckedAt: now - 1,
+        lastSucceededAt: now - 1,
+        rttMs: 30,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://failed.example', {
+        lastDiscoveredAt: now - 2,
+        lastCheckedAt: now,
+        lastSucceededAt: now - 2,
+        consecutiveFailures: 1,
+      }),
     ]);
   });
 });
@@ -420,13 +644,20 @@ describe('resolveUploadRelays', () => {
       excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
     });
     expect(relays.sort()).toEqual(['wss://s1.example', 'wss://s2.example']);
-    expect(storage.workingRelays.map((relay) => relay.url).sort()).toEqual([
+    expect(storage.relayHealth.map((relay) => relay.url).sort()).toEqual([
       'wss://s1.example',
       'wss://s2.example',
     ]);
-    expect(storage.workingRelays.every((relay) => relay.lastSavedAt > 0)).toBe(
-      true,
-    );
+    expect(
+      storage.relayHealth.every(
+        (relay) =>
+          relay.lastCheckedAt !== null &&
+          relay.lastSucceededAt !== null &&
+          relay.rttMs !== null &&
+          relay.supportsControl &&
+          relay.supportsStorage,
+      ),
+    ).toBe(true);
     // Seeds queried for discovery are closed once it finishes — except the
     // two carrying this transfer's control channel.
     for (const url of DEFAULT_RELAYS.slice(2)) {
@@ -455,6 +686,49 @@ describe('resolveUploadRelays', () => {
       'wss://s3.example',
       'wss://s4.example',
     ]);
+  });
+
+  it('records successful probes that finish after the target is reached', async () => {
+    const candidates = Array.from(
+      { length: 21 },
+      (_, i) => `wss://candidate-${i}.example`,
+    );
+    let releaseSlowProbe = () => {};
+    const slowProbe = new Promise<void>((resolve) => {
+      releaseSlowProbe = resolve;
+    });
+    let otherProbesStarted = 0;
+    const candidateSet = new Set(candidates);
+    const pool = createMockPool({
+      beforePublish: async (relay) => {
+        if (relay === candidates[0]) {
+          await slowProbe;
+        } else if (candidateSet.has(relay)) {
+          otherProbesStarted++;
+          if (otherProbesStarted === candidates.length - 1) releaseSlowProbe();
+        }
+      },
+    });
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+
+    await resolveUploadRelays(pool, storage, {
+      ...opts(),
+      excludeRelays: [],
+    });
+
+    expect(storage.relayHealth).toHaveLength(candidates.length);
+    expect(
+      storage.relayHealth.every(
+        (relay) =>
+          relay.supportsStorage &&
+          relay.lastSucceededAt !== null &&
+          relay.consecutiveFailures === 0,
+      ),
+    ).toBe(true);
   });
 
   it('filters the override and refuses a ring the exclusion leaves too small', async () => {
