@@ -2,6 +2,73 @@
 
 ## Planned Features
 
+### Answer Return over Nostr Relays (Manual Exchange, phased)
+
+Make Manual Exchange the low-friction default by removing the second manual
+hop and, eventually, the manual mode switching. Each phase stands alone and
+ships independently; the file-transfer path stays WebRTC unless a phase says
+otherwise.
+
+#### Phase 1 — automatic answer return (WebRTC unchanged)
+
+With **Relay file through Nostr** *unchecked* (the normal direct Manual
+Exchange flow), the receiver's answer goes back to the sender over Nostr
+relays instead of a second QR scan / copy-paste:
+
+- Only the **offer** is still carried by hand (QR or copy/paste). The offer
+  payload names the relays the answer will come back on, so both sides agree
+  on the channel without a second out-of-band step.
+- Reuse the verified-relay logic from the Nostr file relay
+  (`src/lib/nostr-file/relay-pool.ts`): the write→read control-relay probe
+  (`resolveTransferRelays`), the canonical-keyed IndexedDB relay-health cache,
+  and the same NIP-40 expiration. Answers are small, so the control-sized
+  probe (256 B) is the right health bar — no full-size storage probe, no
+  storage ring.
+- The answer rides an **encrypted side channel keyed from the offer**, the
+  same way the Nostr file relay's control channel is keyed from its code, so
+  relays see only ciphertext and the exchange keeps its current security
+  boundary (authenticity still rests on the offer's QR/clipboard path).
+- **Fallback to manual copy/paste is automatic**: if no relay set passes the
+  probe, or the answer does not arrive before a short deadline, the receiver
+  shows its answer QR / **Copy Data** exactly as today and the sender shows
+  its scan/paste input. The current two-hop flow remains the guaranteed path,
+  never a dead end.
+- Still WebRTC: file bytes never touch a relay in this phase.
+
+#### Phase 2 — automatic relay fallback for the data path
+
+If the WebRTC connection fails after signaling (the `P2PConnectionError` case
+that today just fails with a suggestion), fall back to the Nostr file relay
+transport automatically, without the user having to find and check the
+experimental **Relay file through Nostr** switch:
+
+- The switch stops being the only way in; it becomes an explicit *prefer
+  relay* choice for users who know they have no direct route.
+- Fallback inherits the relay transport's constraints (currently ≤ 100 MB,
+  1-hour deadline, both pages open) — the UI has to state what it is
+  switching to and why, and the sender must still hold the file bytes.
+- Needs a decision point after the connection attempt that can hand the
+  already-selected files to the relay uploader without a new user action, and
+  a receiver side that can be told to stop waiting on the data channel.
+
+#### Phase 3 — Manual Exchange becomes the default
+
+Once Phase 1 removes the second hop and Phase 2 removes the dead end, Manual
+Exchange is no harder than Auto Exchange for most users and involves no
+signaling server by default:
+
+- Flip the Transfer mode default: Manual Exchange is selected on the send and
+  receive tabs out of the box.
+- **Auto Exchange becomes the accessibility path** — the choice for people who
+  cannot copy/paste or scan (in-app browsers with a blocked clipboard, no
+  camera, screen-reader or motor-accessibility constraints, device pairs where
+  moving a QR is impractical). It stays fully supported and one click away,
+  with UI copy that offers it in those terms rather than as "the automatic
+  mode".
+- Documentation reversal: `docs/MANUAL_EXCHANGE.md` and `docs/ARCHITECTURE.md`
+  currently describe Nostr signaling as the default; both need rewriting, plus
+  a version bump for the behavior change.
+
 ### NIP-65/NIP-66 Relay Discovery
 Implement automatic relay discovery using Nostr relay list events:
 - Query seed relays for relay list events (kind 10002 NIP-65, kind 30166 NIP-66)
