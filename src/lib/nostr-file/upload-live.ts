@@ -541,12 +541,15 @@ export async function sendFileLive(
         // A relay override means the caller picked the relays itself, so
         // there is no discovery to continue and the sweep stays out of it.
         if (!opts.dataRelayOverride?.length) {
+          // Swallowed at the assignment, not at the await: the sweep is
+          // best-effort, and a rejection surfacing from the teardown's
+          // `await sweep` would replace the transfer's real outcome error.
           sweep = sweepRelayHealth(pool, storage, {
             unprobed,
             excludeRelays: [...controlRelays, ...dataRelays],
             signal: sweepAbort.signal,
             isCancelled,
-          });
+          }).catch(() => {});
         }
       })().catch(fail);
 

@@ -995,6 +995,36 @@ describe('sweepRelayHealth', () => {
     expect(ranked).toContain('wss://unproven.example');
   });
 
+  it('returns without waiting out an in-flight discovery page on abort', async () => {
+    const controller = new AbortController();
+    let releaseQuery = () => {};
+    const hung = new Promise<void>((resolve) => {
+      releaseQuery = resolve;
+    });
+    const pool = createMockPool();
+    // Discovery only checks the abort flag between pages, so this stands in
+    // for a page still waiting on DISCOVERY_PAGE_MAX_WAIT_MS at teardown.
+    const stalled = {
+      ...pool,
+      querySync: async () => {
+        controller.abort();
+        await hung;
+        return [];
+      },
+    };
+    const storage = memoryStorage();
+
+    await sweepRelayHealth(stalled, storage, {
+      unprobed: ['wss://stalled.example'],
+      signal: controller.signal,
+    });
+
+    // Resolving at all is the assertion: the hung page is still unresolved.
+    expect(storage.relayHealth).toEqual([]);
+    expect(pool.closedRelays).toEqual([]);
+    releaseQuery();
+  });
+
   it('ends on abort without recording probes that raced the shutdown', async () => {
     const controller = new AbortController();
     let probesStarted = 0;

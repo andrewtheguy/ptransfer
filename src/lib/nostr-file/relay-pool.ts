@@ -654,15 +654,29 @@ export async function sweepRelayHealth(
     ...seeds,
   ]);
 
-  const discovered = await discoverAllRelayCandidates(pool, seeds, {
-    signal: opts.signal,
-    isCancelled: opts.isCancelled,
+  const aborted = new Promise<void>((resolve) => {
+    const signal = opts.signal;
+    if (!signal) return;
+    if (signal.aborted) resolve();
+    else signal.addEventListener('abort', () => resolve(), { once: true });
   });
+
+  // Discovery only polls the abort flag between pages, and a page can sit on
+  // querySync for DISCOVERY_PAGE_MAX_WAIT_MS. Racing the signal means a caller
+  // about to destroy the pool is not held up by an in-flight page; the
+  // abandoned query settles into nothing.
+  const discovered = await Promise.race([
+    discoverAllRelayCandidates(pool, seeds, {
+      signal: opts.signal,
+      isCancelled: opts.isCancelled,
+    }).catch(() => [] as string[]),
+    aborted.then(() => null),
+  ]);
+  if (discovered === null || stopped()) return;
   // Discovery reopened the seeds; the ones not carrying this transfer are
   // done again.
   const doneSeeds = seeds.filter((url) => !transferRelays.includes(url));
   if (doneSeeds.length > 0) pool.close?.(doneSeeds);
-  if (stopped()) return;
 
   const urls = canonicalUrls([...(opts.unprobed ?? []), ...discovered]).filter(
     (url) => !excluded.has(url),
@@ -671,13 +685,13 @@ export async function sweepRelayHealth(
   // Written down before a single probe runs: the enumeration is the part the
   // next transfer needs most, and it must survive a teardown that lands long
   // before the probing is done.
-  await saveDiscoveredRelays(storage, urls);
+  await saveDiscoveredRelays(storage, urls).catch(() => {});
   if (stopped()) return;
 
   // Longest-unchecked first, so a second session picks up where this one ran
   // out of transfer rather than re-probing the same relays.
   const lastCheckedAt = new Map<string, number>();
-  for (const relay of await storage.getRelayHealth()) {
+  for (const relay of await storage.getRelayHealth().catch(() => [])) {
     const url = normalizeRelayUrl(relay.url);
     if (url && relay.lastCheckedAt !== null) {
       lastCheckedAt.set(url, relay.lastCheckedAt);
@@ -735,12 +749,6 @@ export async function sweepRelayHealth(
   const workers = Promise.all(
     Array.from({ length: Math.min(concurrency, queue.length) }, worker),
   ).catch(() => {});
-  const aborted = new Promise<void>((resolve) => {
-    const signal = opts.signal;
-    if (!signal) return;
-    if (signal.aborted) resolve();
-    else signal.addEventListener('abort', () => resolve(), { once: true });
-  });
   await Promise.race([workers, aborted]);
   await flush();
 }
