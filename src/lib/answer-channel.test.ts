@@ -12,6 +12,7 @@ import {
   normalizeAnswerRelays,
   probeAnswerRelays,
   publishAnswer,
+  sweepAnswerRelays,
   watchForAnswer,
 } from './answer-channel';
 import {
@@ -335,6 +336,46 @@ describe('probeAnswerRelays', () => {
     expect(await probeAnswerRelays(pool, { storage: memoryStorage() })).toEqual(
       [],
     );
+  });
+});
+
+describe('sweepAnswerRelays', () => {
+  it('enumerates and probes the relay population behind an exchange, leaving the answer relays alone', async () => {
+    const found = ['wss://found1.example', 'wss://found2.example'];
+    const pool = createMockPool({ failRelays: new Set([found[1]]) });
+    for (const seed of DEFAULT_RELAYS) {
+      pool.store.set(seed, found.map(discoveryEvent));
+    }
+    const storage = memoryStorage();
+    const answerRelays = DEFAULT_RELAYS.slice(0, ANSWER_RELAY_COUNT);
+
+    await sweepAnswerRelays(pool, answerRelays, { storage });
+
+    const byUrl = new Map(storage.relayHealth.map((r) => [r.url, r]));
+    expect([...byUrl.keys()].sort()).toEqual([...found].sort());
+    expect(byUrl.get(found[0])?.supportsStorage).toBe(true);
+    expect(byUrl.get(found[1])?.consecutiveFailures).toBe(1);
+    for (const url of found) expect(pool.closedRelays).toContain(url);
+    for (const url of answerRelays) {
+      expect(pool.closedRelays).not.toContain(url);
+    }
+  });
+
+  it('stops as soon as the signal fires and never throws', async () => {
+    const pool = createMockPool();
+    for (const seed of DEFAULT_RELAYS) {
+      pool.store.set(seed, [discoveryEvent('wss://late.example')]);
+    }
+    const storage = memoryStorage();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      sweepAnswerRelays(pool, DEFAULT_RELAYS.slice(0, 2), {
+        storage,
+        signal: controller.signal,
+      }),
+    ).resolves.toBeUndefined();
+    expect(storage.relayHealth).toEqual([]);
   });
 });
 

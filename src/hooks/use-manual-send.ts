@@ -6,6 +6,7 @@ import {
   deriveAnswerChannel,
   generateAnswerSecret,
   probeAnswerRelays,
+  sweepAnswerRelays,
   watchForAnswer,
 } from '@/lib/answer-channel';
 import {
@@ -125,16 +126,25 @@ export function useManualSend(): UseManualSendReturn {
   // Relay pool and subscription carrying the receiver's answer back.
   const poolRef = useRef<ReturnType<typeof createTransferPool> | null>(null);
   const answerWatchRef = useRef<AnswerWatch | null>(null);
+  // Background relay enumeration running behind the exchange; aborted with
+  // the pool so a teardown never waits out a probe.
+  const sweepAbortRef = useRef<AbortController | null>(null);
   // A relayed answer that landed before the flow was ready for it. The watch
   // stops at the first one, so it is held here rather than dropped.
   const pendingAnswerRef = useRef<Uint8Array | null>(null);
 
-  const teardownAnswerRelay = useCallback(() => {
+  const closeAnswerWatch = useCallback(() => {
     answerWatchRef.current?.close();
     answerWatchRef.current = null;
+  }, []);
+
+  const teardownAnswerRelay = useCallback(() => {
+    closeAnswerWatch();
+    sweepAbortRef.current?.abort();
+    sweepAbortRef.current = null;
     poolRef.current?.destroy();
     poolRef.current = null;
-  }, []);
+  }, [closeAnswerWatch]);
 
   const clearExpirationTimeout = useCallback(() => {
     if (expirationTimeoutRef.current) {
@@ -374,6 +384,15 @@ export function useManualSend(): UseManualSendReturn {
         if (cancelledRef.current) return;
         let channel: AnswerChannel | null = null;
         if (answerRelays.length > 0) {
+          // Same as behind a Nostr file transfer: with the exchange's relays
+          // settled, enumerate and probe the rest of the relay population
+          // for as long as the exchange lasts. It ends with the pool.
+          const sweepAbort = new AbortController();
+          sweepAbortRef.current = sweepAbort;
+          void sweepAnswerRelays(pool, answerRelays, {
+            signal: sweepAbort.signal,
+            isCancelled: () => cancelledRef.current,
+          });
           channel = await deriveAnswerChannel(answerSecret);
         } else {
           teardownAnswerRelay();
@@ -444,8 +463,10 @@ export function useManualSend(): UseManualSendReturn {
           },
         );
 
-        // The answer is in hand; the relay channel has nothing left to do.
-        teardownAnswerRelay();
+        // The answer is in hand; the watch has nothing left to do. The pool
+        // stays up so the background sweep runs on behind the P2P transfer,
+        // as it does behind a Nostr one; the final teardown ends it.
+        closeAnswerWatch();
 
         if (cancelledRef.current) return;
 
@@ -593,7 +614,12 @@ export function useManualSend(): UseManualSendReturn {
         }
       }
     },
-    [clearExpirationTimeout, submitAnswer, teardownAnswerRelay],
+    [
+      clearExpirationTimeout,
+      closeAnswerWatch,
+      submitAnswer,
+      teardownAnswerRelay,
+    ],
   );
 
   // Memoize return object to prevent unnecessary re-renders in consumers
