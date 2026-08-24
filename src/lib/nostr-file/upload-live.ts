@@ -32,10 +32,7 @@ import {
 import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
-import {
-  createLocalStorageRelayPool,
-  type RelayPoolStorage,
-} from './relay-pool';
+import { createIndexedDbRelayPool, type RelayPoolStorage } from './relay-pool';
 import {
   createTransferStats,
   type NostrFileTransferStats,
@@ -110,7 +107,7 @@ export async function sendFileLive(
   },
 ): Promise<void> {
   const { onProgress, isCancelled, pool } = opts;
-  const storage = opts.storage ?? createLocalStorageRelayPool();
+  const storage = opts.storage ?? createIndexedDbRelayPool();
 
   if (data.length === 0) throw new Error('Cannot send an empty file');
   if (data.length > NOSTR_FILE_MAX_BYTES) {

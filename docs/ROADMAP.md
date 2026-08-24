@@ -6,14 +6,15 @@
 Implement automatic relay discovery using Nostr relay list events:
 - Query seed relays for relay list events (kind 10002 NIP-65, kind 30166 NIP-66)
 - Probe discovered relays for latency and capabilities
-- Cache discovered relays in localStorage with TTL
+- Cache discovered and health-proven relays in IndexedDB with TTL
 - Select best relays based on latency, availability, and suitability
 - Filter out relays requiring payment or authentication
 
 Status: implemented for the experimental Nostr file relay
 (`src/lib/nostr-file/relay-pool.ts` — NIP-66/NIP-65 discovery, write→read
-health probes, localStorage candidate cache with 24h TTL, rotating batch
-selection). Not yet used for Auto Exchange signaling relays.
+health probes, IndexedDB candidate and timestamped working-relay caches with
+24h TTL, rotating batch selection). Not yet used for Auto Exchange signaling
+relays.
 
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.

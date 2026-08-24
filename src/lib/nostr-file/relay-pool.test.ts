@@ -7,9 +7,11 @@ import {
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
+  type KnownWorkingRelay,
   parseRelayCandidates,
   type RelayPoolState,
   type RelayPoolStorage,
+  saveWorkingRelays,
   selectUploadRelays,
 } from './relay-pool';
 import { createTransferStats } from './stats';
@@ -33,14 +35,21 @@ function makeEvent(kind: number, tags: string[][]): Event {
 
 function memoryStorage(
   initial: RelayPoolState | null = null,
+  workingRelays: KnownWorkingRelay[] = [],
 ): RelayPoolStorage & {
   state: RelayPoolState | null;
+  workingRelays: KnownWorkingRelay[];
 } {
   const holder = {
     state: initial,
-    get: () => holder.state,
-    set: (s: RelayPoolState) => {
+    workingRelays,
+    getState: async () => holder.state,
+    setState: async (s: RelayPoolState) => {
       holder.state = s;
+    },
+    getWorkingRelays: async () => holder.workingRelays,
+    setWorkingRelays: async (relays: KnownWorkingRelay[]) => {
+      holder.workingRelays = relays;
     },
   };
   return holder;
@@ -131,6 +140,41 @@ describe('getRelayCandidates', () => {
     expect(storage.state?.discoveredAt).toBe(2000);
     expect(storage.state?.cursor).toBe(3);
   });
+
+  it('does not accept a candidate cache timestamped in the future', async () => {
+    const storage = memoryStorage({
+      candidates: ['wss://future.example'],
+      discoveredAt: 3_000,
+      cursor: 0,
+    });
+    const candidates = await getRelayCandidates(
+      createMockPool(),
+      storage,
+      2_000,
+    );
+    expect(candidates).toEqual([]);
+    expect(storage.state?.discoveredAt).toBe(2_000);
+  });
+
+  it('prioritizes recently working relays and ignores stale ones', async () => {
+    const now = 2 * 24 * 60 * 60 * 1000;
+    const storage = memoryStorage(
+      {
+        candidates: ['wss://candidate.example'],
+        discoveredAt: now - 1_000,
+        cursor: 0,
+      },
+      [
+        { url: 'wss://stale.example', lastSavedAt: 0 },
+        { url: 'wss://working.example', lastSavedAt: now - 500 },
+      ],
+    );
+    const candidates = await getRelayCandidates(createMockPool(), storage, now);
+    expect(candidates).toEqual([
+      'wss://working.example',
+      'wss://candidate.example',
+    ]);
+  });
 });
 
 describe('selectUploadRelays', () => {
@@ -141,14 +185,14 @@ describe('selectUploadRelays', () => {
     { url: 'wss://d', rttMs: 40 },
   ];
 
-  it('rotates the cursor across calls, wrapping modulo the pool', () => {
+  it('rotates the cursor across calls, wrapping modulo the pool', async () => {
     const storage = memoryStorage();
-    expect(selectUploadRelays(healthy, 3, storage)).toEqual([
+    await expect(selectUploadRelays(healthy, 3, storage)).resolves.toEqual([
       'wss://a',
       'wss://b',
       'wss://c',
     ]);
-    expect(selectUploadRelays(healthy, 3, storage)).toEqual([
+    await expect(selectUploadRelays(healthy, 3, storage)).resolves.toEqual([
       'wss://d',
       'wss://a',
       'wss://b',
@@ -156,27 +200,52 @@ describe('selectUploadRelays', () => {
     expect(storage.state?.cursor).toBe(2);
   });
 
-  it('caps the batch at the healthy pool size without duplicates', () => {
+  it('caps the batch at the healthy pool size without duplicates', async () => {
     const storage = memoryStorage();
-    expect(selectUploadRelays(healthy.slice(0, 2), 6, storage)).toEqual([
-      'wss://a',
-      'wss://b',
-    ]);
+    await expect(
+      selectUploadRelays(healthy.slice(0, 2), 6, storage),
+    ).resolves.toEqual(['wss://a', 'wss://b']);
   });
 
-  it('returns empty for an empty pool', () => {
-    expect(selectUploadRelays([], 6, memoryStorage())).toEqual([]);
+  it('returns empty for an empty pool', async () => {
+    await expect(selectUploadRelays([], 6, memoryStorage())).resolves.toEqual(
+      [],
+    );
   });
 
-  it('preserves cached candidates while advancing the cursor', () => {
+  it('preserves cached candidates while advancing the cursor', async () => {
     const storage = memoryStorage({
       candidates: ['wss://cached'],
       discoveredAt: 123,
       cursor: 0,
     });
-    selectUploadRelays(healthy, 2, storage);
+    await selectUploadRelays(healthy, 2, storage);
     expect(storage.state?.candidates).toEqual(['wss://cached']);
     expect(storage.state?.discoveredAt).toBe(123);
+  });
+});
+
+describe('saveWorkingRelays', () => {
+  it('updates healthy relays, removes probed failures, and retains unprobed relays', async () => {
+    const now = 24 * 60 * 60 * 1000;
+    const storage = memoryStorage(null, [
+      { url: 'wss://stale.example', lastSavedAt: 0 },
+      { url: 'wss://failed.example/', lastSavedAt: now - 2 },
+      { url: 'wss://still-good.example', lastSavedAt: now - 1 },
+    ]);
+    await saveWorkingRelays(
+      storage,
+      [
+        { url: 'wss://new.example', rttMs: 10 },
+        { url: 'wss://new.example/', rttMs: 20 },
+      ],
+      ['wss://failed.example', 'wss://new.example'],
+      now,
+    );
+    expect(storage.workingRelays).toEqual([
+      { url: 'wss://new.example', lastSavedAt: now },
+      { url: 'wss://still-good.example', lastSavedAt: now - 1 },
+    ]);
   });
 });
 
@@ -273,6 +342,7 @@ describe('resolveUploadRelays', () => {
 
   it('never rings signaling relays, whether discovered or cached', async () => {
     const pool = createMockPool();
+    const storage = memoryStorage();
     // NIP-66 events served by a seed relay: two real candidates plus a seed
     // that someone listed — the signaling pool must never come back.
     pool.store.set(DEFAULT_RELAYS[0], [
@@ -280,11 +350,18 @@ describe('resolveUploadRelays', () => {
       makeEvent(30166, [['d', 'wss://s2.example']]),
       makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]),
     ]);
-    const relays = await resolveUploadRelays(pool, memoryStorage(), {
+    const relays = await resolveUploadRelays(pool, storage, {
       ...opts(),
       excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
     });
     expect(relays.sort()).toEqual(['wss://s1.example', 'wss://s2.example']);
+    expect(storage.workingRelays.map((relay) => relay.url).sort()).toEqual([
+      'wss://s1.example',
+      'wss://s2.example',
+    ]);
+    expect(storage.workingRelays.every((relay) => relay.lastSavedAt > 0)).toBe(
+      true,
+    );
     // Seeds queried for discovery are closed once it finishes — except the
     // two carrying this transfer's control channel.
     for (const url of DEFAULT_RELAYS.slice(2)) {

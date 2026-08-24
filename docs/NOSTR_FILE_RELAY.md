@@ -53,7 +53,9 @@ handed out, so it stays quick.
    `DEFAULT_RELAYS` is the signaling pool and never carries chunks, so a failed discovery
    fails the transfer with the not-enough-relays error rather than degrading to the
    seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in
-   localStorage for 24 h (`ptransfer:nostr-file:relay-pool:v1`).
+   IndexedDB for 24 h. Relays that pass the write/read health probe are saved as
+   `{ url, lastSavedAt }` records and prioritized for 24 h on later runs, but are
+   always probed again before receiving file chunks.
 2. **Health-check candidates** with a real write→read round trip per relay: a
    production-shaped probe event through the full codec at the full chunk size
    (`HEALTH_CHECK_PROBE_BYTES` = 48 KiB), read back and byte-compared. A relay with a
@@ -309,6 +311,7 @@ sequenceDiagram
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
 | `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop probing once this many relays pass |
+| `RELAY_CANDIDATE_TTL_MS` | 24 h | Lifetime of discovered candidates and timestamped working-relay priority |
 | `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |

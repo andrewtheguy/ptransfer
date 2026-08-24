@@ -11,8 +11,11 @@ import {
   HEALTH_CHECK_PROBE_BYTES,
   HEALTH_CHECK_TARGET_COUNT,
   HEALTH_CHECK_TIMEOUT_MS,
+  RELAY_CACHE_DATABASE_NAME,
+  RELAY_CACHE_DATABASE_VERSION,
+  RELAY_CACHE_STATE_STORE,
+  RELAY_CACHE_WORKING_STORE,
   RELAY_CANDIDATE_TTL_MS,
-  RELAY_POOL_STORAGE_KEY,
 } from './constants';
 import { buildProbeEvent } from './events';
 import type { NostrFilePool } from './pool';
@@ -32,45 +35,169 @@ export interface RelayPoolState {
   cursor: number;
 }
 
-/** Injected persistence so node tests never touch localStorage. */
-export interface RelayPoolStorage {
-  get(): RelayPoolState | null;
-  set(state: RelayPoolState): void;
+export interface KnownWorkingRelay {
+  url: string;
+  lastSavedAt: number;
 }
 
-export function createLocalStorageRelayPool(): RelayPoolStorage {
+/** Injected persistence so node tests never touch IndexedDB. */
+export interface RelayPoolStorage {
+  getState(): Promise<RelayPoolState | null>;
+  setState(state: RelayPoolState): Promise<void>;
+  getWorkingRelays(): Promise<KnownWorkingRelay[]>;
+  setWorkingRelays(relays: KnownWorkingRelay[]): Promise<void>;
+}
+
+const RELAY_POOL_STATE_KEY = 'current';
+
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function transactionDone(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+function openRelayCache(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(
+      RELAY_CACHE_DATABASE_NAME,
+      RELAY_CACHE_DATABASE_VERSION,
+    );
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      database.createObjectStore(RELAY_CACHE_STATE_STORE);
+      database.createObjectStore(RELAY_CACHE_WORKING_STORE, {
+        keyPath: 'url',
+      });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('Relay cache upgrade blocked'));
+  });
+}
+
+function parseRelayPoolState(value: unknown): RelayPoolState | null {
+  if (!value || typeof value !== 'object') return null;
+  const state = value as Record<string, unknown>;
+  if (
+    !Array.isArray(state.candidates) ||
+    !state.candidates.every((candidate) => typeof candidate === 'string') ||
+    typeof state.discoveredAt !== 'number' ||
+    !Number.isFinite(state.discoveredAt) ||
+    typeof state.cursor !== 'number' ||
+    !Number.isInteger(state.cursor) ||
+    state.cursor < 0
+  ) {
+    return null;
+  }
   return {
-    get() {
+    candidates: state.candidates as string[],
+    discoveredAt: state.discoveredAt,
+    cursor: state.cursor,
+  };
+}
+
+function parseWorkingRelays(value: unknown): KnownWorkingRelay[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const relay = entry as Record<string, unknown>;
+    if (
+      typeof relay.url !== 'string' ||
+      typeof relay.lastSavedAt !== 'number' ||
+      !Number.isFinite(relay.lastSavedAt) ||
+      relay.lastSavedAt < 0
+    ) {
+      return [];
+    }
+    return [{ url: relay.url, lastSavedAt: relay.lastSavedAt }];
+  });
+}
+
+export function createIndexedDbRelayPool(): RelayPoolStorage {
+  return {
+    async getState() {
+      let database: IDBDatabase | undefined;
       try {
-        const raw = localStorage.getItem(RELAY_POOL_STORAGE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as unknown;
-        if (!parsed || typeof parsed !== 'object') return null;
-        const s = parsed as Record<string, unknown>;
-        if (
-          !Array.isArray(s.candidates) ||
-          !s.candidates.every((c) => typeof c === 'string') ||
-          typeof s.discoveredAt !== 'number' ||
-          typeof s.cursor !== 'number' ||
-          !Number.isInteger(s.cursor) ||
-          s.cursor < 0
-        ) {
-          return null;
-        }
-        return {
-          candidates: s.candidates as string[],
-          discoveredAt: s.discoveredAt,
-          cursor: s.cursor,
-        };
+        database = await openRelayCache();
+        const transaction = database.transaction(
+          RELAY_CACHE_STATE_STORE,
+          'readonly',
+        );
+        const value = await requestResult(
+          transaction
+            .objectStore(RELAY_CACHE_STATE_STORE)
+            .get(RELAY_POOL_STATE_KEY),
+        );
+        await transactionDone(transaction);
+        return parseRelayPoolState(value);
       } catch {
         return null;
+      } finally {
+        database?.close();
       }
     },
-    set(state) {
+    async setState(state) {
+      let database: IDBDatabase | undefined;
       try {
-        localStorage.setItem(RELAY_POOL_STORAGE_KEY, JSON.stringify(state));
+        database = await openRelayCache();
+        const transaction = database.transaction(
+          RELAY_CACHE_STATE_STORE,
+          'readwrite',
+        );
+        transaction
+          .objectStore(RELAY_CACHE_STATE_STORE)
+          .put(state, RELAY_POOL_STATE_KEY);
+        await transactionDone(transaction);
       } catch {
-        // Quota/private-mode failures degrade to per-session rotation.
+        // Cache persistence never prevents a transfer.
+      } finally {
+        database?.close();
+      }
+    },
+    async getWorkingRelays() {
+      let database: IDBDatabase | undefined;
+      try {
+        database = await openRelayCache();
+        const transaction = database.transaction(
+          RELAY_CACHE_WORKING_STORE,
+          'readonly',
+        );
+        const value = await requestResult(
+          transaction.objectStore(RELAY_CACHE_WORKING_STORE).getAll(),
+        );
+        await transactionDone(transaction);
+        return parseWorkingRelays(value);
+      } catch {
+        return [];
+      } finally {
+        database?.close();
+      }
+    },
+    async setWorkingRelays(relays) {
+      let database: IDBDatabase | undefined;
+      try {
+        database = await openRelayCache();
+        const transaction = database.transaction(
+          RELAY_CACHE_WORKING_STORE,
+          'readwrite',
+        );
+        const store = transaction.objectStore(RELAY_CACHE_WORKING_STORE);
+        store.clear();
+        for (const relay of relays) store.put(relay);
+        await transactionDone(transaction);
+      } catch {
+        // Cache persistence never prevents a transfer.
+      } finally {
+        database?.close();
       }
     },
   };
@@ -243,7 +370,7 @@ export async function healthCheckRelays(
     targetCount?: number;
     probeBytes?: number;
     isCancelled?: () => boolean;
-    onProgress?: (checked: number, healthy: number) => void;
+    onProgress?: (checked: number, healthy: number, url: string) => void;
   } = {},
 ): Promise<HealthyRelay[]> {
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
@@ -272,7 +399,7 @@ export async function healthCheckRelays(
         // will not be used, so stop its socket (and its reconnect loop) now.
         pool.close?.([url]);
       }
-      opts.onProgress?.(checked, healthy.length);
+      opts.onProgress?.(checked, healthy.length, url);
     }
   };
 
@@ -288,19 +415,19 @@ export async function healthCheckRelays(
  * the healthy list (load balancing across uploads). Returns up to `count`
  * relays.
  */
-export function selectUploadRelays(
+export async function selectUploadRelays(
   healthy: HealthyRelay[],
   count: number,
   storage: RelayPoolStorage,
-): string[] {
+): Promise<string[]> {
   if (healthy.length === 0) return [];
-  const state = storage.get();
+  const state = await storage.getState();
   const cursor = state ? state.cursor % healthy.length : 0;
   const selected: string[] = [];
   for (let i = 0; i < Math.min(count, healthy.length); i++) {
     selected.push(healthy[(cursor + i) % healthy.length].url);
   }
-  storage.set({
+  await storage.setState({
     candidates: state?.candidates ?? [],
     discoveredAt: state?.discoveredAt ?? 0,
     cursor: (cursor + selected.length) % healthy.length,
@@ -317,25 +444,87 @@ export async function getRelayCandidates(
   storage: RelayPoolStorage,
   now: number = Date.now(),
 ): Promise<string[]> {
-  const state = storage.get();
-  if (state && now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS) {
+  const [state, savedWorkingRelays] = await Promise.all([
+    storage.getState(),
+    storage.getWorkingRelays(),
+  ]);
+  const knownWorking = savedWorkingRelays
+    .filter(
+      (relay) =>
+        relay.lastSavedAt <= now &&
+        now - relay.lastSavedAt < RELAY_CANDIDATE_TTL_MS,
+    )
+    .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
+    .map((relay) => normalizeRelayUrl(relay.url))
+    .filter((url): url is string => url !== null);
+  if (
+    state &&
+    state.discoveredAt <= now &&
+    now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
+  ) {
     // Cached candidates must re-pass the *current* normalization rules: the
     // rules can tighten (reserved domains, IP literals) while a cache written
     // under the old rules is still fresh.
     const cached = [
       ...new Set(
-        state.candidates
+        [...knownWorking, ...state.candidates]
           .map((url) => normalizeRelayUrl(url))
           .filter((url): url is string => url !== null),
       ),
     ];
-    if (cached.length > 0) return cached;
+    if (cached.length > 0) return cached.slice(0, DISCOVERY_CANDIDATE_CAP);
   }
-  const candidates = await discoverRelayCandidates(pool);
-  storage.set({
-    candidates,
+  const discovered = await discoverRelayCandidates(pool);
+  await storage.setState({
+    candidates: discovered,
     discoveredAt: now,
     cursor: state?.cursor ?? 0,
   });
-  return candidates;
+  return [...new Set([...knownWorking, ...discovered])].slice(
+    0,
+    DISCOVERY_CANDIDATE_CAP,
+  );
+}
+
+/**
+ * Persist recent health-check passes and remove saved relays that just failed.
+ * Saved relays not probed in this run remain available until their TTL ends.
+ */
+export async function saveWorkingRelays(
+  storage: RelayPoolStorage,
+  healthy: HealthyRelay[],
+  probedCandidates: string[],
+  now: number = Date.now(),
+): Promise<void> {
+  const previous = await storage.getWorkingRelays();
+  const probed = new Set(
+    probedCandidates
+      .map((url) => normalizeRelayUrl(url))
+      .filter((url): url is string => url !== null),
+  );
+  const healthyUrls = new Set(
+    healthy
+      .map((relay) => normalizeRelayUrl(relay.url))
+      .filter((url): url is string => url !== null),
+  );
+  const byUrl = new Map<string, KnownWorkingRelay>();
+  for (const relay of previous) {
+    const url = normalizeRelayUrl(relay.url);
+    if (
+      url &&
+      (!probed.has(url) || healthyUrls.has(url)) &&
+      relay.lastSavedAt <= now &&
+      now - relay.lastSavedAt < RELAY_CANDIDATE_TTL_MS
+    ) {
+      byUrl.set(url, { url, lastSavedAt: relay.lastSavedAt });
+    }
+  }
+  for (const relay of healthy) {
+    const url = normalizeRelayUrl(relay.url);
+    if (url) byUrl.set(url, { url, lastSavedAt: now });
+  }
+  const saved = [...byUrl.values()]
+    .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
+    .slice(0, DISCOVERY_CANDIDATE_CAP);
+  await storage.setWorkingRelays(saved);
 }
