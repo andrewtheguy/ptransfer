@@ -19,6 +19,7 @@ import {
   healthCheckRelays,
   type RelayPoolStorage,
   saveRelayHealth,
+  sweepRelayHealth,
 } from './nostr-file/relay-pool';
 
 /**
@@ -246,6 +247,38 @@ export async function probeAnswerRelays(
   } catch {
     return [];
   }
+}
+
+export interface AnswerRelaySweepOptions {
+  /** Candidate and health cache; defaults to the shared IndexedDB one. */
+  storage?: RelayPoolStorage;
+  /** Ends the sweep at once; probes in flight are abandoned. */
+  signal?: AbortSignal;
+  isCancelled?: () => boolean;
+}
+
+/**
+ * The background relay pass behind a manual exchange: the same uncapped
+ * enumeration and probing `sendFileLive` runs behind a Nostr file transfer,
+ * so an exchange that only ever touches signaling relays still extends the
+ * shared relay knowledge the next transfer starts from. The answer relays
+ * are carrying the exchange and are left alone.
+ *
+ * Best-effort: never throws, and returns as soon as `signal` fires — the
+ * caller destroys the pool right after, and the sweep's last cache write is
+ * the only thing this promise waits on.
+ */
+export function sweepAnswerRelays(
+  pool: NostrFilePool,
+  answerRelays: string[],
+  opts: AnswerRelaySweepOptions = {},
+): Promise<void> {
+  const storage = opts.storage ?? createIndexedDbRelayPool();
+  return sweepRelayHealth(pool, storage, {
+    excludeRelays: answerRelays,
+    signal: opts.signal,
+    isCancelled: opts.isCancelled,
+  }).catch(() => {});
 }
 
 /** Offer-side validation of the relay list the receiver is asked to use. */
