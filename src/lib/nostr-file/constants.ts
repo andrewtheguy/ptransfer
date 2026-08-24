@@ -110,7 +110,10 @@ export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
 // with every chunk listed is well under this).
 export const CONTROL_MESSAGE_MAX_BYTES = 256 * 1024;
 
-export const RELAY_POOL_STORAGE_KEY = 'ptransfer:nostr-file:relay-pool:v1';
+export const RELAY_CACHE_DATABASE_NAME = 'ptransfer:nostr-file:relay-cache';
+export const RELAY_CACHE_DATABASE_VERSION = 1;
+export const RELAY_CACHE_STATE_STORE = 'relay-pool-state';
+export const RELAY_CACHE_WORKING_STORE = 'working-relays';
 export const RELAY_CANDIDATE_TTL_MS = 24 * 60 * 60 * 1000;
 
 // Tolerated wall-clock disagreement between sender and receiver.

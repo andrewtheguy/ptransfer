@@ -18,6 +18,7 @@ import {
   healthCheckRelays,
   normalizeRelayUrl,
   type RelayPoolStorage,
+  saveWorkingRelays,
   selectUploadRelays,
 } from './relay-pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
@@ -218,11 +219,12 @@ export async function resolveUploadRelays(
     },
   });
   stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
+  await saveWorkingRelays(storage, healthy);
   throwIfCancelled();
   if (healthy.length < MIN_UPLOAD_RELAYS) {
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
   }
-  const relays = selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
+  const relays = await selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
   const ringSet = new Set(relays);
   const unselected = healthy
     .filter((r) => !ringSet.has(r.url))

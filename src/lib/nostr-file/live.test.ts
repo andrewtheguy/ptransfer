@@ -15,7 +15,11 @@ import { type LiveReceiveProgress, receiveFileLive } from './download-live';
 import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
-import type { RelayPoolState, RelayPoolStorage } from './relay-pool';
+import type {
+  KnownWorkingRelay,
+  RelayPoolState,
+  RelayPoolStorage,
+} from './relay-pool';
 import { type LiveSendProgress, sendFileLive } from './upload-live';
 
 // crypto.getRandomValues caps at 65536 bytes per call
@@ -44,10 +48,15 @@ function memoryStorage(
   initial: RelayPoolState | null = null,
 ): RelayPoolStorage {
   let state: RelayPoolState | null = initial;
+  let workingRelays: KnownWorkingRelay[] = [];
   return {
-    get: () => state,
-    set(s) {
+    getState: async () => state,
+    setState: async (s) => {
       state = s;
+    },
+    getWorkingRelays: async () => workingRelays,
+    setWorkingRelays: async (relays) => {
+      workingRelays = relays;
     },
   };
 }
