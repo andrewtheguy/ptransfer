@@ -436,8 +436,10 @@ export async function selectUploadRelays(
 }
 
 /**
- * Candidate list with 24h caching: reuse stored candidates when fresh,
- * otherwise run discovery and persist the result (cursor preserved).
+ * Candidate list with 24h caching. Every run merges fresh discovery results
+ * into the still-valid candidate and known-working caches, so newly listed
+ * relays become available without giving up cached fallbacks when discovery
+ * is sparse or the default seeds are unreliable.
  */
 export async function getRelayCandidates(
   pool: NostrFilePool,
@@ -457,33 +459,27 @@ export async function getRelayCandidates(
     .sort((a, b) => b.lastSavedAt - a.lastSavedAt)
     .map((relay) => normalizeRelayUrl(relay.url))
     .filter((url): url is string => url !== null);
-  if (
+  const cachedCandidates =
     state &&
     state.discoveredAt <= now &&
     now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
-  ) {
-    // Cached candidates must re-pass the *current* normalization rules: the
-    // rules can tighten (reserved domains, IP literals) while a cache written
-    // under the old rules is still fresh.
-    const cached = [
-      ...new Set(
-        [...knownWorking, ...state.candidates]
+      ? state.candidates
           .map((url) => normalizeRelayUrl(url))
-          .filter((url): url is string => url !== null),
-      ),
-    ];
-    if (cached.length > 0) return cached.slice(0, DISCOVERY_CANDIDATE_CAP);
-  }
+          .filter((url): url is string => url !== null)
+      : [];
   const discovered = await discoverRelayCandidates(pool);
+  // Known-working relays stay first so a seed outage can fall back to relays
+  // already proven by a recent transfer. Fresh discoveries precede the rest
+  // of the generic cache, ensuring the merged list keeps evolving.
+  const merged = [
+    ...new Set([...knownWorking, ...discovered, ...cachedCandidates]),
+  ].slice(0, DISCOVERY_CANDIDATE_CAP);
   await storage.setState({
-    candidates: discovered,
+    candidates: merged,
     discoveredAt: now,
     cursor: state?.cursor ?? 0,
   });
-  return [...new Set([...knownWorking, ...discovered])].slice(
-    0,
-    DISCOVERY_CANDIDATE_CAP,
-  );
+  return merged;
 }
 
 /**

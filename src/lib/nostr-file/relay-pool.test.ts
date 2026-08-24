@@ -17,7 +17,7 @@ import {
 import { createTransferStats } from './stats';
 import {
   NOT_ENOUGH_RELAYS_MESSAGE,
-  resolveControlRelays,
+  resolveTransferRelays,
   resolveUploadRelays,
 } from './upload';
 
@@ -175,6 +175,28 @@ describe('getRelayCandidates', () => {
       'wss://candidate.example',
     ]);
   });
+
+  it('merges newly discovered relays into a fresh cache', async () => {
+    const now = 2_000;
+    const storage = memoryStorage({
+      candidates: ['wss://cached.example'],
+      discoveredAt: 1_000,
+      cursor: 3,
+    });
+    const pool = createMockPool();
+    pool.store.set(DEFAULT_RELAYS[0], [
+      makeEvent(30166, [['d', 'wss://new.example']]),
+    ]);
+
+    const candidates = await getRelayCandidates(pool, storage, now);
+
+    expect(candidates).toEqual(['wss://new.example', 'wss://cached.example']);
+    expect(storage.state).toEqual({
+      candidates,
+      discoveredAt: now,
+      cursor: 3,
+    });
+  });
 });
 
 describe('selectUploadRelays', () => {
@@ -274,17 +296,18 @@ describe('control relay probe', () => {
   });
 });
 
-describe('resolveControlRelays', () => {
+describe('resolveTransferRelays', () => {
   const opts = () => ({
     isCancelled: () => false,
-    onProgress: () => {},
+    onControlProgress: () => {},
+    onUploadProgress: () => {},
     stats: createTransferStats('sender'),
   });
 
   it('returns a deduped override and seeds its stats rows', async () => {
     const pool = createMockPool();
     const o = opts();
-    const relays = await resolveControlRelays(pool, {
+    const selection = await resolveTransferRelays(pool, memoryStorage(), {
       ...o,
       controlRelayOverride: [
         'wss://c1.example',
@@ -292,43 +315,85 @@ describe('resolveControlRelays', () => {
         'wss://c2.example',
       ],
     });
+    const relays = selection.controlRelays;
     expect(relays).toEqual(['wss://c1.example', 'wss://c2.example']);
+    expect(selection.storageRelays).toBeNull();
     expect(o.stats.relays.map((r) => r.url)).toEqual(relays);
   });
 
   it('rejects an override with fewer than two distinct relays', async () => {
     const pool = createMockPool();
     await expect(
-      resolveControlRelays(pool, {
+      resolveTransferRelays(pool, memoryStorage(), {
         ...opts(),
         controlRelayOverride: ['wss://c1.example', 'wss://c1.example'],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
     // Equivalent URL forms collapse before the distinct-relay count.
     await expect(
-      resolveControlRelays(pool, {
+      resolveTransferRelays(pool, memoryStorage(), {
         ...opts(),
         controlRelayOverride: ['wss://c1.example', 'wss://c1.example/'],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
   });
 
-  it('picks probed default relays, skipping ones that serve nothing', async () => {
+  it('fills failed default signaling relays from the four storage reserves', async () => {
+    const candidates = Array.from(
+      { length: 20 },
+      (_, i) => `wss://storage-${i}.example`,
+    );
     const pool = createMockPool({
       blackholeRelays: new Set([DEFAULT_RELAYS[0]]),
     });
+    pool.store.set(
+      DEFAULT_RELAYS[1],
+      candidates.map((url) => makeEvent(30166, [['d', url]])),
+    );
     const o = opts();
-    const relays = await resolveControlRelays(pool, o);
-    expect(relays.length).toBeLessThanOrEqual(CONTROL_RELAY_COUNT);
-    expect(relays.length).toBeGreaterThanOrEqual(2);
+    const selection = await resolveTransferRelays(pool, memoryStorage(), o);
+    const relays = selection.controlRelays;
+    const defaultSet = new Set<string>(DEFAULT_RELAYS);
+    expect(relays).toHaveLength(CONTROL_RELAY_COUNT);
     expect(relays).not.toContain(DEFAULT_RELAYS[0]);
-    for (const url of relays) expect(DEFAULT_RELAYS).toContain(url);
+    expect(relays.filter((url) => !defaultSet.has(url))).toHaveLength(1);
+    expect(selection.storageRelays).toHaveLength(16);
+    for (const url of selection.storageRelays ?? []) {
+      expect(relays).not.toContain(url);
+    }
     expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
-    // Every seed is either picked for the channel or its socket is closed.
+    // Every default is either picked for the channel or its socket is closed.
     for (const url of DEFAULT_RELAYS) {
       expect(relays.includes(url) || pool.closedRelays.includes(url)).toBe(
         true,
       );
+    }
+  });
+
+  it('uses cached storage reserves when every default signaling relay fails', async () => {
+    const now = Date.now();
+    const candidates = Array.from(
+      { length: 20 },
+      (_, i) => `wss://cached-${i}.example`,
+    );
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: now,
+      cursor: 0,
+    });
+    const pool = createMockPool({
+      blackholeRelays: new Set(DEFAULT_RELAYS),
+    });
+
+    const selection = await resolveTransferRelays(pool, storage, opts());
+
+    expect(selection.storageRelays).toHaveLength(16);
+    expect(selection.controlRelays).toHaveLength(4);
+    expect(
+      new Set([...(selection.storageRelays ?? []), ...selection.controlRelays]),
+    ).toEqual(new Set(candidates));
+    for (const relay of selection.controlRelays) {
+      expect(selection.storageRelays).not.toContain(relay);
     }
   });
 });
@@ -350,7 +415,7 @@ describe('resolveUploadRelays', () => {
       makeEvent(30166, [['d', 'wss://s2.example']]),
       makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]),
     ]);
-    const relays = await resolveUploadRelays(pool, storage, {
+    const { storageRelays: relays } = await resolveUploadRelays(pool, storage, {
       ...opts(),
       excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
     });
@@ -376,22 +441,35 @@ describe('resolveUploadRelays', () => {
       discoveredAt: Date.now(),
       cursor: 0,
     });
-    const fromCache = await resolveUploadRelays(pool, stale, {
-      ...opts(),
-      excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
-    });
-    expect(fromCache.sort()).toEqual(['wss://s3.example', 'wss://s4.example']);
+    const { storageRelays: fromCache } = await resolveUploadRelays(
+      pool,
+      stale,
+      {
+        ...opts(),
+        excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
+      },
+    );
+    expect(fromCache.sort()).toEqual([
+      'wss://s1.example',
+      'wss://s2.example',
+      'wss://s3.example',
+      'wss://s4.example',
+    ]);
   });
 
   it('filters the override and refuses a ring the exclusion leaves too small', async () => {
     const pool = createMockPool();
     const override = ['wss://a.example', 'wss://b.example', 'wss://c.example'];
-    const relays = await resolveUploadRelays(pool, memoryStorage(), {
-      ...opts(),
-      relayOverride: override,
-      // Trailing slash on purpose: exclusion matches normalized URLs.
-      excludeRelays: ['wss://c.example/'],
-    });
+    const { storageRelays: relays } = await resolveUploadRelays(
+      pool,
+      memoryStorage(),
+      {
+        ...opts(),
+        relayOverride: override,
+        // Trailing slash on purpose: exclusion matches normalized URLs.
+        excludeRelays: ['wss://c.example/'],
+      },
+    );
     expect(relays).toEqual(['wss://a.example', 'wss://b.example']);
     await expect(
       resolveUploadRelays(pool, memoryStorage(), {

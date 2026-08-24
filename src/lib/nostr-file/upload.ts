@@ -10,11 +10,13 @@ import {
   PUBLISH_BACKOFF_CAP_MS,
   PUBLISH_BACKOFF_JITTER_MS,
   PUBLISH_MAX_RETRIES,
+  SIGNALING_RESERVE_RELAY_COUNT,
   UPLOAD_RELAY_COUNT,
 } from './constants';
 import type { NostrFilePool } from './pool';
 import {
   getRelayCandidates,
+  type HealthyRelay,
   healthCheckRelays,
   normalizeRelayUrl,
   type RelayPoolStorage,
@@ -85,60 +87,10 @@ export async function publishWithRetry(
 export const NOT_ENOUGH_RELAYS_MESSAGE =
   'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.';
 
-/**
- * The control relays for a transfer: the caller's override, or the fastest
- * DEFAULT_RELAYS seeds that pass a small-event probe (with read-back, so the
- * stored control backlog is actually served). Runs before the code is handed
- * out, so it stays quick — no discovery, no rotation cursor. Throws when
- * fewer than MIN_CONTROL_RELAYS relays are usable.
- */
-export async function resolveControlRelays(
-  pool: NostrFilePool,
-  opts: {
-    controlRelayOverride?: string[];
-    isCancelled: () => boolean;
-    onProgress: (checked: number, healthy: number) => void;
-    stats: NostrFileTransferStats;
-  },
-): Promise<string[]> {
-  const { stats } = opts;
-  const seedStats = (relays: string[]) => {
-    for (const relay of relays) relayStatsFor(stats, relay, 'control');
-    return relays;
-  };
-  if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
-    const distinct = [
-      ...new Set(
-        opts.controlRelayOverride.map((url) => normalizeRelayUrl(url) ?? url),
-      ),
-    ];
-    if (distinct.length < MIN_CONTROL_RELAYS) {
-      throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
-    }
-    return seedStats(distinct);
-  }
-  const probeStarted = Date.now();
-  const healthy = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
-    probeBytes: CONTROL_PROBE_BYTES,
-    timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
-    targetCount: CONTROL_RELAY_COUNT,
-    isCancelled: opts.isCancelled,
-    onProgress: opts.onProgress,
-  });
-  stats.phaseMs.controlProbe = Date.now() - probeStarted;
-  if (opts.isCancelled()) throw new NostrFileCancelledError();
-  if (healthy.length < MIN_CONTROL_RELAYS) {
-    throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
-  }
-  const relays = healthy.slice(0, CONTROL_RELAY_COUNT).map((r) => r.url);
-  const passedOver = healthy.slice(CONTROL_RELAY_COUNT).map((r) => r.url);
-  if (passedOver.length > 0) pool.close?.(passedOver);
-  seedStats(relays);
-  for (const { url, rttMs } of healthy) {
-    const entry = stats.relays.find((r) => r.url === url);
-    if (entry) entry.rttMs = rttMs;
-  }
-  return relays;
+export interface UploadRelaySelection {
+  storageRelays: string[];
+  /** Full-size-proven relays deliberately left outside the storage ring. */
+  reserveRelays: HealthyRelay[];
 }
 
 /**
@@ -159,8 +111,9 @@ export async function resolveUploadRelays(
     isCancelled: () => boolean;
     onProgress: (p: UploadProgress) => void;
     stats: NostrFileTransferStats;
+    reserveCount?: number;
   },
-): Promise<string[]> {
+): Promise<UploadRelaySelection> {
   const { isCancelled, onProgress, stats } = opts;
   const throwIfCancelled = () => {
     if (isCancelled()) throw new NostrFileCancelledError();
@@ -187,7 +140,7 @@ export async function resolveUploadRelays(
     if (usable.length < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
-    return seedRing(usable);
+    return { storageRelays: seedRing(usable), reserveRelays: [] };
   }
   onProgress({ phase: 'discovering', stats });
   const discoverStarted = Date.now();
@@ -228,8 +181,12 @@ export async function resolveUploadRelays(
   }
   const relays = await selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
   const ringSet = new Set(relays);
+  const reserveRelays = healthy
+    .filter((relay) => !ringSet.has(relay.url))
+    .slice(0, opts.reserveCount ?? 0);
+  const reserveSet = new Set(reserveRelays.map((relay) => relay.url));
   const unselected = healthy
-    .filter((r) => !ringSet.has(r.url))
+    .filter((r) => !ringSet.has(r.url) && !reserveSet.has(r.url))
     .map((r) => r.url);
   if (unselected.length > 0) pool.close?.(unselected);
   seedRing(relays);
@@ -237,5 +194,98 @@ export async function resolveUploadRelays(
     const entry = stats.relays.find((r) => r.url === url);
     if (entry) entry.rttMs = rttMs;
   }
-  return relays;
+  return { storageRelays: relays, reserveRelays };
+}
+
+export interface TransferRelaySelection {
+  controlRelays: string[];
+  /** Already selected only when signaling needed storage reserves. */
+  storageRelays: string[] | null;
+}
+
+/**
+ * Resolve the relay sets needed before the manual exchange code is created.
+ * Six default signaling relays are probed first. When any are unavailable,
+ * storage discovery runs early and its four full-size-proven, unselected
+ * relays fill the signaling gaps. The selected sets remain disjoint.
+ */
+export async function resolveTransferRelays(
+  pool: NostrFilePool,
+  storage: RelayPoolStorage,
+  opts: {
+    controlRelayOverride?: string[];
+    dataRelayOverride?: string[];
+    isCancelled: () => boolean;
+    onControlProgress: (checked: number, healthy: number) => void;
+    onUploadProgress: (p: UploadProgress) => void;
+    stats: NostrFileTransferStats;
+  },
+): Promise<TransferRelaySelection> {
+  const { stats } = opts;
+  const seedControlStats = (healthy: HealthyRelay[]) => {
+    for (const { url, rttMs } of healthy) {
+      relayStatsFor(stats, url, 'control').rttMs = rttMs;
+    }
+    const urls = new Set(healthy.map((relay) => relay.url));
+    stats.relays.sort(
+      (a, b) => Number(urls.has(b.url)) - Number(urls.has(a.url)),
+    );
+    return healthy.map((relay) => relay.url);
+  };
+
+  if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
+    const distinct = [
+      ...new Set(
+        opts.controlRelayOverride.map((url) => normalizeRelayUrl(url) ?? url),
+      ),
+    ].slice(0, CONTROL_RELAY_COUNT);
+    if (distinct.length < MIN_CONTROL_RELAYS) {
+      throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+    }
+    for (const relay of distinct) relayStatsFor(stats, relay, 'control');
+    return { controlRelays: distinct, storageRelays: null };
+  }
+
+  const probeStarted = Date.now();
+  const healthyDefaults = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
+    probeBytes: CONTROL_PROBE_BYTES,
+    timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
+    targetCount: CONTROL_RELAY_COUNT,
+    isCancelled: opts.isCancelled,
+    onProgress: opts.onControlProgress,
+  });
+  stats.phaseMs.controlProbe = Date.now() - probeStarted;
+  if (opts.isCancelled()) throw new NostrFileCancelledError();
+
+  let storageRelays: string[] | null = null;
+  let reserves: HealthyRelay[] = [];
+  if (healthyDefaults.length < CONTROL_RELAY_COUNT) {
+    const upload = await resolveUploadRelays(pool, storage, {
+      relayOverride: opts.dataRelayOverride,
+      excludeRelays: healthyDefaults.map((relay) => relay.url),
+      isCancelled: opts.isCancelled,
+      onProgress: opts.onUploadProgress,
+      stats,
+      reserveCount: SIGNALING_RESERVE_RELAY_COUNT,
+    });
+    storageRelays = upload.storageRelays;
+    reserves = upload.reserveRelays;
+  }
+
+  const missing = CONTROL_RELAY_COUNT - healthyDefaults.length;
+  const usedReserves = reserves.slice(0, missing);
+  const unusedReserves = reserves.slice(missing).map((relay) => relay.url);
+  if (unusedReserves.length > 0) pool.close?.(unusedReserves);
+  const control = [...healthyDefaults, ...usedReserves].slice(
+    0,
+    CONTROL_RELAY_COUNT,
+  );
+  if (control.length < MIN_CONTROL_RELAYS) {
+    throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+  }
+
+  return {
+    controlRelays: seedControlStats(control),
+    storageRelays,
+  };
 }

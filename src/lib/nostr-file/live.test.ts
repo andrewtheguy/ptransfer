@@ -450,8 +450,8 @@ describe('live single-copy relay transfer', () => {
       readyResolve = resolve;
     });
     // No dataRelayOverride: the ring resolves for real from the candidate
-    // cache (fresh, so discovery is skipped). The cache still lists a
-    // signaling seed — the whole DEFAULT_RELAYS pool must never be rung.
+    // cache merged with fresh discovery. The cache still lists a signaling
+    // seed — the whole DEFAULT_RELAYS pool must never be rung.
     const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
     const storageRing = ['wss://s1.example', 'wss://s2.example'];
     const sendDone = sendFileLive(data, META, {
@@ -514,7 +514,7 @@ describe('live single-copy relay transfer', () => {
     const transferId = 'ab'.repeat(16);
     const createdAt = Math.floor(Date.now() / 1000);
     const manifest: NostrFileManifest = {
-      v: 6,
+      v: 7,
       fileName: 'late.bin',
       fileSize: data.length,
       mimeType: 'application/octet-stream',
@@ -612,7 +612,7 @@ describe('live single-copy relay transfer', () => {
     const pool = createMockPool();
     const createdAt = Math.floor(Date.now() / 1000) - 100_000;
     const manifest: NostrFileManifest = {
-      v: 6,
+      v: 7,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',

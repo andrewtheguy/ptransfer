@@ -15,19 +15,23 @@ All code lives in [`src/lib/nostr-file/`](../src/lib/nostr-file/) (see the
 
 Two separate relay sets do two different jobs:
 
-- **Control relays** (2–4, embedded in the payload): a small set of proven signaling
-  relays, picked from `DEFAULT_RELAYS` after a quick small-event probe. They carry only
-  the encrypted control channel — a relay that caps event sizes or rate-limits large
-  writes (fine for signaling, useless for 48 KiB chunks) still serves perfectly here.
+- **Control relays** (2–6, embedded in the payload): a set of proven signaling relays,
+  picked from `DEFAULT_RELAYS` after a quick small-event probe. When fewer than six
+  defaults work, up to four healthy relays left outside the storage ring fill the gaps.
+  They carry only the encrypted control channel — a relay that caps event sizes or
+  rate-limits large writes (fine for signaling, useless for 48 KiB chunks) still serves
+  perfectly here.
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
   ring is *not* in the payload — the sender announces it over the control channel. The
   whole `DEFAULT_RELAYS` signaling pool is barred from the ring, so the two sets never
   overlap.
 
-The sender hands out the code (payload `type: 'nostr-file-live'`) as soon as the control
-relays pass their probe — storage-relay discovery runs in the background while the user
-shares the code — and then keeps running: each piece is uploaded **once** while the
-receiver downloads alongside, and the two sides coordinate over the control channel.
+The sender normally hands out the code (payload `type: 'nostr-file-live'`) as soon as all
+six default control relays pass their probe, then discovers storage relays in the
+background while the user shares the code. If a default fails, storage selection runs
+first so its unused reserves can be embedded in the code as signaling fallbacks. The
+sender then keeps running: each piece is uploaded **once** while the receiver downloads
+alongside, and the two sides coordinate over the control channel.
 Redundancy is created on demand — a piece is re-sent only after the receiver
 reports it could not fetch it, so the upload costs ~1× the file size plus the failed
 pieces. Both pages stay open until the receiver confirms the verified file; the receiver
@@ -37,13 +41,14 @@ gets the full hour because the clock and the code start together.
 
 ### Control relay probe (`upload.ts`, `relay-pool.ts`)
 
-`resolveControlRelays` probes the `DEFAULT_RELAYS` seeds with the same write→read
+`resolveTransferRelays` probes the six `DEFAULT_RELAYS` seeds with the same write→read
 round trip as the storage health check but at `CONTROL_PROBE_BYTES` (256 B) and a short
 `CONTROL_PROBE_TIMEOUT_MS` (4 s) — read-back matters because the control channel relies
-on relays *serving* the stored backlog, not just accepting writes. The fastest
-`CONTROL_RELAY_COUNT` (4) passers go into the payload; fewer than `MIN_CONTROL_RELAYS`
-(2) refuses the transfer. No discovery, no rotation — this runs before the code is
-handed out, so it stays quick.
+on relays *serving* the stored backlog, not just accepting writes. If fewer than
+`CONTROL_RELAY_COUNT` (6) pass, storage selection runs before the code is handed out and
+up to `SIGNALING_RESERVE_RELAY_COUNT` (4) full-size-proven relays outside its ring fill
+the missing signaling positions. Fewer than `MIN_CONTROL_RELAYS` (2) total signaling
+relays refuses the transfer.
 
 ### Storage relay discovery and health check (`relay-pool.ts`)
 
@@ -53,7 +58,9 @@ handed out, so it stays quick.
    `DEFAULT_RELAYS` is the signaling pool and never carries chunks, so a failed discovery
    fails the transfer with the not-enough-relays error rather than degrading to the
    seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in
-   IndexedDB for 24 h. Relays that pass the write/read health probe are saved as
+   IndexedDB for 24 h. Fresh discovery is merged with the valid cache on every run, so
+   new candidates are learned without discarding cached fallbacks. Relays that pass the
+   write/read health probe are saved as
    `{ url, lastSavedAt }` records and prioritized for 24 h on later runs, but are
    always probed again before receiving file chunks.
 2. **Health-check candidates** with a real write→read round trip per relay: a
@@ -61,22 +68,25 @@ handed out, so it stays quick.
    (`HEALTH_CHECK_PROBE_BYTES` = 48 KiB), read back and byte-compared. A relay with a
    small event-size cap therefore fails here instead of rejecting real chunks mid-upload.
    Probes carry the same NIP-40 expiration as everything else. Checking stops once
-   `HEALTH_CHECK_TARGET_COUNT` (20) relays pass — some rotation headroom without probing
-   the whole candidate list (only ~1 in 6 public candidates passes the full-size probe).
+   `HEALTH_CHECK_TARGET_COUNT` (20) relays pass — 16 for the storage ring and four
+   signaling reserves, without probing the whole candidate list (only ~1 in 6 public
+   candidates passes the full-size probe).
    Per-relay round-trip time is measured (`HealthyRelay.rttMs`) and the fastest passers
    are kept. Sockets are dropped as soon as a relay has no further job — a failed probe,
-   a pass after the target filled, a seed once discovery finishes, a healthy relay the
-   batch selection skipped — because with reconnect enabled a lingering dead socket
-   would retry forever, spamming connections for the rest of the transfer. Both engines
+   a pass after the target filled, a seed once discovery finishes, or a healthy relay the
+   batch and signaling-reserve selection skipped — because with reconnect enabled a
+   lingering dead socket would retry forever, spamming connections for the rest of the transfer. Both engines
    run on a tracked pool (`createTransferPool`) that force-closes even sockets still
    mid-handshake — nostr-tools only closes fully open ones — and refuses new sockets
    after `destroy()`, so no connection or reconnect loop outlives the transfer.
-3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a rotating cursor
-   persisted with the candidate cache, load-balancing across uploads. The transfer's
+3. **Select the batch and reserves**: up to `UPLOAD_RELAY_COUNT` (16) relays via a
+   rotating cursor persisted with the candidate cache, load-balancing across uploads. The transfer's
    control relays and the whole `DEFAULT_RELAYS` signaling pool are filtered out of the
-   candidates first (also catching stale caches written before seeds were barred) — the
-   two sets are mutually exclusive, so chunk traffic never competes with the control
-   channel on a shared relay. The minimum viable batch is two relays. The batch order
+   candidates first (also catching stale caches written before seeds were barred). Up to
+   four healthy relays outside the ring remain open as signaling reserves when default
+   signaling has gaps. The two selected sets are mutually exclusive, so chunk traffic
+   never competes with the control channel on a shared relay. The minimum viable batch
+   is two relays. The batch order
    **is the placement ring**, announced to the receiver inside every `avail` control
    message (never stored in the manifest).
 
@@ -135,12 +145,12 @@ or failed upload are AES-256-GCM ciphertext under a key that was never published
 
 ### Manifest and payload (`manifest.ts`, `manual-signaling.ts`)
 
-The `NostrFileManifest` (v5) travels inside the PT01 manual payload and is never
+The `NostrFileManifest` (v7) travels inside the PT01 manual payload and is never
 published: version, file name/size/MIME, base64 SHA-256 of the plaintext, `transferId`
 (16 random bytes, hex), the ephemeral pubkey, the whole-payload compression mode
 (`deflate` or `none`) and the compressed payload size, chunk size, total chunks, the
-control relays (2–4), and created/expiry timestamps. The storage ring is not in it — it arrives
-over the control channel. The payload wrapper (`NostrFileLivePayload`) adds `type` and
+control relays (2–6), and created/expiry timestamps. The storage ring is not in it — it
+arrives over the control channel. The payload wrapper (`NostrFileLivePayload`) adds `type` and
 the base64 AES key — ~300 bytes total, a single QR code.
 
 Because chunk `d` tags are derived from `transferId` and index, the manifest needs no
@@ -304,13 +314,14 @@ sequenceDiagram
 | `NOSTR_FILE_EXPIRATION_SEC` | 3600 | NIP-40 lifetime on every event; transfer deadline |
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
 | `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
-| `CONTROL_RELAY_COUNT` | 4 | Control relays embedded in the payload |
+| `CONTROL_RELAY_COUNT` | 6 | Target control relays embedded in the payload |
 | `MIN_CONTROL_RELAYS` | 2 | Fewest usable control relays for a send to start |
+| `SIGNALING_RESERVE_RELAY_COUNT` | 4 | Full-size-proven relays held outside the storage ring to fill failed default signaling positions |
 | `CONTROL_PROBE_BYTES` | 256 | Control probe payload (a sealed control message is a few hundred bytes) |
 | `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
-| `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop probing once this many relays pass |
+| `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop after 16 storage relays plus 4 signaling reserves pass |
 | `RELAY_CANDIDATE_TTL_MS` | 24 h | Lifetime of discovered candidates and timestamped working-relay priority |
 | `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
@@ -333,7 +344,7 @@ sequenceDiagram
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
 | `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
-| `src/lib/nostr-file/upload.ts` | Publish-with-retry, control-relay probe (`resolveControlRelays`), storage-ring resolution (`resolveUploadRelays`) |
+| `src/lib/nostr-file/upload.ts` | Publish-with-retry, combined signaling/reserve resolution (`resolveTransferRelays`), storage-ring resolution (`resolveUploadRelays`) |
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
 | `src/lib/nostr-file/sync.ts` | `Deferred`/`Signal` async helpers |

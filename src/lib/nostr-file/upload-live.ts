@@ -42,7 +42,7 @@ import { Deferred, Signal } from './sync';
 import {
   NostrFileCancelledError,
   publishWithRetry,
-  resolveControlRelays,
+  resolveTransferRelays,
   resolveUploadRelays,
   type UploadProgress,
 } from './upload';
@@ -69,10 +69,10 @@ export interface LiveSendProgress {
 /**
  * Live (single-copy) relay transfer, sender side.
  *
- * The manual payload is handed out right after hashing and a quick probe of
- * the control relays (`onReady`) — before storage-relay discovery, which
- * runs in the background while the user shares the code. The sender stays
- * online: each chunk is published to one ring relay (chunk i → ring[i % N],
+ * The manual payload is handed out right after hashing and relay selection.
+ * Storage discovery normally runs after `onReady`; it runs first only when
+ * failed default signaling relays need the unused storage reserves. The
+ * sender stays online: each chunk is published to one ring relay (chunk i → ring[i % N],
  * walking the ring on rejection), the ring itself plus availability are
  * announced over the encrypted control channel after every LIVE_BATCH_CHUNKS
  * chunks, and the receiver's acknowledgements name the
@@ -94,9 +94,10 @@ export async function sendFileLive(
   opts: {
     onProgress: (p: LiveSendProgress) => void;
     /**
-     * Called once the control relays are probed and the control channel is
-     * open — before storage-relay discovery. Ownership of `keyBytes`
-     * transfers to the callee, which must wipe it.
+     * Called once the signaling set is resolved and the control channel is
+     * open. Storage selection may already be complete when its unused
+     * reserves were needed for signaling. Ownership of `keyBytes` transfers
+     * to the callee, which must wipe it.
      */
     onReady: (manifest: NostrFileManifest, keyBytes: Uint8Array) => void;
     isCancelled: () => boolean;
@@ -158,18 +159,21 @@ export async function sendFileLive(
     stats.chunksTotal = total;
     throwIfCancelled();
 
-    const controlRelays = await resolveControlRelays(pool, {
+    const initialRelays = await resolveTransferRelays(pool, storage, {
       controlRelayOverride: opts.controlRelayOverride,
+      dataRelayOverride: opts.dataRelayOverride,
       isCancelled,
       stats,
-      onProgress: (relaysChecked, relaysHealthy) =>
+      onControlProgress: (relaysChecked, relaysHealthy) =>
         onProgress({
           phase: 'connecting',
           relaysChecked,
           relaysHealthy,
           stats,
         }),
+      onUploadProgress: onProgress,
     });
+    const controlRelays = initialRelays.controlRelays;
     const createdAt = Math.floor(Date.now() / 1000);
     const expiresAt = createdAt + NOSTR_FILE_EXPIRATION_SEC;
     const manifest: NostrFileManifest = {
@@ -196,8 +200,9 @@ export async function sendFileLive(
     const placedPos = new Int32Array(total).fill(-1);
     const gen = new Uint32Array(total);
     const nextOffset = new Uint32Array(total);
-    // The data ring is late-bound: discovery runs after the code is handed
-    // out, and workers only start once it exists. Empty ring = still looking.
+    // The data ring is usually late-bound after the code is handed out. It is
+    // already resolved when signaling had to borrow storage reserves. Empty
+    // ring = still looking.
     let ring: string[] = [];
     let ringSize = 0;
     let maxRetransmits = LIVE_MIN_RETRANSMITS_PER_CHUNK;
@@ -484,18 +489,23 @@ export async function sendFileLive(
       availDirty = true;
       const loop = controlLoop().catch(fail);
 
-      // Discovery runs after the code handout; workers exist only once the
-      // ring does. A failure here rejects `outcome`, and the teardown's
-      // best-effort cancel tells a waiting receiver to stop.
+      // Discovery normally runs after code handout, but a signaling fallback
+      // may have resolved the ring already. Workers exist only once the ring
+      // does. A failure rejects `outcome`, and the teardown's best-effort
+      // cancel tells a waiting receiver to stop.
       let workers: Promise<unknown> = Promise.resolve();
       const uploadStart = (async () => {
-        const dataRelays = await resolveUploadRelays(pool, storage, {
-          relayOverride: opts.dataRelayOverride,
-          excludeRelays: controlRelays,
-          isCancelled,
-          onProgress,
-          stats,
-        });
+        const dataRelays =
+          initialRelays.storageRelays ??
+          (
+            await resolveUploadRelays(pool, storage, {
+              relayOverride: opts.dataRelayOverride,
+              excludeRelays: controlRelays,
+              isCancelled,
+              onProgress,
+              stats,
+            })
+          ).storageRelays;
         if (finished) return;
         ring = dataRelays;
         ringSize = dataRelays.length;
