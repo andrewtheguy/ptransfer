@@ -465,7 +465,7 @@ describe('saveRelayHealth', () => {
         { url: 'wss://new.example', rttMs: 10 },
         { url: 'wss://new.example/', rttMs: 20 },
       ],
-      ['wss://failed.example', 'wss://new.example'],
+      ['wss://failed.example'],
       now,
     );
     expect(storage.relayHealth).toEqual([
@@ -686,6 +686,49 @@ describe('resolveUploadRelays', () => {
       'wss://s3.example',
       'wss://s4.example',
     ]);
+  });
+
+  it('records successful probes that finish after the target is reached', async () => {
+    const candidates = Array.from(
+      { length: 21 },
+      (_, i) => `wss://candidate-${i}.example`,
+    );
+    let releaseSlowProbe = () => {};
+    const slowProbe = new Promise<void>((resolve) => {
+      releaseSlowProbe = resolve;
+    });
+    let otherProbesStarted = 0;
+    const candidateSet = new Set(candidates);
+    const pool = createMockPool({
+      beforePublish: async (relay) => {
+        if (relay === candidates[0]) {
+          await slowProbe;
+        } else if (candidateSet.has(relay)) {
+          otherProbesStarted++;
+          if (otherProbesStarted === candidates.length - 1) releaseSlowProbe();
+        }
+      },
+    });
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+
+    await resolveUploadRelays(pool, storage, {
+      ...opts(),
+      excludeRelays: [],
+    });
+
+    expect(storage.relayHealth).toHaveLength(candidates.length);
+    expect(
+      storage.relayHealth.every(
+        (relay) =>
+          relay.supportsStorage &&
+          relay.lastSucceededAt !== null &&
+          relay.consecutiveFailures === 0,
+      ),
+    ).toBe(true);
   });
 
   it('filters the override and refuses a ring the exclusion leaves too small', async () => {

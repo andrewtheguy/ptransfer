@@ -407,7 +407,12 @@ export async function healthCheckRelays(
     targetCount?: number;
     probeBytes?: number;
     isCancelled?: () => boolean;
-    onProgress?: (checked: number, healthy: number, url: string) => void;
+    onProgress?: (
+      checked: number,
+      healthy: number,
+      url: string,
+      rttMs: number | null,
+    ) => void;
   } = {},
 ): Promise<HealthyRelay[]> {
   const concurrency = opts.concurrency ?? HEALTH_CHECK_CONCURRENCY;
@@ -436,7 +441,7 @@ export async function healthCheckRelays(
         // will not be used, so stop its socket (and its reconnect loop) now.
         pool.close?.([url]);
       }
-      opts.onProgress?.(checked, healthy.length, url);
+      opts.onProgress?.(checked, healthy.length, url, rttMs);
     }
   };
 
@@ -578,12 +583,12 @@ export async function getRelayCandidates(
 export async function saveRelayHealth(
   storage: RelayPoolStorage,
   healthy: HealthyRelay[],
-  probedCandidates: string[],
+  failedRelays: string[],
   now: number = Date.now(),
 ): Promise<void> {
   const previous = await storage.getRelayHealth();
-  const probed = new Set(
-    probedCandidates
+  const failed = new Set(
+    failedRelays
       .map((url) => normalizeRelayUrl(url))
       .filter((url): url is string => url !== null),
   );
@@ -600,6 +605,7 @@ export async function saveRelayHealth(
       );
     }
   }
+  const probed = new Set([...failed, ...healthyByUrl.keys()]);
   const byUrl = new Map<string, CachedRelay>();
   for (const relay of previous) {
     const url = normalizeRelayUrl(relay.url);

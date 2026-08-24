@@ -131,13 +131,9 @@ export function isValidNostrFileManifest(
     m.controlRelays.length > CONTROL_RELAY_COUNT ||
     !m.controlRelays.every(
       (r): r is string =>
-        typeof r === 'string' &&
-        r.length < 200 &&
-        normalizeRelayUrl(r) !== null,
+        typeof r === 'string' && r.length < 200 && normalizeRelayUrl(r) === r,
     ) ||
-    // Distinct after normalization: a trailing-slash variant is the same relay.
-    new Set(m.controlRelays.map((r) => normalizeRelayUrl(r))).size !==
-      m.controlRelays.length
+    new Set(m.controlRelays).size !== m.controlRelays.length
   ) {
     return false;
   }

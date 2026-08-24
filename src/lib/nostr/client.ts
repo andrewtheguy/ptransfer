@@ -171,9 +171,13 @@ export class NostrClient {
    * Add additional relays to the pool (for backup relay fallback)
    */
   async addRelays(newRelays: string[]): Promise<void> {
-    const normalized = newRelays
-      .map(normalizeRelayUrl)
-      .filter((url): url is string => url !== null);
+    const normalized = [
+      ...new Set(
+        newRelays
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
+      ),
+    ];
     const toAdd = normalized.filter((url) => !this.relays.includes(url));
 
     if (toAdd.length === 0) return;

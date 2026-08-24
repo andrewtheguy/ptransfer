@@ -262,29 +262,26 @@ export function parseSenderMessage(
   if (!isCount(m.n, Number.MAX_SAFE_INTEGER)) return null;
   if (m.t === 'cancel') return { t: 'cancel', n: m.n };
   if (m.t === 'avail') {
-    if (
-      !Array.isArray(m.relays) ||
-      m.relays.length > UPLOAD_RELAY_COUNT ||
-      !m.relays.every(
-        (r): r is string =>
-          typeof r === 'string' &&
-          r.length < 200 &&
-          normalizeRelayUrl(r) !== null,
-      ) ||
-      // Ring positions index into the list, so a relay repeated under an
-      // equivalent URL form (e.g. trailing slash) is forged or corrupt.
-      new Set(m.relays.map((r) => normalizeRelayUrl(r))).size !==
-        m.relays.length
-    ) {
+    if (!Array.isArray(m.relays) || m.relays.length > UPLOAD_RELAY_COUNT) {
       return null;
     }
+    const relays: string[] = [];
+    for (const relay of m.relays) {
+      if (typeof relay !== 'string' || relay.length >= 200) return null;
+      const normalized = normalizeRelayUrl(relay);
+      if (normalized === null) return null;
+      relays.push(normalized);
+    }
+    // Ring positions index into the list, so a relay repeated under an
+    // equivalent URL form (e.g. trailing slash) is forged or corrupt.
+    if (new Set(relays).size !== relays.length) return null;
     if (!isCount(m.upto, totalChunks)) return null;
     // No ring yet (still discovering) is presence-only: nothing placed.
-    if (m.relays.length === 0 && m.upto > 0) return null;
+    if (relays.length === 0 && m.upto > 0) return null;
     if (typeof m.map !== 'string' || m.map.length !== m.upto) return null;
     for (const char of m.map) {
       const pos = decodePosition(char);
-      if (pos < 0 || pos >= m.relays.length) return null;
+      if (pos < 0 || pos >= relays.length) return null;
     }
     if (!Array.isArray(m.gens) || m.gens.length > m.upto) return null;
     const upto = m.upto;
@@ -301,7 +298,7 @@ export function parseSenderMessage(
       t: 'avail',
       n: m.n,
       upto,
-      relays: m.relays as string[],
+      relays,
       map: m.map,
       gens: m.gens as [number, number][],
     };

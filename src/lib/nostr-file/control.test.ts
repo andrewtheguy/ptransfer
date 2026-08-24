@@ -233,6 +233,12 @@ describe('control message validation', () => {
         4,
       ),
     ).toBeNull();
+    expect(
+      parseSenderMessage(
+        avail({ relays: RELAYS.map((relay) => `${relay}/`) }),
+        4,
+      ),
+    ).toEqual(avail({ relays: RELAYS }));
     // Empty ring is presence-only: valid with upto 0, never with chunks.
     expect(
       parseSenderMessage(avail({ relays: [], upto: 0, map: '' }), 4),
