@@ -32,7 +32,11 @@ import {
 import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
-import { createIndexedDbRelayPool, type RelayPoolStorage } from './relay-pool';
+import {
+  createIndexedDbRelayPool,
+  type RelayPoolStorage,
+  sweepRelayHealth,
+} from './relay-pool';
 import {
   createTransferStats,
   type NostrFileTransferStats,
@@ -219,6 +223,10 @@ export async function sendFileLive(
     const retryQueue: number[] = [];
     const pendingRetry = new Set<number>();
 
+    // Ends the background relay sweep the moment the transfer winds down:
+    // the caller destroys the pool as soon as this function returns, so the
+    // sweep must not still be waiting on a probe timeout by then.
+    const sweepAbort = new AbortController();
     let finished = false;
     let succeeded = false;
     const outcome = new Deferred<void>();
@@ -233,6 +241,7 @@ export async function sendFileLive(
 
     const stop = () => {
       finished = true;
+      sweepAbort.abort();
       work.notify();
       control.notify();
     };
@@ -494,18 +503,21 @@ export async function sendFileLive(
       // does. A failure rejects `outcome`, and the teardown's best-effort
       // cancel tells a waiting receiver to stop.
       let workers: Promise<unknown> = Promise.resolve();
+      let sweep: Promise<void> = Promise.resolve();
       const uploadStart = (async () => {
-        const dataRelays =
-          initialRelays.storageRelays ??
-          (
-            await resolveUploadRelays(pool, storage, {
-              relayOverride: opts.dataRelayOverride,
-              excludeRelays: controlRelays,
-              isCancelled,
-              onProgress,
-              stats,
-            })
-          ).storageRelays;
+        let dataRelays = initialRelays.storageRelays;
+        let unprobed = initialRelays.unprobedCandidates;
+        if (dataRelays === null) {
+          const upload = await resolveUploadRelays(pool, storage, {
+            relayOverride: opts.dataRelayOverride,
+            excludeRelays: controlRelays,
+            isCancelled,
+            onProgress,
+            stats,
+          });
+          dataRelays = upload.storageRelays;
+          unprobed = upload.unprobedCandidates;
+        }
         if (finished) return;
         ring = dataRelays;
         ringSize = dataRelays.length;
@@ -520,6 +532,22 @@ export async function sendFileLive(
             () => worker().catch(fail),
           ),
         );
+        // The foreground pass sampled: one page of discovery, capped, probed
+        // only until the ring filled. Behind the transfer, enumerate the whole
+        // relay population uncapped and probe as far as this transfer lasts,
+        // so the next one is not limited to what this one happened to need.
+        // The ring and control relays are carrying the file — hands off.
+        //
+        // A relay override means the caller picked the relays itself, so
+        // there is no discovery to continue and the sweep stays out of it.
+        if (!opts.dataRelayOverride?.length) {
+          sweep = sweepRelayHealth(pool, storage, {
+            unprobed,
+            excludeRelays: [...controlRelays, ...dataRelays],
+            signal: sweepAbort.signal,
+            isCancelled,
+          });
+        }
       })().catch(fail);
 
       try {
@@ -535,6 +563,9 @@ export async function sendFileLive(
             new Promise((r) => setTimeout(r, 3000)),
           ]);
         }
+        // `stop()` already aborted the sweep, so this only collects its last
+        // cache write — it never waits out an in-flight probe.
+        await sweep;
       }
     } finally {
       channel.close();

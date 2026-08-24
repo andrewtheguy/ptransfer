@@ -90,6 +90,12 @@ export interface UploadRelaySelection {
   storageRelays: string[];
   /** Full-size-proven relays deliberately left outside the storage ring. */
   reserveRelays: HealthyRelay[];
+  /**
+   * Discovered candidates the health check early-stopped before reaching.
+   * The caller sweeps them in the background so the cache ends up covering
+   * the whole discovered population, not just the prefix this ring needed.
+   */
+  unprobedCandidates: string[];
 }
 
 /**
@@ -143,7 +149,11 @@ export async function resolveUploadRelays(
     if (usable.length < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
-    return { storageRelays: seedRing(usable), reserveRelays: [] };
+    return {
+      storageRelays: seedRing(usable),
+      reserveRelays: [],
+      unprobedCandidates: [],
+    };
   }
   onProgress({ phase: 'discovering', stats });
   const discoverStarted = Date.now();
@@ -182,6 +192,13 @@ export async function resolveUploadRelays(
   });
   stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
   await saveRelayHealth(storage, successfulProbes, failedProbes);
+  // Whatever the early stop left untouched, handed back for a background
+  // sweep rather than discarded.
+  const probed = new Set([
+    ...successfulProbes.map((relay) => relay.url),
+    ...failedProbes,
+  ]);
+  const unprobedCandidates = candidates.filter((url) => !probed.has(url));
   throwIfCancelled();
   if (healthy.length < MIN_UPLOAD_RELAYS) {
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
@@ -201,13 +218,15 @@ export async function resolveUploadRelays(
     const entry = stats.relays.find((r) => r.url === url);
     if (entry) entry.rttMs = rttMs;
   }
-  return { storageRelays: relays, reserveRelays };
+  return { storageRelays: relays, reserveRelays, unprobedCandidates };
 }
 
 export interface TransferRelaySelection {
   controlRelays: string[];
   /** Already selected only when signaling needed storage reserves. */
   storageRelays: string[] | null;
+  /** Empty unless storage discovery already ran for the signaling fallback. */
+  unprobedCandidates: string[];
 }
 
 /**
@@ -252,7 +271,11 @@ export async function resolveTransferRelays(
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
     for (const relay of distinct) relayStatsFor(stats, relay, 'control');
-    return { controlRelays: distinct, storageRelays: null };
+    return {
+      controlRelays: distinct,
+      storageRelays: null,
+      unprobedCandidates: [],
+    };
   }
 
   const probeStarted = Date.now();
@@ -268,6 +291,7 @@ export async function resolveTransferRelays(
 
   let storageRelays: string[] | null = null;
   let reserves: HealthyRelay[] = [];
+  let unprobedCandidates: string[] = [];
   if (healthyDefaults.length < CONTROL_RELAY_COUNT) {
     const upload = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.dataRelayOverride,
@@ -279,6 +303,7 @@ export async function resolveTransferRelays(
     });
     storageRelays = upload.storageRelays;
     reserves = upload.reserveRelays;
+    unprobedCandidates = upload.unprobedCandidates;
   }
 
   const missing = CONTROL_RELAY_COUNT - healthyDefaults.length;
@@ -296,5 +321,6 @@ export async function resolveTransferRelays(
   return {
     controlRelays: seedControlStats(control),
     storageRelays,
+    unprobedCandidates,
   };
 }

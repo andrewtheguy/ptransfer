@@ -27,6 +27,9 @@ function matches(event: Event, filter: Filter): boolean {
   if (filter.since !== undefined && event.created_at < filter.since) {
     return false;
   }
+  if (filter.until !== undefined && event.created_at > filter.until) {
+    return false;
+  }
   for (const key of Object.keys(filter)) {
     if (!key.startsWith('#')) continue;
     const wanted = (filter as Record<string, string[] | undefined>)[key];
@@ -88,9 +91,14 @@ export function createMockPool(opts: MockPoolOptions = {}): MockPool {
     async querySync(relays, filter) {
       const out: Event[] = [];
       for (const relay of relays) {
-        for (const ev of store.get(relay) ?? []) {
-          if (matches(ev, filter)) out.push(ev);
-        }
+        // Newest first, then `limit` — how a relay answers a filter, and what
+        // makes `until` paging able to walk backwards through history.
+        const hits = (store.get(relay) ?? [])
+          .filter((ev) => matches(ev, filter))
+          .sort((a, b) => b.created_at - a.created_at);
+        out.push(
+          ...(filter.limit === undefined ? hits : hits.slice(0, filter.limit)),
+        );
       }
       return out;
     },

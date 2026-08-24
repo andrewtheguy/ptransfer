@@ -1,11 +1,16 @@
-import type { Event } from 'nostr-tools';
+import type { Event, Filter } from 'nostr-tools';
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys } from '../nostr/events';
 import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
 import { chunkAad, decodeChunkContent, encodeChunkContent } from './codec';
 import {
+  BACKGROUND_PROBE_CONCURRENCY,
+  BACKGROUND_PROBE_SAVE_BATCH,
   DISCOVERY_CANDIDATE_CAP,
   DISCOVERY_CANDIDATE_LIMIT,
+  DISCOVERY_MAX_PAGES,
+  DISCOVERY_PAGE_LIMIT,
+  DISCOVERY_PAGE_MAX_WAIT_MS,
   EVENT_KIND_FILE_CHUNK,
   HEALTH_CHECK_CONCURRENCY,
   HEALTH_CHECK_PROBE_BYTES,
@@ -14,6 +19,7 @@ import {
   RELAY_CACHE_DATABASE_NAME,
   RELAY_CACHE_DATABASE_VERSION,
   RELAY_CACHE_HEALTH_STORE,
+  RELAY_CACHE_MAX_ENTRIES,
   RELAY_CACHE_STATE_STORE,
   RELAY_CANDIDATE_TTL_MS,
 } from './constants';
@@ -173,6 +179,56 @@ function parseRelayHealth(value: unknown): CachedRelay[] {
   return [...byUrl.values()];
 }
 
+/** A relay that discovery has named but no probe has judged yet. */
+function emptyCachedRelay(url: string, lastDiscoveredAt: number): CachedRelay {
+  return {
+    url,
+    lastDiscoveredAt,
+    lastCheckedAt: null,
+    lastSucceededAt: null,
+    rttMs: null,
+    consecutiveFailures: 0,
+    supportsControl: false,
+    supportsStorage: false,
+  };
+}
+
+/**
+ * Drop expired entries and order the cache by how much a future transfer
+ * wants each relay: proven storage relays first, then fewer failures, then
+ * lower latency, then most recently seen. `RELAY_CACHE_MAX_ENTRIES` bounds
+ * what is kept, so eviction sheds repeatedly failing relays before ones the
+ * background pass has yet to reach.
+ */
+function rankRelayCache(relays: CachedRelay[], now: number): CachedRelay[] {
+  return relays
+    .filter((relay) => {
+      const freshness = Math.max(
+        relay.lastDiscoveredAt,
+        relay.lastSucceededAt ?? 0,
+      );
+      return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
+    })
+    .sort(
+      (a, b) =>
+        Number(b.supportsStorage) - Number(a.supportsStorage) ||
+        a.consecutiveFailures - b.consecutiveFailures ||
+        (a.rttMs ?? Number.POSITIVE_INFINITY) -
+          (b.rttMs ?? Number.POSITIVE_INFINITY) ||
+        b.lastDiscoveredAt - a.lastDiscoveredAt,
+    )
+    .slice(0, RELAY_CACHE_MAX_ENTRIES);
+}
+
+/** Canonical, deduped, non-null relay URLs. */
+function canonicalUrls(urls: string[]): string[] {
+  return [
+    ...new Set(
+      urls.map(normalizeRelayUrl).filter((url): url is string => url !== null),
+    ),
+  ];
+}
+
 export function createIndexedDbRelayPool(): RelayPoolStorage {
   return {
     async getState() {
@@ -325,6 +381,69 @@ export async function discoverRelayCandidates(
 }
 
 /**
+ * Enumerate the relay population rather than sampling it: page back through
+ * NIP-66 (kind 30166) and NIP-65 (kind 10002) history by `created_at` until a
+ * page returns nothing, stops moving, or the page bound is hit. Unlike
+ * `discoverRelayCandidates` the result is uncapped — this is the background
+ * pass, and its whole job is to find every relay it can.
+ *
+ * Seeds are queried but never returned; a query that fails ends that kind's
+ * paging with whatever it already collected instead of failing the sweep.
+ */
+export async function discoverAllRelayCandidates(
+  pool: NostrFilePool,
+  seeds: string[] = [...DEFAULT_RELAYS],
+  opts: {
+    pageLimit?: number;
+    maxPages?: number;
+    signal?: AbortSignal;
+    isCancelled?: () => boolean;
+    onProgress?: (found: number) => void;
+  } = {},
+): Promise<string[]> {
+  const canonicalSeeds = canonicalUrls(seeds);
+  const seedSet = new Set(canonicalSeeds);
+  const found = new Set<string>();
+  const pageLimit = opts.pageLimit ?? DISCOVERY_PAGE_LIMIT;
+  const maxPages = opts.maxPages ?? DISCOVERY_MAX_PAGES;
+  const stopped = () =>
+    opts.signal?.aborted === true || opts.isCancelled?.() === true;
+
+  for (const kind of [KIND_RELAY_DISCOVERY, KIND_RELAY_LIST]) {
+    let until: number | undefined;
+    for (let page = 0; page < maxPages; page++) {
+      if (stopped()) return [...found];
+      const filter: Filter = { kinds: [kind], limit: pageLimit };
+      if (until !== undefined) filter.until = until;
+      let events: Event[];
+      try {
+        events = await pool.querySync(canonicalSeeds, filter, {
+          maxWait: DISCOVERY_PAGE_MAX_WAIT_MS,
+        });
+      } catch {
+        break;
+      }
+      if (events.length === 0) break;
+      for (const url of parseRelayCandidates(events)) {
+        if (!seedSet.has(url)) found.add(url);
+      }
+      opts.onProgress?.(found.size);
+      // Step the cursor past the oldest event this page returned. A cursor
+      // that fails to move means the relays are serving the same page again.
+      const oldest = events.reduce(
+        (min, event) => Math.min(min, event.created_at),
+        Number.POSITIVE_INFINITY,
+      );
+      if (!Number.isFinite(oldest)) break;
+      const next = oldest - 1;
+      if (until !== undefined && next >= until) break;
+      until = next;
+    }
+  }
+  return [...found];
+}
+
+/**
  * Real write->read round trip against a single relay using the production
  * event shape (kind, tags, NIP-40 expiration, full codec, full chunk size)
  * with throwaway keys. Returns the round-trip time, or null if the relay
@@ -453,6 +572,180 @@ export async function healthCheckRelays(
 }
 
 /**
+ * Record relays discovery has named, without probing them. The sweep normally
+ * finds far more relays than one transfer lasts long enough to probe, so the
+ * enumeration is written down first and the verdicts fill in behind it —
+ * otherwise everything past the last probe would be lost at teardown.
+ */
+export async function saveDiscoveredRelays(
+  storage: RelayPoolStorage,
+  urls: string[],
+  now: number = Date.now(),
+): Promise<void> {
+  const canonical = canonicalUrls(urls);
+  if (canonical.length === 0) return;
+  const byUrl = new Map<string, CachedRelay>();
+  for (const relay of await storage.getRelayHealth()) {
+    const url = normalizeRelayUrl(relay.url);
+    if (url) byUrl.set(url, { ...relay, url });
+  }
+  for (const url of canonical) {
+    const previous = byUrl.get(url);
+    byUrl.set(
+      url,
+      previous
+        ? { ...previous, lastDiscoveredAt: now }
+        : emptyCachedRelay(url, now),
+    );
+  }
+  await storage.setRelayHealth(rankRelayCache([...byUrl.values()], now));
+}
+
+/**
+ * The background relay pass, run behind a live transfer.
+ *
+ * The foreground path samples: one page of discovery, capped at
+ * DISCOVERY_CANDIDATE_CAP, health-checked only until the ring is full. This
+ * does the opposite — it enumerates the whole relay population with
+ * `discoverAllRelayCandidates` (uncapped), writes the enumeration to the
+ * cache immediately, and then probes it, so what the next transfer knows
+ * about is not limited to what this one happened to need.
+ *
+ * Probe order puts never-checked relays first and otherwise the
+ * longest-unchecked first, so successive sessions extend coverage instead of
+ * re-probing the same prefix. Sockets are closed as each probe finishes,
+ * results are written in batches, and nothing here throws.
+ *
+ * `signal` ends the sweep at once: probes still in flight are abandoned and
+ * their results discarded rather than waited out, so a caller about to
+ * destroy the pool never blocks on a probe timeout.
+ */
+export async function sweepRelayHealth(
+  pool: NostrFilePool,
+  storage: RelayPoolStorage,
+  opts: {
+    /** Candidates the foreground health check early-stopped before reaching. */
+    unprobed?: string[];
+    /** Relays carrying this transfer. Never probed, never closed. */
+    excludeRelays?: string[];
+    seeds?: string[];
+    concurrency?: number;
+    timeoutMs?: number;
+    probeBytes?: number;
+    saveBatch?: number;
+    signal?: AbortSignal;
+    isCancelled?: () => boolean;
+    onProgress?: (checked: number, healthy: number, total: number) => void;
+  } = {},
+): Promise<void> {
+  const concurrency = opts.concurrency ?? BACKGROUND_PROBE_CONCURRENCY;
+  const timeoutMs = opts.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
+  const probeBytes = opts.probeBytes ?? HEALTH_CHECK_PROBE_BYTES;
+  const saveBatch = opts.saveBatch ?? BACKGROUND_PROBE_SAVE_BATCH;
+  const stopped = () =>
+    opts.signal?.aborted === true || opts.isCancelled?.() === true;
+  const seeds = canonicalUrls(opts.seeds ?? [...DEFAULT_RELAYS]);
+  const transferRelays = canonicalUrls(opts.excludeRelays ?? []);
+  // Signaling relays are chosen for small messages and must never carry
+  // chunks, so they stay out of the sweep exactly as they stay out of a ring.
+  const excluded = new Set([
+    ...transferRelays,
+    ...canonicalUrls([...DEFAULT_RELAYS]),
+    ...seeds,
+  ]);
+
+  const discovered = await discoverAllRelayCandidates(pool, seeds, {
+    signal: opts.signal,
+    isCancelled: opts.isCancelled,
+  });
+  // Discovery reopened the seeds; the ones not carrying this transfer are
+  // done again.
+  const doneSeeds = seeds.filter((url) => !transferRelays.includes(url));
+  if (doneSeeds.length > 0) pool.close?.(doneSeeds);
+  if (stopped()) return;
+
+  const urls = canonicalUrls([...(opts.unprobed ?? []), ...discovered]).filter(
+    (url) => !excluded.has(url),
+  );
+  if (urls.length === 0) return;
+  // Written down before a single probe runs: the enumeration is the part the
+  // next transfer needs most, and it must survive a teardown that lands long
+  // before the probing is done.
+  await saveDiscoveredRelays(storage, urls);
+  if (stopped()) return;
+
+  // Longest-unchecked first, so a second session picks up where this one ran
+  // out of transfer rather than re-probing the same relays.
+  const lastCheckedAt = new Map<string, number>();
+  for (const relay of await storage.getRelayHealth()) {
+    const url = normalizeRelayUrl(relay.url);
+    if (url && relay.lastCheckedAt !== null) {
+      lastCheckedAt.set(url, relay.lastCheckedAt);
+    }
+  }
+  const queue = [...urls].sort(
+    (a, b) =>
+      (lastCheckedAt.get(a) ?? -1) - (lastCheckedAt.get(b) ?? -1) ||
+      (a < b ? -1 : a > b ? 1 : 0),
+  );
+  if (stopped()) return;
+
+  let nextIndex = 0;
+  let checked = 0;
+  let healthyCount = 0;
+  let healthy: HealthyRelay[] = [];
+  let failed: string[] = [];
+  // Each save is a read-modify-write of the whole health store, so batches are
+  // chained instead of run concurrently.
+  let saving = Promise.resolve();
+
+  const flush = (): Promise<void> => {
+    if (healthy.length === 0 && failed.length === 0) return saving;
+    const batchHealthy = healthy;
+    const batchFailed = failed;
+    healthy = [];
+    failed = [];
+    saving = saving.then(() =>
+      saveRelayHealth(storage, batchHealthy, batchFailed).catch(() => {}),
+    );
+    return saving;
+  };
+
+  const worker = async (): Promise<void> => {
+    while (!stopped()) {
+      const index = nextIndex++;
+      if (index >= queue.length) return;
+      const url = queue[index];
+      const rttMs = await probeRelay(pool, url, timeoutMs, probeBytes);
+      // A probe that outlived the stop raced the caller tearing the pool
+      // down; its verdict says nothing about the relay.
+      if (stopped()) return;
+      checked++;
+      if (rttMs === null) failed.push(url);
+      else {
+        healthy.push({ url, rttMs });
+        healthyCount++;
+      }
+      pool.close?.([url]);
+      opts.onProgress?.(checked, healthyCount, queue.length);
+      if (healthy.length + failed.length >= saveBatch) flush();
+    }
+  };
+
+  const workers = Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, worker),
+  ).catch(() => {});
+  const aborted = new Promise<void>((resolve) => {
+    const signal = opts.signal;
+    if (!signal) return;
+    if (signal.aborted) resolve();
+    else signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+  await Promise.race([workers, aborted]);
+  await flush();
+}
+
+/**
  * Pick the relay batch for this upload via a persisted rotating cursor over
  * the healthy list (load balancing across uploads). Returns up to `count`
  * relays.
@@ -511,23 +804,13 @@ export async function getRelayCandidates(
           .filter((url): url is string => url !== null)
       : [];
   const discovered = await discoverRelayCandidates(pool);
-  const emptyRelay = (url: string, lastDiscoveredAt: number): CachedRelay => ({
-    url,
-    lastDiscoveredAt,
-    lastCheckedAt: null,
-    lastSucceededAt: null,
-    rttMs: null,
-    consecutiveFailures: 0,
-    supportsControl: false,
-    supportsStorage: false,
-  });
   for (const url of cachedCandidates) {
     if (!byUrl.has(url)) {
-      byUrl.set(url, emptyRelay(url, state?.discoveredAt ?? 0));
+      byUrl.set(url, emptyCachedRelay(url, state?.discoveredAt ?? 0));
     }
   }
   for (const url of discovered) {
-    const relay = byUrl.get(url) ?? emptyRelay(url, now);
+    const relay = byUrl.get(url) ?? emptyCachedRelay(url, now);
     byUrl.set(url, { ...relay, lastDiscoveredAt: now });
   }
   const knownWorking = [...byUrl.values()]
@@ -568,9 +851,10 @@ export async function getRelayCandidates(
       discoveredAt: now,
       cursor: state?.cursor ?? 0,
     }),
-    storage.setRelayHealth(
-      merged.map((url) => byUrl.get(url) ?? emptyRelay(url, now)),
-    ),
+    // The whole cache is written back, not just `merged`. Trimming it to this
+    // transfer's working set would throw away everything the background pass
+    // enumerated beyond the 150 relays this run happens to rank highest.
+    storage.setRelayHealth(rankRelayCache([...byUrl.values()], now)),
   ]);
   return merged;
 }
@@ -613,16 +897,7 @@ export async function saveRelayHealth(
   }
   for (const url of probed) {
     const previousRelay = byUrl.get(url);
-    const relay: CachedRelay = previousRelay ?? {
-      url,
-      lastDiscoveredAt: now,
-      lastCheckedAt: null,
-      lastSucceededAt: null,
-      rttMs: null,
-      consecutiveFailures: 0,
-      supportsControl: false,
-      supportsStorage: false,
-    };
+    const relay: CachedRelay = previousRelay ?? emptyCachedRelay(url, now);
     const rttMs = healthyByUrl.get(url);
     byUrl.set(
       url,
@@ -646,22 +921,5 @@ export async function saveRelayHealth(
           },
     );
   }
-  const saved = [...byUrl.values()]
-    .filter((relay) => {
-      const freshness = Math.max(
-        relay.lastDiscoveredAt,
-        relay.lastSucceededAt ?? 0,
-      );
-      return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
-    })
-    .sort(
-      (a, b) =>
-        Number(b.supportsStorage) - Number(a.supportsStorage) ||
-        a.consecutiveFailures - b.consecutiveFailures ||
-        (a.rttMs ?? Number.POSITIVE_INFINITY) -
-          (b.rttMs ?? Number.POSITIVE_INFINITY) ||
-        b.lastDiscoveredAt - a.lastDiscoveredAt,
-    )
-    .slice(0, DISCOVERY_CANDIDATE_CAP);
-  await storage.setRelayHealth(saved);
+  await storage.setRelayHealth(rankRelayCache([...byUrl.values()], now));
 }
