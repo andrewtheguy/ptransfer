@@ -7,10 +7,10 @@
  * Publishes real (expiring, NIP-40) events to public relays — run manually,
  * not part of `npm test`:
  *
- *   npx tsx tests/live_nostr_file_e2e.ts
+ *   npm run test:live:nostr-file
  *
  * NOSTR_E2E_FILE_MB overrides the file size (default 0.1, max 100), e.g.
- *   NOSTR_E2E_FILE_MB=100 npx tsx tests/live_nostr_file_e2e.ts
+ *   NOSTR_E2E_FILE_MB=100 npm run test:live:nostr-file
  *
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.

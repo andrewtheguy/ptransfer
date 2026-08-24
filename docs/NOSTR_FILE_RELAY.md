@@ -358,5 +358,13 @@ sequenceDiagram
 Payload detection and routing into these hooks happens in the normal Manual Exchange
 receive flow (`parseAnyManualPayload` → `receive-tab.tsx`). Tests are colocated
 (`src/lib/nostr-file/*.test.ts`) and run against the injectable in-memory relay network in
-`mock-pool.ts`; end-to-end coverage against real relay behavior lives in
-`tests/live_nostr_file_e2e.ts`.
+`mock-pool.ts`. `npm test` runs the fast unit files first, then runs `live.test.ts` as a
+separate sequential integration phase so its real-time transfer deadlines do not compete
+with parallel unit workers. Either phase can be run directly with `npm run test:unit` or
+`npm run test:integration:nostr-file`.
+
+Public-relay end-to-end coverage is opt-in because it publishes expiring events to shared
+infrastructure. Run `npm run test:live` to execute `tests/live_nostr_file_e2e.ts` followed
+by `tests/live_web_to_web_e2e.ts`. The aggregate command deliberately runs them
+sequentially so the scenarios never contend for the same real Nostr relays; each scenario
+also has its own `test:live:*` command for targeted diagnosis.

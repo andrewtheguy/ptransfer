@@ -8,7 +8,7 @@
 // It deliberately uses the public relays and therefore lives outside the unit
 // test suite; it needs internet access, Node/npm, and a Chrome-family browser.
 //
-//   npx tsx tests/live_web_to_web_e2e.ts
+//   npm run test:live:web
 //
 // Environment:
 //   PTRANSFER_WEB_URL                 reuse a running dev server (default
