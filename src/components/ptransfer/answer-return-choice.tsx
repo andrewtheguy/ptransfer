@@ -19,10 +19,13 @@ export function AnswerReturnChoice({ onChoose }: AnswerReturnChoiceProps) {
         to their page. You can use them, or hand the response back yourself as a
         code for the sender to scan or paste.
       </p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Button onClick={() => onChoose('relay')} className="h-auto py-3">
-          <Radio className="h-4 w-4 mr-2 shrink-0" />
-          <span className="text-left">
+      <div className="flex flex-col gap-2">
+        <Button
+          onClick={() => onChoose('relay')}
+          className="h-auto w-full justify-start whitespace-normal py-3 text-left"
+        >
+          <Radio className="mr-2 shrink-0" />
+          <span className="min-w-0 flex-1">
             <span className="block">Send through relays</span>
             <span className="block text-xs font-normal opacity-80">
               Nothing to carry back; the sender's page must stay open
@@ -32,13 +35,14 @@ export function AnswerReturnChoice({ onChoose }: AnswerReturnChoiceProps) {
         <Button
           variant="outline"
           onClick={() => onChoose('manual')}
-          className="h-auto py-3"
+          className="h-auto w-full justify-start whitespace-normal py-3 text-left"
         >
-          <QrCode className="h-4 w-4 mr-2 shrink-0" />
-          <span className="text-left">
+          <QrCode className="mr-2 shrink-0" />
+          <span className="min-w-0 flex-1">
             <span className="block">Show a code to scan or paste</span>
             <span className="block text-xs font-normal opacity-80">
-              The sender takes it in under "Scan or paste the response"
+              The sender takes it in under "Scan or paste the receiver's
+              response"
             </span>
           </span>
         </Button>
