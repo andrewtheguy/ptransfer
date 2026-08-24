@@ -16,7 +16,7 @@ import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool } from './mock-pool';
 import type {
-  KnownWorkingRelay,
+  CachedRelay,
   RelayPoolState,
   RelayPoolStorage,
 } from './relay-pool';
@@ -48,15 +48,15 @@ function memoryStorage(
   initial: RelayPoolState | null = null,
 ): RelayPoolStorage {
   let state: RelayPoolState | null = initial;
-  let workingRelays: KnownWorkingRelay[] = [];
+  let relayHealth: CachedRelay[] = [];
   return {
     getState: async () => state,
     setState: async (s) => {
       state = s;
     },
-    getWorkingRelays: async () => workingRelays,
-    setWorkingRelays: async (relays) => {
-      workingRelays = relays;
+    getRelayHealth: async () => relayHealth,
+    setRelayHealth: async (relays) => {
+      relayHealth = relays;
     },
   };
 }

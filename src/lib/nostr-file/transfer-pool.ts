@@ -1,6 +1,6 @@
 import { verifyEvent } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
-import { normalizeURL } from 'nostr-tools/utils';
+import { normalizeRelayUrl } from '../nostr/relays';
 
 /**
  * Relay pool for a live transfer, with teardown that actually tears down.
@@ -44,9 +44,9 @@ export function createTransferPool(): AbstractSimplePool {
 
   pool.close = (relays) => {
     baseClose(relays);
-    const targets = new Set(relays.map(normalizeURL));
+    const targets = new Set(relays.map((url) => normalizeRelayUrl(url) ?? url));
     for (const ws of [...sockets]) {
-      if (targets.has(normalizeURL(ws.url))) ws.close();
+      if (targets.has(normalizeRelayUrl(ws.url) ?? ws.url)) ws.close();
     }
   };
 

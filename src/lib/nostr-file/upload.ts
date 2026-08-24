@@ -1,5 +1,5 @@
 import type { Event } from 'nostr-tools';
-import { DEFAULT_RELAYS } from '../nostr/relays';
+import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_PROBE_BYTES,
   CONTROL_PROBE_TIMEOUT_MS,
@@ -18,9 +18,8 @@ import {
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
-  normalizeRelayUrl,
   type RelayPoolStorage,
-  saveWorkingRelays,
+  saveRelayHealth,
   selectUploadRelays,
 } from './relay-pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
@@ -125,16 +124,20 @@ export async function resolveUploadRelays(
   // DEFAULT_RELAYS is also filtered here (not just in discovery) so a stale
   // candidate cache written before seeds were barred cannot resurface them.
   const excluded = new Set(
-    [...opts.excludeRelays, ...DEFAULT_RELAYS].map(
-      (url) => normalizeRelayUrl(url) ?? url,
-    ),
+    [...opts.excludeRelays, ...DEFAULT_RELAYS]
+      .map(normalizeRelayUrl)
+      .filter((url): url is string => url !== null),
   );
-  const isExcluded = (url: string) =>
-    excluded.has(normalizeRelayUrl(url) ?? url);
+  const isExcluded = (url: string) => {
+    const normalized = normalizeRelayUrl(url);
+    return normalized === null || excluded.has(normalized);
+  };
   if (opts.relayOverride && opts.relayOverride.length > 0) {
     const usable = [
       ...new Set(
-        opts.relayOverride.map((url) => normalizeRelayUrl(url) ?? url),
+        opts.relayOverride
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
       ),
     ].filter((url) => !isExcluded(url));
     if (usable.length < MIN_UPLOAD_RELAYS) {
@@ -152,7 +155,9 @@ export async function resolveUploadRelays(
   // Discovery connected to the seeds; the ones not carrying this transfer's
   // control channel have no further job — stop their sockets.
   const controlSet = new Set(
-    opts.excludeRelays.map((url) => normalizeRelayUrl(url) ?? url),
+    opts.excludeRelays
+      .map(normalizeRelayUrl)
+      .filter((url): url is string => url !== null),
   );
   const doneSeeds = DEFAULT_RELAYS.filter((url) => !controlSet.has(url));
   if (doneSeeds.length > 0) pool.close?.(doneSeeds);
@@ -174,7 +179,7 @@ export async function resolveUploadRelays(
     },
   });
   stats.phaseMs.healthCheck = Date.now() - healthCheckStarted;
-  await saveWorkingRelays(storage, healthy, probedCandidates);
+  await saveRelayHealth(storage, healthy, probedCandidates);
   throwIfCancelled();
   if (healthy.length < MIN_UPLOAD_RELAYS) {
     throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
@@ -236,7 +241,9 @@ export async function resolveTransferRelays(
   if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
     const distinct = [
       ...new Set(
-        opts.controlRelayOverride.map((url) => normalizeRelayUrl(url) ?? url),
+        opts.controlRelayOverride
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
       ),
     ].slice(0, CONTROL_RELAY_COUNT);
     if (distinct.length < MIN_CONTROL_RELAYS) {

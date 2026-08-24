@@ -1,4 +1,4 @@
-import { DEFAULT_RELAYS } from './relays';
+import { DEFAULT_RELAYS, normalizeRelayUrl } from './relays';
 
 const RELAY_PROBE_TIMEOUT = 3000;
 
@@ -50,7 +50,16 @@ export async function testRelayAvailability(
   relays: string[] = [...DEFAULT_RELAYS],
 ): Promise<RelayAvailabilityResult> {
   try {
-    const results = await Promise.all(relays.map((url) => probeRelay(url)));
+    const canonicalRelays = [
+      ...new Set(
+        relays
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => url !== null),
+      ),
+    ];
+    const results = await Promise.all(
+      canonicalRelays.map((url) => probeRelay(url)),
+    );
     const connectedRelays = results.filter((r): r is string => r !== null);
 
     return {

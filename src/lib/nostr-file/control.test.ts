@@ -50,7 +50,7 @@ describe('control channel key and sealing', () => {
     const key = await deriveControlKey(fixedKeyBytes(), TRANSFER_ID);
     const ring = Array.from(
       { length: 16 },
-      (_, i) => `wss://relay-${i}.example.com`,
+      (_, i) => `wss://relay-${i}.example`,
     );
     let map = '';
     for (let i = 0; i < 3200; i++) map += encodePosition(i % 16);

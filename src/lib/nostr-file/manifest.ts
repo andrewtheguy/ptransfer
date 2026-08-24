@@ -1,3 +1,4 @@
+import { normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_RELAY_COUNT,
   MIN_CONTROL_RELAYS,
@@ -5,7 +6,6 @@ import {
   NOSTR_FILE_MANIFEST_VERSION,
   NOSTR_FILE_MAX_BYTES,
 } from './constants';
-import { normalizeRelayUrl } from './relay-pool';
 
 /**
  * Retrieval metadata for a file saved to nostr relays. Travels inside the
@@ -61,15 +61,6 @@ const HEX_64 = /^[0-9a-f]{64}$/;
 export const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
 const MIN_CHUNK_SIZE = 1024;
 const MAX_CHUNK_SIZE = 65408;
-
-export function isWssUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    return url.protocol === 'wss:' && url.hostname.length > 0;
-  } catch {
-    return false;
-  }
-}
 
 export function isValidNostrFileManifest(
   value: unknown,
@@ -140,10 +131,12 @@ export function isValidNostrFileManifest(
     m.controlRelays.length > CONTROL_RELAY_COUNT ||
     !m.controlRelays.every(
       (r): r is string =>
-        typeof r === 'string' && r.length < 200 && isWssUrl(r),
+        typeof r === 'string' &&
+        r.length < 200 &&
+        normalizeRelayUrl(r) !== null,
     ) ||
     // Distinct after normalization: a trailing-slash variant is the same relay.
-    new Set(m.controlRelays.map((r) => normalizeRelayUrl(r) ?? r)).size !==
+    new Set(m.controlRelays.map((r) => normalizeRelayUrl(r))).size !==
       m.controlRelays.length
   ) {
     return false;

@@ -2,6 +2,7 @@ import { deflateSync, inflateSync } from 'fflate';
 import { type Event, finalizeEvent } from 'nostr-tools';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../nostr/events';
+import { normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_KEY_INFO,
   CONTROL_MESSAGE_MAX_BYTES,
@@ -11,9 +12,7 @@ import {
   PUBLISH_MAX_RETRIES,
   UPLOAD_RELAY_COUNT,
 } from './constants';
-import { isWssUrl } from './manifest';
 import type { NostrFilePool, PoolSubscription } from './pool';
-import { normalizeRelayUrl } from './relay-pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /**
@@ -268,11 +267,13 @@ export function parseSenderMessage(
       m.relays.length > UPLOAD_RELAY_COUNT ||
       !m.relays.every(
         (r): r is string =>
-          typeof r === 'string' && r.length < 200 && isWssUrl(r),
+          typeof r === 'string' &&
+          r.length < 200 &&
+          normalizeRelayUrl(r) !== null,
       ) ||
       // Ring positions index into the list, so a relay repeated under an
       // equivalent URL form (e.g. trailing slash) is forged or corrupt.
-      new Set(m.relays.map((r) => normalizeRelayUrl(r) ?? r)).size !==
+      new Set(m.relays.map((r) => normalizeRelayUrl(r))).size !==
         m.relays.length
     ) {
       return null;
