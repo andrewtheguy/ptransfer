@@ -20,6 +20,7 @@ import {
 import { parseAnyManualPayload } from '@/lib/manual-signaling';
 import type { PinKeyMaterial } from '@/lib/types';
 import { AnswerReturn } from './answer-return';
+import { AnswerReturnChoice } from './answer-return-choice';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { type PinChangePayload, PinInput, type PinInputRef } from './pin-input';
 import { QRInput } from './qr-input';
@@ -75,7 +76,7 @@ export function ReceiveTab() {
     typeof activeHook.receive === 'function'
       ? activeHook.receive
       : undefined;
-  const { startReceive, submitOffer } = manualHook;
+  const { startReceive, submitOffer, chooseAnswerReturn } = manualHook;
 
   // Route a pasted/scanned Manual Exchange payload to the right flow: a
   // Nostr file relay payload starts the relay download directly (no answer
@@ -284,6 +285,8 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const showQRInput = isManualMode && state.status === 'waiting_for_offer';
+  const showAnswerChoice =
+    isManualMode && state.status === 'choosing_answer_return';
   const showQRDisplay =
     isManualMode && answerData && state.status === 'showing_answer';
 
@@ -437,6 +440,11 @@ export function ReceiveTab() {
                 onSubmit={handleOfferSubmit}
               />
             </div>
+          )}
+
+          {/* The receiver decides how the answer goes back */}
+          {showAnswerChoice && (
+            <AnswerReturnChoice onChoose={chooseAnswerReturn} />
           )}
 
           {/* The receiver's answer step: relayed, or carried back by hand */}

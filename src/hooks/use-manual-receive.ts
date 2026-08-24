@@ -28,6 +28,7 @@ export type ManualReceiveStatus =
   | 'idle'
   | 'waiting_for_offer'
   | 'generating_answer'
+  | 'choosing_answer_return'
   | 'showing_answer'
   | 'connecting'
   | 'receiving'
@@ -62,11 +63,21 @@ export interface ManualReceiveState {
   answerRelayStatus?: 'sent' | 'failed';
 }
 
+/**
+ * How the receiver returns the answer when the offer named relays: over
+ * those relays, or hand-carried (QR / copy-paste) for the sender to scan or
+ * paste. The receiver picks explicitly so neither side is surprised by
+ * where the response went.
+ */
+export type AnswerReturnMethod = 'relay' | 'manual';
+
 export interface UseManualReceiveReturn {
   state: TransferState & ManualReceiveState;
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
+  /** Resolves the 'choosing_answer_return' step. No-op in any other state. */
+  chooseAnswerReturn: (method: AnswerReturnMethod) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -100,6 +111,10 @@ export function useManualReceive(): UseManualReceiveReturn {
     null,
   );
   const offerRejectRef = useRef<((error: Error) => void) | null>(null);
+  // Resolves the receiver's choice of how to return the answer.
+  const answerReturnResolverRef = useRef<
+    ((method: AnswerReturnMethod) => void) | null
+  >(null);
 
   const discardSink = useCallback(() => {
     const sink = sinkRef.current;
@@ -118,12 +133,20 @@ export function useManualReceive(): UseManualReceiveReturn {
     receivingRef.current = false;
     offerResolverRef.current = null;
     offerRejectRef.current = null;
+    answerReturnResolverRef.current = null;
     if (rtcRef.current) {
       rtcRef.current.close();
       rtcRef.current = null;
     }
     setState({ status: 'idle' });
   }, [discardSink]);
+
+  const chooseAnswerReturn = useCallback((method: AnswerReturnMethod) => {
+    const resolve = answerReturnResolverRef.current;
+    if (!resolve) return;
+    answerReturnResolverRef.current = null;
+    resolve(method);
+  }, []);
 
   const reset = useCallback(() => {
     cancel();
@@ -397,13 +420,47 @@ export function useManualReceive(): UseManualReceiveReturn {
         ecdhKeyPair.publicKeyBytes,
       );
 
-      // When the offer named an answer channel, seal the same blob under the
-      // offer's secret and publish it there: the sender is already listening,
-      // so nothing has to be carried back by hand. A refusal is not fatal —
-      // the answer code is shown and the exchange finishes as it always did.
+      const fileMetadata = {
+        fileName: fileName!,
+        fileSize: fileSize!,
+        mimeType: mimeType!,
+      };
+
+      // When the offer named an answer channel, the receiver decides how the
+      // answer goes back: sealed under the offer's secret and published to
+      // those relays (the sender is already listening), or hand-carried as a
+      // code for the sender to scan or paste. The choice is explicit so the
+      // receiver knows which one happened. A relay refusal is not fatal — the
+      // answer code is shown and the exchange finishes as it always did.
       const answerChannel = answerChannelFromOffer(offerPayload);
       let answerRelayStatus: 'sent' | 'failed' | undefined;
+      let returnMethod: AnswerReturnMethod = 'manual';
       if (answerChannel) {
+        setState({
+          status: 'choosing_answer_return',
+          message: 'Choose how to return your response',
+          answerData: answerBinary,
+          contentType: 'file',
+          fileMetadata,
+        });
+        returnMethod = await new Promise<AnswerReturnMethod>(
+          (resolve, reject) => {
+            answerReturnResolverRef.current = resolve;
+            const checkInterval = setInterval(() => {
+              if (cancelledRef.current) {
+                clearInterval(checkInterval);
+                reject(new Error('Cancelled'));
+              }
+            }, 500);
+            answerReturnResolverRef.current = (method) => {
+              clearInterval(checkInterval);
+              resolve(method);
+            };
+          },
+        );
+        if (cancelledRef.current) return;
+      }
+      if (answerChannel && returnMethod === 'relay') {
         setState({
           status: 'generating_answer',
           message: 'Sending your response to the sender...',
@@ -439,11 +496,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         answerData: answerBinary,
         answerRelayStatus,
         contentType: 'file',
-        fileMetadata: {
-          fileName: fileName!,
-          fileSize: fileSize!,
-          mimeType: mimeType!,
-        },
+        fileMetadata,
       });
 
       // Wait for data channel to open
@@ -543,6 +596,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       receivingRef.current = false;
       offerResolverRef.current = null;
       offerRejectRef.current = null;
+      answerReturnResolverRef.current = null;
       if (rtcRef.current) {
         rtcRef.current.close();
         rtcRef.current = null;
@@ -550,5 +604,13 @@ export function useManualReceive(): UseManualReceiveReturn {
     }
   };
 
-  return { state, receivedContent, startReceive, submitOffer, cancel, reset };
+  return {
+    state,
+    receivedContent,
+    startReceive,
+    submitOffer,
+    chooseAnswerReturn,
+    cancel,
+    reset,
+  };
 }

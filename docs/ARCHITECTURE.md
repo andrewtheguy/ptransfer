@@ -506,6 +506,11 @@ one hand-carried code. It moves signaling, never file bytes.
   offer's own 1-hour deadline. Content is base64 of AES-GCM over the *same*
   PT01 answer blob the manual path would have shown, with AAD binding it to
   the channel tag. Signed by a throwaway key.
+- **Choice.** Publishing is never implicit: once the answer is built, the
+  receiver's hook parks in `choosing_answer_return` and the UI asks
+  "send through relays" or "show a code". Only the first publishes; the second
+  goes straight to the hand-carried code. (The Nostr file relay option has no
+  answer step and is untouched.)
 - **Delivery.** The receiver publishes to every named relay with the shared
   retry/backoff policy, stops waiting once two accept (or all settle, or
   `ANSWER_PUBLISH_TIMEOUT_MS` elapses), and fails only when none did. The
@@ -516,9 +521,9 @@ one hand-carried code. It moves signaling, never file bytes.
 - **Fallback.** Nothing about the manual path is removed. No proven relays →
   the offer names none and both sides run the two-hop exchange. Publishing
   refused → the receiver shows its answer code with an explanation. Published
-  but no connection within 30 s → the receiver reveals the code anyway. On the
+  → the code stays one tap away under "Show response code instead". On the
   sender, the scan/paste input is always present, collapsed behind
-  "Response not arriving?" while the channel is live.
+  "Scan or paste the receiver's response" while the channel is live.
 
 ### Nostr File Relay (`src/lib/nostr-file/`) — Experimental
 
@@ -696,7 +701,6 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 | ICE gathering | 5 seconds | Bounded wait while preparing Manual offer/answer QR payloads |
 | Answer-relay probe | 4 seconds | Per-relay write→read bound when proving the answer-return relays (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means a manual-only offer |
 | Answer publish | 10 seconds | Receiver's bound on getting its sealed answer onto the relays (`ANSWER_PUBLISH_TIMEOUT_MS`); ends early once two relays accept |
-| Answer code reveal | 30 seconds | How long a relayed answer stays collapsed on the receiver before the QR/copy-paste code is shown anyway |
 | Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
 | Data-channel ACK wait | 30 seconds | Sender wait after `DONE:<chunkCount>:<byteCount>` for receiver `ACK` |
 | P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |
