@@ -25,11 +25,12 @@ export interface UseNostrRelayLiveSendReturn {
 }
 
 /**
- * Live (single-copy) Nostr relay send. The code is shown as soon as the
- * control relays pass their quick probe (`showing_payload`) — storage-relay
- * discovery runs behind it — and stays up while the upload and the
- * receiver's download run side by side; the state completes on its own when
- * the receiver confirms the verified file.
+ * Live (single-copy) Nostr relay send. The code is shown as soon as the relay
+ * sets needed for signaling are ready (`showing_payload`). Storage discovery
+ * normally runs behind it, but completes first when its unused reserves must
+ * replace failed default signaling relays. The code stays up while upload and
+ * download run side by side; the state completes when the receiver confirms
+ * the verified file.
  */
 export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
@@ -125,8 +126,8 @@ export function useNostrRelayLiveSend(): UseNostrRelayLiveSendReturn {
                     stats: p.stats,
                   });
                   break;
-                // Storage-relay discovery runs after the code is handed out:
-                // keep the code on screen while it works.
+                // Keep the code on screen when storage discovery is the usual
+                // background path; otherwise report why the code is pending.
                 case 'discovering':
                 case 'health_check': {
                   const working =

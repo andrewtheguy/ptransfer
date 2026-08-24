@@ -99,9 +99,11 @@ user-facing behavior; the technical design is documented in
    storage relays as **temporary events with a 1-hour NIP-40 expiration** — a deletion
    request that compliant relays honor by pruning the events, not guaranteed erasure; the
    file stays protected by its encryption regardless. The sender gets the exchange code
-   (a single QR or copy/paste) **right away**, after a quick check of a few signaling
-   relays — the storage relays are found in the background while the code is shared —
-   and keeps the page open. The encrypted pieces upload in the background, **one copy
+   (a single QR or copy/paste) after checking the signaling relays. Storage relays are
+   normally found in the background while the code is shared; if a default signaling
+   relay fails, storage selection runs first so unused healthy relays can fill the
+   signaling set. The sender keeps the page open while the encrypted pieces upload in
+   the background, **one copy
    each**, so the upload costs about the file size in bandwidth
 2. The receiver pastes/scans the code in the normal Manual Exchange receive flow — it is
    detected automatically — and starts downloading the pieces while the sender is still

@@ -4,7 +4,7 @@ import { isValidNostrFileManifest, type NostrFileManifest } from './manifest';
 describe('isValidNostrFileManifest', () => {
   const createdAt = 1_700_000_000;
   const manifest: NostrFileManifest = {
-    v: 6,
+    v: 7,
     fileName: 'big.bin',
     fileSize: 100 * 1024 * 1024,
     mimeType: 'application/octet-stream',
@@ -80,12 +80,21 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(false);
   });
 
-  it('rejects control-relay lists outside 2..4 and files over 100 MB', () => {
+  it('rejects control-relay lists outside 2..6 and files over 100 MB', () => {
     expect(
       isValidNostrFileManifest({
         ...manifest,
         controlRelays: Array.from(
-          { length: 5 },
+          { length: 6 },
+          (_, i) => `wss://r${i}.example`,
+        ),
+      }),
+    ).toBe(true);
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        controlRelays: Array.from(
+          { length: 7 },
           (_, i) => `wss://r${i}.example`,
         ),
       }),
@@ -122,7 +131,7 @@ describe('isValidNostrFileManifest', () => {
   });
 
   it('rejects the previous wire format', () => {
-    expect(isValidNostrFileManifest({ ...manifest, v: 5 })).toBe(false);
+    expect(isValidNostrFileManifest({ ...manifest, v: 6 })).toBe(false);
     expect(isValidNostrFileManifest({ ...manifest, enc: 1 })).toBe(false);
     const { compression, payloadSize, ...perChunkDeflate } = manifest;
     expect(isValidNostrFileManifest(perChunkDeflate)).toBe(false);

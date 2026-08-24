@@ -115,9 +115,10 @@ export function SendTransferPage() {
 
     const prepareFile = async () => {
       try {
-        // Check Nostr availability first if needed (Auto Exchange and the
-        // Nostr file relay both depend on reachable relays)
-        if (config.methodChoice === 'online' || config.nostrFileRelay) {
+        // Auto Exchange uses the fixed signaling set. The Manual Exchange
+        // Nostr-file route resolves its own cached/discovered fallbacks, so a
+        // failed fixed-set preflight must not block it before that can run.
+        if (config.methodChoice === 'online') {
           if (cancelled) return;
           setStep('checking');
           const result = await testRelayAvailability();

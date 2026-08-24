@@ -19,7 +19,7 @@ export const EVENT_KIND_FILE_CHUNK = 30078;
 // transfer window.
 export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
-export const NOSTR_FILE_MANIFEST_VERSION = 6;
+export const NOSTR_FILE_MANIFEST_VERSION = 7;
 
 // Codec identity: whole-payload deflate (skipped when it would not shrink)
 // before chunking, then per chunk AES-256-GCM (nonce||ct||tag) then Z85.
@@ -44,19 +44,23 @@ export const UPLOAD_CHUNK_CONCURRENCY = 16;
 
 export const HEALTH_CHECK_CONCURRENCY = 16;
 export const HEALTH_CHECK_TIMEOUT_MS = 8000;
-// Stop health-checking once this many relays passed: some rotation headroom
-// over UPLOAD_RELAY_COUNT without probing the entire candidate list (only
-// ~1 in 6 public candidates passes the full-size probe).
-export const HEALTH_CHECK_TARGET_COUNT = UPLOAD_RELAY_COUNT + 4;
+// Healthy relays left after the 16-node storage ring is selected. They can
+// fill gaps in the default signaling set instead of being probed and then
+// discarded.
+export const SIGNALING_RESERVE_RELAY_COUNT = 4;
+// Stop health-checking once the storage ring plus its signaling reserves
+// have passed, without probing the entire candidate list (only ~1 in 6 public
+// candidates passes the full-size probe).
+export const HEALTH_CHECK_TARGET_COUNT =
+  UPLOAD_RELAY_COUNT + SIGNALING_RESERVE_RELAY_COUNT;
 // Probe payload size. A full-size chunk, so a relay that caps event size below
 // a real chunk fails the probe instead of rejecting every chunk placed on it.
 export const HEALTH_CHECK_PROBE_BYTES = NOSTR_FILE_CHUNK_SIZE;
 
-// The encrypted control channel rides its own small set of proven signaling
-// relays (seeded from DEFAULT_RELAYS), embedded in the manual payload — the
-// chunk ring is announced over the channel instead. Control relays are picked
-// with a small probe: they only ever carry control-sized events.
-export const CONTROL_RELAY_COUNT = 4;
+// The encrypted control channel rides six proven signaling relays embedded in
+// the manual payload. DEFAULT_RELAYS are checked with a small probe first; if
+// any fail, unused full-size-proven storage reserves fill the gaps.
+export const CONTROL_RELAY_COUNT = 6;
 // Fewer usable control relays than this and a send refuses to start.
 export const MIN_CONTROL_RELAYS = 2;
 // Control probe payload size — a sealed control message is a few hundred

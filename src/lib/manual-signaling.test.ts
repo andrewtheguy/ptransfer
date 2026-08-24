@@ -162,7 +162,7 @@ describe('Nostr file payload', () => {
   const createdAt = Math.floor(Date.now() / 1000);
   const validPayload: NostrFileLivePayload = {
     type: 'nostr-file-live',
-    v: 6,
+    v: 7,
     fileName: 'photo.jpg',
     fileSize: 5 * 1024 * 1024,
     mimeType: 'image/jpeg',
@@ -267,7 +267,7 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, type: 'offer' }),
     ).toBe(false);
-    expect(isValidNostrFileLivePayload({ ...validPayload, v: 5 })).toBe(false);
+    expect(isValidNostrFileLivePayload({ ...validPayload, v: 6 })).toBe(false);
     expect(isValidNostrFileLivePayload({ ...validPayload, enc: 1 })).toBe(
       false,
     );
