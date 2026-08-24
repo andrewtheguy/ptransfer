@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   CheckCircle2,
+  ChevronDown,
   Loader2,
   RotateCcw,
 } from 'lucide-react';
@@ -14,6 +15,11 @@ import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { QRInput } from '@/components/ptransfer/qr-input';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { useSend } from '@/contexts/send-context';
 import {
   type UseManualSendReturn,
@@ -58,6 +64,9 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  // Fallback input for the receiver's response, kept collapsed while the
+  // relay answer channel is live.
+  const [manualAnswerOpen, setManualAnswerOpen] = useState(false);
 
   // Hooks for transfer
   const nostrHook = useNostrSend();
@@ -97,6 +106,9 @@ export function SendTransferPage() {
   const manualState =
     activeHook.type === 'offline' ? activeHook.hook.state : null;
   const offerData = manualState?.offerData;
+  // 'waiting': the receiver's response comes back over relays on its own, so
+  // the scan/paste input is a fallback rather than the next step.
+  const answerRelayStatus = manualState?.answerRelayStatus;
   const submitAnswer =
     activeHook.type === 'offline' ? activeHook.hook.submitAnswer : undefined;
 
@@ -333,8 +345,9 @@ export function SendTransferPage() {
                       </li>
                     </ul>
                     <p className="text-sm text-muted-foreground">
-                      Either way, the receiver then sends their response back
-                      the same way — scan or paste it below to connect.
+                      {answerRelayStatus === 'waiting'
+                        ? "Their response comes back to this page on its own through Nostr relays — you only have to hand over the data above. If it doesn't arrive, they can still send it to you by QR or copy/paste."
+                        : 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect.'}
                     </p>
                   </div>
                 </div>
@@ -343,12 +356,34 @@ export function SendTransferPage() {
                 <MultiQRDisplay data={offerData} />
 
                 {/* Input for receiver's response */}
-                <div className="pt-2 border-t">
-                  <p className="text-sm font-medium mb-3">
-                    Scan or paste receiver's response
-                  </p>
-                  <QRInput onSubmit={submitAnswer} expectedType="answer" />
-                </div>
+                {answerRelayStatus === 'waiting' ? (
+                  <Collapsible
+                    open={manualAnswerOpen}
+                    onOpenChange={setManualAnswerOpen}
+                    className="pt-2 border-t"
+                  >
+                    <div className="flex items-center gap-2 pb-3 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Waiting for the receiver's response...
+                    </div>
+                    <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
+                      <ChevronDown
+                        className={`h-4 w-4 transition-transform ${manualAnswerOpen ? 'rotate-180' : ''}`}
+                      />
+                      Response not arriving? Scan or paste it here
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-3">
+                      <QRInput onSubmit={submitAnswer} expectedType="answer" />
+                    </CollapsibleContent>
+                  </Collapsible>
+                ) : (
+                  <div className="pt-2 border-t">
+                    <p className="text-sm font-medium mb-3">
+                      Scan or paste receiver's response
+                    </p>
+                    <QRInput onSubmit={submitAnswer} expectedType="answer" />
+                  </div>
+                )}
               </div>
             )}
 

@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { QRDisplay } from '@/components/ptransfer/qr-display';
+import { AnswerReturn } from '@/components/ptransfer/answer-return';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useChunkCollector } from '@/hooks/use-chunk-collector';
@@ -306,44 +306,13 @@ export function ReceiveChunkedPage() {
           <TransferStatus state={receiveState} />
         )}
 
-        {/* Answer display: returned to the sender by QR or copy/paste */}
+        {/* The receiver's answer step: relayed, or carried back by hand */}
         {showQRDisplay && answerData && (
-          <div className="space-y-4">
-            <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
-              <p className="font-medium">
-                Send your response back to the sender
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Get your response back to the sender by the QR code below or
-                copy/paste the data:
-              </p>
-              <ul className="text-sm text-muted-foreground space-y-2">
-                <li>
-                  <span className="font-medium text-foreground">QR code:</span>{' '}
-                  the sender scans the code below with their camera.
-                </li>
-                <li>
-                  <span className="font-medium text-foreground">
-                    Copy &amp; paste:
-                  </span>{' '}
-                  tap <strong>Copy Data</strong> below the code, then send the
-                  copied text back to the sender over the same secure channel
-                  for them to paste. If the button doesn&apos;t work, use{' '}
-                  <strong>Show text to copy manually</strong> to select and copy
-                  the response yourself.
-                </li>
-              </ul>
-              <p className="text-sm text-muted-foreground">
-                Keep this page open — the transfer connects automatically once
-                the sender has your response.
-              </p>
-            </div>
-            <QRDisplay
-              data={answerData}
-              clipboardData={clipboardData}
-              label="Your response"
-            />
-          </div>
+          <AnswerReturn
+            answerData={answerData}
+            clipboardData={clipboardData}
+            answerRelayStatus={receiveState.answerRelayStatus}
+          />
         )}
 
         {/* Download completed file */}

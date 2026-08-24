@@ -255,11 +255,9 @@ describe('getRelayCandidates', () => {
       discoveredAt: 1000,
       cursor: 0,
     });
-    const candidates = await getRelayCandidates(
-      createMockPool(),
-      storage,
-      2000,
-    );
+    const candidates = await getRelayCandidates(createMockPool(), storage, {
+      now: 2000,
+    });
     expect(candidates).toEqual(['wss://good.example']);
   });
 
@@ -269,11 +267,9 @@ describe('getRelayCandidates', () => {
       discoveredAt: 1000,
       cursor: 3,
     });
-    const candidates = await getRelayCandidates(
-      createMockPool(),
-      storage,
-      2000,
-    );
+    const candidates = await getRelayCandidates(createMockPool(), storage, {
+      now: 2000,
+    });
     expect(candidates).toEqual([]);
     // Discovery ran and persisted its (empty) result, keeping the cursor.
     expect(storage.state?.discoveredAt).toBe(2000);
@@ -286,11 +282,9 @@ describe('getRelayCandidates', () => {
       discoveredAt: 3_000,
       cursor: 0,
     });
-    const candidates = await getRelayCandidates(
-      createMockPool(),
-      storage,
-      2_000,
-    );
+    const candidates = await getRelayCandidates(createMockPool(), storage, {
+      now: 2_000,
+    });
     expect(candidates).toEqual([]);
     expect(storage.state?.discoveredAt).toBe(2_000);
   });
@@ -328,7 +322,9 @@ describe('getRelayCandidates', () => {
         }),
       ],
     );
-    const candidates = await getRelayCandidates(createMockPool(), storage, now);
+    const candidates = await getRelayCandidates(createMockPool(), storage, {
+      now,
+    });
     expect(candidates).toEqual([
       'wss://working.example',
       'wss://slower.example',
@@ -348,7 +344,7 @@ describe('getRelayCandidates', () => {
       makeEvent(30166, [['d', 'wss://new.example']]),
     ]);
 
-    const candidates = await getRelayCandidates(pool, storage, now);
+    const candidates = await getRelayCandidates(pool, storage, { now });
 
     expect(candidates).toEqual(['wss://new.example', 'wss://cached.example']);
     expect(storage.state).toEqual({
@@ -382,7 +378,9 @@ describe('getRelayCandidates', () => {
       ],
     );
 
-    const candidates = await getRelayCandidates(createMockPool(), storage, now);
+    const candidates = await getRelayCandidates(createMockPool(), storage, {
+      now,
+    });
 
     expect(candidates).toEqual([
       'wss://unfailed.example',
@@ -472,7 +470,7 @@ describe('saveRelayHealth', () => {
         { url: 'wss://new.example/', rttMs: 20 },
       ],
       ['wss://failed.example'],
-      now,
+      { capability: 'storage', now },
     );
     expect(storage.relayHealth).toEqual([
       cachedRelay('wss://new.example', {

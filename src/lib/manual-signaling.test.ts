@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  answerChannelFromOffer,
   estimatePayloadSize,
   generateMutualAnswerBinary,
   generateMutualClipboardData,
@@ -283,5 +284,97 @@ describe('Nostr file payload', () => {
     expect(
       isValidNostrFileLivePayload({ ...validPayload, chunkSize: 100 }),
     ).toBe(false);
+  });
+});
+
+describe('offer-borne answer channel', () => {
+  const mockOffer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
+  const publicKey = new Uint8Array(65).fill(1);
+  publicKey[0] = 4;
+  const salt = new Uint8Array(16).fill(2);
+  const secret = new Uint8Array(32).fill(3);
+  const relays = ['wss://r1.example', 'wss://r2.example'];
+  const metadata = {
+    createdAt: Date.now(),
+    fileName: 'test.txt',
+    fileSize: 1024,
+    contentEncoding: 'deflate-raw' as const,
+    mimeType: 'text/plain',
+    publicKey,
+    salt,
+  };
+
+  it('round-trips the relays and secret an offer advertises', () => {
+    const binary = generateMutualOfferBinary(mockOffer, [], {
+      ...metadata,
+      answerRelays: relays,
+      answerSecret: secret,
+    });
+    const parsed = parseMutualPayload(binary);
+    expect(parsed).not.toBeNull();
+    const channel = answerChannelFromOffer(parsed as SignalingPayload);
+    expect(channel?.relays).toEqual(relays);
+    expect(channel?.secret).toEqual(secret);
+  });
+
+  it('advertises no channel when relays were not proven', () => {
+    const binary = generateMutualOfferBinary(mockOffer, [], metadata);
+    const parsed = parseMutualPayload(binary) as SignalingPayload;
+    expect(parsed.answerRelays).toBeUndefined();
+    expect(parsed.answerSecret).toBeUndefined();
+    expect(answerChannelFromOffer(parsed)).toBeNull();
+  });
+
+  it('rejects half-formed or misplaced channel fields', () => {
+    const base = {
+      type: 'offer',
+      sdp: 'sdp',
+      candidates: [],
+      createdAt: Date.now(),
+      publicKey: Array.from(publicKey),
+    };
+    const answerSecret = `${'A'.repeat(43)}=`;
+    expect(isValidSignalingPayload({ ...base, answerRelays: relays })).toBe(
+      false,
+    );
+    expect(isValidSignalingPayload({ ...base, answerSecret })).toBe(false);
+    expect(
+      isValidSignalingPayload({ ...base, answerRelays: relays, answerSecret }),
+    ).toBe(true);
+    // Offer-only: an answer may never carry the channel.
+    expect(
+      isValidSignalingPayload({
+        ...base,
+        type: 'answer',
+        answerRelays: relays,
+        answerSecret,
+      }),
+    ).toBe(false);
+    // A relay list that cannot be used is a malformed offer, not a silent
+    // downgrade to the manual hop.
+    expect(
+      isValidSignalingPayload({
+        ...base,
+        answerRelays: ['wss://r1.example'],
+        answerSecret,
+      }),
+    ).toBe(false);
+    expect(
+      isValidSignalingPayload({
+        ...base,
+        answerRelays: relays,
+        answerSecret: 'too short',
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps a channel-bearing offer within a few hundred extra bytes', () => {
+    const plain = generateMutualOfferBinary(mockOffer, [], metadata);
+    const withChannel = generateMutualOfferBinary(mockOffer, [], {
+      ...metadata,
+      answerRelays: relays,
+      answerSecret: secret,
+    });
+    expect(withChannel.length - plain.length).toBeLessThan(200);
   });
 });

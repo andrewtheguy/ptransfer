@@ -1,5 +1,10 @@
 import { deflateSync, inflateSync } from 'fflate';
 import {
+  decodeAnswerSecret,
+  encodeAnswerSecret,
+  normalizeAnswerRelays,
+} from './answer-channel';
+import {
   BASE64_32_BYTES,
   isValidNostrFileManifest,
   type NostrFileManifest,
@@ -70,6 +75,35 @@ export interface SignalingPayload {
   contentEncoding?: WireEncoding;
   mimeType?: string;
   salt?: number[]; // Salt for content encryption key derivation (from ECDH shared secret)
+  /**
+   * Offer-only, and only when relays were proven before the code was made:
+   * the relays the receiver publishes its sealed answer to, and the secret
+   * keying that channel. Both travel together or not at all; without them the
+   * answer comes back by hand as before.
+   */
+  answerRelays?: string[];
+  /** base64(32-byte answer-channel secret) */
+  answerSecret?: string;
+}
+
+/**
+ * The answer channel an offer advertises, or null when it advertises none.
+ * A half-formed or malformed channel invalidates the whole offer (see
+ * isValidSignalingPayload), so this only ever sees well-formed input.
+ */
+export function answerChannelFromOffer(
+  payload: SignalingPayload,
+): { relays: string[]; secret: Uint8Array } | null {
+  if (payload.type !== 'offer') return null;
+  if (
+    payload.answerRelays === undefined ||
+    payload.answerSecret === undefined
+  ) {
+    return null;
+  }
+  const relays = normalizeAnswerRelays(payload.answerRelays);
+  const secret = decodeAnswerSecret(payload.answerSecret);
+  return relays && secret ? { relays, secret } : null;
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -178,7 +212,22 @@ export function isValidSignalingPayload(
     return false;
   if (!Number.isFinite(p.createdAt)) return false;
   if (!isValidPublicKeyArray(p.publicKey)) return false;
-  return true;
+  return isValidAnswerChannelFields(p);
+}
+
+/**
+ * The answer-channel fields are offer-only and all-or-nothing: an answer
+ * carrying them, or an offer carrying half of them (or an unusable relay
+ * list), is malformed rather than silently manual-only.
+ */
+function isValidAnswerChannelFields(p: Record<string, unknown>): boolean {
+  const hasRelays = p.answerRelays !== undefined;
+  const hasSecret = p.answerSecret !== undefined;
+  if (!hasRelays && !hasSecret) return true;
+  if (!hasRelays || !hasSecret || p.type !== 'offer') return false;
+  if (typeof p.answerSecret !== 'string') return false;
+  if (decodeAnswerSecret(p.answerSecret) === null) return false;
+  return normalizeAnswerRelays(p.answerRelays) !== null;
 }
 
 /**
@@ -213,8 +262,18 @@ export function generateMutualOfferBinary(
     mimeType: string;
     publicKey: Uint8Array; // ECDH public key (65 bytes)
     salt: Uint8Array; // Salt for AES key derivation
+    /** Omitted together when no relay set was proven for the answer. */
+    answerRelays?: string[];
+    answerSecret?: Uint8Array;
   },
 ): Uint8Array {
+  const answerChannel =
+    metadata.answerRelays && metadata.answerSecret
+      ? {
+          answerRelays: metadata.answerRelays,
+          answerSecret: encodeAnswerSecret(metadata.answerSecret),
+        }
+      : {};
   const payload: SignalingPayload = {
     type: 'offer',
     sdp: offer.sdp || '',
@@ -226,6 +285,7 @@ export function generateMutualOfferBinary(
     mimeType: metadata.mimeType,
     publicKey: Array.from(metadata.publicKey),
     salt: Array.from(metadata.salt),
+    ...answerChannel,
   };
 
   return encodeManualPayload(payload);
