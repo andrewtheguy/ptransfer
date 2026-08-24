@@ -57,6 +57,17 @@ export const HEALTH_CHECK_TARGET_COUNT =
 // a real chunk fails the probe instead of rejecting every chunk placed on it.
 export const HEALTH_CHECK_PROBE_BYTES = NOSTR_FILE_CHUNK_SIZE;
 
+// Once the ring is full the foreground health check stops, and the rest of the
+// relay population would never be looked at. A background sweep runs behind
+// the upload instead: it enumerates every relay it can find (uncapped, unlike
+// the foreground pass) and probes as far as the transfer lasts, so the next
+// transfer starts from a cache of the whole population. It shares the
+// upload's bandwidth, so it stays well below HEALTH_CHECK_CONCURRENCY.
+export const BACKGROUND_PROBE_CONCURRENCY = 4;
+// Sweep outcomes are written to IndexedDB in batches of this size (plus a
+// final flush), so a page closed mid-sweep still keeps most of the work.
+export const BACKGROUND_PROBE_SAVE_BATCH = 8;
+
 // The encrypted control channel rides six proven signaling relays embedded in
 // the manual payload. DEFAULT_RELAYS are checked with a small probe first; if
 // any fail, unused full-size-proven storage reserves fill the gaps.
@@ -71,9 +82,20 @@ export const CONTROL_PROBE_BYTES = 256;
 // keep it short.
 export const CONTROL_PROBE_TIMEOUT_MS = 4000;
 
-// NIP-66 / NIP-65 discovery query limit per kind.
+// NIP-66 / NIP-65 discovery query limit per kind for the foreground pass. It
+// only has to fill one ring, so it takes a single page and moves on.
 export const DISCOVERY_CANDIDATE_LIMIT = 100;
+// Candidates a single transfer will rank and health-check. A bound on the
+// working set, not on what is known: the cache holds far more (see
+// RELAY_CACHE_MAX_ENTRIES) and the best of it leads this list.
 export const DISCOVERY_CANDIDATE_CAP = 150;
+
+// The background pass enumerates instead of sampling: it pages back through
+// NIP-66/NIP-65 history by `created_at` until a page turns up nothing new.
+// These bound the paging, not the result — discovery itself is uncapped.
+export const DISCOVERY_PAGE_LIMIT = 500;
+export const DISCOVERY_MAX_PAGES = 20;
+export const DISCOVERY_PAGE_MAX_WAIT_MS = 8000;
 
 // Max `d` identifiers per fetch filter (~3 MB of content per query).
 export const D_TAG_FILTER_BATCH = 50;
@@ -119,6 +141,11 @@ export const RELAY_CACHE_DATABASE_VERSION = 2;
 export const RELAY_CACHE_STATE_STORE = 'relay-pool-state';
 export const RELAY_CACHE_HEALTH_STORE = 'relay-health';
 export const RELAY_CANDIDATE_TTL_MS = 24 * 60 * 60 * 1000;
+// Relays retained in the health cache — the record of everything the
+// background pass has found, proved, or buried. Deliberately far above
+// DISCOVERY_CANDIDATE_CAP: each transfer draws its working set from here, so
+// capping this at the working-set size would throw the enumeration away.
+export const RELAY_CACHE_MAX_ENTRIES = 2000;
 
 // Tolerated wall-clock disagreement between sender and receiver.
 export const CLOCK_SKEW_TOLERANCE_SEC = 600;

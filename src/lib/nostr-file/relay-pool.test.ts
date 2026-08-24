@@ -4,13 +4,18 @@ import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_PROBE_BYTES,
   CONTROL_RELAY_COUNT,
+  DISCOVERY_CANDIDATE_CAP,
+  DISCOVERY_CANDIDATE_LIMIT,
   RELAY_CACHE_HEALTH_STORE,
   RELAY_CACHE_STATE_STORE,
+  UPLOAD_RELAY_COUNT,
 } from './constants';
 import { createMockPool } from './mock-pool';
 import {
   type CachedRelay,
   createIndexedDbRelayPool,
+  discoverAllRelayCandidates,
+  discoverRelayCandidates,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
@@ -19,6 +24,7 @@ import {
   type RelayPoolStorage,
   saveRelayHealth,
   selectUploadRelays,
+  sweepRelayHealth,
 } from './relay-pool';
 import { createTransferStats } from './stats';
 import {
@@ -731,6 +737,36 @@ describe('resolveUploadRelays', () => {
     ).toBe(true);
   });
 
+  it('hands back the candidates the early stop never probed', async () => {
+    const candidates = Array.from(
+      { length: 60 },
+      (_, i) => `wss://leftover-${i}.example`,
+    );
+    const pool = createMockPool();
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+    const { storageRelays, unprobedCandidates } = await resolveUploadRelays(
+      pool,
+      storage,
+      { ...opts(), excludeRelays: [] },
+    );
+    expect(storageRelays).toHaveLength(UPLOAD_RELAY_COUNT);
+    // The health check stopped well short of the list; the rest comes back
+    // for the background sweep instead of being dropped.
+    expect(unprobedCandidates.length).toBeGreaterThan(0);
+    const probed = storage.relayHealth
+      .filter((relay) => relay.lastCheckedAt !== null)
+      .map((relay) => relay.url);
+    expect(probed.length + unprobedCandidates.length).toBe(candidates.length);
+    for (const url of unprobedCandidates) {
+      expect(probed).not.toContain(url);
+      expect(candidates).toContain(url);
+    }
+  });
+
   it('filters the override and refuses a ring the exclusion leaves too small', async () => {
     const pool = createMockPool();
     const override = ['wss://a.example', 'wss://b.example', 'wss://c.example'];
@@ -760,5 +796,260 @@ describe('resolveUploadRelays', () => {
         excludeRelays: [],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
+  });
+});
+
+describe('discoverAllRelayCandidates', () => {
+  it('enumerates the whole population instead of sampling one capped page', async () => {
+    const total = DISCOVERY_CANDIDATE_CAP + 60;
+    const pool = createMockPool();
+    // Distinct created_at values, newest first — what a real relay pages over.
+    pool.store.set(
+      DEFAULT_RELAYS[0],
+      Array.from({ length: total }, (_, i) => ({
+        ...makeEvent(30166, [['d', `wss://pop-${i}.example`]]),
+        id: `e${i}`,
+        created_at: total - i,
+      })),
+    );
+
+    // Foreground: one page, bounded by the per-kind query limit. It only has
+    // to fill a ring, so it never sees most of the population.
+    const sampled = await discoverRelayCandidates(pool);
+    expect(sampled).toHaveLength(DISCOVERY_CANDIDATE_LIMIT);
+    expect(sampled.length).toBeLessThan(total);
+
+    // Background: pages back by created_at until exhausted. No cap.
+    const all = await discoverAllRelayCandidates(pool, [...DEFAULT_RELAYS], {
+      pageLimit: 50,
+    });
+    expect(all).toHaveLength(total);
+    expect(all.length).toBeGreaterThan(DISCOVERY_CANDIDATE_CAP);
+  });
+
+  it('stops paging when the cursor cannot move and never returns a seed', async () => {
+    const pool = createMockPool();
+    // Every event shares one timestamp, so `until` cannot step past them.
+    pool.store.set(DEFAULT_RELAYS[0], [
+      { ...makeEvent(30166, [['d', 'wss://same-1.example']]), id: 'a' },
+      { ...makeEvent(30166, [['d', 'wss://same-2.example']]), id: 'b' },
+      { ...makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]), id: 'c' },
+    ]);
+    const found = await discoverAllRelayCandidates(pool, [...DEFAULT_RELAYS], {
+      pageLimit: 1,
+    });
+    expect(found).not.toContain(DEFAULT_RELAYS[2]);
+    expect(found.length).toBeGreaterThan(0);
+  });
+});
+
+describe('sweepRelayHealth', () => {
+  it('probes every leftover candidate, caches the verdict, and drops the sockets', async () => {
+    const candidates = [
+      'wss://sweep-a.example',
+      'wss://sweep-b.example',
+      'wss://sweep-c.example',
+    ];
+    // The middle relay acknowledges writes but serves nothing back.
+    const pool = createMockPool({ blackholeRelays: new Set([candidates[1]]) });
+    const storage = memoryStorage();
+    await sweepRelayHealth(pool, storage, {
+      // Duplicate and junk entries collapse away before probing.
+      unprobed: [
+        ...candidates,
+        'wss://sweep-a.example/',
+        'http://sweep-a.example',
+      ],
+      saveBatch: 2,
+    });
+    const byUrl = new Map(storage.relayHealth.map((r) => [r.url, r]));
+    expect([...byUrl.keys()].sort()).toEqual([...candidates].sort());
+    expect(byUrl.get(candidates[0])?.supportsStorage).toBe(true);
+    expect(byUrl.get(candidates[0])?.rttMs).not.toBeNull();
+    expect(byUrl.get(candidates[1])?.supportsStorage).toBe(false);
+    expect(byUrl.get(candidates[1])?.consecutiveFailures).toBe(1);
+    expect(byUrl.get(candidates[2])?.supportsStorage).toBe(true);
+    // None of these relays carry the transfer, so every probed socket is
+    // closed instead of left reconnecting behind the upload.
+    for (const url of candidates) expect(pool.closedRelays).toContain(url);
+  });
+
+  it('enumerates uncapped, caches the enumeration before probing, and leaves the transfer alone', async () => {
+    const found = Array.from(
+      { length: DISCOVERY_CANDIDATE_CAP + 40 },
+      (_, i) => `wss://found-${i}.example`,
+    );
+    const ring = ['wss://ring-1.example', 'wss://ring-2.example'];
+    let probes = 0;
+    const pool = createMockPool({
+      beforePublish: (relay) => {
+        if (relay.startsWith('wss://found-')) probes++;
+      },
+    });
+    pool.store.set(
+      DEFAULT_RELAYS[0],
+      found.map((url, i) => ({
+        ...makeEvent(30166, [['d', url]]),
+        id: `d${i}`,
+        created_at: found.length - i,
+      })),
+    );
+    const storage = memoryStorage();
+    const controller = new AbortController();
+    // Cut the sweep off early, as a finishing transfer would.
+    const sweep = sweepRelayHealth(pool, storage, {
+      excludeRelays: [...ring, DEFAULT_RELAYS[0]],
+      concurrency: 2,
+      saveBatch: 4,
+      signal: controller.signal,
+      onProgress: (checked) => {
+        if (checked >= 6) controller.abort();
+      },
+    });
+    await sweep;
+
+    const cached = storage.relayHealth.map((relay) => relay.url);
+    // The enumeration is cached whole even though probing got nowhere near
+    // the end — that is the part the next transfer needs.
+    expect(cached.length).toBeGreaterThan(DISCOVERY_CANDIDATE_CAP);
+    for (const url of found) expect(cached).toContain(url);
+    expect(probes).toBeLessThan(found.length);
+    // Relays carrying the transfer are never probed and never closed.
+    for (const url of ring) {
+      expect(cached).not.toContain(url);
+      expect(pool.closedRelays).not.toContain(url);
+    }
+    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[0]);
+  });
+
+  it('probes the longest-unchecked relays first so later sessions extend coverage', async () => {
+    const order: string[] = [];
+    const pool = createMockPool({
+      beforePublish: (relay) => {
+        if (relay.startsWith('wss://age-')) order.push(relay);
+      },
+    });
+    const storage = memoryStorage(null, [
+      cachedRelay('wss://age-recent.example', {
+        lastDiscoveredAt: Date.now(),
+        lastCheckedAt: Date.now(),
+      }),
+      cachedRelay('wss://age-old.example', {
+        lastDiscoveredAt: Date.now(),
+        lastCheckedAt: 1,
+      }),
+    ]);
+    await sweepRelayHealth(pool, storage, {
+      unprobed: [
+        'wss://age-recent.example',
+        'wss://age-old.example',
+        'wss://age-never.example',
+      ],
+      concurrency: 1,
+    });
+    // Never checked, then longest-unchecked, then the freshest verdict.
+    expect(order).toEqual([
+      'wss://age-never.example',
+      'wss://age-old.example',
+      'wss://age-recent.example',
+    ]);
+  });
+
+  it('accumulates working relays across batches so the next transfer starts from them', async () => {
+    const working = [
+      'wss://sweep-ok-1.example',
+      'wss://sweep-ok-2.example',
+      'wss://sweep-ok-3.example',
+    ];
+    const dead = ['wss://sweep-dead-1.example', 'wss://sweep-dead-2.example'];
+    const pool = createMockPool({ blackholeRelays: new Set(dead) });
+    const storage = memoryStorage();
+    // Small batches: every flush has to merge onto the previous one, not
+    // replace it, or only the last batch would survive.
+    await sweepRelayHealth(pool, storage, {
+      unprobed: [...working, ...dead],
+      saveBatch: 2,
+    });
+    expect(
+      storage.relayHealth
+        .filter((relay) => relay.supportsStorage)
+        .map((relay) => relay.url)
+        .sort(),
+    ).toEqual([...working].sort());
+
+    // The point of sweeping: a later transfer with nothing else to go on —
+    // no candidate state, no discovery events — still starts from the relays
+    // this sweep proved, and never from the ones it buried.
+    const seeded = await getRelayCandidates(createMockPool(), storage);
+    expect([...seeded].sort()).toEqual([...working].sort());
+
+    // And when discovery does return a candidate list, the swept relays lead
+    // it, so the next ring is drawn from them before anything unproven.
+    storage.state = {
+      candidates: ['wss://unproven.example', ...working],
+      discoveredAt: Date.now(),
+      cursor: 0,
+    };
+    const ranked = await getRelayCandidates(createMockPool(), storage);
+    expect(ranked.slice(0, working.length).sort()).toEqual([...working].sort());
+    expect(ranked).toContain('wss://unproven.example');
+  });
+
+  it('returns without waiting out an in-flight discovery page on abort', async () => {
+    const controller = new AbortController();
+    let releaseQuery = () => {};
+    const hung = new Promise<void>((resolve) => {
+      releaseQuery = resolve;
+    });
+    const pool = createMockPool();
+    // Discovery only checks the abort flag between pages, so this stands in
+    // for a page still waiting on DISCOVERY_PAGE_MAX_WAIT_MS at teardown.
+    const stalled = {
+      ...pool,
+      querySync: async () => {
+        controller.abort();
+        await hung;
+        return [];
+      },
+    };
+    const storage = memoryStorage();
+
+    await sweepRelayHealth(stalled, storage, {
+      unprobed: ['wss://stalled.example'],
+      signal: controller.signal,
+    });
+
+    // Resolving at all is the assertion: the hung page is still unresolved.
+    expect(storage.relayHealth).toEqual([]);
+    expect(pool.closedRelays).toEqual([]);
+    releaseQuery();
+  });
+
+  it('ends on abort without recording probes that raced the shutdown', async () => {
+    const controller = new AbortController();
+    let probesStarted = 0;
+    const pool = createMockPool({
+      beforePublish: async (relay) => {
+        if (!relay.startsWith('wss://abort-')) return;
+        probesStarted++;
+        controller.abort();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    });
+    const storage = memoryStorage();
+    await sweepRelayHealth(pool, storage, {
+      unprobed: Array.from(
+        { length: 20 },
+        (_, i) => `wss://abort-${i}.example`,
+      ),
+      concurrency: 2,
+      signal: controller.signal,
+    });
+    // The two in-flight probes are abandoned rather than waited out, and a
+    // verdict reached against a pool being torn down is thrown away.
+    expect(probesStarted).toBeLessThanOrEqual(2);
+    expect(
+      storage.relayHealth.every((relay) => relay.lastCheckedAt === null),
+    ).toBe(true);
   });
 });
