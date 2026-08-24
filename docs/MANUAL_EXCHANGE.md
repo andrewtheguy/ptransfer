@@ -13,8 +13,12 @@ either side can scan or paste, whichever is more convenient.
 The receiver's response normally comes back on its own: when the sender's device can
 reach Nostr relays, the offer names a few proven ones and the receiver's answer travels
 back through them, encrypted with a key only the offer holder has. So you usually carry
-**one** code, not two. If those relays are unreachable — offline, or none of them took
-the response — the app falls back to the original two-code exchange with nothing lost.
+**one** code, not two. That path needs two things: the receiver must reach at least one
+of the relays named in the offer, and the sender's page must stay open and listening —
+closing or reloading it drops the subscription, and a response published afterwards is
+never picked up. Whenever it does not work out — offline, no relay took the response, or
+the sender's page was restarted — the app falls back to the original two-code exchange
+with nothing lost.
 
 Once the two devices are connected, file bytes are sent directly peer-to-peer over WebRTC
 using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:<chunkCount>:<byteCount>`,

@@ -241,9 +241,11 @@ export function AboutContent() {
                   using camera scan or copy/paste.
                 </li>
                 <li>
-                  Offer/answer signaling is exchanged directly between the two
-                  devices — as a QR code or by copy/paste — so no relay
-                  coordination service is required.
+                  The offer is handed to the recipient directly — as a QR code
+                  or by copy/paste — with no relay coordination service holding
+                  it. Their response normally returns through Nostr relays as
+                  ciphertext, and by QR code or copy/paste when those relays are
+                  unreachable.
                 </li>
                 <li>
                   With internet, STUN can assist direct candidate discovery

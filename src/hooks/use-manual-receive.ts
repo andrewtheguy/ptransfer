@@ -88,6 +88,12 @@ export function useManualReceive(): UseManualReceiveReturn {
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
   const sinkRef = useRef<AppendSink | null>(null);
+  // Pool carrying the answer to the relays, held only for the publish. Cancel
+  // reaches it through this ref so an abandoned receive stops publishing
+  // instead of finishing the round on a dead session.
+  const answerPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
+    null,
+  );
 
   // Resolve function for offer submission
   const offerResolverRef = useRef<((payload: SignalingPayload) => void) | null>(
@@ -106,6 +112,9 @@ export function useManualReceive(): UseManualReceiveReturn {
     // payload stays readable until reset.
     if (receivingRef.current) discardSink();
     cancelledRef.current = true;
+    const answerPool = answerPoolRef.current;
+    answerPoolRef.current = null;
+    if (answerPool) answerPool.destroy();
     receivingRef.current = false;
     offerResolverRef.current = null;
     offerRejectRef.current = null;
@@ -400,6 +409,7 @@ export function useManualReceive(): UseManualReceiveReturn {
           message: 'Sending your response to the sender...',
         });
         const pool = createTransferPool();
+        answerPoolRef.current = pool;
         try {
           await publishAnswer(pool, answerChannel.relays, {
             channel: await deriveAnswerChannel(answerChannel.secret),
@@ -412,6 +422,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         } catch {
           answerRelayStatus = 'failed';
         } finally {
+          answerPoolRef.current = null;
           pool.destroy();
         }
       }

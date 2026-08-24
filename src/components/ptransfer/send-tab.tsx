@@ -113,7 +113,7 @@ export function SendTab() {
   const manualModeDescription =
     'You hand the recipient a short signaling payload — by QR code or copy/paste — and their response comes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for your code; STUN may be used when internet is available. File data stays encrypted.';
   const manualModeHowItWorksDescription =
-    'You and the recipient directly exchange a short signaling payload, either by scanning QR codes or by copy/paste. The signaling payload is obfuscated, not encrypted, so exchange it only with the intended recipient. If internet is available, STUN is used for connection setup metadata such as IP address and port; it does not receive your file contents or encryption keys. It also works without internet when the devices can reach each other over a network path, such as the same LAN/Wi-Fi.';
+    'You hand the recipient a short signaling payload, either by scanning QR codes or by copy/paste. Their encrypted response comes back through Nostr relays when those are reachable, and by QR code or copy/paste when they are not. The signaling payload is obfuscated, not encrypted, so hand it only to the intended recipient — it is also what secures the response. If internet is available, STUN is used for connection setup metadata such as IP address and port; it does not receive your file contents or encryption keys. It also works without internet when the devices can reach each other over a network path, such as the same LAN/Wi-Fi — the relay step drops out on its own.';
 
   const handleSend = () => {
     // Set context with all the configuration
