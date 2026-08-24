@@ -346,7 +346,7 @@ export function SendTransferPage() {
                     </ul>
                     <p className="text-sm text-muted-foreground">
                       {answerRelayStatus === 'waiting'
-                        ? "Their response comes back to this page on its own through Nostr relays — you only have to hand over the data above. If it doesn't arrive, they can still send it to you by QR or copy/paste."
+                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way.'
                         : 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect.'}
                     </p>
                   </div>
@@ -370,7 +370,7 @@ export function SendTransferPage() {
                       <ChevronDown
                         className={`h-4 w-4 transition-transform ${manualAnswerOpen ? 'rotate-180' : ''}`}
                       />
-                      Response not arriving? Scan or paste it here
+                      Scan or paste the receiver's response
                     </CollapsibleTrigger>
                     <CollapsibleContent className="pt-3">
                       <QRInput onSubmit={submitAnswer} expectedType="answer" />

@@ -18,6 +18,7 @@ import {
 import type { TransferState } from '@/lib/nostr';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
+import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
@@ -28,6 +29,7 @@ export type ManualReceiveStatus =
   | 'idle'
   | 'waiting_for_offer'
   | 'generating_answer'
+  | 'choosing_answer_return'
   | 'showing_answer'
   | 'connecting'
   | 'receiving'
@@ -62,11 +64,21 @@ export interface ManualReceiveState {
   answerRelayStatus?: 'sent' | 'failed';
 }
 
+/**
+ * How the receiver returns the answer when the offer named relays: over
+ * those relays, or hand-carried (QR / copy-paste) for the sender to scan or
+ * paste. The receiver picks explicitly so neither side is surprised by
+ * where the response went.
+ */
+export type AnswerReturnMethod = 'relay' | 'manual';
+
 export interface UseManualReceiveReturn {
   state: TransferState & ManualReceiveState;
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
+  /** Resolves the 'choosing_answer_return' step. No-op in any other state. */
+  chooseAnswerReturn: (method: AnswerReturnMethod) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -95,11 +107,16 @@ export function useManualReceive(): UseManualReceiveReturn {
     null,
   );
 
-  // Resolve function for offer submission
-  const offerResolverRef = useRef<((payload: SignalingPayload) => void) | null>(
+  // The steps a receive blocks on until the UI settles them. Cancel rejects
+  // whichever is pending so the flow unwinds immediately.
+  const offerStepRef = useRef<PendingStep<SignalingPayload> | null>(null);
+  const answerReturnStepRef = useRef<PendingStep<AnswerReturnMethod> | null>(
     null,
   );
-  const offerRejectRef = useRef<((error: Error) => void) | null>(null);
+  // Identifies the receive currently in charge of the refs. A cancelled run
+  // that is still unwinding compares against it before touching shared
+  // state, so a restart right after cancel is never clobbered.
+  const runRef = useRef(0);
 
   const discardSink = useCallback(() => {
     const sink = sinkRef.current;
@@ -116,14 +133,26 @@ export function useManualReceive(): UseManualReceiveReturn {
     answerPoolRef.current = null;
     if (answerPool) answerPool.destroy();
     receivingRef.current = false;
-    offerResolverRef.current = null;
-    offerRejectRef.current = null;
+    const cancelledError = new Error('Cancelled');
+    const offerStep = offerStepRef.current;
+    offerStepRef.current = null;
+    offerStep?.reject(cancelledError);
+    const answerReturnStep = answerReturnStepRef.current;
+    answerReturnStepRef.current = null;
+    answerReturnStep?.reject(cancelledError);
     if (rtcRef.current) {
       rtcRef.current.close();
       rtcRef.current = null;
     }
     setState({ status: 'idle' });
   }, [discardSink]);
+
+  const chooseAnswerReturn = useCallback((method: AnswerReturnMethod) => {
+    const step = answerReturnStepRef.current;
+    if (!step) return;
+    answerReturnStepRef.current = null;
+    step.resolve(method);
+  }, []);
 
   const reset = useCallback(() => {
     cancel();
@@ -132,23 +161,23 @@ export function useManualReceive(): UseManualReceiveReturn {
   }, [cancel, discardSink]);
 
   const submitOffer = useCallback(async (offerData: Uint8Array) => {
-    if (!offerResolverRef.current) return;
+    const step = offerStepRef.current;
+    if (!step) return;
 
     // Parse mutual payload (no decryption needed)
     const parsed = await parseMutualPayload(offerData);
+    // The step may have been cancelled while parsing; settle-once makes the
+    // calls below harmless then, but don't clear a newer run's step.
+    if (offerStepRef.current === step) offerStepRef.current = null;
     if (!parsed) {
-      offerRejectRef.current?.(new Error('Invalid offer format'));
-      offerRejectRef.current = null;
-      offerResolverRef.current = null;
+      step.reject(new Error('Invalid offer format'));
       return;
     }
     if (parsed.type !== 'offer') {
-      offerRejectRef.current?.(new Error('Expected offer, got answer'));
-      offerRejectRef.current = null;
-      offerResolverRef.current = null;
+      step.reject(new Error('Expected offer, got answer'));
       return;
     }
-    offerResolverRef.current?.(parsed);
+    step.resolve(parsed);
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doReceive is defined below and only invoked at call time; references stable refs/setState
@@ -166,6 +195,10 @@ export function useManualReceive(): UseManualReceiveReturn {
   }, []);
 
   const doReceive = async () => {
+    const run = ++runRef.current;
+    // Cancelled, or superseded by a receive started after the cancel — in
+    // either case this closure must stop and leave the shared refs alone.
+    const abandoned = () => cancelledRef.current || runRef.current !== run;
     try {
       // Show input for scanning/pasting offer
       setState({
@@ -174,22 +207,11 @@ export function useManualReceive(): UseManualReceiveReturn {
       });
 
       // Wait for offer to be submitted
-      const offerPayload = await new Promise<SignalingPayload>(
-        (resolve, reject) => {
-          offerResolverRef.current = resolve;
-          offerRejectRef.current = reject;
+      const offerStep = createPendingStep<SignalingPayload>();
+      offerStepRef.current = offerStep;
+      const offerPayload = await offerStep.promise;
 
-          // Check periodically if cancelled
-          const checkInterval = setInterval(() => {
-            if (cancelledRef.current) {
-              clearInterval(checkInterval);
-              reject(new Error('Cancelled'));
-            }
-          }, 500);
-        },
-      );
-
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Enforce TTL
       if (
@@ -254,7 +276,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         return;
       }
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Generate our ECDH keypair and derive shared secret
       setState({ status: 'generating_answer', message: 'Generating keys...' });
@@ -270,7 +292,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       );
       const key = await deriveAESKeyFromSecretKey(sharedSecretKey, salt);
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Create WebRTC connection and handle offer
       setState({
@@ -285,7 +307,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       // during its creation cannot see it through sinkRef yet, so discard it
       // here instead of leaving its scratch storage orphaned.
       const sink = await createAdaptiveAppendSink(fileSize);
-      if (cancelledRef.current) {
+      if (abandoned()) {
         void sink.discard();
         return;
       }
@@ -341,7 +363,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         });
       }
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Wait for answer SDP to be generated
       setState({
@@ -359,7 +381,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         }
       });
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Wait for ICE gathering to complete
       setState({
@@ -381,7 +403,7 @@ export function useManualReceive(): UseManualReceiveReturn {
           : 'Network probe timed out. Preparing response code with available routes...',
       });
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Validate answerSDP is available
       if (!answerSDP) {
@@ -397,13 +419,35 @@ export function useManualReceive(): UseManualReceiveReturn {
         ecdhKeyPair.publicKeyBytes,
       );
 
-      // When the offer named an answer channel, seal the same blob under the
-      // offer's secret and publish it there: the sender is already listening,
-      // so nothing has to be carried back by hand. A refusal is not fatal —
-      // the answer code is shown and the exchange finishes as it always did.
+      const fileMetadata = {
+        fileName: fileName!,
+        fileSize: fileSize!,
+        mimeType: mimeType!,
+      };
+
+      // When the offer named an answer channel, the receiver decides how the
+      // answer goes back: sealed under the offer's secret and published to
+      // those relays (the sender is already listening), or hand-carried as a
+      // code for the sender to scan or paste. The choice is explicit so the
+      // receiver knows which one happened. A relay refusal is not fatal — the
+      // answer code is shown and the exchange finishes as it always did.
       const answerChannel = answerChannelFromOffer(offerPayload);
       let answerRelayStatus: 'sent' | 'failed' | undefined;
+      let returnMethod: AnswerReturnMethod = 'manual';
       if (answerChannel) {
+        setState({
+          status: 'choosing_answer_return',
+          message: 'Choose how to return your response',
+          answerData: answerBinary,
+          contentType: 'file',
+          fileMetadata,
+        });
+        const answerReturnStep = createPendingStep<AnswerReturnMethod>();
+        answerReturnStepRef.current = answerReturnStep;
+        returnMethod = await answerReturnStep.promise;
+        if (abandoned()) return;
+      }
+      if (answerChannel && returnMethod === 'relay') {
         setState({
           status: 'generating_answer',
           message: 'Sending your response to the sender...',
@@ -427,7 +471,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         }
       }
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Show answer and wait for connection
       setState({
@@ -439,11 +483,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         answerData: answerBinary,
         answerRelayStatus,
         contentType: 'file',
-        fileMetadata: {
-          fileName: fileName!,
-          fileSize: fileSize!,
-          mimeType: mimeType!,
-        },
+        fileMetadata,
       });
 
       // Wait for data channel to open
@@ -465,7 +505,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         }
       });
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       setState({
         status: 'receiving',
@@ -487,7 +527,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       // createDataChannelReceiver).
       const receivedData = await new Promise<Blob>((resolve, reject) => {
         const checkInterval = setInterval(() => {
-          if (cancelledRef.current) {
+          if (abandoned()) {
             clearInterval(checkInterval);
             receiver.dispose();
             reject(new Error('Cancelled'));
@@ -505,7 +545,7 @@ export function useManualReceive(): UseManualReceiveReturn {
           });
       });
 
-      if (cancelledRef.current) return;
+      if (abandoned()) return;
 
       // Acknowledge only after all chunks authenticate and reassemble.
       rtc.send(ACK);
@@ -529,9 +569,10 @@ export function useManualReceive(): UseManualReceiveReturn {
         },
       });
     } catch (error) {
-      // Nothing downloadable survives a failed transfer; drop its storage.
-      discardSink();
-      if (!cancelledRef.current) {
+      // Nothing downloadable survives a failed transfer; drop its storage
+      // — unless a newer run owns the sink by now.
+      if (!abandoned()) {
+        discardSink();
         setState((prevState) => ({
           ...prevState,
           status: 'error',
@@ -540,15 +581,26 @@ export function useManualReceive(): UseManualReceiveReturn {
         }));
       }
     } finally {
-      receivingRef.current = false;
-      offerResolverRef.current = null;
-      offerRejectRef.current = null;
-      if (rtcRef.current) {
-        rtcRef.current.close();
-        rtcRef.current = null;
+      // A superseded run's refs already belong to the newer receive.
+      if (runRef.current === run) {
+        receivingRef.current = false;
+        offerStepRef.current = null;
+        answerReturnStepRef.current = null;
+        if (rtcRef.current) {
+          rtcRef.current.close();
+          rtcRef.current = null;
+        }
       }
     }
   };
 
-  return { state, receivedContent, startReceive, submitOffer, cancel, reset };
+  return {
+    state,
+    receivedContent,
+    startReceive,
+    submitOffer,
+    chooseAnswerReturn,
+    cancel,
+    reset,
+  };
 }

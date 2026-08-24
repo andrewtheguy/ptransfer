@@ -1,19 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { QRDisplay } from './qr-display';
-
-// A response that went out over relays hides its code, but not forever: if
-// the sender has not connected by now, something on that path failed
-// silently and the hand-carried hop is the way out.
-const ANSWER_CODE_REVEAL_MS = 30 * 1000;
 
 export interface AnswerReturnProps {
   answerData: Uint8Array;
   clipboardData?: string;
   /**
-   * Outcome of the relay answer channel the offer named: 'sent' collapses the
-   * code behind a disclosure, 'failed' explains why it still has to be
-   * carried back, and undefined is the plain two-hop exchange.
+   * Outcome of the relay path the receiver chose: 'sent' collapses the code
+   * behind a disclosure, 'failed' explains why it has to be carried back
+   * after all, and undefined is the hand-carried exchange (chosen, or the
+   * only option when the offer named no relays).
    */
   answerRelayStatus?: 'sent' | 'failed';
 }
@@ -29,12 +25,6 @@ export function AnswerReturn({
 }: AnswerReturnProps) {
   const [showCode, setShowCode] = useState(false);
 
-  useEffect(() => {
-    if (answerRelayStatus !== 'sent') return;
-    const timer = setTimeout(() => setShowCode(true), ANSWER_CODE_REVEAL_MS);
-    return () => clearTimeout(timer);
-  }, [answerRelayStatus]);
-
   if (answerRelayStatus === 'sent' && !showCode) {
     return (
       <div className="space-y-3 rounded-lg bg-muted/50 border p-4">
@@ -42,7 +32,8 @@ export function AnswerReturn({
         <p className="text-sm text-muted-foreground">
           It went back over the relays named in the sender's code, so there is
           nothing to scan or copy. Keep this page open — the transfer connects
-          on its own once the sender has it.
+          on its own once the sender has it. If the sender's page reports a
+          failed connection, both sides need to start over.
         </p>
         <Button variant="outline" size="sm" onClick={() => setShowCode(true)}>
           Show response code instead
@@ -58,7 +49,7 @@ export function AnswerReturn({
         {answerRelayStatus === 'failed' && (
           <p className="text-sm text-amber-700 dark:text-amber-300">
             The relays named in the sender's code did not take your response, so
-            it has to go back by hand this time.
+            it has to go back by hand after all.
           </p>
         )}
         <p className="text-sm text-muted-foreground">
@@ -68,7 +59,8 @@ export function AnswerReturn({
         <ul className="text-sm text-muted-foreground space-y-2">
           <li>
             <span className="font-medium text-foreground">QR code:</span> the
-            sender scans the code below with their camera.
+            sender opens <strong>Scan or paste the receiver's response</strong>{' '}
+            on their page and scans the code below with the in-app scanner.
           </li>
           <li>
             <span className="font-medium text-foreground">

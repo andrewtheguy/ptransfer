@@ -10,15 +10,16 @@ two devices, **you** carry the sender's connection data across by hand — using
 **copy/paste**, or a mix of the two. The two methods are interchangeable at every step:
 either side can scan or paste, whichever is more convenient.
 
-The receiver's response normally comes back on its own: when the sender's device can
-reach Nostr relays, the offer names a few proven ones and the receiver's answer travels
-back through them, encrypted with a key only the offer holder has. So you usually carry
-**one** code, not two. That path needs two things: the receiver must reach at least one
-of the relays named in the offer, and the sender's page must stay open and listening —
-closing or reloading it drops the subscription, and a response published afterwards is
-never picked up. Whenever it does not work out — offline, no relay took the response, or
-the sender's page was restarted — the app falls back to the original two-code exchange
-with nothing lost.
+The receiver's response can come back on its own: when the sender's device can reach
+Nostr relays, the offer names a few proven ones and the receiver's answer can travel back
+through them, encrypted with a key only the offer holder has. The **receiver chooses**
+this explicitly once the offer is in — *send through relays* or *show a code* for the
+sender to scan or paste — so both sides know which way the response went. With relays
+you carry **one** code, not two. That path needs two things: the receiver must reach at
+least one of the relays named in the offer, and the sender's page must stay open and
+listening — closing or reloading it drops the subscription, and a response published
+afterwards is never picked up. If no relay takes the response, the app falls back to the
+two-code exchange with nothing lost.
 
 Once the two devices are connected, file bytes are sent directly peer-to-peer over WebRTC
 using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:<chunkCount>:<byteCount>`,
@@ -44,20 +45,20 @@ Manual mode is useful when:
 The two devices swap two small pieces of connection data:
 
 1. **Offer** — sender → receiver, always carried by you
-2. **Answer** — receiver → sender, normally returned through Nostr relays
+2. **Answer** — receiver → sender, through Nostr relays or carried by you (the receiver picks)
 
 The offer can be transferred **either** as QR code(s) **or** as copied text — the receiver
 can scan it or paste it, whichever is easier.
 
-The answer takes the automatic path whenever the sender proved a set of relays while
-building the offer. It checks its default relays in the background while the connection
-data is prepared, so that part costs no waiting; if some of them are down it looks for
-replacements first, and the offer code appears once it knows which relays to name. The receiver's
-page then says *"Response sent to the sender"* and there is nothing to carry back; the code
-is still one tap away under **Show response code instead**, and appears on its own if the
-connection has not come up after half a minute. When no relays were proven, or none accepted
-the response, both sides fall back to the hand-carried answer — QR or copy/paste, exactly as
-below.
+The relay path is offered whenever the sender proved a set of relays while building the
+offer. It checks its default relays in the background while the connection data is
+prepared, so that part costs no waiting; if some of them are down it looks for replacements
+first, and the offer code appears once it knows which relays to name. Once the receiver has
+the offer, their page asks how the response should go back: **Send through relays** or
+**Show a code to scan or paste**. With relays, the page then says *"Response sent to the
+sender"* and there is nothing to carry back (the code stays one tap away under **Show
+response code instead**). With a code, or when no relays were proven or none accepted the
+response, the answer is hand-carried — QR or copy/paste, exactly as below.
 
 > The relay hop moves the answer only. File bytes always travel directly between the two
 > devices over WebRTC. Because the answer channel is keyed from the offer, treat the offer as
@@ -104,19 +105,22 @@ AES-GCM plus a whole-file checksum.)
      the app if needed, then scan the remaining codes one by one (progress shows "Collected 1 of N")
    - **Paste tab:** paste the copied offer text
 3. Once the full offer is collected, the app validates it and generates your **answer**
-4. If the sender's code named relays, the answer is sent back through them automatically —
-   the page says **Response sent to the sender** and you are done; just keep it open
-5. Otherwise (or if that fails) your answer appears as a **single QR code** with a
-   **Copy Data** button — send it back to the sender by **either** method. You can also
-   bring the code up yourself with **Show response code instead**
+4. If the sender's code named relays, the page asks how to return it: **Send through
+   relays** publishes the answer for the sender's page to pick up — it then says
+   **Response sent to the sender** and you are done; just keep it open. **Show a code to
+   scan or paste** skips the relays entirely
+5. With a code (chosen, no relays named, or relays refused it) your answer appears as a
+   **single QR code** with a **Copy Data** button — send it back to the sender by
+   **either** method. After a relay send you can still bring the code up with **Show
+   response code instead**
 
 ### Back to Sender — connect
 
-1. Normally there is nothing to do: the page waits for the receiver's response and picks it
-   up off the relays by itself
-2. If it does not arrive, open **Response not arriving? Scan or paste it here** and take the
-   answer in by **either** method — scan the response QR with the in-app scanner, or paste
-   the copied response text
+1. If the receiver sent the response through relays, there is nothing to do: the page
+   waits for it and picks it up off the relays by itself
+2. If the receiver shows a code instead, open **Scan or paste the receiver's response** and
+   take the answer in by **either** method — scan the response QR with the in-app scanner,
+   or paste the copied response text
 3. The P2P connection establishes and the file transfers directly
 4. Both sides show that the transfer completed when done
 
@@ -169,7 +173,7 @@ Differences from normal Manual Exchange:
 
 ## Tips
 
-- **Usually one code, not two**: Only the sender's offer is carried by hand when relays are reachable
+- **One code or two — the receiver decides**: With relays reachable, the receiver can send the answer back through them so only the sender's offer is carried by hand, or show a code and have the sender scan or paste it
 - **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them
 - **Order doesn't matter (QR)**: Multi-QR offer codes can be scanned in any order
 - **Duplicates are fine (QR)**: Scanning the same QR code twice won't cause issues
@@ -194,8 +198,9 @@ Differences from normal Manual Exchange:
 | "Camera access denied" in-app | Allow camera permissions in your browser settings and reload the page. Or switch to the **Paste** tab and use copy/paste instead. |
 | Copy button does nothing | Some browsers block clipboard access. Use **Show text to copy manually** and select the text by hand. |
 | Pasted data is rejected | Make sure you copied the entire blob and pasted the matching piece (offer to the receiver, answer to the sender). |
-| Receiver says the response was sent, but the sender is still waiting | Give it a few seconds. If nothing happens, use **Show response code instead** on the receiver and **Response not arriving?** on the sender, and carry the answer across by QR or copy/paste. |
-| Receiver shows the response code even though both devices are online | No relay took the response (or none were reachable when the offer was made). The hand-carried answer works exactly as before. |
+| Receiver says the response was sent, but the sender is still waiting | Give it a few seconds. If nothing happens, use **Show response code instead** on the receiver and **Scan or paste the receiver's response** on the sender, and carry the answer across by QR or copy/paste. |
+| Receiver says the response was sent, and the sender reports a failed connection | The response arrived; the direct WebRTC route between the devices is blocked (firewall / restrictive NAT). Scanning the code will not help — both sides need to start over on a network path that allows a direct connection, or use the Nostr file relay option. |
+| Receiver shows the response code without being asked | No relay took the response (or none were reachable when the offer was made). The hand-carried answer works exactly as before. |
 | Transfer fails after the offer is collected (direct flow) | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
 | Sender shows expired error | Generate a new offer by retrying the send flow. |
 | Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
