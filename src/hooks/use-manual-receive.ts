@@ -335,6 +335,11 @@ export function useManualReceive(): UseManualReceiveReturn {
       let dataChannelResolver: (() => void) | null = null;
       let connectionFailedRejecter: ((error: Error) => void) | null = null;
       let answerSDPResolver: (() => void) | null = null;
+      // A dead route can be known before the wait promise below exists (while
+      // the receiver is still choosing how to return the answer, or ICE is
+      // gathering). With no rejecter to hand it to yet, the failure is held
+      // here so the wait fails fast instead of riding out the full timeout.
+      let earlyConnectionFailure: Error | null = null;
 
       const rtc = new WebRTCConnection(
         getWebRTCConfig(),
@@ -362,14 +367,16 @@ export function useManualReceive(): UseManualReceiveReturn {
         },
         (connectionState) => {
           // A dead route is known long before the connection timeout; the
-          // relay fallback (below) starts from it right away.
+          // relay fallback (below) starts from it right away. If it fails
+          // before the wait promise is set up, record it so that promise can
+          // reject at once rather than waiting out the timeout.
           if (
             connectionState === 'failed' ||
             connectionState === 'disconnected'
           ) {
-            connectionFailedRejecter?.(
-              new P2PConnectionError('Connection failed'),
-            );
+            const error = new P2PConnectionError('Connection failed');
+            if (connectionFailedRejecter) connectionFailedRejecter(error);
+            else earlyConnectionFailure ??= error;
           }
         },
       );
@@ -516,6 +523,11 @@ export function useManualReceive(): UseManualReceiveReturn {
       // without relays, or past the relay size cap, the failure stands.
       try {
         await new Promise<void>((resolve, reject) => {
+          // A failure that landed before this promise existed is not lost.
+          if (earlyConnectionFailure) {
+            reject(earlyConnectionFailure);
+            return;
+          }
           const timeout = setTimeout(
             () => {
               reject(new P2PConnectionError('Connection timeout'));

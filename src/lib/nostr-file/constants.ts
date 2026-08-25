@@ -72,7 +72,8 @@ export const BACKGROUND_PROBE_SAVE_BATCH = 8;
 
 // The encrypted control channel rides the proven signaling relays the offer
 // names for the answer channel. DEFAULT_RELAYS are checked with a small probe
-// first; if any fail, discovered control-capable relays fill the gaps.
+// first; a default that fails is filled from a reserve that passed the
+// full-size HEALTH_CHECK_PROBE_BYTES probe, not from a control-sized discovery.
 export const CONTROL_RELAY_COUNT = 6;
 // Fewer usable control relays than this and the offer goes out without a
 // relay channel — no answer return over relays, no relay fallback.

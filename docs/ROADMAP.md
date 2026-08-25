@@ -72,7 +72,7 @@ transport becomes the Manual Exchange stand-in for TURN, with no user opt-in.
   convenient way to pass the receiver's response back — the same relays carry
   the file if the direct connection fails.
 - It still fails rather than falling back only when there is no relay path at
-  all: the offer named no relays (fewer than `MIN_ANSWER_RELAYS` were proven
+  all: the offer named no relays (fewer than `MIN_CONTROL_RELAYS` were proven
   when it was built), or the file is over the 100 MB relay cap.
 
 Status: implemented. Sender/receiver fallback lives in

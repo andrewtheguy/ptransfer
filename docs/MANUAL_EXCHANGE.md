@@ -26,8 +26,8 @@ using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:
 then a single receiver `ACK` once `DONE` validates the chunk count and final byte count and all chunks have
 authenticated and reassembled).
 
-If a direct connection **cannot** be made — a restrictive NAT or firewall on both ends —
-the encrypted file is carried through Nostr relays instead of failing (see
+If a direct connection **cannot** be made — for example, a restrictive NAT or firewall on
+either end — the encrypted file is carried through Nostr relays instead of failing (see
 [Relay fallback](#relay-fallback-no-direct-connection)). This is automatic: there is no
 switch to find. It needs only that the offer named relays (it usually does) and a file
 under 100 MB; how you returned the answer, over relays or by QR, makes no difference. This
