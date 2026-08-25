@@ -71,14 +71,11 @@ export function canonicalRelayPool(
 // list). Write entries in canonical form (no trailing slash, no default port)
 // — `relays.test.ts` enforces that the source reads exactly as it is used, and
 // `canonicalRelayPool` guarantees it at runtime either way.
+//
+// The pool is restricted to relays that stay reachable over Tor: the popular
+// ones (damus, nos.lol, primal, snort) sit behind Cloudflare or otherwise
+// refuse exit-node traffic, which strands the anonymous signaling path.
 export const DEFAULT_RELAYS = canonicalRelayPool(
-  [
-    'wss://relay.damus.io',
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-    'wss://nostr.rocks',
-    'wss://relay.nostr.pub',
-    'wss://relay.snort.social',
-  ],
+  ['wss://relay.pocketnostr.com', 'wss://nostrelay.circum.space'],
   'DEFAULT_RELAYS',
 );
