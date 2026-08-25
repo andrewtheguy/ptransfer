@@ -387,7 +387,7 @@ tag        = HKDF-SHA256(ECDH shared secret,
                                 + "|" + offerHash + "|" + answerHash)[0..16]
 ```
 
-The receiver computes it right after it derives the shared secret and puts it in the answer. The sender recomputes it from its *own* offer bytes and the answer it parsed, and compares in constant time (`constantTimeEqualBytes`); a mismatch aborts the transfer before `handleSignal` is called, before the content key is derived, and before any file byte moves.
+Once it has the shared secret, the receiver holds it until the answer exists: it builds the answer payload, hashes that payload, and only then derives the tag over the result and encodes it into the answer. The sender recomputes it from its *own* offer bytes and the answer it parsed, and compares in constant time (`constantTimeEqualBytes`); a mismatch aborts the transfer before `handleSignal` is called, before the content key is derived, and before any file byte moves.
 
 The **offer** digest hashes the container bytes rather than a re-serialization of the parsed fields. Every path delivers those bytes unmodified — copy/paste is base64 of exactly them, and the chunked QR path reassembles them under a CRC32 check — so the digest commits to the whole offer, including any field a future reader would not know to canonicalize.
 
