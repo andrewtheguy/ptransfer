@@ -2,7 +2,7 @@
 
 ## Overview
 
-pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling and a Code Exchange method whose offer is handed over by QR or copy/paste and whose receiver answer can be returned either the same way or as ciphertext over Nostr relays. Both modes prefer direct P2P transfer over WebRTC. Code Exchange can instead carry files up to 100 MiB through public Nostr relays when a direct connection cannot be established and the offer named usable relays; PIN Exchange has no data-path fallback. In PIN Exchange the content-encryption key comes from a PIN-driven SPAKE2 password-authenticated key exchange; in Code Exchange it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard offer path.
+pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling and a Code Exchange method whose offer and whose receiver answer are both handed over by QR or copy/paste. Both modes prefer direct P2P transfer over WebRTC. Code Exchange can instead carry files up to 100 MiB through public Nostr relays when a direct connection cannot be established and the offer named usable relays; PIN Exchange has no data-path fallback. In PIN Exchange the content-encryption key comes from a PIN-driven SPAKE2 password-authenticated key exchange; in Code Exchange it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard offer path.
 
 ## Core Principles
 
@@ -10,7 +10,7 @@ pTransfer is a browser-based encrypted file and folder transfer application. It 
 2. **Single P2P Transfer Path**: `src/lib/p2p-transfer.ts` is the only file-transfer implementation used after signaling opens a WebRTC data channel. Both signaling methods use its 128 KiB AES-GCM chunks, `DONE:<chunkCount>:<byteCount>`, and data-channel `ACK` framing on the direct path.
 3. **Separate Relay Transfer Path**: `src/lib/nostr-file/` implements Code Exchange's fallback: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check.
 4. **Bounded P2P Receive Storage**: Direct receivers append authenticated chunks in reliable data-channel order to an adaptive sink: memory through 100 MiB, then OPFS. The relay fallback is capped at 100 MiB and materializes its payload in memory while hashing, compressing, assembling, and verifying it.
-5. **Method-Specific Setup and Failure Handling**: PIN Exchange uses Nostr for its PAKE handshake and WebRTC signals. Code Exchange hand-carries the offer, optionally uses Nostr relays for the encrypted answer, and may reuse those named relays as the fallback's encrypted control channel. A failed answer publication is terminal for that attempt; it does not silently switch to a QR response.
+5. **Method-Specific Setup and Failure Handling**: PIN Exchange uses Nostr for its PAKE handshake and WebRTC signals. Code Exchange hand-carries both the offer and the answer, and may reuse the relays the offer named as the fallback's encrypted control channel.
 6. **PIN Locates and Authenticates via PAKE (PIN Exchange)**: A rotating 12-character, case-sensitive letters-and-digits PIN locates the sender's rendezvous event and drives a SPAKE2 (RFC 9382, P-256) password-authenticated key exchange. Content and signaling keys are HKDF derivations off the SPAKE2 shared secret — which mixes fresh ephemeral scalars from both sides — so nothing published to relays can test a PIN guess offline, and a PIN recovered after the fact decrypts nothing.
 7. **Confidentiality and Authenticity, Not Availability**: The system defends what is transferred and who receives it. It does not guarantee completion: signaling and the Code Exchange fallback depend on third-party relays, and direct P2P setup is STUN-only. Failure — accidental or induced — costs a retry, not confidentiality or integrity. See *Availability Is a Non-Goal*.
 
@@ -23,7 +23,7 @@ By default, Nostr is used for signaling. Code Exchange is available as an altern
 | Signaling path | Decentralized relays | Offer and answer both by QR/copy-paste; the sender scans or pastes the answer |
 | ICE servers | STUN only (Google + Cloudflare); no TURN | STUN only (same WebRTC config); no TURN |
 | File transport | Direct WebRTC only | Direct WebRTC first; automatic Nostr relay fallback up to 100 MiB when available |
-| Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE | Offer is only obfuscated and must be delivered authentically; relay-returned answer and fallback file pieces are encrypted |
+| Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE | Offer and answer are only obfuscated and must be delivered authentically; fallback file pieces are encrypted |
 | Complexity | More complex | Hand-carried code (QR or copy/paste) |
 | Internet Required | Yes | No (if on same local network) |
 | Network Requirement | Internet access to common signaling relays plus a direct ICE route | Same local network without internet; with internet, either a direct ICE route or a usable relay fallback |

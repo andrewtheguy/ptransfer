@@ -24,6 +24,7 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [qrFailed, setQrFailed] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(
     Math.ceil(PIN_WAIT_TIMEOUT_MS / 1000),
   );
@@ -101,6 +102,7 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
   useEffect(() => {
     let active = true;
     setQrUrl(null);
+    setQrFailed(false);
 
     generateTextQRCode(buildPinUrl(window.location.origin, pin), {
       width: QR_WIDTH,
@@ -111,8 +113,10 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
       })
       .catch((err) => {
         // The QR only saves the receiver some typing; the PIN below it is the
-        // real handoff, so a failure here just leaves the code hidden.
+        // real handoff, so a failure here just drops the code rather than
+        // leaving a spinner running forever.
         console.error('Failed to generate PIN QR code:', err);
+        if (active) setQrFailed(true);
       });
 
     return () => {
@@ -176,29 +180,33 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
           Share this PIN with the receiver
         </h3>
         <p className="text-xs text-muted-foreground">
-          Have them scan the code, or read them the PIN.
+          {qrFailed
+            ? 'Read them the PIN, or copy it and send it over.'
+            : 'Have them scan the code, or read them the PIN.'}
         </p>
       </div>
 
       {/* Scannable PIN link: opens the receive page with the PIN filled in */}
-      <div className="flex justify-center">
-        <div className="p-2 bg-white rounded-lg">
-          <div
-            className="flex items-center justify-center"
-            style={{ width: QR_WIDTH, height: QR_WIDTH }}
-          >
-            {qrUrl ? (
-              <img
-                src={qrUrl}
-                alt="QR code linking to the receive page with this PIN"
-                className="block w-full h-auto"
-              />
-            ) : (
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            )}
+      {!qrFailed && (
+        <div className="flex justify-center">
+          <div className="p-2 bg-white rounded-lg">
+            <div
+              className="flex items-center justify-center"
+              style={{ width: QR_WIDTH, height: QR_WIDTH }}
+            >
+              {qrUrl ? (
+                <img
+                  src={qrUrl}
+                  alt="QR code linking to the receive page with this PIN"
+                  className="block w-full h-auto"
+                />
+              ) : (
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* PIN Display */}
       <div className="flex flex-col gap-2">

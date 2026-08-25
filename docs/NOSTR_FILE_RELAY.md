@@ -10,9 +10,8 @@ that would have connected directly never puts a byte of the file on a storage re
 are known, the sender discovers and health-checks a storage ring and keeps probing the
 relay population behind the exchange (`prepareStorageRelays`), so the shared relay cache
 is warmed either way and a failed direct attempt finds its ring ready. What matters is only that the
-offer named proven relays; whether the receiver returned the answer over those relays or
-by QR / copy-paste makes no difference, since both sides still share the offer's relays
-and the session derived from the exchange. When there is no relay path at all — the offer
+offer named proven relays: both sides share those relays and the session derived from
+the exchange. When there is no relay path at all — the offer
 named no relays or the file is over the 100 MiB cap — the fallback is unavailable. It can
 also fail later if too few storage relays work or the selected relays do not deliver the
 pieces.

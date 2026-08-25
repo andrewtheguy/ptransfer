@@ -43,6 +43,9 @@ export function ReceiveTab() {
   } = useManualReceive();
 
   const [route, setRoute] = useState<ReceiveRoute>('none');
+  // Failures before either hook owns the transfer, which therefore have no
+  // state of their own to report through.
+  const [startError, setStartError] = useState<string | null>(null);
   // Held between startReceive() and the hook arming its offer step.
   const pendingOfferRef = useRef<Uint8Array | null>(null);
 
@@ -67,6 +70,7 @@ export function ReceiveTab() {
     async (input: ReceiveInputValue) => {
       // Spent: a later "Receive Another" must not refill the deep-link PIN.
       setInitialPin(undefined);
+      setStartError(null);
 
       if (input.kind === 'pin') {
         setRoute('auto');
@@ -75,7 +79,11 @@ export function ReceiveTab() {
           const pakeSecret = await derivePakeSecret(input.pin);
           await receive({ pakeSecret, locator: getPinLocator(input.pin) });
         } catch (err) {
+          // receive() reports its own failures through state; reaching here
+          // means the transfer never started, so hand the box back.
           console.error('Failed to start PIN receive flow:', err);
+          setRoute('none');
+          setStartError('Could not start the transfer. Please try again.');
         }
         return;
       }
@@ -107,6 +115,7 @@ export function ReceiveTab() {
     else cancelNostr();
     pendingOfferRef.current = null;
     setRoute('none');
+    setStartError(null);
   }, [isManual, cancelManual, cancelNostr]);
 
   const handleReset = useCallback(() => {
@@ -114,6 +123,7 @@ export function ReceiveTab() {
     else resetNostr();
     pendingOfferRef.current = null;
     setRoute('none');
+    setStartError(null);
   }, [isManual, resetManual, resetNostr]);
 
   const handleDownload = useCallback(() => {
@@ -138,7 +148,11 @@ export function ReceiveTab() {
     <div className="space-y-4 pt-4">
       {state.status === 'idle' ? (
         <>
-          <ReceiveInput onSubmit={handleSubmit} initialPin={initialPin} />
+          <ReceiveInput
+            onSubmit={handleSubmit}
+            initialPin={initialPin}
+            error={startError}
+          />
 
           <div className="text-xs text-muted-foreground text-center pb-2">
             File data is encrypted before transfer. Relays or STUN may still see

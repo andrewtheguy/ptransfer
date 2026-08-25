@@ -142,6 +142,7 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
               }}
               placeholder="Paste the receiver's response here..."
               className="min-h-[100px] font-mono text-xs"
+              aria-label="Receiver's response code"
               disabled={disabled}
             />
 

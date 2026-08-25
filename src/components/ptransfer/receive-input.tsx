@@ -30,6 +30,8 @@ interface ReceiveInputProps {
   onSubmit: (input: ReceiveInputValue) => void;
   /** Prefills the box from a scanned PIN link, opening on the Paste tab. */
   initialPin?: string;
+  /** Surfaced from the parent when starting the transfer itself failed. */
+  error?: string | null;
   disabled?: boolean;
 }
 
@@ -47,6 +49,7 @@ function formatTime(seconds: number): string {
 export function ReceiveInput({
   onSubmit,
   initialPin,
+  error: startError,
   disabled,
 }: ReceiveInputProps) {
   const [value, setValue] = useState(initialPin ?? '');
@@ -92,6 +95,10 @@ export function ReceiveInput({
 
     return () => clearInterval(intervalId);
   }, [value]);
+
+  useEffect(() => {
+    if (startError) setError(startError);
+  }, [startError]);
 
   const handlePasteFromClipboard = useCallback(async () => {
     try {

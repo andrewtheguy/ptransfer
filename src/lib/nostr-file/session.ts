@@ -1,7 +1,7 @@
 import { RELAY_SESSION_INFO } from './constants';
 
 /**
- * The relay-fallback session both sides of a Code Exchange share.
+ * The relay-fallback session that both sides of a Code Exchange share.
  *
  * Nothing about it travels in a code: once the offer/answer exchange has
  * produced the ECDH shared secret, sender and receiver each run HKDF over

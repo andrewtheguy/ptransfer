@@ -111,11 +111,11 @@ When WebRTC succeeds, all signaling methods share the same **data-channel transf
 
 See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encryption specifics.
 
-### Receive Modes
+### Receive Input
 
-Receivers choose the matching receive mode:
-- **PIN Exchange**: Nostr signaling with the rotating PIN shown on the sender's screen.
-- **Code Exchange**: The sender's signaling payload is handed over directly via QR scan or copy/paste, and the response goes back the same way; if direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
+One input accepts both modes; the page works out which one the sender used from what it is given:
+- **PIN Exchange**: the rotating PIN from the sender's screen — typed, pasted, or scanned from the PIN QR. Signaling then runs over Nostr, and a confirmation code appears for the receiver to read back.
+- **Code Exchange**: the sender's signaling payload, scanned from their QR codes or pasted as copied text. The response code that appears goes back to the sender the same way; if direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
 
 ## Documentation
 
