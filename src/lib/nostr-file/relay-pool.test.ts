@@ -339,6 +339,45 @@ describe('getRelayCandidates', () => {
     ]);
   });
 
+  it('never returns a seed, whichever cache it was left in', async () => {
+    const now = 2_000;
+    // One seed sits in the candidate cache and another is a proven entry in
+    // the health cache — both from a run before this seed list was in force.
+    const storage = memoryStorage(
+      {
+        candidates: [SEED_RELAYS[0], 'wss://cached.example'],
+        discoveredAt: 1_000,
+        cursor: 0,
+      },
+      [
+        cachedRelay(SEED_RELAYS[1], {
+          lastDiscoveredAt: 1_000,
+          lastCheckedAt: 1_000,
+          lastSucceededAt: 1_000,
+          rttMs: 1,
+          supportsControl: true,
+          supportsStorage: true,
+        }),
+      ],
+    );
+    const pool = createMockPool();
+    // A seed someone listed in a discovery event is dropped as well.
+    pool.store.set(SEED_RELAYS[2], [
+      makeEvent(30166, [['d', SEED_RELAYS[3]]]),
+      makeEvent(30166, [['d', 'wss://new.example']]),
+    ]);
+
+    const candidates = await getRelayCandidates(pool, storage, {
+      now,
+      seeds: SEED_RELAYS,
+    });
+
+    expect(candidates).toEqual(['wss://new.example', 'wss://cached.example']);
+    // The candidate cache is written straight back from this list, so the
+    // stale seed is gone for good rather than resurfacing next run.
+    expect(storage.state?.candidates).toEqual(candidates);
+  });
+
   it('merges newly discovered relays into a fresh cache', async () => {
     const now = 2_000;
     const storage = memoryStorage({

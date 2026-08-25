@@ -787,6 +787,10 @@ export async function selectUploadRelays(
  * into the still-valid candidate and relay-health caches, so newly listed
  * relays become available without giving up cached fallbacks when discovery
  * is sparse or the default seeds are unreliable.
+ *
+ * The seeds are never returned, from any source — discovery, the candidate
+ * cache, or the relay-health cache. Signaling relays are chosen for small
+ * messages and must never end up carrying chunks.
  */
 export async function getRelayCandidates(
   pool: NostrFilePool,
@@ -814,18 +818,23 @@ export async function getRelayCandidates(
       })
       .map((relay) => [relay.url, relay]),
   );
+  // Discovery drops seeds from what it returns, but the caches are older than
+  // any given seed list: a relay listed as a candidate before it became a
+  // signaling seed, or left behind by a seed list that has since changed, is
+  // still sitting in them. Barring seeds here too is what makes `merged` —
+  // which is written straight back to the candidate cache — self-healing
+  // rather than carrying such an entry forever.
+  const seeds = canonicalUrls(opts.seeds ?? [...DEFAULT_RELAYS]);
+  const seedSet = new Set(seeds);
   const cachedCandidates =
     state &&
     state.discoveredAt <= now &&
     now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
       ? state.candidates
           .map((url) => normalizeRelayUrl(url))
-          .filter((url): url is string => url !== null)
+          .filter((url): url is string => url !== null && !seedSet.has(url))
       : [];
-  const discovered = await discoverRelayCandidates(
-    pool,
-    opts.seeds ?? [...DEFAULT_RELAYS],
-  );
+  const discovered = await discoverRelayCandidates(pool, seeds);
   for (const url of cachedCandidates) {
     if (!byUrl.has(url)) {
       byUrl.set(url, emptyCachedRelay(url, state?.discoveredAt ?? 0));
@@ -838,6 +847,7 @@ export async function getRelayCandidates(
   const knownWorking = [...byUrl.values()]
     .filter(
       (relay) =>
+        !seedSet.has(relay.url) &&
         (capability === 'storage'
           ? relay.supportsStorage
           : relay.supportsControl) &&
