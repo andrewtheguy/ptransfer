@@ -15,11 +15,8 @@ import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useSend } from '@/contexts/send-context';
-import {
-  type UseManualSendReturn,
-  useManualSend,
-} from '@/hooks/use-manual-send';
-import { type UseNostrSendReturn, useNostrSend } from '@/hooks/use-nostr-send';
+import { type UseCodeSendReturn, useCodeSend } from '@/hooks/use-code-send';
+import { type UsePinSendReturn, usePinSend } from '@/hooks/use-pin-send';
 import {
   archiveTimestamp,
   createZipTransferSource,
@@ -37,12 +34,12 @@ type TransferStep =
   | 'active'
   | 'complete'
   | 'error'
-  | 'nostr_unavailable';
+  | 'pin_unavailable';
 
 // Discriminated union for type-safe hook access
 type ActiveHook =
-  | { type: 'online'; hook: UseNostrSendReturn }
-  | { type: 'offline'; hook: UseManualSendReturn };
+  | { type: 'pin'; hook: UsePinSendReturn }
+  | { type: 'code'; hook: UseCodeSendReturn };
 
 export function SendTransferPage() {
   const navigate = useNavigate();
@@ -55,40 +52,39 @@ export function SendTransferPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Hooks for transfer
-  const nostrHook = useNostrSend();
-  const manualHook = useManualSend();
+  const pinHook = usePinSend();
+  const codeHook = useCodeSend();
 
   const startedRef = useRef(false);
 
   // Determine which hook to use based on config with discriminated union
-  const isOnline = config?.methodChoice === 'online';
+  const isPinExchange = config?.transferMode === 'pin';
   const activeHook: ActiveHook = useMemo(
     () =>
-      isOnline
-        ? { type: 'online', hook: nostrHook }
-        : { type: 'offline', hook: manualHook },
-    [isOnline, nostrHook, manualHook],
+      isPinExchange
+        ? { type: 'pin', hook: pinHook }
+        : { type: 'code', hook: codeHook },
+    [isPinExchange, pinHook, codeHook],
   );
 
   // Extract common state from active hook
   const state = activeHook.hook.state;
   const cancel = activeHook.hook.cancel;
 
-  // Online-specific properties (type-safe access)
-  const pin = activeHook.type === 'online' ? activeHook.hook.pin : null;
+  // PIN Exchange-specific properties (type-safe access)
+  const pin = activeHook.type === 'pin' ? activeHook.hook.pin : null;
   const refreshPin =
-    activeHook.type === 'online' ? activeHook.hook.refreshPin : undefined;
+    activeHook.type === 'pin' ? activeHook.hook.refreshPin : undefined;
   const submitConfirmationCode =
-    activeHook.type === 'online'
+    activeHook.type === 'pin'
       ? activeHook.hook.submitConfirmationCode
       : undefined;
 
-  // Offline-specific properties (type-safe access via discriminated union)
-  const manualState =
-    activeHook.type === 'offline' ? activeHook.hook.state : null;
-  const offerData = manualState?.offerData;
+  // Code Exchange-specific properties (type-safe access via discriminated union)
+  const codeState = activeHook.type === 'code' ? activeHook.hook.state : null;
+  const offerData = codeState?.offerData;
   const submitAnswer =
-    activeHook.type === 'offline' ? activeHook.hook.submitAnswer : undefined;
+    activeHook.type === 'code' ? activeHook.hook.submitAnswer : undefined;
 
   // Redirect if no config
   useEffect(() => {
@@ -108,14 +104,14 @@ export function SendTransferPage() {
         // PIN Exchange uses the fixed signaling set. The Code Exchange
         // Nostr-file route resolves its own cached/discovered fallbacks, so a
         // failed fixed-set preflight must not block it before that can run.
-        if (config.methodChoice === 'online') {
+        if (config.transferMode === 'pin') {
           if (cancelled) return;
           setStep('checking');
           const result = await testRelayAvailability();
           if (cancelled) return;
           const available = result.available;
           if (!available) {
-            setStep('nostr_unavailable');
+            setStep('pin_unavailable');
             return;
           }
         }
@@ -174,7 +170,7 @@ export function SendTransferPage() {
 
   // Track completion - sync local step with hook state
   // Only apply state changes when transfer is active to avoid race conditions
-  // after cancellation (handleSwitchToOffline, handleRetry set startedRef to false)
+  // after cancellation (handleSwitchToCode, handleRetry set startedRef to false)
   useEffect(() => {
     if (!startedRef.current) return;
 
@@ -194,7 +190,7 @@ export function SendTransferPage() {
     void navigate('/send');
   }, [cancel, clearConfig, navigate]);
 
-  const handleSwitchToOffline = useCallback(() => {
+  const handleSwitchToCode = useCallback(() => {
     if (!config) return;
     // Cancel any active Nostr transfer before switching modes
     if (startedRef.current) {
@@ -206,7 +202,7 @@ export function SendTransferPage() {
     }
     // Update config to Code Exchange and restart the transfer flow.
     startedRef.current = false;
-    setConfig({ ...config, methodChoice: 'offline' });
+    setConfig({ ...config, transferMode: 'code' });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);
@@ -247,7 +243,7 @@ export function SendTransferPage() {
       )}
 
       {/* Nostr unavailable */}
-      {step === 'nostr_unavailable' && (
+      {step === 'pin_unavailable' && (
         <div className="space-y-4">
           <div className="flex items-start gap-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4">
             <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
@@ -262,11 +258,7 @@ export function SendTransferPage() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button
-              onClick={handleSwitchToOffline}
-              className="flex-1"
-              size="sm"
-            >
+            <Button onClick={handleSwitchToCode} className="flex-1" size="sm">
               <ArrowLeftRight className="mr-2 h-4 w-4" />
               Switch to Code Exchange
             </Button>
@@ -281,7 +273,7 @@ export function SendTransferPage() {
       {step === 'active' && (
         <>
           {/* Code Exchange: showing offer */}
-          {activeHook.type === 'offline' &&
+          {activeHook.type === 'code' &&
             offerData &&
             submitAnswer &&
             state.status === 'showing_offer' && (
@@ -344,13 +336,12 @@ export function SendTransferPage() {
             )}
 
           {/* Code Exchange: other states (connecting, transferring, etc.) */}
-          {activeHook.type === 'offline' &&
-            state.status !== 'showing_offer' && (
-              <TransferStatus state={state} />
-            )}
+          {activeHook.type === 'code' && state.status !== 'showing_offer' && (
+            <TransferStatus state={state} />
+          )}
 
-          {/* Nostr mode: Transfer progress */}
-          {isOnline && (
+          {/* PIN Exchange: transfer progress */}
+          {isPinExchange && (
             <TransferStatus
               state={state}
               betweenProgressAndChunks={

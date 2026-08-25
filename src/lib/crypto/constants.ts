@@ -136,11 +136,11 @@ export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 // locally (the rendezvous is plaintext and the PAKE only settles who knew the
 // PIN at confirm time), so it claims up to MAX_CLAIM_CANDIDATES of them and
 // lets the handshake pick the real one. Query limits on `#h` have to leave
-// room for that (see the rendezvous lookup in use-nostr-receive.ts).
+// room for that (see the rendezvous lookup in use-pin-receive.ts).
 export const PIN_HINT_LENGTH = 8; // hex characters
 
 // Transfer timeouts
-export const TRANSFER_EXPIRATION_MS = 60 * 60 * 1000; // 1 hour (manual-exchange session TTL)
+export const TRANSFER_EXPIRATION_MS = 60 * 60 * 1000; // 1 hour (Code Exchange session TTL)
 // Resource backstop, not a security control: rotation already caps any single
 // PIN's exposure at PIN_TTL_MS, so waiting longer is not less safe. This only
 // bounds how long an unclaimed transfer keeps publishing rendezvous events and

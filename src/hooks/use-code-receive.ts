@@ -1,5 +1,11 @@
 import { useCallback, useRef, useState } from 'react';
 import {
+  generateMutualAnswerBinary,
+  parseMutualPayload,
+  relaysFromOffer,
+  type SignalingPayload,
+} from '@/lib/code-signaling';
+import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
   generateECDHKeyPair,
@@ -8,12 +14,6 @@ import {
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
-import {
-  generateMutualAnswerBinary,
-  parseMutualPayload,
-  relaysFromOffer,
-  type SignalingPayload,
-} from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
 import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
 import { receiveFileLive } from '@/lib/nostr-file/download-live';
@@ -28,7 +28,7 @@ import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
 // Extended transfer status for Code Exchange receive mode
-export type ManualReceiveStatus =
+export type CodeReceiveStatus =
   | 'idle'
   | 'waiting_for_offer'
   | 'generating_answer'
@@ -40,9 +40,9 @@ export type ManualReceiveStatus =
   | 'complete'
   | 'error';
 
-// Typed manual receive state for UI consumers.
-export interface ManualReceiveState {
-  status: ManualReceiveStatus;
+// Typed Code Exchange receive state for UI consumers.
+export interface CodeReceiveState {
+  status: CodeReceiveStatus;
   message?: string;
   progress?: {
     current: number;
@@ -60,8 +60,8 @@ export interface ManualReceiveState {
   answerData?: Uint8Array; // Binary data for QR code
 }
 
-export interface UseManualReceiveReturn {
-  state: TransferState & ManualReceiveState;
+export interface UseCodeReceiveReturn {
+  state: TransferState & CodeReceiveState;
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
@@ -70,15 +70,15 @@ export interface UseManualReceiveReturn {
 }
 
 const ICE_GATHER_TIMEOUT_MS = 5000;
-const MANUAL_CONNECTION_TIMEOUT_MS = 120000;
+const CODE_CONNECTION_TIMEOUT_MS = 120000;
 // Matches the sender: once a relay fallback is available, cap the direct
 // attempt so neither side rides out the full backstop before relaying.
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — receiving the file through Nostr instead';
 
-export function useManualReceive(): UseManualReceiveReturn {
-  const [state, setState] = useState<TransferState & ManualReceiveState>({
+export function useCodeReceive(): UseCodeReceiveReturn {
+  const [state, setState] = useState<TransferState & CodeReceiveState>({
     status: 'idle',
   });
   const [receivedContent, setReceivedContent] =
@@ -346,6 +346,10 @@ export function useManualReceive(): UseManualReceiveReturn {
         },
       );
 
+      if (abandoned()) {
+        rtc.close();
+        return;
+      }
       rtcRef.current = rtc;
 
       // Handle offer signal
@@ -451,7 +455,7 @@ export function useManualReceive(): UseManualReceiveReturn {
             },
             offerRelays
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
-              : MANUAL_CONNECTION_TIMEOUT_MS,
+              : CODE_CONNECTION_TIMEOUT_MS,
           );
 
           dataChannelResolver = () => {

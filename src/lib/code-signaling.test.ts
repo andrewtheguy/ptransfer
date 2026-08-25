@@ -11,9 +11,9 @@ import {
   parseMutualPayload,
   relaysFromOffer,
   type SignalingPayload,
-} from './manual-signaling';
+} from './code-signaling';
 
-describe('Manual Signaling Utils', () => {
+describe('Code Exchange Signaling Utils', () => {
   const mockOffer: RTCSessionDescriptionInit = {
     type: 'offer',
     sdp: 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 1 RTP/AVP 111\r\nc=IN IP4 127.0.0.1',

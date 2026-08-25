@@ -13,12 +13,11 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import type { TransferMode } from '@/contexts/send-context';
 import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { supportsFolderSelection } from '@/lib/folder-utils';
-
-type MethodChoice = 'online' | 'offline';
 
 // Extend input element to include webkitdirectory attribute
 declare module 'react' {
@@ -46,7 +45,7 @@ export function SendTab() {
   const navigate = useNavigate();
   const { setConfig } = useSend();
 
-  const [methodChoice, setMethodChoice] = useState<MethodChoice>('online');
+  const [transferMode, setTransferMode] = useState<TransferMode>('pin');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,16 +97,16 @@ export function SendTab() {
     "Carry a short 12-character PIN — the option when scanning a QR or moving a long code isn't practical: no camera, a blocked clipboard, or devices that aren't side by side. Relays carry the handshake and your PIN authenticates it, then the file goes over direct WebRTC.";
   const pinModeHowItWorksDescription =
     'The handshake travels through relays and is authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Needs internet on both sides, and there is no data-relay fallback if direct WebRTC fails.';
-  const manualModeDescription =
+  const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
-  const manualModeHowItWorksDescription =
+  const codeModeHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
   const handleSend = () => {
     // Set context with all the configuration
     setConfig({
       selectedFiles,
-      methodChoice,
+      transferMode,
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -338,23 +337,19 @@ export function SendTab() {
           </p>
         </div>
         <RadioGroup
-          value={methodChoice}
-          onValueChange={(value) => setMethodChoice(value as MethodChoice)}
+          value={transferMode}
+          onValueChange={(value) => setTransferMode(value as TransferMode)}
           className="gap-2"
         >
           <label
             htmlFor="send-mode-pin"
             className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-              methodChoice === 'online'
+              transferMode === 'pin'
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:bg-muted/60'
             }`}
           >
-            <RadioGroupItem
-              id="send-mode-pin"
-              value="online"
-              className="mt-0.5"
-            />
+            <RadioGroupItem id="send-mode-pin" value="pin" className="mt-0.5" />
             <div className="space-y-1">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <KeyRound className="h-4 w-4" />
@@ -367,16 +362,16 @@ export function SendTab() {
           </label>
 
           <label
-            htmlFor="send-mode-qr"
+            htmlFor="send-mode-code"
             className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-              methodChoice === 'offline'
+              transferMode === 'code'
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:bg-muted/60'
             }`}
           >
             <RadioGroupItem
-              id="send-mode-qr"
-              value="offline"
+              id="send-mode-code"
+              value="code"
               className="mt-0.5"
             />
             <div className="space-y-1">
@@ -385,7 +380,7 @@ export function SendTab() {
                 Code Exchange
               </span>
               <p className="text-xs text-muted-foreground">
-                {manualModeDescription}
+                {codeModeDescription}
               </p>
             </div>
           </label>
@@ -401,7 +396,7 @@ export function SendTab() {
           <div className="text-sm">
             <p className="font-medium mb-1">How it works</p>
             <p className="text-muted-foreground">
-              {methodChoice === 'online' ? (
+              {transferMode === 'pin' ? (
                 <>
                   Show the recipient your PIN — as a QR code they scan, or read
                   out — so they can connect and decrypt your files.
@@ -413,7 +408,7 @@ export function SendTab() {
                   Hand your recipient the connection code — by QR code or
                   copy/paste — to establish the transfer session.
                   <br />
-                  {manualModeHowItWorksDescription}
+                  {codeModeHowItWorksDescription}
                 </>
               )}
             </p>
@@ -423,9 +418,7 @@ export function SendTab() {
 
       <Button onClick={handleSend} disabled={!canSend} className="w-full">
         <Send className="mr-2 h-4 w-4" />
-        {methodChoice === 'offline'
-          ? 'Start Code Exchange'
-          : 'Start PIN Exchange'}
+        {transferMode === 'code' ? 'Start Code Exchange' : 'Start PIN Exchange'}
         <ChevronRight className="ml-1 h-3 w-3" />
       </Button>
     </div>

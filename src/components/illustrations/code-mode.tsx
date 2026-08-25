@@ -10,7 +10,7 @@ interface IllustrationProps {
   className?: string;
 }
 
-export function QrModeIllustration({ className }: IllustrationProps) {
+export function CodeModeIllustration({ className }: IllustrationProps) {
   return (
     <svg
       viewBox="0 0 200 140"

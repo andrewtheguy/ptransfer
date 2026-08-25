@@ -445,7 +445,7 @@ async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
     });
     await senderPage.locator('input[type="file"]').first().setInputFiles(source);
     await senderPage
-      .getByRole('button', { name: 'Start Auto Exchange' })
+      .getByRole('button', { name: 'Start PIN Exchange' })
       .click();
 
     const pinInput = senderPage.getByRole('textbox', {

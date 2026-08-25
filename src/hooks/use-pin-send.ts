@@ -7,8 +7,8 @@ import {
   decrypt,
   deriveConfirmationCode,
   deriveHandshakeSealKeys,
-  deriveNostrSessionKeys,
   derivePakeSecret,
+  derivePinSessionKeys,
   encrypt,
   finishPake,
   generatePin,
@@ -18,10 +18,10 @@ import {
   getPinLocator,
   isPinBucketActive,
   MAX_MESSAGE_SIZE,
-  type NostrSessionKeys,
   normalizeCrockfordBase32,
   PIN_ROTATION_MS,
   PIN_WAIT_TIMEOUT_MS,
+  type PinSessionKeys,
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
@@ -122,7 +122,7 @@ interface VerifiedClaim {
  */
 const CONFIRM_CODE_ENTRY_TIMEOUT_MS = 150000;
 
-export interface UseNostrSendReturn {
+export interface UsePinSendReturn {
   state: TransferState;
   pin: string | null;
   send: (content: TransferSource) => Promise<void>;
@@ -144,7 +144,7 @@ export interface UseNostrSendReturn {
   submitConfirmationCode: (code: string) => boolean;
 }
 
-export function useNostrSend(): UseNostrSendReturn {
+export function usePinSend(): UsePinSendReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
   const [pin, setPin] = useState<string | null>(null);
 
@@ -638,7 +638,7 @@ export function useNostrSend(): UseNostrSendReturn {
       // Session keys are HKDF derivations off the SPAKE2 root the claim just
       // proved agreement on — the PIN authenticated the exchange, and the
       // exchange's fresh ephemeral scalars supply the entropy.
-      const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
+      const sessionKeys: PinSessionKeys = await derivePinSessionKeys(
         claim.rootKey,
         salt,
       );
@@ -886,7 +886,7 @@ export function useNostrSend(): UseNostrSendReturn {
               }
             },
             () => {
-              // Data-channel messages are not used by the auto-mode sender.
+              // Data-channel messages are not used by the PIN Exchange sender.
             },
           );
 

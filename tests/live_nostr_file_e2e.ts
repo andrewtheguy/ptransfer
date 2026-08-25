@@ -1,5 +1,5 @@
 /**
- * Live end-to-end test of the Nostr file relay — the Manual Exchange data
+ * Live end-to-end test of the Nostr file relay — the Code Exchange data
  * path taken when no direct WebRTC connection can be made — against real
  * public relays: sender and receiver run side by side (two pools, like two
  * browsers) with a shared session, as both sides of a failed exchange would

@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
 import { buildChunkUrl, chunkPayload } from '@/lib/chunk-utils';
-import { generateMutualClipboardData } from '@/lib/manual-signaling';
+import { generateMutualClipboardData } from '@/lib/code-signaling';
 import { generateTextQRCode } from '@/lib/qr-utils';
 
 // The Clipboard API is unavailable in insecure contexts and some in-app

@@ -1,8 +1,8 @@
 import { Download, FileDown, RotateCcw, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { useManualReceive } from '@/hooks/use-manual-receive';
-import { useNostrReceive } from '@/hooks/use-nostr-receive';
+import { useCodeReceive } from '@/hooks/use-code-receive';
+import { usePinReceive } from '@/hooks/use-pin-receive';
 import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
 import {
   downloadFile,
@@ -20,27 +20,27 @@ import { TransferStatus } from './transfer-status';
  * Which exchange the receiver's input turned out to belong to. Chosen from what
  * they pasted or scanned rather than asked for up front.
  */
-type ReceiveRoute = 'none' | 'auto' | 'manual';
+type ReceiveRoute = 'none' | 'pin' | 'code';
 
 export function ReceiveTab() {
   // Both hooks must be called unconditionally (React rules); the route picks
   // which one's state the UI reads.
   const {
-    state: nostrState,
-    receivedContent: nostrContent,
+    state: pinState,
+    receivedContent: pinContent,
     confirmationCode,
     receive,
-    cancel: cancelNostr,
-    reset: resetNostr,
-  } = useNostrReceive();
+    cancel: cancelPin,
+    reset: resetPin,
+  } = usePinReceive();
   const {
-    state: manualState,
-    receivedContent: manualContent,
+    state: codeState,
+    receivedContent: codeContent,
     startReceive,
     submitOffer,
-    cancel: cancelManual,
-    reset: resetManual,
-  } = useManualReceive();
+    cancel: cancelCode,
+    reset: resetCode,
+  } = useCodeReceive();
 
   const [route, setRoute] = useState<ReceiveRoute>('none');
   // Failures before either hook owns the transfer, which therefore have no
@@ -62,9 +62,9 @@ export function ReceiveTab() {
     window.history.replaceState(null, '', window.location.pathname);
   }, [initialPin]);
 
-  const isManual = route === 'manual';
-  const state = isManual ? manualState : nostrState;
-  const receivedContent = isManual ? manualContent : nostrContent;
+  const isCodeExchange = route === 'code';
+  const state = isCodeExchange ? codeState : pinState;
+  const receivedContent = isCodeExchange ? codeContent : pinContent;
 
   const handleSubmit = useCallback(
     async (input: ReceiveInputValue) => {
@@ -73,7 +73,7 @@ export function ReceiveTab() {
       setStartError(null);
 
       if (input.kind === 'pin') {
-        setRoute('auto');
+        setRoute('pin');
         try {
           // The hook wipes the scalar once its PAKE runs are done.
           const pakeSecret = await derivePakeSecret(input.pin);
@@ -90,7 +90,7 @@ export function ReceiveTab() {
 
       if (input.kind === 'offer') {
         pendingOfferRef.current = input.payload;
-        setRoute('manual');
+        setRoute('code');
         startReceive();
       }
       // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
@@ -102,29 +102,29 @@ export function ReceiveTab() {
   // submitOffer is a no-op until doReceive has armed its offer step, so hand
   // the offer over once the hook reports it is waiting.
   useEffect(() => {
-    if (route !== 'manual') return;
-    if (manualState.status !== 'waiting_for_offer') return;
+    if (route !== 'code') return;
+    if (codeState.status !== 'waiting_for_offer') return;
     const payload = pendingOfferRef.current;
     if (!payload) return;
     pendingOfferRef.current = null;
     void submitOffer(payload);
-  }, [route, manualState.status, submitOffer]);
+  }, [route, codeState.status, submitOffer]);
 
   const handleCancel = useCallback(() => {
-    if (isManual) cancelManual();
-    else cancelNostr();
+    if (isCodeExchange) cancelCode();
+    else cancelPin();
     pendingOfferRef.current = null;
     setRoute('none');
     setStartError(null);
-  }, [isManual, cancelManual, cancelNostr]);
+  }, [isCodeExchange, cancelCode, cancelPin]);
 
   const handleReset = useCallback(() => {
-    if (isManual) resetManual();
-    else resetNostr();
+    if (isCodeExchange) resetCode();
+    else resetPin();
     pendingOfferRef.current = null;
     setRoute('none');
     setStartError(null);
-  }, [isManual, resetManual, resetNostr]);
+  }, [isCodeExchange, resetCode, resetPin]);
 
   const handleDownload = useCallback(() => {
     if (receivedContent) {
@@ -140,9 +140,9 @@ export function ReceiveTab() {
     state.status !== 'idle' &&
     state.status !== 'error' &&
     state.status !== 'complete';
-  const answerData = isManual ? manualState.answerData : undefined;
+  const answerData = isCodeExchange ? codeState.answerData : undefined;
   const showAnswerReturn =
-    isManual && answerData && manualState.status === 'showing_answer';
+    isCodeExchange && answerData && codeState.status === 'showing_answer';
 
   return (
     <div className="space-y-4 pt-4">

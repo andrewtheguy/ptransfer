@@ -14,7 +14,7 @@ import { AnswerReturn } from '@/components/ptransfer/answer-return';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useChunkCollector } from '@/hooks/use-chunk-collector';
-import { useManualReceive } from '@/hooks/use-manual-receive';
+import { useCodeReceive } from '@/hooks/use-code-receive';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { extractChunkParam } from '@/lib/chunk-utils';
 import {
@@ -43,7 +43,7 @@ export function ReceiveChunkedPage() {
     submitOffer,
     cancel,
     reset,
-  } = useManualReceive();
+  } = useCodeReceive();
 
   const initialChunkFed = useRef(false);
 

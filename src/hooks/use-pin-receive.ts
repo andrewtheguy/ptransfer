@@ -5,7 +5,7 @@ import {
   decrypt,
   deriveConfirmationCode,
   deriveHandshakeSealKeys,
-  deriveNostrSessionKeys,
+  derivePinSessionKeys,
   encrypt,
   finishPake,
   getPinBucket,
@@ -13,9 +13,9 @@ import {
   MAX_CLAIM_ATTEMPTS,
   MAX_CLAIM_CANDIDATES,
   MAX_MESSAGE_SIZE,
-  type NostrSessionKeys,
   PIN_HINT_LOOKBACK_BUCKETS,
   PIN_TTL_MS,
+  type PinSessionKeys,
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
@@ -111,7 +111,7 @@ interface ClaimCandidate {
   claimEvent: Event;
 }
 
-export interface UseNostrReceiveReturn {
+export interface UsePinReceiveReturn {
   state: TransferState;
   receivedContent: ReceivedContent | null;
   /**
@@ -124,7 +124,7 @@ export interface UseNostrReceiveReturn {
   reset: () => void;
 }
 
-export function useNostrReceive(): UseNostrReceiveReturn {
+export function usePinReceive(): UsePinReceiveReturn {
   const [state, setState] = useState<TransferState>({ status: 'idle' });
   const [receivedContent, setReceivedContent] =
     useState<ReceivedContent | null>(null);
@@ -658,6 +658,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
             for (const candidate of candidates) {
               await client.publish(candidate.claimEvent);
             }
+            if (settled || cancelledRef.current) return;
             // Backstop for relays that processed the publish before the
             // subscription: poll for an already-stored confirm.
             queryPoll = setInterval(() => {
@@ -759,7 +760,7 @@ export function useNostrReceive(): UseNostrReceiveReturn {
         // Session keys are HKDF derivations off the same SPAKE2 root — the
         // PIN authenticated the exchange, and the exchange's fresh ephemeral
         // scalars supply the entropy.
-        const sessionKeys: NostrSessionKeys = await deriveNostrSessionKeys(
+        const sessionKeys: PinSessionKeys = await derivePinSessionKeys(
           session.rootKey,
           salt,
         );

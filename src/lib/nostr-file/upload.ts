@@ -330,7 +330,7 @@ export interface TransferRelaySelection {
  * The control set and the ring stay disjoint.
  *
  * Throws NOT_ENOUGH_RELAYS_MESSAGE when fewer than MIN_CONTROL_RELAYS are
- * usable; the caller then falls back to a manual-only offer.
+ * usable; the caller then falls back to a relay-free Code Exchange offer.
  */
 export async function resolveTransferRelays(
   pool: NostrFilePool,

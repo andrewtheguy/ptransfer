@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { base64urlEncode, buildChunkUrl, chunkPayload } from './chunk-utils';
-import { generatePin, PIN_CHARSET } from './crypto';
 import {
   generateMutualClipboardData,
   generateMutualOfferBinary,
-} from './manual-signaling';
+} from './code-signaling';
+import { generatePin, PIN_CHARSET } from './crypto';
 import { buildPinUrl } from './pin-link';
 import { classifyReceiveText, looksLikePin } from './receive-input';
 

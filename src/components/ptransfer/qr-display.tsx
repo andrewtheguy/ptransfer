@@ -8,7 +8,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
-import { generateMutualClipboardData } from '@/lib/manual-signaling';
+import { generateMutualClipboardData } from '@/lib/code-signaling';
 import { generateBinaryQRCode } from '@/lib/qr-utils';
 
 // The Clipboard API is unavailable in insecure contexts and some in-app

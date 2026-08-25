@@ -1,9 +1,6 @@
 import { extractChunkParam } from './chunk-utils';
+import { isValidBinaryPayload, parseClipboardPayload } from './code-signaling';
 import { isValidPin, PIN_CHARSET, PIN_LENGTH } from './crypto';
-import {
-  isValidBinaryPayload,
-  parseClipboardPayload,
-} from './manual-signaling';
 import { extractPinFromUrl } from './pin-link';
 
 /**

@@ -1,8 +1,8 @@
 import { KeyRound, Lock, QrCode, Shield, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
+  CodeModeIllustration,
   PinModeIllustration,
-  QrModeIllustration,
 } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
 import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
@@ -20,7 +20,7 @@ const COMMON_DETAILS = [
   { label: 'Primary transport:', value: 'Direct peer-to-peer over WebRTC' },
   {
     label: 'Size limits:',
-    value: '2 GiB selected input; 100 MiB for the Manual relay fallback',
+    value: '2 GiB selected input; 100 MiB for the Code Exchange relay fallback',
   },
 ] as const;
 
@@ -218,7 +218,7 @@ export function AboutContent() {
             </div>
           </div>
           <div className="grid gap-5 rounded-2xl border bg-card p-6 shadow-sm sm:grid-cols-[200px_1fr] sm:items-start sm:gap-7">
-            <QrModeIllustration className="mx-auto w-full max-w-[200px] sm:mx-0" />
+            <CodeModeIllustration className="mx-auto w-full max-w-[200px] sm:mx-0" />
             <div>
               <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
                 <QrCode className="h-5 w-5 text-primary" />

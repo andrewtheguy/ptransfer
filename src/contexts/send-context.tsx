@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 
-export type MethodChoice = 'online' | 'offline';
+export type TransferMode = 'pin' | 'code';
 
 interface SendConfig {
   // Files (loose files and folder selections mixed; folder entries carry
@@ -16,7 +16,7 @@ interface SendConfig {
   selectedFiles: File[];
 
   // Configuration
-  methodChoice: MethodChoice;
+  transferMode: TransferMode;
 }
 
 interface SendContextState {
