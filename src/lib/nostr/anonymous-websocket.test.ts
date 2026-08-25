@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const cacheMocks = vi.hoisted(() => ({
-  load: vi.fn(async () => 'cached-directory'),
+  load: vi.fn(async (): Promise<string | undefined> => 'cached-directory'),
   save: vi.fn(async () => undefined),
 }));
 
@@ -129,6 +129,23 @@ describe('AnonymousSignalingTransport', () => {
       false,
     );
     expect(cacheMocks.load).not.toHaveBeenCalled();
+    transport.close();
+  });
+
+  it('bootstraps with no directory data when neither source has any', async () => {
+    cacheMocks.load.mockResolvedValueOnce(undefined);
+
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: false,
+    });
+    await transport.waitUntilReady();
+
+    // webtor downloads the consensus and its own relay sample in this case.
+    expect(wasmMocks.create).toHaveBeenCalledWith(
+      undefined,
+      expect.any(Array),
+      false,
+    );
     transport.close();
   });
 
