@@ -6,7 +6,7 @@ import {
 } from './constants';
 
 /**
- * Session keys for Auto Exchange (Nostr) mode, derived from the SPAKE2 root
+ * Session keys for PIN Exchange (Nostr) mode, derived from the SPAKE2 root
  * key established by the PIN handshake (see spake2.ts). The SPAKE2 output
  * already mixes fresh ephemeral scalars from both sides, so it is the
  * transfer's ephemeral shared secret — there is no separate ECDH exchange in
@@ -69,7 +69,7 @@ async function deriveSessionKey(
 }
 
 /**
- * Derive the Auto Exchange session keys from the non-extractable HKDF root
+ * Derive the PIN Exchange session keys from the non-extractable HKDF root
  * returned by finishPake (spake2.ts) and the public per-transfer salt.
  * Distinct HKDF info labels guarantee signaling and content never reuse the
  * same AES-GCM key.

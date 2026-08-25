@@ -291,7 +291,6 @@ export function ReceiveChunkedPage() {
 
   // --- Transferring ---
   const answerData = receiveState.answerData;
-  const clipboardData = receiveState.clipboardData;
   const showQRDisplay =
     receiveState.status === 'showing_answer' &&
     answerData instanceof Uint8Array;
@@ -308,7 +307,7 @@ export function ReceiveChunkedPage() {
 
         {/* The receiver's answer, carried back to the sender by hand */}
         {showQRDisplay && answerData && (
-          <AnswerReturn answerData={answerData} clipboardData={clipboardData} />
+          <AnswerReturn answerData={answerData} />
         )}
 
         {/* Download completed file */}

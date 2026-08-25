@@ -1,238 +1,132 @@
-import {
-  ArrowLeftRight,
-  Download,
-  FileDown,
-  KeyRound,
-  RotateCcw,
-  X,
-} from 'lucide-react';
+import { Download, FileDown, RotateCcw, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useManualReceive } from '@/hooks/use-manual-receive';
 import { useNostrReceive } from '@/hooks/use-nostr-receive';
+import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
 import {
   downloadFile,
   formatFileSize,
   getMimeTypeDescription,
 } from '@/lib/file-utils';
-import type { PinKeyMaterial } from '@/lib/types';
+import { extractPinFromUrl } from '@/lib/pin-link';
+import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
 import { AnswerReturn } from './answer-return';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
-import { type PinChangePayload, PinInput, type PinInputRef } from './pin-input';
-import { QRInput } from './qr-input';
+import { ReceiveInput } from './receive-input';
 import { TransferStatus } from './transfer-status';
 
-const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const PIN_MODE_DESCRIPTION =
-  'Sets up signaling automatically through relays using the PIN the sender shares, then receives the file over direct WebRTC without a manual handoff.';
-const MANUAL_MODE_DESCRIPTION =
-  'The sender hands you an offer by QR or copy/paste, and you hand your response back the same way. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
-
-type ReceiveMode = 'pin' | 'scan';
+/**
+ * Which exchange the receiver's input turned out to belong to. Chosen from what
+ * they pasted or scanned rather than asked for up front.
+ */
+type ReceiveRoute = 'none' | 'auto' | 'manual';
 
 export function ReceiveTab() {
-  const [receiveMode, setReceiveMode] = useState<ReceiveMode>('pin');
+  // Both hooks must be called unconditionally (React rules); the route picks
+  // which one's state the UI reads.
+  const {
+    state: nostrState,
+    receivedContent: nostrContent,
+    confirmationCode,
+    receive,
+    cancel: cancelNostr,
+    reset: resetNostr,
+  } = useNostrReceive();
+  const {
+    state: manualState,
+    receivedContent: manualContent,
+    startReceive,
+    submitOffer,
+    cancel: cancelManual,
+    reset: resetManual,
+  } = useManualReceive();
 
-  // Store PIN in ref to avoid React DevTools exposure
-  const pinSecretRef = useRef<PinKeyMaterial | null>(null);
-  const pinInputLengthRef = useRef(0);
-  const pinInputRef = useRef<PinInputRef>(null);
-  const [isPinValid, setIsPinValid] = useState(false);
-  const [pinExpired, setPinExpired] = useState(false);
-  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [route, setRoute] = useState<ReceiveRoute>('none');
+  // Failures before either hook owns the transfer, which therefore have no
+  // state of their own to report through.
+  const [startError, setStartError] = useState<string | null>(null);
+  // Held between startReceive() and the hook arming its offer step.
+  const pendingOfferRef = useRef<Uint8Array | null>(null);
 
-  // All hooks must be called unconditionally (React rules)
-  const nostrHook = useNostrReceive();
-  const manualHook = useManualReceive();
-
-  // Determine which hook to use based on mode
-  const isManualMode = receiveMode === 'scan';
-
-  const activeHook = isManualMode ? manualHook : nostrHook;
-
-  const { state: rawState, receivedContent, cancel, reset } = activeHook;
-
-  // Get the right receive function based on mode
-  // nostrHook has .receive, manualHook does not
-  const pinReceive: ((secret: PinKeyMaterial) => Promise<void>) | undefined =
-    !isManualMode &&
-    'receive' in activeHook &&
-    typeof activeHook.receive === 'function'
-      ? activeHook.receive
-      : undefined;
-  const { startReceive, submitOffer } = manualHook;
-
-  // Auto Exchange only: the code the receiver reads out to the sender.
-  const confirmationCode = isManualMode ? null : nostrHook.confirmationCode;
-
-  // Use rawState directly for common properties
-  const state = rawState;
-
-  // Runtime normalization for manual-mode specific properties
-  const rawStateAny = rawState as unknown as Record<string, unknown>;
-  const answerData: Uint8Array | undefined =
-    rawStateAny.answerData instanceof Uint8Array
-      ? rawStateAny.answerData
-      : undefined;
-  const clipboardData: string | undefined =
-    typeof rawStateAny.clipboardData === 'string'
-      ? rawStateAny.clipboardData
-      : undefined;
-
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pinInactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
-  const mountedRef = useRef(true);
-
-  // Clear PIN inactivity timeout and countdown
-  const clearPinInactivityTimeout = useCallback(() => {
-    if (pinInactivityRef.current) {
-      clearTimeout(pinInactivityRef.current);
-      pinInactivityRef.current = null;
-    }
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
-    setTimeRemaining(0);
-  }, []);
-
-  // Reset PIN inactivity timeout (called on each PIN change)
-  const resetPinInactivityTimeout = useCallback(
-    (hasInput: boolean) => {
-      clearPinInactivityTimeout();
-      setPinExpired(false);
-
-      // Only set timeout if there's some PIN input
-      if (hasInput) {
-        // Set initial countdown time
-        setTimeRemaining(Math.floor(PIN_INACTIVITY_TIMEOUT_MS / 1000));
-
-        // Start countdown interval
-        countdownIntervalRef.current = setInterval(() => {
-          if (!mountedRef.current) return;
-          setTimeRemaining((prev) => Math.max(0, prev - 1));
-        }, 1000);
-
-        // Set expiration timeout
-        pinInactivityRef.current = setTimeout(() => {
-          if (
-            mountedRef.current &&
-            (pinSecretRef.current || pinInputLengthRef.current > 0)
-          ) {
-            // Clear PIN due to inactivity
-            pinSecretRef.current = null;
-            pinInputLengthRef.current = 0;
-            setIsPinValid(false);
-            pinInputRef.current?.clear();
-            setPinExpired(true);
-            if (countdownIntervalRef.current) {
-              clearInterval(countdownIntervalRef.current);
-              countdownIntervalRef.current = null;
-            }
-            setTimeRemaining(0);
-          }
-        }, PIN_INACTIVITY_TIMEOUT_MS);
-      }
-    },
-    [clearPinInactivityTimeout],
+  // A PIN QR deep-links here with the PIN in the fragment. Read it during the
+  // first render so the input box can open prefilled.
+  const [initialPin, setInitialPin] = useState(
+    () => extractPinFromUrl(window.location.href) ?? undefined,
   );
 
+  // Strip the PIN back out of the URL so it does not linger in the address bar
+  // or browser history.
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      // Clear PIN from memory on unmount
-      pinSecretRef.current = null;
-      pinInputLengthRef.current = 0;
-      const timeoutId = timeoutRef.current;
-      const countdownId = countdownIntervalRef.current;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      if (countdownId) {
-        clearInterval(countdownId);
-      }
-      timeoutRef.current = null;
-      countdownIntervalRef.current = null;
-      clearPinInactivityTimeout();
-    };
-  }, [clearPinInactivityTimeout]);
+    if (!initialPin) return;
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [initialPin]);
 
-  // Format time remaining as MM:SS
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  const isManual = route === 'manual';
+  const state = isManual ? manualState : nostrState;
+  const receivedContent = isManual ? manualContent : nostrContent;
 
-  const canReceivePin = isPinValid && state.status === 'idle';
-  const canReceiveScan = state.status === 'idle';
+  const handleSubmit = useCallback(
+    async (input: ReceiveInputValue) => {
+      // Spent: a later "Receive Another" must not refill the deep-link PIN.
+      setInitialPin(undefined);
+      setStartError(null);
 
-  const handleReceivePin = async () => {
-    const stored = pinSecretRef.current;
-    if (canReceivePin && stored && pinReceive) {
-      // PinInput still owns the emitted buffer and wipes it when cleared
-      // below, so hand the receive flow its own copy. The hook wipes the
-      // copy once its PAKE runs are done.
-      const secret: PinKeyMaterial = {
-        pakeSecret: new Uint8Array(stored.pakeSecret),
-        locator: stored.locator,
-      };
-      clearPinInactivityTimeout();
-      // Clear stored material immediately after retrieving it
-      pinSecretRef.current = null;
-      pinInputLengthRef.current = 0;
-      setIsPinValid(false);
-      pinInputRef.current?.clear();
-      setPinExpired(false);
-      try {
-        await pinReceive(secret);
-      } catch (err) {
-        console.error('Failed to start PIN receive flow:', err);
-      }
-    }
-  };
-
-  const handleReceiveScan = () => {
-    if (canReceiveScan) {
-      startReceive();
-    }
-  };
-
-  const handleReset = () => {
-    reset();
-    clearPinInactivityTimeout();
-    // Clear PIN from ref and input
-    pinSecretRef.current = null;
-    pinInputLengthRef.current = 0;
-    setIsPinValid(false);
-    pinInputRef.current?.clear();
-    setPinExpired(false);
-  };
-
-  const handlePinChange = useCallback(
-    (payload: PinChangePayload) => {
-      const { pakeSecret, locator, isValid, length } = payload;
-      pinInputLengthRef.current = length;
-
-      if (isValid && pakeSecret && locator) {
-        pinSecretRef.current = { pakeSecret, locator };
-        setIsPinValid(true);
-      } else {
-        pinSecretRef.current = null;
-        setIsPinValid(false);
+      if (input.kind === 'pin') {
+        setRoute('auto');
+        try {
+          // The hook wipes the scalar once its PAKE runs are done.
+          const pakeSecret = await derivePakeSecret(input.pin);
+          await receive({ pakeSecret, locator: getPinLocator(input.pin) });
+        } catch (err) {
+          // receive() reports its own failures through state; reaching here
+          // means the transfer never started, so hand the box back.
+          console.error('Failed to start PIN receive flow:', err);
+          setRoute('none');
+          setStartError('Could not start the transfer. Please try again.');
+        }
+        return;
       }
 
-      resetPinInactivityTimeout(length > 0);
+      if (input.kind === 'offer') {
+        pendingOfferRef.current = input.payload;
+        setRoute('manual');
+        startReceive();
+      }
+      // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
+      // the paste box redirects a single chunk link to the Scan tab.
     },
-    [resetPinInactivityTimeout],
+    [receive, startReceive],
   );
 
-  const handleDownload = () => {
+  // submitOffer is a no-op until doReceive has armed its offer step, so hand
+  // the offer over once the hook reports it is waiting.
+  useEffect(() => {
+    if (route !== 'manual') return;
+    if (manualState.status !== 'waiting_for_offer') return;
+    const payload = pendingOfferRef.current;
+    if (!payload) return;
+    pendingOfferRef.current = null;
+    void submitOffer(payload);
+  }, [route, manualState.status, submitOffer]);
+
+  const handleCancel = useCallback(() => {
+    if (isManual) cancelManual();
+    else cancelNostr();
+    pendingOfferRef.current = null;
+    setRoute('none');
+    setStartError(null);
+  }, [isManual, cancelManual, cancelNostr]);
+
+  const handleReset = useCallback(() => {
+    if (isManual) resetManual();
+    else resetNostr();
+    pendingOfferRef.current = null;
+    setRoute('none');
+    setStartError(null);
+  }, [isManual, resetManual, resetNostr]);
+
+  const handleDownload = useCallback(() => {
     if (receivedContent) {
       downloadFile(
         receivedContent.data,
@@ -240,174 +134,50 @@ export function ReceiveTab() {
         receivedContent.mimeType,
       );
     }
-  };
+  }, [receivedContent]);
 
   const isActive =
     state.status !== 'idle' &&
     state.status !== 'error' &&
     state.status !== 'complete';
-  const showQRInput = isManualMode && state.status === 'waiting_for_offer';
-  const showQRDisplay =
-    isManualMode && answerData && state.status === 'showing_answer';
+  const answerData = isManual ? manualState.answerData : undefined;
+  const showAnswerReturn =
+    isManual && answerData && manualState.status === 'showing_answer';
 
   return (
     <div className="space-y-4 pt-4">
       {state.status === 'idle' ? (
         <>
-          <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-            <p className="text-sm font-medium">Transfer mode</p>
-            <RadioGroup
-              value={receiveMode}
-              onValueChange={(value) => setReceiveMode(value as ReceiveMode)}
-              className="gap-2"
-            >
-              <label
-                htmlFor="receive-mode-pin"
-                className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-                  receiveMode === 'pin'
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-muted/60'
-                }`}
-              >
-                <RadioGroupItem
-                  id="receive-mode-pin"
-                  value="pin"
-                  className="mt-0.5"
-                />
-                <div className="space-y-1">
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <KeyRound className="h-4 w-4" />
-                    Auto Exchange mode
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    {PIN_MODE_DESCRIPTION}
-                  </p>
-                </div>
-              </label>
+          <ReceiveInput
+            onSubmit={handleSubmit}
+            initialPin={initialPin}
+            error={startError}
+          />
 
-              <label
-                htmlFor="receive-mode-qr"
-                className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
-                  receiveMode === 'scan'
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-muted/60'
-                }`}
-              >
-                <RadioGroupItem
-                  id="receive-mode-qr"
-                  value="scan"
-                  className="mt-0.5"
-                />
-                <div className="space-y-1">
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <ArrowLeftRight className="h-4 w-4" />
-                    Manual Exchange mode
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    {MANUAL_MODE_DESCRIPTION}
-                  </p>
-                </div>
-              </label>
-            </RadioGroup>
+          <div className="text-xs text-muted-foreground text-center pb-2">
+            File data is encrypted before transfer. Relays or STUN may still see
+            routing metadata.
           </div>
-
-          {receiveMode === 'pin' ? (
-            <>
-              {/* Auto Exchange mode */}
-              <div className="space-y-2">
-                <div className="text-sm font-medium">Enter PIN from sender</div>
-                <PinInput
-                  ref={pinInputRef}
-                  onPinChange={handlePinChange}
-                  disabled={isActive}
-                />
-                {timeRemaining > 0 && (
-                  <p className="text-xs text-amber-600 font-medium">
-                    PIN will be cleared in {formatTime(timeRemaining)}
-                  </p>
-                )}
-                {pinExpired && (
-                  <p className="text-xs text-muted-foreground">
-                    PIN cleared due to inactivity. Please re-enter.
-                  </p>
-                )}
-              </div>
-
-              {isPinValid && (
-                <p className="text-xs text-muted-foreground">
-                  After you receive, a confirmation code appears here. Read it
-                  to the sender — the transfer only starts once they enter it.
-                </p>
-              )}
-
-              <div className="text-xs text-muted-foreground text-center pb-2">
-                File data is encrypted before transfer. Relays or STUN may still
-                see routing metadata.
-              </div>
-
-              <Button
-                onClick={handleReceivePin}
-                disabled={!canReceivePin}
-                className="w-full bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-600 dark:hover:bg-cyan-700"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Receive
-                <span aria-hidden="true" className="ml-2 h-4 w-4" />
-              </Button>
-            </>
-          ) : (
-            <>
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  For{' '}
-                  <span className="font-medium text-foreground">
-                    Manual Exchange mode
-                  </span>{' '}
-                  transfers only. Scan or paste the sender's signaling data to
-                  receive their content.
-                </p>
-              </div>
-
-              <Button
-                onClick={handleReceiveScan}
-                disabled={!canReceiveScan}
-                className="w-full bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-600 dark:hover:bg-cyan-700"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Start Receive
-              </Button>
-            </>
-          )}
         </>
       ) : (
         <>
-          <TransferStatus
-            state={state}
-            betweenProgressAndChunks={
-              state.status === 'showing_confirmation_code' &&
-              confirmationCode ? (
-                <ConfirmationCodeDisplay code={confirmationCode} />
-              ) : undefined
-            }
-          />
-
-          {/* QR Input for receiving offer */}
-          {showQRInput && (
-            <div className="space-y-4">
-              <QRInput
-                expectedType="offer"
-                label="Scan or paste the sender's code"
-                onSubmit={submitOffer}
-              />
-            </div>
+          {/* The offer is already in hand here, so the hook's brief
+              "waiting for offer" step has nothing to tell the user. */}
+          {state.status !== 'waiting_for_offer' && (
+            <TransferStatus
+              state={state}
+              betweenProgressAndChunks={
+                state.status === 'showing_confirmation_code' &&
+                confirmationCode ? (
+                  <ConfirmationCodeDisplay code={confirmationCode} />
+                ) : undefined
+              }
+            />
           )}
 
           {/* The receiver's answer, carried back to the sender by hand */}
-          {showQRDisplay && answerData && (
-            <AnswerReturn
-              answerData={answerData}
-              clipboardData={clipboardData}
-            />
+          {showAnswerReturn && answerData && (
+            <AnswerReturn answerData={answerData} />
           )}
 
           {state.status === 'complete' && receivedContent && (
@@ -436,7 +206,11 @@ export function ReceiveTab() {
 
           <div className="flex gap-2">
             {isActive && (
-              <Button variant="outline" onClick={cancel} className="flex-1">
+              <Button
+                variant="outline"
+                onClick={handleCancel}
+                className="flex-1"
+              >
                 <X className="mr-2 h-4 w-4" />
                 Cancel
               </Button>

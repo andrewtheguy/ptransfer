@@ -20,7 +20,7 @@ import { type NostrFileTransferStats, relayStatsFor } from './stats';
  * Encrypted control channel for the live (single-copy) relay transfer.
  *
  * Both peers derive the same AES-GCM key from the session file key (HKDF,
- * distinct info label), which itself comes from the Manual Exchange ECDH
+ * distinct info label), which itself comes from the Code Exchange ECDH
  * secret, so only the two peers of that exchange can read or forge control
  * messages. Messages ride on the control relays — the proven relays the
  * offer named, probed with a control-sized event (the chunk ring is

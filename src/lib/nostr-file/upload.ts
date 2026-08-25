@@ -418,7 +418,7 @@ export interface PreparedStorageRelays {
 }
 
 /**
- * Prepare the storage ring behind a manual exchange and keep probing the
+ * Prepare the storage ring behind a Code Exchange and keep probing the
  * relay population after it — the storage half of the transfer, started as
  * soon as the offer's control relays are known so it runs while the receiver
  * is still reading the code and while WebRTC is still trying. Nothing about

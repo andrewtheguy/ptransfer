@@ -8,28 +8,24 @@ import {
   parseClipboardPayload,
 } from '@/lib/manual-signaling';
 import { isMobileDevice } from '@/lib/utils';
-import { QRScanner } from './qr-scanner';
+import { QRScanner, type ScanResult } from './qr-scanner';
 
-interface QRInputProps {
+interface AnswerInputProps {
   onSubmit: (payload: Uint8Array) => void;
-  expectedType: 'offer' | 'answer';
-  label?: string;
   disabled?: boolean;
 }
 
-export function QRInput({
-  onSubmit,
-  expectedType,
-  label,
-  disabled,
-}: QRInputProps) {
+/**
+ * The sender's side of a Code Exchange: take back the receiver's response,
+ * scanned or pasted.
+ */
+export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<'scan' | 'paste'>('scan');
-  // Receiver scans the offer — start the camera immediately. Sender scans the
-  // answer behind a click gate so the camera isn't running prematurely.
-  const autoStartScan = expectedType === 'offer';
-  const [scanStarted, setScanStarted] = useState(autoStartScan);
+  // Behind a click gate so the camera isn't running before the receiver has
+  // anything to show.
+  const [scanStarted, setScanStarted] = useState(false);
   const scanActionVerb = isMobileDevice() ? 'Tap' : 'Click';
 
   const handlePaste = useCallback(async () => {
@@ -43,7 +39,6 @@ export function QRInput({
     }
   }, []);
 
-  // Paste tab handles base64-encoded binary payload
   const handleSubmit = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed) {
@@ -51,7 +46,6 @@ export function QRInput({
       return;
     }
 
-    // Parse as base64 binary payload
     const binary = parseClipboardPayload(trimmed);
     if (!binary) {
       setError('Invalid format. Make sure you copied the complete text.');
@@ -68,9 +62,11 @@ export function QRInput({
   }, [value, onSubmit]);
 
   const handleScanSuccess = useCallback(
-    (binary: Uint8Array) => {
+    (result: ScanResult) => {
+      // 'answer' mode only ever yields a raw payload.
+      if (result.kind !== 'payload') return;
       setError(null);
-      onSubmit(binary);
+      onSubmit(result.data);
     },
     [onSubmit],
   );
@@ -87,21 +83,16 @@ export function QRInput({
     setScanStarted(true);
   }, []);
 
-  const handleInputModeChange = useCallback(
-    (mode: 'scan' | 'paste') => {
-      setError(null);
-      setInputMode(mode);
-      if (mode !== 'scan') {
-        setScanStarted(autoStartScan);
-      }
-    },
-    [autoStartScan],
-  );
+  const handleInputModeChange = useCallback((next: 'scan' | 'paste') => {
+    setError(null);
+    setInputMode(next);
+    if (next !== 'scan') {
+      setScanStarted(false);
+    }
+  }, []);
 
   return (
     <div className="space-y-3">
-      {label && <p className="text-sm font-medium">{label}</p>}
-
       <Tabs
         value={inputMode}
         onValueChange={(v) => handleInputModeChange(v as 'scan' | 'paste')}
@@ -120,7 +111,7 @@ export function QRInput({
         <TabsContent value="scan" className="mt-3">
           {scanStarted ? (
             <QRScanner
-              expectedType={expectedType}
+              mode="answer"
               onScan={handleScanSuccess}
               onError={handleScanError}
               disabled={disabled}
@@ -149,8 +140,9 @@ export function QRInput({
                 setValue(e.target.value);
                 setError(null);
               }}
-              placeholder={`Paste the ${expectedType} data here...`}
+              placeholder="Paste the receiver's response here..."
               className="min-h-[100px] font-mono text-xs"
+              aria-label="Receiver's response code"
               disabled={disabled}
             />
 

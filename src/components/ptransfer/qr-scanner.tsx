@@ -4,27 +4,33 @@ import { Button } from '@/components/ui/button';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import {
   computeCrc32,
-  extractChunkParam,
   isValidPayloadChecksum,
   parseChunk,
   reassembleChunks,
 } from '@/lib/chunk-utils';
 import { isValidBinaryPayload } from '@/lib/manual-signaling';
+import { classifyReceiveText } from '@/lib/receive-input';
 import { isMobileDevice } from '@/lib/utils';
 
+/**
+ * 'receive' takes anything a sender can hand a receiver — a PIN link or the
+ * chunked offer codes. 'answer' takes the receiver's response back on the
+ * sender's screen, which is a single raw PT01 code rather than a URL.
+ */
+export type ScannerMode = 'receive' | 'answer';
+
+export type ScanResult =
+  | { kind: 'pin'; pin: string }
+  | { kind: 'payload'; data: Uint8Array };
+
 interface QRScannerProps {
-  onScan: (binary: Uint8Array) => void;
-  expectedType: 'offer' | 'answer';
+  onScan: (result: ScanResult) => void;
+  mode: ScannerMode;
   onError?: (error: string) => void;
   disabled?: boolean;
 }
 
-export function QRScanner({
-  onScan,
-  expectedType,
-  onError,
-  disabled,
-}: QRScannerProps) {
+export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
@@ -91,19 +97,33 @@ export function QRScanner({
 
   const handleScan = useCallback(
     (binaryData: Uint8Array) => {
-      if (expectedType === 'offer') {
-        // URL-based QR codes from MultiQRDisplay
+      if (mode === 'receive') {
         const text = new TextDecoder().decode(binaryData);
-        const param = extractChunkParam(text);
-        if (!param) {
-          console.debug('QRScanner: no chunk param found in QR text', text);
+        const input = classifyReceiveText(text);
+        if (!input) {
+          console.debug('QRScanner: unrecognized QR text', text);
           showWarning('Unrecognized QR code, keep scanning...');
           return;
         }
 
-        const chunk = parseChunk(param);
+        // A PIN link and a whole copied offer each arrive complete in one code.
+        if (input.kind === 'pin') {
+          setError(null);
+          setWarning(null);
+          onScan({ kind: 'pin', pin: input.pin });
+          return;
+        }
+        if (input.kind === 'offer') {
+          setError(null);
+          setWarning(null);
+          onScan({ kind: 'payload', data: input.payload });
+          return;
+        }
+
+        // Chunked offer codes from MultiQRDisplay, collected one at a time.
+        const chunk = parseChunk(input.param);
         if (!chunk) {
-          console.debug('QRScanner: failed to parse chunk param', param);
+          console.debug('QRScanner: failed to parse chunk param', input.param);
           setError('Could not parse QR code data');
           onError?.('Could not parse QR code data');
           return;
@@ -177,7 +197,7 @@ export function QRScanner({
             onError?.(msg);
             return;
           }
-          onScan(assembled);
+          onScan({ kind: 'payload', data: assembled });
         }
       } else {
         // Binary PT01 payload from QRDisplay
@@ -188,13 +208,13 @@ export function QRScanner({
         }
 
         setError(null);
-        onScan(binaryData);
+        onScan({ kind: 'payload', data: binaryData });
       }
     },
     [
       onScan,
       onError,
-      expectedType,
+      mode,
       clearChunkRefs,
       clearChunkProgressState,
       showWarning,
@@ -340,7 +360,8 @@ export function QRScanner({
       )}
 
       <p className="text-xs text-muted-foreground text-center">
-        Point your camera at the {expectedType} QR code
+        Point your camera at the{' '}
+        {mode === 'answer' ? "receiver's response" : "sender's"} QR code
         {needsMoreChunks ? 's' : ''}
       </p>
     </div>

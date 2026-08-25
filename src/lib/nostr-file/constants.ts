@@ -1,4 +1,4 @@
-// Nostr file relay: the Manual Exchange fallback data path, used when the
+// Nostr file relay: the Code Exchange fallback data path, used when the
 // direct WebRTC connection between the two devices cannot be established
 // (a live single-copy transfer through public relays, in place of TURN).
 
@@ -49,7 +49,7 @@ export const HEALTH_CHECK_CONCURRENCY = 16;
 export const HEALTH_CHECK_TIMEOUT_MS = 8000;
 // Stop health-checking once the storage ring has passed, without probing the
 // entire candidate list (only ~1 in 6 public candidates passes the full-size
-// probe). A manual exchange whose default signaling relays are defunct probes
+// probe). A Code Exchange whose default signaling relays are defunct probes
 // only until the gap in its control set is filled, before the code is shown.
 export const HEALTH_CHECK_TARGET_COUNT = UPLOAD_RELAY_COUNT;
 // Probe payload size. A full-size chunk, so a relay that caps event size below
@@ -135,7 +135,7 @@ export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
 // HKDF info label for the relay session (transfer id + file key) both sides
-// derive from the Manual Exchange ECDH shared secret.
+// derive from the Code Exchange ECDH shared secret.
 export const RELAY_SESSION_INFO = 'ptransfer-nostr-file:v1:session';
 // Decompression bound for a control message body (a full ~2100-chunk map
 // with every chunk listed is well under this).

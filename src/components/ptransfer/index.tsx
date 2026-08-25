@@ -68,7 +68,7 @@ export function PTransfer({ view = 'send' }: PTransferProps) {
             </span>
           )}
           {view === 'receive' &&
-            'Use Auto Exchange mode or Manual Exchange mode to securely receive files.'}
+            'Receive files or folders securely with end-to-end encryption.'}
         </CardDescription>
       </CardHeader>
       <CardContent>

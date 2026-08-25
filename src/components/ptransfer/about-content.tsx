@@ -24,7 +24,7 @@ const COMMON_DETAILS = [
   },
 ] as const;
 
-// Specific to Auto Exchange mode.
+// Specific to PIN Exchange.
 const PIN_DETAILS = [
   {
     label: 'Key exchange:',
@@ -52,7 +52,7 @@ const PIN_DETAILS = [
   { label: 'Signaling:', value: 'Relay signaling' },
 ] as const;
 
-// Specific to Manual Exchange mode.
+// Specific to Code Exchange.
 const QR_DETAILS = [
   { label: 'Key exchange:', value: 'ECDH' },
   {
@@ -117,7 +117,7 @@ export function AboutContent() {
               folders straight from one device to another with end-to-end
               encryption. Your content is encrypted in your browser and first
               tries a direct peer-to-peer connection. If that connection cannot
-              be established, eligible Manual Exchange files can travel as
+              be established, eligible Code Exchange files can travel as
               temporary ciphertext through public Nostr relays.
             </p>
             <p>
@@ -127,14 +127,13 @@ export function AboutContent() {
               as a Progressive Web App, so it keeps working offline.
             </p>
             <p>
-              Two transfer modes cover different situations: a shareable{' '}
-              <span className="font-medium text-foreground">PIN</span> for the
-              automatic signaling, or a direct{' '}
-              <span className="font-medium text-foreground">
-                Manual Exchange
-              </span>{' '}
-              (QR code or copy/paste) that can even work offline on the same
-              local network.
+              You hand something to the recipient either way; the two transfer
+              modes differ in what you carry. A short{' '}
+              <span className="font-medium text-foreground">PIN</span> lets
+              relays set up the handshake for you, while a{' '}
+              <span className="font-medium text-foreground">Code Exchange</span>{' '}
+              carries the whole connection code (QR code or copy/paste) and can
+              even work offline on the same local network.
             </p>
           </div>
 
@@ -183,19 +182,20 @@ export function AboutContent() {
             <div>
               <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
                 <KeyRound className="h-5 w-5 text-primary" />
-                Auto Exchange mode
+                PIN Exchange
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                Auto Exchange uses an end-to-end encrypted direct WebRTC
-                transfer. Instead of exchanging the handshake by QR or
-                copy/paste, the app carries it through third-party Nostr relays
-                and authenticates it with a SPAKE2 exchange driven by the PIN
-                you share. Auto Exchange has no file-relay fallback.
+                PIN Exchange uses an end-to-end encrypted direct WebRTC
+                transfer. Instead of you carrying the whole connection code, the
+                app carries the handshake through third-party Nostr relays and
+                authenticates it with a SPAKE2 exchange driven by the PIN you
+                share. PIN Exchange has no file-relay fallback.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
-                  Best when you want the app to exchange signaling automatically
-                  through Nostr relays instead of carrying it by hand.
+                  Best when carrying a long code is impractical — no camera, a
+                  blocked clipboard, or devices that are not side by side. A
+                  short PIN is all you have to move.
                 </li>
                 <li>
                   PIN is shared out-of-band (chat, voice, etc.), then receiver
@@ -210,7 +210,7 @@ export function AboutContent() {
                 </li>
                 <li>
                   File data is always transferred directly peer-to-peer over
-                  WebRTC in this mode; Auto Exchange relays carry signaling, not
+                  WebRTC in this mode; PIN Exchange relays carry signaling, not
                   file contents.
                 </li>
               </ul>
@@ -222,7 +222,7 @@ export function AboutContent() {
             <div>
               <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
                 <QrCode className="h-5 w-5 text-primary" />
-                Manual Exchange mode
+                Code Exchange
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 Coordination starts by handing the recipient a signaling payload
@@ -267,10 +267,10 @@ export function AboutContent() {
           <QrCode className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <p>
             Both modes try direct WebRTC first, and neither configures a TURN
-            server. Auto Exchange fails if no direct route exists. Manual
-            Exchange can instead use its encrypted Nostr fallback for eligible
-            files up to 100 MiB, but that public-relay path is best-effort too.
-            If neither path completes and the devices are together, transfer the
+            server. PIN Exchange fails if no direct route exists. Code Exchange
+            can instead use its encrypted Nostr fallback for eligible files up
+            to 100 MiB, but that public-relay path is best-effort too. If
+            neither path completes and the devices are together, transfer the
             file offline with animated QR codes using{' '}
             <a
               href={OFFLINE_QR_TRANSFER_URL}

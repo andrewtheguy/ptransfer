@@ -56,7 +56,7 @@ function xorObfuscate(data: Uint8Array, seed: number): Uint8Array {
 }
 
 /**
- * Signaling Payload - method-agnostic format for Manual Exchange mode
+ * Signaling Payload - method-agnostic format for Code Exchange
  * Used by both QR scan and copy/paste methods
  */
 export interface SignalingPayload {

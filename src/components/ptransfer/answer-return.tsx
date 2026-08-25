@@ -2,14 +2,13 @@ import { QRDisplay } from './qr-display';
 
 export interface AnswerReturnProps {
   answerData: Uint8Array;
-  clipboardData?: string;
 }
 
 /**
  * The receiver's half of the answer step: the QR / copy-paste instructions.
  * The answer only ever reaches the sender through their own scan or paste.
  */
-export function AnswerReturn({ answerData, clipboardData }: AnswerReturnProps) {
+export function AnswerReturn({ answerData }: AnswerReturnProps) {
   return (
     <div className="space-y-4">
       <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
@@ -40,11 +39,7 @@ export function AnswerReturn({ answerData, clipboardData }: AnswerReturnProps) {
           sender has your response.
         </p>
       </div>
-      <QRDisplay
-        data={answerData}
-        clipboardData={clipboardData}
-        label="Your response"
-      />
+      <QRDisplay data={answerData} label="Your response" />
     </div>
   );
 }

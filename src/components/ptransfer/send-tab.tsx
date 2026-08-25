@@ -95,13 +95,13 @@ export function SendTab() {
   }, [selectedFiles]);
 
   const pinModeDescription =
-    'Sets up signaling automatically through relays using a short PIN you share, then transfers the file over direct WebRTC without a manual handoff.';
+    "Carry a short 12-character PIN — the option when scanning a QR or moving a long code isn't practical: no camera, a blocked clipboard, or devices that aren't side by side. Relays carry the handshake and your PIN authenticates it, then the file goes over direct WebRTC.";
   const pinModeHowItWorksDescription =
-    'The handshake is exchanged automatically through relays and authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Auto Exchange has no data-relay fallback if direct WebRTC fails.';
+    'The handshake travels through relays and is authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Needs internet on both sides, and there is no data-relay fallback if direct WebRTC fails.';
   const manualModeDescription =
-    'You hand the recipient an offer by QR or copy/paste, and they hand their response back the same way. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
+    "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
   const manualModeHowItWorksDescription =
-    'The offer is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The response only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the offer named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
+    'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
   const handleSend = () => {
     // Set context with all the configuration
@@ -330,7 +330,13 @@ export function SendTab() {
 
       {/* Transfer mode selector */}
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <p className="text-sm font-medium">Transfer mode</p>
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Transfer mode</p>
+          <p className="text-xs text-muted-foreground">
+            You hand something to the receiver either way. The modes differ in
+            what you carry.
+          </p>
+        </div>
         <RadioGroup
           value={methodChoice}
           onValueChange={(value) => setMethodChoice(value as MethodChoice)}
@@ -352,7 +358,7 @@ export function SendTab() {
             <div className="space-y-1">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <KeyRound className="h-4 w-4" />
-                Auto Exchange mode
+                PIN Exchange
               </span>
               <p className="text-xs text-muted-foreground">
                 {pinModeDescription}
@@ -376,7 +382,7 @@ export function SendTab() {
             <div className="space-y-1">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <ArrowLeftRight className="h-4 w-4" />
-                Manual Exchange mode
+                Code Exchange
               </span>
               <p className="text-xs text-muted-foreground">
                 {manualModeDescription}
@@ -397,14 +403,14 @@ export function SendTab() {
             <p className="text-muted-foreground">
               {methodChoice === 'online' ? (
                 <>
-                  Share your PIN with the recipient so they can connect and
-                  decrypt your files.
+                  Show the recipient your PIN — as a QR code they scan, or read
+                  out — so they can connect and decrypt your files.
                   <br />
                   {pinModeHowItWorksDescription}
                 </>
               ) : (
                 <>
-                  Exchange signaling data with your recipient — by QR code or
+                  Hand your recipient the connection code — by QR code or
                   copy/paste — to establish the transfer session.
                   <br />
                   {manualModeHowItWorksDescription}
@@ -418,8 +424,8 @@ export function SendTab() {
       <Button onClick={handleSend} disabled={!canSend} className="w-full">
         <Send className="mr-2 h-4 w-4" />
         {methodChoice === 'offline'
-          ? 'Start Manual Exchange'
-          : 'Start Auto Exchange'}
+          ? 'Start Code Exchange'
+          : 'Start PIN Exchange'}
         <ChevronRight className="ml-1 h-3 w-3" />
       </Button>
     </div>

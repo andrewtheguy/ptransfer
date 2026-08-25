@@ -3,7 +3,7 @@
  *
  * Provides multiple public STUN servers for direct ICE candidate discovery.
  * TURN is intentionally unsupported, so WebRTC itself uses direct candidates
- * only. Auto Exchange fails when no direct route can be established; Manual
+ * only. PIN Exchange fails when no direct route can be established; Code
  * Exchange may switch to its separate Nostr file-relay fallback.
  */
 

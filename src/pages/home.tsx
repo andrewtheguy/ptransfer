@@ -23,19 +23,19 @@ const STEPS = [
     icon: KeyRound,
     title: 'Choose a mode',
     description:
-      'Auto Exchange uses automatic signaling and direct WebRTC. Manual Exchange swaps an offer by QR or copy/paste and can relay encrypted files when no direct route exists.',
+      'PIN Exchange carries a short PIN and lets relays set up the handshake. Code Exchange carries the whole connection code by QR or copy/paste, keeps relays out of the handshake, and can relay encrypted files when no direct route exists.',
   },
   {
     icon: Share2,
     title: 'Share pairing info',
     description:
-      'Hand off the PIN, or exchange the connection data — by QR code or copy/paste — with your recipient.',
+      'Hand over the PIN, or the connection code — by QR code or copy/paste — to your recipient.',
   },
   {
     icon: Send,
     title: 'Transfer securely',
     description:
-      'Files stay end-to-end encrypted over direct WebRTC or Manual Exchange’s relay fallback.',
+      'Files stay end-to-end encrypted over direct WebRTC or Code Exchange’s relay fallback.',
   },
 ] as const;
 
@@ -50,7 +50,7 @@ const FEATURES = [
     icon: Zap,
     title: 'Direct P2P first',
     description:
-      'Files normally travel directly over WebRTC. If that fails, eligible Manual Exchange files can use a temporary encrypted Nostr relay path.',
+      'Files normally travel directly over WebRTC. If that fails, eligible Code Exchange files can use a temporary encrypted Nostr relay path.',
   },
   {
     icon: Shield,

@@ -2,26 +2,27 @@
 
 ## Planned Features
 
-### Manual Exchange becomes the default
+### Code Exchange becomes the default
 
 Now that the Nostr relay fallback (see `docs/NOSTR_FILE_RELAY.md`) removes
-many direct-connection dead ends, Manual Exchange may be practical as the
+many direct-connection dead ends, Code Exchange may be practical as the
 initial mode while keeping its fully hand-carried signaling path:
 
-- Flip the Transfer mode default: Manual Exchange is selected on the send and
-  receive tabs out of the box.
-- **Auto Exchange becomes the accessibility path** — the choice for people who
+- Flip the Transfer mode default: Code Exchange is selected on the send tab out
+  of the box. The receive tab no longer has a mode selector — it infers the
+  mode from what the receiver pastes or scans — so there is nothing to flip
+  there.
+- **PIN Exchange becomes the accessibility path** — the choice for people who
   cannot copy/paste or scan (in-app browsers with a blocked clipboard, no
   camera, screen-reader or motor-accessibility constraints, device pairs where
-  moving a QR is impractical). It stays fully supported and one click away,
-  with UI copy that offers it in those terms rather than as "the automatic
-  mode".
+  moving a QR is impractical). It stays fully supported and one click away. The
+  UI copy already offers it in those terms.
 - Documentation reversal: `docs/MANUAL_EXCHANGE.md` and `docs/ARCHITECTURE.md`
   currently describe Nostr signaling as the default; both need rewriting, plus
   a version bump for the behavior change.
 
-### More Efficient Use of the Relay Cache in Manual Exchange
-Make Manual Exchange lean harder on the IndexedDB relay cache
+### More Efficient Use of the Relay Cache in Code Exchange
+Make Code Exchange lean harder on the IndexedDB relay cache
 (`src/lib/nostr-file/relay-pool.ts`) so that relays already proven in a
 recent session are trusted first and probed less, cutting the time spent
 proving control relays before the offer QR and preparing the storage ring

@@ -7,11 +7,11 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { AnswerInput } from '@/components/ptransfer/answer-input';
 import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-input';
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
 import { NostrRelayStatsPanel } from '@/components/ptransfer/nostr-relay-stats';
 import { PinDisplay } from '@/components/ptransfer/pin-display';
-import { QRInput } from '@/components/ptransfer/qr-input';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useSend } from '@/contexts/send-context';
@@ -105,7 +105,7 @@ export function SendTransferPage() {
 
     const prepareFile = async () => {
       try {
-        // Auto Exchange uses the fixed signaling set. The Manual Exchange
+        // PIN Exchange uses the fixed signaling set. The Code Exchange
         // Nostr-file route resolves its own cached/discovered fallbacks, so a
         // failed fixed-set preflight must not block it before that can run.
         if (config.methodChoice === 'online') {
@@ -204,7 +204,7 @@ export function SendTransferPage() {
         console.error('Failed to cancel transfer:', err);
       }
     }
-    // Update config to Manual Exchange and restart the transfer flow.
+    // Update config to Code Exchange and restart the transfer flow.
     startedRef.current = false;
     setConfig({ ...config, methodChoice: 'offline' });
     setStep('checking');
@@ -256,8 +256,8 @@ export function SendTransferPage() {
                 Unable to connect to relay servers
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-300">
-                Auto Exchange mode is temporarily unavailable. Switch to Manual
-                Exchange mode or retry the connection.
+                PIN Exchange is temporarily unavailable. Switch to Code Exchange
+                or retry the connection.
               </p>
             </div>
           </div>
@@ -268,7 +268,7 @@ export function SendTransferPage() {
               size="sm"
             >
               <ArrowLeftRight className="mr-2 h-4 w-4" />
-              Switch to Manual Exchange
+              Switch to Code Exchange
             </Button>
             <Button onClick={handleRetry} variant="outline" size="sm">
               Retry
@@ -280,7 +280,7 @@ export function SendTransferPage() {
       {/* Active transfer */}
       {step === 'active' && (
         <>
-          {/* Manual Exchange mode: showing offer */}
+          {/* Code Exchange: showing offer */}
           {activeHook.type === 'offline' &&
             offerData &&
             submitAnswer &&
@@ -338,12 +338,12 @@ export function SendTransferPage() {
                   <p className="text-sm font-medium mb-3">
                     Scan or paste receiver's response
                   </p>
-                  <QRInput onSubmit={submitAnswer} expectedType="answer" />
+                  <AnswerInput onSubmit={submitAnswer} />
                 </div>
               </div>
             )}
 
-          {/* Manual Exchange mode: other states (connecting, transferring, etc.) */}
+          {/* Code Exchange: other states (connecting, transferring, etc.) */}
           {activeHook.type === 'offline' &&
             state.status !== 'showing_offer' && (
               <TransferStatus state={state} />

@@ -58,7 +58,7 @@ export interface LiveSendProgress {
 }
 
 /**
- * Live (single-copy) relay transfer, sender side — the Manual Exchange data
+ * Live (single-copy) relay transfer, sender side — the Code Exchange data
  * path when no direct connection could be made.
  *
  * Nothing is uploaded ahead of time: this runs only once WebRTC has failed.
