@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
@@ -11,6 +13,19 @@ function getGitCommitHash(): string {
   // fall back to a placeholder to avoid confusion about which commit is running.
   const cfSha = process.env.CF_PAGES_COMMIT_SHA;
   return cfSha ? cfSha.slice(0, 7) : 'local';
+}
+
+// The Tor WASM client is a `file:` dependency, so npm links it into
+// node_modules as a symlink to a sibling checkout. Vite serves it through its
+// real path, which lies outside the project root and would otherwise be
+// refused by the dev server's filesystem allow list.
+function anonymousSignalingWasmDir(): string {
+  const require = createRequire(path.join(__dirname, 'package.json'));
+  return fs.realpathSync(
+    path.dirname(
+      require.resolve('@andrewtheguy/anonymous-signaling-wasm/package.json'),
+    ),
+  );
 }
 
 // https://vite.dev/config/
@@ -47,6 +62,9 @@ export default defineConfig({
   },
   server: {
     allowedHosts: ['.trycloudflare.com'],
+    fs: {
+      allow: [__dirname, anonymousSignalingWasmDir()],
+    },
     // Keep a page on one coherent module set when WASM is rebuilt during development.
     hmr: false,
   },
