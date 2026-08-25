@@ -318,7 +318,7 @@ export function ReceiveChunkedPage() {
           <AnswerReturn
             answerData={answerData}
             clipboardData={clipboardData}
-            answerRelayStatus={receiveState.answerRelayStatus}
+            answerRelayed={receiveState.answerRelayed === true}
           />
         )}
 

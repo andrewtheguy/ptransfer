@@ -111,11 +111,7 @@ export function ReceiveTab() {
     typeof rawStateAny.clipboardData === 'string'
       ? rawStateAny.clipboardData
       : undefined;
-  const answerRelayStatus: 'sent' | 'failed' | undefined =
-    rawStateAny.answerRelayStatus === 'sent' ||
-    rawStateAny.answerRelayStatus === 'failed'
-      ? rawStateAny.answerRelayStatus
-      : undefined;
+  const answerRelayed = rawStateAny.answerRelayed === true;
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pinInactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -452,7 +448,7 @@ export function ReceiveTab() {
             <AnswerReturn
               answerData={answerData}
               clipboardData={clipboardData}
-              answerRelayStatus={answerRelayStatus}
+              answerRelayed={answerRelayed}
             />
           )}
 
