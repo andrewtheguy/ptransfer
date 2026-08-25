@@ -29,6 +29,8 @@ import {
 import { createTransferStats } from './stats';
 import {
   NOT_ENOUGH_RELAYS_MESSAGE,
+  NostrFileCancelledError,
+  prepareStorageRelays,
   resolveTransferRelays,
   resolveUploadRelays,
 } from './upload';
@@ -532,45 +534,13 @@ describe('resolveTransferRelays', () => {
     stats: createTransferStats('sender'),
   });
 
-  it('returns a deduped override and seeds its stats rows', async () => {
-    const pool = createMockPool();
-    const o = opts();
-    const selection = await resolveTransferRelays(pool, memoryStorage(), {
-      ...o,
-      controlRelayOverride: [
-        'wss://c1.example',
-        'wss://c1.example',
-        'wss://c2.example',
-      ],
-    });
-    const relays = selection.controlRelays;
-    expect(relays).toEqual(['wss://c1.example', 'wss://c2.example']);
-    expect(selection.storageRelays).toBeNull();
-    expect(o.stats.relays.map((r) => r.url)).toEqual(relays);
-  });
-
-  it('rejects an override with fewer than two distinct relays', async () => {
-    const pool = createMockPool();
-    await expect(
-      resolveTransferRelays(pool, memoryStorage(), {
-        ...opts(),
-        controlRelayOverride: ['wss://c1.example', 'wss://c1.example'],
-      }),
-    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
-    // Equivalent URL forms collapse before the distinct-relay count.
-    await expect(
-      resolveTransferRelays(pool, memoryStorage(), {
-        ...opts(),
-        controlRelayOverride: ['wss://c1.example', 'wss://c1.example/'],
-      }),
-    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
-  });
-
-  it('fills failed default signaling relays from the four storage reserves', async () => {
+  it('fills failed default signaling relays from the full-size storage reserves', async () => {
     const candidates = Array.from(
       { length: 20 },
       (_, i) => `wss://storage-${i}.example`,
     );
+    // One default is a blackhole (accepts writes, serves nothing) so the
+    // control probe fails it and a reserve must make up the gap.
     const pool = createMockPool({
       blackholeRelays: new Set([DEFAULT_RELAYS[0]]),
     });
@@ -584,7 +554,11 @@ describe('resolveTransferRelays', () => {
     const defaultSet = new Set<string>(DEFAULT_RELAYS);
     expect(relays).toHaveLength(CONTROL_RELAY_COUNT);
     expect(relays).not.toContain(DEFAULT_RELAYS[0]);
+    // Exactly the one gap is filled, and from a full-size-proven storage
+    // relay, not a default.
     expect(relays.filter((url) => !defaultSet.has(url))).toHaveLength(1);
+    // The ring resolved as a side effect and stays disjoint from the control
+    // set, so the caller does not discover twice.
     expect(selection.storageRelays).toHaveLength(16);
     for (const url of selection.storageRelays ?? []) {
       expect(relays).not.toContain(url);
@@ -615,6 +589,8 @@ describe('resolveTransferRelays', () => {
 
     const selection = await resolveTransferRelays(pool, storage, opts());
 
+    // No default survived, so the whole control set is full-size-proven
+    // reserves, disjoint from the ring.
     expect(selection.storageRelays).toHaveLength(16);
     expect(selection.controlRelays).toHaveLength(4);
     expect(
@@ -623,6 +599,30 @@ describe('resolveTransferRelays', () => {
     for (const relay of selection.controlRelays) {
       expect(selection.storageRelays).not.toContain(relay);
     }
+  });
+
+  it('leaves the storage ring for the background when the defaults suffice', async () => {
+    // A fresh mock pool serves every default on the control probe, so no
+    // storage discovery runs here at all.
+    const pool = createMockPool();
+    const storage = memoryStorage();
+    const selection = await resolveTransferRelays(pool, storage, opts());
+    expect(selection.controlRelays).toHaveLength(CONTROL_RELAY_COUNT);
+    for (const url of selection.controlRelays) {
+      expect(DEFAULT_RELAYS as readonly string[]).toContain(url);
+    }
+    expect(selection.storageRelays).toBeNull();
+    expect(selection.unprobedCandidates).toEqual([]);
+    // Discovery never ran, so the cache is untouched.
+    expect(storage.relayHealth).toEqual([]);
+  });
+
+  it('throws when neither the defaults nor the reserves reach the floor', async () => {
+    const pool = createMockPool({ blackholeRelays: new Set(DEFAULT_RELAYS) });
+    // No candidates anywhere: control probe fails, discovery finds nothing.
+    await expect(
+      resolveTransferRelays(pool, memoryStorage(), opts()),
+    ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
   });
 });
 
@@ -794,6 +794,173 @@ describe('resolveUploadRelays', () => {
         excludeRelays: [],
       }),
     ).rejects.toThrow(NOT_ENOUGH_RELAYS_MESSAGE);
+  });
+});
+
+describe('prepareStorageRelays', () => {
+  const discoveryEvent = (url: string) => makeEvent(30166, [['d', url]]);
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+
+  it('resolves a ring outside the control relays and sweeps the rest of the population behind it', async () => {
+    const control = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
+    const cached = Array.from(
+      { length: 40 },
+      (_, i) => `wss://cached-${i}.example`,
+    );
+    const late = ['wss://late-ok.example', 'wss://late-down.example'];
+    const pool = createMockPool({ failRelays: new Set([late[1]]) });
+    for (const seed of DEFAULT_RELAYS) {
+      pool.store.set(seed, late.map(discoveryEvent));
+    }
+    const storage = memoryStorage({
+      candidates: cached,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+    const phases: string[] = [];
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays: control,
+      storage,
+      onProgress: (p) => phases.push(p.phase),
+    });
+    const ring = await prepared.ring;
+
+    expect(ring).toHaveLength(UPLOAD_RELAY_COUNT);
+    for (const url of ring) {
+      expect(control).not.toContain(url);
+      expect(DEFAULT_RELAYS).not.toContain(url);
+    }
+    expect(phases[0]).toBe('discovering');
+    expect(phases).toContain('health_check');
+    expect(prepared.stats.relaysHealthy).toBeGreaterThanOrEqual(
+      UPLOAD_RELAY_COUNT,
+    );
+    expect(prepared.stats.relays.map((r) => r.url)).toEqual(
+      expect.arrayContaining(ring),
+    );
+
+    // The sweep runs on behind the ring: whatever the early stop skipped
+    // and whatever discovery enumerates ends up in the cache, verdict and
+    // all, while the ring and control relays are left alone.
+    const swept = [...cached, ...late].filter((url) => !ring.includes(url));
+    const checked = () =>
+      new Map(
+        storage.relayHealth
+          .filter((r) => r.lastCheckedAt !== null)
+          .map((r) => [r.url, r]),
+      );
+    const deadline = Date.now() + 5000;
+    while (swept.some((url) => !checked().has(url))) {
+      if (Date.now() > deadline) throw new Error('sweep never finished');
+      await settle();
+    }
+    const byUrl = checked();
+    expect(byUrl.get(late[0])?.supportsStorage).toBe(true);
+    // Discovered by the foreground pass and again by the sweep; failed both.
+    expect(byUrl.get(late[1])?.consecutiveFailures).toBeGreaterThanOrEqual(1);
+    expect(byUrl.get(late[1])?.supportsStorage).toBe(false);
+    for (const url of [...control, ...ring]) {
+      expect(pool.closedRelays).not.toContain(url);
+    }
+  });
+
+  it('stops on the signal, rejects the ring as cancelled, and records no verdict from the teardown', async () => {
+    const candidates = Array.from(
+      { length: 30 },
+      (_, i) => `wss://slow-${i}.example`,
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const controller = new AbortController();
+    const pool = createMockPool({
+      beforePublish: async (relay) => {
+        if (candidates.includes(relay)) await gate;
+      },
+    });
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays: [DEFAULT_RELAYS[0]],
+      storage,
+      signal: controller.signal,
+    });
+    await settle();
+    // Probes are in flight; the caller tears down and they all "fail".
+    controller.abort();
+    release();
+    await expect(prepared.ring).rejects.toBeInstanceOf(NostrFileCancelledError);
+    expect(storage.relayHealth.filter((r) => r.lastCheckedAt !== null)).toEqual(
+      [],
+    );
+  });
+
+  it('skips discovery and the sweep for a caller-picked ring', async () => {
+    const pool = createMockPool();
+    for (const seed of DEFAULT_RELAYS) {
+      pool.store.set(seed, [discoveryEvent('wss://never-probed.example')]);
+    }
+    const storage = memoryStorage();
+    const override = ['wss://a.example', 'wss://b.example'];
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays: [DEFAULT_RELAYS[0]],
+      storage,
+      relayOverride: override,
+    });
+    expect(await prepared.ring).toEqual(override);
+    await settle();
+    expect(storage.relayHealth).toEqual([]);
+  });
+
+  it('adopts a preselected ring without rediscovering and sweeps its leftovers', async () => {
+    const control = [DEFAULT_RELAYS[0]];
+    const ringRelays = ['wss://ring-a.example', 'wss://ring-b.example'];
+    const leftover = [
+      'wss://leftover-ok.example',
+      'wss://leftover-down.example',
+    ];
+    const pool = createMockPool({ failRelays: new Set([leftover[1]]) });
+    for (const seed of DEFAULT_RELAYS) {
+      pool.store.set(seed, leftover.map(discoveryEvent));
+    }
+    const storage = memoryStorage();
+    let discovered = false;
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays: control,
+      storage,
+      preselected: { storageRelays: ringRelays, unprobedCandidates: leftover },
+      onProgress: () => {
+        discovered = true;
+      },
+    });
+    expect(await prepared.ring).toEqual(ringRelays);
+    // The ring came ready-made: no discovery/health-check progress fired.
+    expect(discovered).toBe(false);
+    expect(prepared.stats.relays.map((r) => r.url)).toEqual(
+      expect.arrayContaining(ringRelays),
+    );
+    // The sweep still runs behind it over the leftovers.
+    const deadline = Date.now() + 5000;
+    const seen = () =>
+      new Set(
+        storage.relayHealth
+          .filter((r) => r.lastCheckedAt !== null)
+          .map((r) => r.url),
+      );
+    while (!leftover.every((url) => seen().has(url))) {
+      if (Date.now() > deadline) throw new Error('sweep never finished');
+      await settle();
+    }
+    const byUrl = new Map(storage.relayHealth.map((r) => [r.url, r]));
+    expect(byUrl.get(leftover[0])?.supportsStorage).toBe(true);
+    expect(byUrl.get(leftover[1])?.supportsStorage).toBe(false);
+    for (const url of [...control, ...ringRelays]) {
+      expect(pool.closedRelays).not.toContain(url);
+    }
   });
 });
 

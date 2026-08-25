@@ -17,12 +17,6 @@ interface SendConfig {
 
   // Configuration
   methodChoice: MethodChoice;
-  /**
-   * Experimental Nostr file relay (Manual Exchange only, max 100 MB): hand
-   * over the code right away, one copy per piece; both sides stay online and
-   * only pieces the receiver could not fetch are re-sent.
-   */
-  nostrFileRelay: boolean;
 }
 
 interface SendContextState {

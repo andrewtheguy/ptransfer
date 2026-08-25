@@ -1,18 +1,18 @@
-import { normalizeRelayUrl } from '../nostr/relays';
 import {
-  CONTROL_RELAY_COUNT,
-  MIN_CONTROL_RELAYS,
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
   NOSTR_FILE_MAX_BYTES,
 } from './constants';
 
 /**
- * Retrieval metadata for a file saved to nostr relays. Travels inside the
- * manually exchanged payload (never published to relays). Chunk event `d`
- * tags are derived (`<transferId>:<index>`) so no per-chunk pointers are
- * needed; integrity comes from per-chunk AES-GCM tags plus the whole-file
- * hash, authenticity from nostr signatures under `pubkey`.
+ * Retrieval metadata for a file relayed through nostr. The sender builds it
+ * once the fallback starts (it needs the file hashed and chunked) and sends
+ * it as the first message of the encrypted control channel — it never
+ * appears in a code and relays only ever see it sealed. The transfer id and
+ * control relays are session-level (see `session.ts`) and not repeated here.
+ * Chunk event `d` tags are derived (`<transferId>:<index>`) so no per-chunk
+ * pointers are needed; integrity comes from per-chunk AES-GCM tags plus the
+ * whole-file hash, authenticity from nostr signatures under `pubkey`.
  */
 export interface NostrFileManifest {
   v: typeof NOSTR_FILE_MANIFEST_VERSION;
@@ -21,8 +21,6 @@ export interface NostrFileManifest {
   mimeType: string;
   /** base64(sha256 of plaintext) — whole-file verification after assembly */
   fileHash: string;
-  /** 32 hex chars (16 random bytes) — d/x tag namespace on relays */
-  transferId: string;
   /** 64 hex chars — ephemeral nostr pubkey; authors filter + signature auth */
   pubkey: string;
   /**
@@ -42,20 +40,12 @@ export interface NostrFileManifest {
   /** codec version: 2 = whole-payload deflate + AES-256-GCM (nonce||ct||tag)
    * + Z85 per chunk */
   enc: 2;
-  /**
-   * Relays carrying the encrypted control channel — a small set of proven
-   * signaling relays that only ever see control-sized events. The chunk ring
-   * is not in the manifest: the sender announces it (and where each chunk
-   * landed) over the control channel in every availability message.
-   */
-  controlRelays: string[];
   /** unix seconds */
   createdAt: number;
   /** unix seconds; createdAt + NOSTR_FILE_EXPIRATION_SEC */
   expiresAt: number;
 }
 
-const HEX_32 = /^[0-9a-f]{32}$/;
 const HEX_64 = /^[0-9a-f]{64}$/;
 // base64 of 32 bytes: 43 chars + '=' padding
 export const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
@@ -120,23 +110,7 @@ export function isValidNostrFileManifest(
   if (typeof m.fileHash !== 'string' || !BASE64_32_BYTES.test(m.fileHash)) {
     return false;
   }
-  if (typeof m.transferId !== 'string' || !HEX_32.test(m.transferId)) {
-    return false;
-  }
   if (typeof m.pubkey !== 'string' || !HEX_64.test(m.pubkey)) return false;
-
-  if (
-    !Array.isArray(m.controlRelays) ||
-    m.controlRelays.length < MIN_CONTROL_RELAYS ||
-    m.controlRelays.length > CONTROL_RELAY_COUNT ||
-    !m.controlRelays.every(
-      (r): r is string =>
-        typeof r === 'string' && r.length < 200 && normalizeRelayUrl(r) === r,
-    ) ||
-    new Set(m.controlRelays).size !== m.controlRelays.length
-  ) {
-    return false;
-  }
 
   if (
     typeof m.createdAt !== 'number' ||

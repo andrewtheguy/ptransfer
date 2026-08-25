@@ -12,18 +12,19 @@ import {
   PUBLISH_MAX_RETRIES,
   UPLOAD_RELAY_COUNT,
 } from './constants';
+import { isValidNostrFileManifest, type NostrFileManifest } from './manifest';
 import type { NostrFilePool, PoolSubscription } from './pool';
 import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /**
  * Encrypted control channel for the live (single-copy) relay transfer.
  *
- * Both peers derive the same AES-GCM key from the file key that travels in
- * the manual payload (HKDF, distinct info label), so only the holder of the
- * code can read or forge control messages. Messages ride on the dedicated
- * control relays carried in the manual payload — a small set of proven
- * signaling relays, probed with a control-sized event (the chunk ring is
- * announced over this channel instead) — as addressable events of the chunk
+ * Both peers derive the same AES-GCM key from the session file key (HKDF,
+ * distinct info label), which itself comes from the Manual Exchange ECDH
+ * secret, so only the two peers of that exchange can read or forge control
+ * messages. Messages ride on the control relays — the proven signaling
+ * relays the offer named for the answer channel, probed with a control-sized
+ * event (the chunk ring is announced over this channel instead) — as addressable events of the chunk
  * kind with a unique `d` tag per message and the usual NIP-40 expiration, so
  * a peer that subscribes late — or whose socket dropped — gets the stored
  * backlog via the `since` filter.
@@ -79,6 +80,17 @@ export function decodePosition(char: string): number {
   return POSITION_ALPHABET.indexOf(char);
 }
 
+/**
+ * Sender → receiver, first: what is being relayed. Sent when the fallback
+ * starts, once the file is hashed and chunked; everything the receiver needs
+ * to fetch and verify chunks that a code used to carry.
+ */
+export interface ManifestMessage {
+  t: 'manifest';
+  n: number;
+  manifest: NostrFileManifest;
+}
+
 export interface HelloMessage {
   t: 'hello';
   n: number;
@@ -106,7 +118,7 @@ export interface CancelMessage {
   n: number;
 }
 
-export type SenderMessage = AvailMessage | CancelMessage;
+export type SenderMessage = ManifestMessage | AvailMessage | CancelMessage;
 export type ReceiverMessage =
   | HelloMessage
   | AckMessage
@@ -251,17 +263,23 @@ function isPlacementList(
 /**
  * Shape-check a decrypted sender message; null if it is not one. Avail
  * messages are self-describing: `map` positions are validated against the
- * `relays` list travelling in the same message.
+ * `relays` list travelling in the same message. `totalChunks` is null until
+ * the manifest has arrived, and an avail before it is rejected.
  */
 export function parseSenderMessage(
   value: unknown,
-  totalChunks: number,
+  totalChunks: number | null,
 ): SenderMessage | null {
   if (!value || typeof value !== 'object') return null;
   const m = value as Record<string, unknown>;
   if (!isCount(m.n, Number.MAX_SAFE_INTEGER)) return null;
   if (m.t === 'cancel') return { t: 'cancel', n: m.n };
+  if (m.t === 'manifest') {
+    if (!isValidNostrFileManifest(m.manifest)) return null;
+    return { t: 'manifest', n: m.n, manifest: m.manifest };
+  }
   if (m.t === 'avail') {
+    if (totalChunks === null) return null;
     if (!Array.isArray(m.relays) || m.relays.length > UPLOAD_RELAY_COUNT) {
       return null;
     }

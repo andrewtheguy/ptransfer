@@ -33,11 +33,11 @@ export type TransferStatus =
   | 'generating_answer'
   | 'choosing_answer_return'
   | 'showing_answer'
-  // Nostr file relay states (experimental store-and-forward)
+  // Nostr file relay states: the Manual Exchange data path once a direct
+  // connection has failed.
   | 'preparing'
   | 'discovering_relays'
   | 'uploading'
-  | 'showing_payload'
   | 'fetching';
 
 // File metadata
@@ -63,8 +63,6 @@ interface TransferStateBase {
   connectionFailed?: boolean;
   // Nostr file relay: unix seconds when the relay copies expire (NIP-40).
   expiresAt?: number;
-  // Nostr file relay: the PT01 payload the sender hands to the receiver.
-  payloadData?: Uint8Array;
   // Nostr file relay: detailed running statistics (chunks, bytes, relays).
   stats?: NostrFileTransferStats;
 }

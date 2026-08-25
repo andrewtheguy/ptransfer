@@ -26,10 +26,12 @@ using the shared pTransfer data-channel protocol (encrypted 128KB chunks, `DONE:
 then a single receiver `ACK` once `DONE` validates the chunk count and final byte count and all chunks have
 authenticated and reassembled).
 
-This guide describes that **direct flow** unless it says otherwise. The experimental
-[Relay file through Nostr](#experimental-relay-file-through-nostr) option replaces it
-entirely: there is no offer/answer, no WebRTC connection between the two devices, and no
-direct route between them is needed — see that section for how it differs.
+If a direct connection **cannot** be made — for example, a restrictive NAT or firewall on
+either end — the encrypted file is carried through Nostr relays instead of failing (see
+[Relay fallback](#relay-fallback-no-direct-connection)). This is automatic: there is no
+switch to find. It needs only that the offer named relays (it usually does) and a file
+under 100 MB; how you returned the answer, over relays or by QR, makes no difference. This
+guide describes the **direct flow** unless it says otherwise.
 
 ## When to Use This
 
@@ -47,6 +49,9 @@ The two devices swap two small pieces of connection data:
 1. **Offer** — sender → receiver, always carried by you
 2. **Answer** — receiver → sender, through Nostr relays or carried by you (the receiver picks)
 
+The relays the offer names for the answer do double duty: if the direct connection then
+fails, they carry the encrypted file itself (the [relay fallback](#relay-fallback-no-direct-connection)).
+
 The offer can be transferred **either** as QR code(s) **or** as copied text — the receiver
 can scan it or paste it, whichever is easier.
 
@@ -56,9 +61,9 @@ prepared, so that part costs no waiting; if some of them are down it looks for r
 first, and the offer code appears once it knows which relays to name. Once the receiver has
 the offer, their page asks how the response should go back: **Send through relays** or
 **Show a code to scan or paste**. With relays, the page then says *"Response sent to the
-sender"* and there is nothing to carry back (the code stays one tap away under **Show
-response code instead**). With a code, or when no relays were proven or none accepted the
-response, the answer is hand-carried — QR or copy/paste, exactly as below.
+sender"* and there is nothing to carry back. With a code, or when no relays were proven or none accepted the
+response, the answer is hand-carried — QR or copy/paste, exactly as below. The choice is
+final: the two return paths do not fall back to each other.
 
 > The relay hop moves the answer only. File bytes always travel directly between the two
 > devices over WebRTC. Because the answer channel is keyed from the offer, treat the offer as
@@ -108,11 +113,11 @@ AES-GCM plus a whole-file checksum.)
 4. If the sender's code named relays, the page asks how to return it: **Send through
    relays** publishes the answer for the sender's page to pick up — it then says
    **Response sent to the sender** and you are done; just keep it open. **Show a code to
-   scan or paste** skips the relays entirely
+   scan or paste** skips the relays entirely. The choice is final — pick relays only if
+   you can reach them and the sender's page stays open
 5. With a code (chosen, no relays named, or relays refused it) your answer appears as a
    **single QR code** with a **Copy Data** button — send it back to the sender by
-   **either** method. After a relay send you can still bring the code up with **Show
-   response code instead**
+   **either** method
 
 ### Back to Sender — connect
 
@@ -124,52 +129,53 @@ AES-GCM plus a whole-file checksum.)
 3. The P2P connection establishes and the file transfers directly
 4. Both sides show that the transfer completed when done
 
-## Experimental: Relay File Through Nostr
+## Relay Fallback (No Direct Connection)
 
-Under **Advanced options** (visible when Manual Exchange is selected on the send tab), the
-**Relay file through Nostr** switch replaces the direct connection with encrypted pieces
-carried through public Nostr relays, for files up to **100 MB**. (This page describes the
-user-facing behavior; the technical design is documented in
-[NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
+When the offer/answer exchange succeeds but the two devices still cannot open a direct
+WebRTC connection — usually a restrictive NAT or firewall on both ends — the encrypted
+file (up to **100 MB**) is carried through public Nostr relays instead of the transfer
+failing. This is the Manual Exchange stand-in for TURN. (This page describes the
+user-facing behavior; the technical design is in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
 
-1. The sender's file is encrypted with a random key and uploaded to a set of discovered
-   storage relays as **temporary events with a 1-hour NIP-40 expiration** — a deletion
-   request that compliant relays honor by pruning the events, not guaranteed erasure; the
-   file stays protected by its encryption regardless. The sender gets the exchange code
-   (a single QR or copy/paste) after checking the signaling relays. Storage relays are
-   normally found in the background while the code is shared; if a default signaling
-   relay fails, storage selection runs first so unused healthy relays can fill the
-   signaling set. The sender keeps the page open while the encrypted pieces upload in
-   the background, **one copy
-   each**, so the upload costs about the file size in bandwidth
-2. The receiver pastes/scans the code in the normal Manual Exchange receive flow — it is
-   detected automatically — and starts downloading the pieces while the sender is still
-   uploading. The two sides coordinate over a small **encrypted side channel on a few
-   dedicated signaling relays** named in the code (keyed from the code, so only the two
-   of you can read it): the sender announces which storage relays hold which pieces, the
-   receiver acknowledges and names any piece it could not fetch, and **only those pieces
-   are sent again**, to another relay — nothing is duplicated up front
-3. The sender's page completes on its own once the receiver has verified the whole file
+It is fully automatic — there is no switch, and nothing changes about how you use Manual
+Exchange:
 
-Differences from normal Manual Exchange:
+1. You run the normal offer/answer exchange above. Both sides then try to connect
+   directly, as always.
+2. If that direct connection cannot be made, both pages switch to the relay path on their
+   own. The sender encrypts the file and uploads it to a set of discovered storage relays
+   as **temporary events with a 1-hour NIP-40 expiration** (a deletion request compliant
+   relays honor, not guaranteed erasure — the file stays protected by its encryption
+   regardless), **one copy each**. The receiver downloads the pieces while the sender is
+   still uploading.
+3. The two sides coordinate over a small **encrypted side channel** on the same proven
+   relays the offer named for the answer — the sender announces which storage relays hold
+   which pieces, the receiver names any it could not fetch, and **only those are sent
+   again**. Both pages complete on their own once the receiver has the verified file.
 
-- **No answer step**: the receiver never sends a code back. The sender's page shows the
-  receiver's progress and completes when the receiver has the verified file
-- **Connectivity**: no WebRTC connection is made — the peers never connect to each other,
-  and both only need internet access to the relays. Both pages must stay open until the
-  transfer completes (a side that goes silent for a few minutes ends it)
-- **Time limit**: everything must finish within 1 hour of the transfer *start* — the app
-  enforces this deadline, and expired pieces are pruned by compliant relays (deletion is
-  requested via NIP-40, not cryptographically guaranteed); both screens show the
-  remaining time
-- **The code IS the key**: unlike signaling payloads, this code contains the decryption key.
-  Anyone who obtains it before expiry can download and decrypt the file — share it only over
-  a trusted channel (in person, or an end-to-end encrypted messenger)
+Nothing is uploaded ahead of time: the file goes to relays **only** after the direct
+connection fails, so a transfer that would have connected directly never puts a byte of it
+on a storage relay. What does run ahead of time is a background check of which public
+relays are working (a small throwaway probe per relay, no file data), so the relay path is
+ready the moment it is needed and every later transfer starts from a warmer relay cache.
+
+Key points:
+
+- **No new key to share.** Unlike the file itself, the decryption key is never carried in
+  a code — both sides derive it from the same secret the offer/answer exchange already
+  established. Whoever could authentically deliver the offer can already decrypt.
+- **What decides whether the fallback is available:** only whether the offer named proven
+  relays (it does whenever the sender could reach a few when the offer was built).
+  Returning the answer by QR / copy-paste instead of over the relays does **not** disable
+  it. The file must also be under 100 MB.
+- **When it still fails:** the offer named no relays (none were reachable when it was
+  built), or the file is over 100 MB. Then the transfer fails as before and the app
+  suggests the offline-QR app for side-by-side devices.
+- **Both pages must stay open** until it finishes, and everything must complete within 1
+  hour of the exchange start; both screens show the remaining time.
 - Relays see only encrypted pieces, sizes, timing, and the small encrypted coordination
-  messages — never the file name, contents, or the decryption key. Signaling and storage
-  use separate relays: the coordination channel rides a few proven signaling relays,
-  while the pieces go to relays that passed a full-size health check — never the same
-  relay for both
+  messages — never the file name, contents, or the key. Signaling and storage use
+  separate relays.
 
 ## Tips
 
@@ -184,8 +190,9 @@ Differences from normal Manual Exchange:
 - **A direct route is required (direct flow only)**: Without internet, both devices normally need
   to be on the same Wi-Fi or local network. With internet, STUN can help discover direct routes
   across different networks, but restrictive NAT or firewall rules can still prevent a connection.
-  TURN relaying is not supported. This does not apply to the Nostr relay options — the devices
-  never connect to each other, so each only needs internet access to the relays
+  TURN relaying is not supported. When a direct route cannot be found, the file falls back to
+  the [Nostr relay path](#relay-fallback-no-direct-connection) (offer named relays, file under
+  100 MB), where the devices only need internet access to the relays, not to each other
 - **Deployment path**: Host at domain root (for example `https://example.com`). Subpath
   deployments (for example `https://example.com/my-app`) can break scanned QR links
 
@@ -198,10 +205,10 @@ Differences from normal Manual Exchange:
 | "Camera access denied" in-app | Allow camera permissions in your browser settings and reload the page. Or switch to the **Paste** tab and use copy/paste instead. |
 | Copy button does nothing | Some browsers block clipboard access. Use **Show text to copy manually** and select the text by hand. |
 | Pasted data is rejected | Make sure you copied the entire blob and pasted the matching piece (offer to the receiver, answer to the sender). |
-| Receiver says the response was sent, but the sender is still waiting | Give it a few seconds. If nothing happens, use **Show response code instead** on the receiver and **Scan or paste the receiver's response** on the sender, and carry the answer across by QR or copy/paste. |
-| Receiver says the response was sent, and the sender reports a failed connection | The response arrived; the direct WebRTC route between the devices is blocked (firewall / restrictive NAT). Scanning the code will not help — both sides need to start over on a network path that allows a direct connection, or use the Nostr file relay option. |
+| Receiver says the response was sent, but the sender is still waiting | Give it a few seconds. If nothing happens, both sides need to start over — the receiver's choice of relay return is final, so there is no code to carry across after it. On the retry, choose **Show a code to scan or paste** for the answer instead. |
+| Sender reports a failed connection after the answer arrived | The direct WebRTC route between the devices is blocked (firewall / restrictive NAT). If the offer named relays and the file is under 100 MB, the app relays the file through Nostr automatically instead — no action needed. It only fails outright when no relays were named or the file is over 100 MB; then start over on a network that allows a direct connection. |
 | Receiver shows the response code without being asked | No relay took the response (or none were reachable when the offer was made). The hand-carried answer works exactly as before. |
 | Transfer fails after the offer is collected (direct flow) | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
 | Sender shows expired error | Generate a new offer by retrying the send flow. |
 | Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
-| Relay transfer stalls or times out (Nostr relay options) | Both devices need internet access to the relays, not to each other. With *Live*, both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must also finish within 1 hour of the transfer start; after that, start a new one. |
+| Relay fallback stalls or times out | Both devices need internet access to the relays, not to each other. Both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must finish within 1 hour of the exchange start; after that, start a new one. |

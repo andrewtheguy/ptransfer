@@ -15,14 +15,20 @@ import {
 } from './constants';
 import type { NostrFilePool } from './pool';
 import {
+  createIndexedDbRelayPool,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
   type RelayPoolStorage,
   saveRelayHealth,
   selectUploadRelays,
+  sweepRelayHealth,
 } from './relay-pool';
-import { type NostrFileTransferStats, relayStatsFor } from './stats';
+import {
+  createTransferStats,
+  type NostrFileTransferStats,
+  relayStatsFor,
+} from './stats';
 
 export class NostrFileCancelledError extends Error {
   constructor() {
@@ -84,7 +90,7 @@ export async function publishWithRetry(
 }
 
 export const NOT_ENOUGH_RELAYS_MESSAGE =
-  'Not enough working Nostr relays found. Try again, or use the normal Manual Exchange transfer.';
+  'Not enough working Nostr storage relays found to relay the file. Try again on a network that allows a direct connection.';
 
 export interface UploadRelaySelection {
   storageRelays: string[];
@@ -116,6 +122,7 @@ export async function resolveUploadRelays(
     isCancelled: () => boolean;
     onProgress: (p: UploadProgress) => void;
     stats: NostrFileTransferStats;
+    /** Full-size-proven relays to keep aside for the signaling fallback. */
     reserveCount?: number;
   },
 ): Promise<UploadRelaySelection> {
@@ -178,6 +185,9 @@ export async function resolveUploadRelays(
   const healthy = await healthCheckRelays(pool, candidates, {
     isCancelled,
     onProgress: (relaysChecked, relaysHealthy, url, rttMs) => {
+      // A probe that outlived a cancellation raced the caller tearing the
+      // pool down; its verdict says nothing about the relay.
+      if (isCancelled()) return;
       if (rttMs === null) failedProbes.push(url);
       else successfulProbes.push({ url, rttMs });
       stats.relaysChecked = relaysChecked;
@@ -225,24 +235,39 @@ export async function resolveUploadRelays(
 
 export interface TransferRelaySelection {
   controlRelays: string[];
-  /** Already selected only when signaling needed storage reserves. */
+  /** Discovery and full-size probe tallies, seeded with the chosen relays. */
+  stats: NostrFileTransferStats;
+  /**
+   * The storage ring, already selected only when signaling had to borrow
+   * full-size-proven reserves. Null when every control relay came from the
+   * proven defaults, in which case the ring is resolved in the background.
+   */
   storageRelays: string[] | null;
   /** Empty unless storage discovery already ran for the signaling fallback. */
   unprobedCandidates: string[];
 }
 
 /**
- * Resolve the relay sets needed before the manual exchange code is created.
- * Six default signaling relays are probed first. When any are unavailable,
- * storage discovery runs early and its four full-size-proven, unselected
- * relays fill the signaling gaps. The selected sets remain disjoint.
+ * Resolve the control (signaling) relays the offer will name, before the code
+ * is shown. The manual exchange's robustness rule: probe the DEFAULT_RELAYS
+ * seeds with a control-sized write->read round trip, and when fewer than
+ * CONTROL_RELAY_COUNT pass, run storage discovery early and fill the gaps from
+ * its full-size-proven, ring-excluded reserves — a defunct default is replaced
+ * by a relay proven to serve real chunks, never by a weaker control-sized
+ * discovery. The control set and the storage ring stay disjoint.
+ *
+ * When the defaults suffice, no storage work happens here at all: `storageRelays`
+ * comes back null and the caller resolves the ring in the background, since the
+ * code does not depend on it. When reserves were needed, the ring is already
+ * selected and handed back so the caller does not discover twice.
+ *
+ * Throws NOT_ENOUGH_RELAYS_MESSAGE when fewer than MIN_CONTROL_RELAYS are
+ * usable; the caller then falls back to a manual-only offer.
  */
 export async function resolveTransferRelays(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
   opts: {
-    controlRelayOverride?: string[];
-    dataRelayOverride?: string[];
     isCancelled: () => boolean;
     onControlProgress: (checked: number, healthy: number) => void;
     onUploadProgress: (p: UploadProgress) => void;
@@ -261,25 +286,6 @@ export async function resolveTransferRelays(
     return healthy.map((relay) => relay.url);
   };
 
-  if (opts.controlRelayOverride && opts.controlRelayOverride.length > 0) {
-    const distinct = [
-      ...new Set(
-        opts.controlRelayOverride
-          .map(normalizeRelayUrl)
-          .filter((url): url is string => url !== null),
-      ),
-    ].slice(0, CONTROL_RELAY_COUNT);
-    if (distinct.length < MIN_CONTROL_RELAYS) {
-      throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
-    }
-    for (const relay of distinct) relayStatsFor(stats, relay, 'control');
-    return {
-      controlRelays: distinct,
-      storageRelays: null,
-      unprobedCandidates: [],
-    };
-  }
-
   const probeStarted = Date.now();
   const healthyDefaults = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
     probeBytes: CONTROL_PROBE_BYTES,
@@ -296,7 +302,6 @@ export async function resolveTransferRelays(
   let unprobedCandidates: string[] = [];
   if (healthyDefaults.length < CONTROL_RELAY_COUNT) {
     const upload = await resolveUploadRelays(pool, storage, {
-      relayOverride: opts.dataRelayOverride,
       excludeRelays: healthyDefaults.map((relay) => relay.url),
       isCancelled: opts.isCancelled,
       onProgress: opts.onUploadProgress,
@@ -322,7 +327,107 @@ export async function resolveTransferRelays(
 
   return {
     controlRelays: seedControlStats(control),
+    stats,
     storageRelays,
     unprobedCandidates,
   };
+}
+
+export interface PreparedStorageRelays {
+  /**
+   * The storage ring. Rejects with NOT_ENOUGH_RELAYS_MESSAGE when too few
+   * relays pass the full-size probe, or NostrFileCancelledError when the
+   * preparation was cancelled or aborted first.
+   */
+  ring: Promise<string[]>;
+  /**
+   * Discovery and health-check tallies (plus the ring's per-relay rows). The
+   * transfer that adopts the ring keeps counting into the same object.
+   */
+  stats: NostrFileTransferStats;
+}
+
+/**
+ * Prepare the storage ring behind a manual exchange and keep probing the
+ * relay population after it — the storage half of the transfer, started as
+ * soon as the offer's control relays are known so it runs while the receiver
+ * is still reading the code and while WebRTC is still trying. Nothing about
+ * the file is touched here; only the relays are prepared. A direct connection
+ * leaves the ring unused (and the cache warmer for the next transfer); a
+ * failed one hands the ring to `sendFileLive` ready-made.
+ *
+ * `preselected` is `resolveTransferRelays`'s storage half — non-null only
+ * when the signaling fallback already discovered and full-size-probed a ring
+ * to borrow reserves from. When it is given, that ring is adopted as-is and
+ * only the background sweep continues (from the candidates that pass left
+ * unprobed); otherwise `resolveUploadRelays` discovers, probes, and selects
+ * the ring here. Either way `sweepRelayHealth` then enumerates and probes the
+ * rest of the population for as long as the caller lets it: `signal` ends the
+ * sweep at once and voids the verdict of any probe still in flight, so a
+ * caller about to destroy the pool never records its own teardown as relay
+ * failures. A relay override means the caller picked the relays itself, so
+ * there is no discovery to continue and the sweep stays out of it.
+ *
+ * The returned `ring` promise never surfaces as an unhandled rejection; the
+ * caller looks at it only once a transfer needs the ring.
+ */
+export function prepareStorageRelays(
+  pool: NostrFilePool,
+  opts: {
+    /** Relays carrying the control channel; never rung, never probed. */
+    controlRelays: string[];
+    /** Continue this tally instead of starting a fresh one. */
+    stats?: NostrFileTransferStats;
+    /** The ring `resolveTransferRelays` already selected, if any. */
+    preselected?: {
+      storageRelays: string[];
+      unprobedCandidates: string[];
+    } | null;
+    storage?: RelayPoolStorage;
+    relayOverride?: string[];
+    signal?: AbortSignal;
+    isCancelled?: () => boolean;
+    onProgress?: (p: UploadProgress) => void;
+  },
+): PreparedStorageRelays {
+  const storage = opts.storage ?? createIndexedDbRelayPool();
+  const stats = opts.stats ?? createTransferStats('sender');
+  const isCancelled = () =>
+    opts.signal?.aborted === true || opts.isCancelled?.() === true;
+  // The whole relay population, uncapped, probed as far as the caller lasts,
+  // so the next transfer is not limited to what this one happened to need.
+  // Best-effort: its outcome is the cache, never the ring. Skipped for a
+  // caller-picked ring — there is no discovery to continue.
+  const sweep = (ring: string[], unprobed: string[]) => {
+    if (opts.relayOverride?.length) return;
+    void sweepRelayHealth(pool, storage, {
+      unprobed,
+      excludeRelays: [...opts.controlRelays, ...ring],
+      signal: opts.signal,
+      isCancelled,
+    }).catch(() => {});
+  };
+  const ring = (async () => {
+    if (opts.preselected) {
+      for (const url of opts.preselected.storageRelays) {
+        relayStatsFor(stats, url, 'storage');
+      }
+      sweep(
+        opts.preselected.storageRelays,
+        opts.preselected.unprobedCandidates,
+      );
+      return opts.preselected.storageRelays;
+    }
+    const upload = await resolveUploadRelays(pool, storage, {
+      relayOverride: opts.relayOverride,
+      excludeRelays: opts.controlRelays,
+      isCancelled,
+      onProgress: opts.onProgress ?? (() => {}),
+      stats,
+    });
+    sweep(upload.storageRelays, upload.unprobedCandidates);
+    return upload.storageRelays;
+  })();
+  ring.catch(() => {});
+  return { ring, stats };
 }

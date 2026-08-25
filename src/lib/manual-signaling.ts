@@ -4,11 +4,6 @@ import {
   encodeAnswerSecret,
   normalizeAnswerRelays,
 } from './answer-channel';
-import {
-  BASE64_32_BYTES,
-  isValidNostrFileManifest,
-  type NostrFileManifest,
-} from './nostr-file/manifest';
 import type { WireEncoding } from './transfer-source';
 
 // Deterministic deflate helpers (avoid browser stream API stalls).
@@ -358,68 +353,4 @@ export function isMutualPayload(binary: Uint8Array): boolean {
  */
 export function generateMutualClipboardData(binary: Uint8Array): string {
   return uint8ArrayToBase64(binary);
-}
-
-/**
- * Live (single-copy) Nostr file relay payload: the manifest of the transfer
- * plus the decryption key, handed out *before* the upload. The sender stays
- * online and the two sides coordinate over an encrypted control channel
- * (keyed off `key`) on the payload's `controlRelays`; the storage-relay ring
- * is announced over that channel, not carried here. Because the key rides in
- * it, this payload must only ever travel over the trusted manual channel
- * (QR / direct copy-paste).
- */
-export interface NostrFileLivePayload extends NostrFileManifest {
-  type: 'nostr-file-live';
-  /** base64(32-byte AES-256-GCM key) */
-  key: string;
-}
-
-/**
- * Validate NostrFileLivePayload structure
- */
-export function isValidNostrFileLivePayload(
-  payload: unknown,
-): payload is NostrFileLivePayload {
-  if (!payload || typeof payload !== 'object') return false;
-  const p = payload as Record<string, unknown>;
-  if (p.type !== 'nostr-file-live') return false;
-  if (typeof p.key !== 'string' || !BASE64_32_BYTES.test(p.key)) {
-    return false;
-  }
-  return isValidNostrFileManifest(payload);
-}
-
-/**
- * Generate a nostr file relay payload as PT01 binary data
- */
-export function generateNostrFilePayloadBinary(
-  payload: NostrFileLivePayload,
-): Uint8Array {
-  return encodeManualPayload(payload);
-}
-
-export type ParsedManualPayload =
-  | { kind: 'signaling'; payload: SignalingPayload }
-  | { kind: 'nostr-file-live'; payload: NostrFileLivePayload };
-
-/**
- * Parse any manual-exchange PT01 binary and discriminate its payload type.
- * Returns null for unknown or malformed payloads.
- */
-export function parseAnyManualPayload(
-  binary: Uint8Array,
-): ParsedManualPayload | null {
-  try {
-    const payload = decodeManualPayload(binary);
-    if (isValidNostrFileLivePayload(payload)) {
-      return { kind: 'nostr-file-live', payload };
-    }
-    if (isValidSignalingPayload(payload)) {
-      return { kind: 'signaling', payload };
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }

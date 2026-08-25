@@ -1,12 +1,11 @@
 import { formatFileSize } from '@/lib/file-utils';
-import type { TransferState } from '@/lib/nostr';
 import {
   NOSTR_FILE_MAX_BYTES,
   NostrFileCancelledError,
 } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
-/** Input handling for the Nostr relay send hook. */
+/** Input handling for the Nostr relay fallback in the Manual Exchange hooks. */
 
 export async function readSourceFully(
   source: TransferSource,
@@ -44,49 +43,6 @@ export async function readSourceFully(
     offset += part.length;
   }
   return data;
-}
-
-/**
- * Validate and sanitize a source's metadata up front. Returns an error state
- * to publish, or the clean name/type to proceed with.
- */
-export function validateNostrRelaySource(
-  content: TransferSource,
-):
-  | { ok: true; fileName: string; mimeType: string }
-  | { ok: false; state: TransferState } {
-  const fileName = (content.name || '').trim();
-  if (!fileName) {
-    return {
-      ok: false,
-      state: { status: 'error', message: 'Missing file name' },
-    };
-  }
-  const mimeType = content.type || 'application/octet-stream';
-
-  if (
-    !Number.isFinite(content.estimatedSize) ||
-    content.estimatedSize < 0 ||
-    (content.size !== null &&
-      (!Number.isFinite(content.size) || content.size <= 0))
-  ) {
-    return {
-      ok: false,
-      state: { status: 'error', message: 'Invalid file size' },
-    };
-  }
-  // Pre-read bound; the exact byte count is re-checked while reading
-  // (ZIP sources only know their real size at end of stream).
-  if ((content.size ?? content.estimatedSize) > NOSTR_FILE_MAX_BYTES) {
-    return {
-      ok: false,
-      state: {
-        status: 'error',
-        message: `File exceeds ${formatFileSize(NOSTR_FILE_MAX_BYTES)} Nostr relay limit`,
-      },
-    };
-  }
-  return { ok: true, fileName, mimeType };
 }
 
 // Plaintext bytes represented by one chunk, for progress display. Chunks

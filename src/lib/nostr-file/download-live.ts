@@ -21,6 +21,7 @@ import {
 } from './fetch';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
+import type { RelaySession } from './session';
 import {
   createTransferStats,
   type NostrFileTransferStats,
@@ -30,7 +31,10 @@ import { Deferred } from './sync';
 import { NostrFileCancelledError } from './upload';
 
 export interface LiveReceiveProgress {
+  /** Null until the sender's manifest has arrived. */
+  manifest: NostrFileManifest | null;
   chunksDone: number;
+  /** 0 until the manifest has arrived. */
   chunksTotal: number;
   /** chunks the sender has announced as uploaded */
   available: number;
@@ -41,9 +45,12 @@ export interface LiveReceiveProgress {
 }
 
 /**
- * Live (single-copy) relay transfer, receiver side.
+ * Live (single-copy) relay transfer, receiver side — the Manual Exchange
+ * data path when no direct connection could be made.
  *
- * Joins the control channel on the manifest's control relays, then follows
+ * Joins the control channel on the offer's control relays with the session
+ * derived from the exchange's ECDH secret, waits for the sender's manifest
+ * (its first message; a late joiner reads it from the backlog), then follows
  * the sender's availability announcements: the announcements carry the data
  * ring (adopted on first sight; empty while the sender is still discovering
  * storage relays), and each announced chunk is fetched from the one ring
@@ -55,20 +62,28 @@ export interface LiveReceiveProgress {
  * Resolves with the verified file.
  */
 export async function receiveFileLive(
-  manifest: NostrFileManifest,
-  keyBytes: Uint8Array,
+  session: RelaySession,
+  controlRelays: string[],
   opts: {
     onProgress: (p: LiveReceiveProgress) => void;
     isCancelled: () => boolean;
     pool: NostrFilePool;
+    /**
+     * unix seconds: the exchange's own start, backdated for the subscription
+     * lower bound so a manifest published before this side joined is read
+     * from the backlog.
+     */
+    since: number;
+    /** unix seconds: the exchange's deadline, stamped on our own events. */
+    expiresAt: number;
   },
 ): Promise<Uint8Array> {
   const { onProgress, isCancelled, pool } = opts;
+  const { transferId, keyBytes } = session;
 
-  assertManifestWindow(manifest, keyBytes);
   let controlKey: CryptoKey;
   try {
-    controlKey = await deriveControlKey(keyBytes, manifest.transferId);
+    controlKey = await deriveControlKey(keyBytes, transferId);
   } catch (err) {
     wipeBufferSource(keyBytes);
     throw err;
@@ -80,31 +95,28 @@ export async function receiveFileLive(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
-  const controlRelays = manifest.controlRelays;
+  // Everything sized by the manifest is bound once it arrives.
+  let manifest: NostrFileManifest | null = null;
+  let total = 0;
+  let chunks: (Uint8Array | null)[] = [];
+  // Placement ([pos, gen]) last tried for a chunk still missing, and when
+  // that attempt finished — after LIVE_FETCH_RETRY_MS the same placement
+  // becomes retryable (a transient fetch failure must not need a re-send).
+  let lastTried: ([number, number] | null)[] = [];
+  let lastTriedAt = new Float64Array(0);
   // Data ring, adopted from the first availability announcement carrying one.
   let ring: string[] = [];
-  const total = manifest.totalChunks;
-  const chunks: (Uint8Array | null)[] = new Array(total).fill(null);
   let chunksDone = 0;
   let upto = 0;
   // Latest announced placement: ring position per chunk and re-send
   // generation for the chunks that were re-sent.
   let map = '';
   const gens = new Map<number, number>();
-  // Placement ([pos, gen]) last tried for a chunk still missing, and when
-  // that attempt finished — after LIVE_FETCH_RETRY_MS the same placement
-  // becomes retryable (a transient fetch failure must not need a re-send).
-  const lastTried: ([number, number] | null)[] = new Array(total).fill(null);
-  const lastTriedAt = new Float64Array(total);
   let lastSenderN = 0;
   let lastPeerAt = 0;
   const startedAt = Date.now();
 
   const stats = createTransferStats('receiver');
-  stats.fileBytes = manifest.fileSize;
-  stats.payloadBytes = manifest.payloadSize;
-  stats.chunkSize = manifest.chunkSize;
-  stats.chunksTotal = total;
   for (const relay of controlRelays) relayStatsFor(stats, relay, 'control');
 
   let finished = false;
@@ -129,6 +141,7 @@ export async function receiveFileLive(
   const report = () => {
     stats.phaseMs.transfer = Date.now() - startedAt;
     onProgress({
+      manifest,
       chunksDone,
       chunksTotal: total,
       available: upto,
@@ -146,7 +159,10 @@ export async function receiveFileLive(
 
     // One fetch cycle: fetch whatever the latest announcement made available,
     // report the outcome, and repeat while another announcement queued a pass.
-    const runCycle = async (ch: ControlChannel): Promise<void> => {
+    const runCycle = async (
+      ch: ControlChannel,
+      manifest: NostrFileManifest,
+    ): Promise<void> => {
       cycleRunning = true;
       try {
         do {
@@ -175,16 +191,24 @@ export async function receiveFileLive(
           }
           await Promise.all(
             [...byPos].map(([pos, indices]) =>
-              fetchChunksFromRelay(pool, manifest, aesKey, ring[pos], indices, {
-                have: (index) => chunks[index] !== null,
-                onChunk: (index, plaintext) => {
-                  chunks[index] = plaintext;
-                  chunksDone++;
-                  report();
+              fetchChunksFromRelay(
+                pool,
+                transferId,
+                manifest,
+                aesKey,
+                ring[pos],
+                indices,
+                {
+                  have: (index) => chunks[index] !== null,
+                  onChunk: (index, plaintext) => {
+                    chunks[index] = plaintext;
+                    chunksDone++;
+                    report();
+                  },
+                  throwIfCancelled,
+                  stats,
                 },
-                throwIfCancelled,
-                stats,
-              }),
+              ),
             ),
           );
           for (const [index, placement] of tried) {
@@ -245,27 +269,54 @@ export async function receiveFileLive(
     // pass. The guard stays out here so `cyclePromise` always tracks the
     // in-flight cycle — the teardown awaits it before closing the channel.
     const scheduleCycle = () => {
-      if (!channel) return;
+      if (!channel || !manifest) return;
       if (cycleRunning) {
         cyclePending = true;
         return;
       }
-      cyclePromise = runCycle(channel).catch(fail);
+      cyclePromise = runCycle(channel, manifest).catch(fail);
     };
 
+    // The sender's pubkey is learned from the manifest, so the subscription
+    // cannot be narrowed by author up front; a message is trusted because it
+    // opened under the session key, and once the manifest names the sender
+    // every other author is ignored.
     channel = openControlChannel(pool, controlRelays, {
-      transferId: manifest.transferId,
+      transferId,
       key: controlKey,
       role: 'receiver',
       secretKey,
-      since: manifest.createdAt - CLOCK_SKEW_TOLERANCE_SEC,
-      expiresAt: manifest.expiresAt,
-      authors: [manifest.pubkey],
+      since: opts.since - CLOCK_SKEW_TOLERANCE_SEC,
+      expiresAt: opts.expiresAt,
       stats,
       onMessage: (raw, pubkey) => {
-        if (finished || pubkey !== manifest.pubkey) return;
-        const msg = parseSenderMessage(raw, total);
+        if (finished) return;
+        if (manifest && pubkey !== manifest.pubkey) return;
+        const msg = parseSenderMessage(raw, manifest ? total : null);
         if (!msg || msg.n <= lastSenderN) return;
+        if (msg.t === 'manifest') {
+          // Exactly one manifest, and only from the key it names.
+          if (manifest || msg.manifest.pubkey !== pubkey) return;
+          try {
+            assertManifestWindow(msg.manifest);
+          } catch (err) {
+            fail(err);
+            return;
+          }
+          manifest = msg.manifest;
+          total = manifest.totalChunks;
+          chunks = new Array(total).fill(null);
+          lastTried = new Array(total).fill(null);
+          lastTriedAt = new Float64Array(total);
+          stats.fileBytes = manifest.fileSize;
+          stats.payloadBytes = manifest.payloadSize;
+          stats.chunkSize = manifest.chunkSize;
+          stats.chunksTotal = total;
+          lastSenderN = msg.n;
+          lastPeerAt = Date.now();
+          report();
+          return;
+        }
         if (msg.t === 'avail' && msg.relays.length > 0) {
           if (ring.length === 0) {
             ring = msg.relays;
@@ -303,7 +354,7 @@ export async function receiveFileLive(
         return;
       }
       const now = Date.now();
-      if (now / 1000 > manifest.expiresAt) {
+      if (now / 1000 > (manifest ? manifest.expiresAt : opts.expiresAt)) {
         fail(
           new Error(
             'The transfer expired before all pieces arrived — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
@@ -317,7 +368,7 @@ export async function receiveFileLive(
           new Error(
             lastPeerAt > 0
               ? 'The sender stopped responding. Both pages must stay open until the transfer completes.'
-              : "No response from the sender. Make sure the sender's page is still open and showing the code.",
+              : "No response from the sender over the relays. Make sure the sender's page is still open.",
           ),
         );
         return;

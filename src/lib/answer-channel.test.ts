@@ -1,18 +1,13 @@
-import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
 import {
   ANSWER_MAX_BYTES,
-  ANSWER_RELAY_COUNT,
   type AnswerChannel,
   decodeAnswerSecret,
   deriveAnswerChannel,
   encodeAnswerSecret,
   generateAnswerSecret,
-  MIN_ANSWER_RELAYS,
   normalizeAnswerRelays,
-  probeAnswerRelays,
   publishAnswer,
-  sweepAnswerRelays,
   watchForAnswer,
 } from './answer-channel';
 import {
@@ -21,13 +16,14 @@ import {
   generateMutualOfferBinary,
   parseMutualPayload,
 } from './manual-signaling';
-import { DEFAULT_RELAYS } from './nostr/relays';
 import { createMockPool } from './nostr-file/mock-pool';
 import type {
   CachedRelay,
   RelayPoolState,
   RelayPoolStorage,
 } from './nostr-file/relay-pool';
+import { createTransferStats } from './nostr-file/stats';
+import { resolveTransferRelays } from './nostr-file/upload';
 
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
 const EXPIRES_AT = Math.floor(Date.now() / 1000) + 3600;
@@ -84,18 +80,6 @@ function memoryStorage(): RelayPoolStorage & {
 }
 
 /** A NIP-66 relay-discovery event naming `url`, as a seed would serve it. */
-function discoveryEvent(url: string): Event {
-  return {
-    kind: 30166,
-    tags: [['d', url]],
-    content: '',
-    created_at: 0,
-    pubkey: 'p',
-    id: `i-${url}`,
-    sig: 's',
-  };
-}
-
 describe('answer channel derivation', () => {
   it('derives the same tag and a working key on both ends', async () => {
     const a = await deriveAnswerChannel(secretBytes());
@@ -249,141 +233,17 @@ describe('publishing and watching for an answer', () => {
   });
 });
 
-describe('probeAnswerRelays', () => {
-  it('returns the defaults that answered the write->read probe', async () => {
-    const pool = createMockPool();
-    const storage = memoryStorage();
-    const relays = await probeAnswerRelays(pool, { storage });
-    expect(relays.length).toBeGreaterThanOrEqual(MIN_ANSWER_RELAYS);
-    expect(relays.length).toBeLessThanOrEqual(ANSWER_RELAY_COUNT);
-    for (const relay of relays) {
-      expect(DEFAULT_RELAYS as readonly string[]).toContain(relay);
-    }
-    // Every default passed, so discovery never ran and the cache is untouched.
-    expect(storage.state).toBeNull();
-    expect(storage.relayHealth).toEqual([]);
-  });
-
-  it('returns nothing when no default relay answers, without throwing', async () => {
-    const pool = createMockPool({ failRelays: new Set(DEFAULT_RELAYS) });
-    expect(await probeAnswerRelays(pool, { storage: memoryStorage() })).toEqual(
-      [],
-    );
-  });
-
-  it('backfills from discovered relays when the defaults come up short', async () => {
-    const dead = DEFAULT_RELAYS.slice(2);
-    const pool = createMockPool({ failRelays: new Set(dead) });
-    // The surviving seeds serve NIP-66 listings for four more relays.
-    const discovered = [
-      'wss://found1.example',
-      'wss://found2.example',
-      'wss://found3.example',
-      'wss://found4.example',
-    ];
-    for (const seed of DEFAULT_RELAYS.slice(0, 2)) {
-      pool.store.set(seed, discovered.map(discoveryEvent));
-    }
-    const storage = memoryStorage();
-
-    const relays = await probeAnswerRelays(pool, { storage });
-
-    expect(relays).toHaveLength(ANSWER_RELAY_COUNT);
-    // Working defaults lead; discovery fills the rest.
-    expect(relays.slice(0, 2).sort()).toEqual(
-      [...DEFAULT_RELAYS.slice(0, 2)].sort(),
-    );
-    expect(relays.slice(2).sort()).toEqual([...discovered].sort());
-    for (const relay of relays) expect(dead).not.toContain(relay);
-  });
-
-  it('records control-probe verdicts in the shared relay cache', async () => {
-    const pool = createMockPool({
-      failRelays: new Set([...DEFAULT_RELAYS.slice(2), 'wss://bad.example']),
-    });
-    for (const seed of DEFAULT_RELAYS.slice(0, 2)) {
-      pool.store.set(seed, [
-        discoveryEvent('wss://good.example'),
-        discoveryEvent('wss://bad.example'),
-      ]);
-    }
-    const storage = memoryStorage();
-
-    await probeAnswerRelays(pool, { storage });
-
-    const good = storage.relayHealth.find(
-      (relay) => relay.url === 'wss://good.example',
-    );
-    const bad = storage.relayHealth.find(
-      (relay) => relay.url === 'wss://bad.example',
-    );
-    expect(good?.supportsControl).toBe(true);
-    // A 256-byte round trip proves nothing about a full-size chunk.
-    expect(good?.supportsStorage).toBe(false);
-    expect(bad?.supportsControl).toBe(false);
-    expect(bad?.consecutiveFailures).toBe(1);
-    // The defaults are seeds, not cache entries.
-    for (const relay of storage.relayHealth) {
-      expect(DEFAULT_RELAYS as readonly string[]).not.toContain(relay.url);
-    }
-  });
-
-  it('returns nothing when the defaults and discovery together fall short', async () => {
-    const usable = new Set(DEFAULT_RELAYS.slice(0, 1));
-    const pool = createMockPool({
-      failRelays: new Set(DEFAULT_RELAYS.filter((r) => !usable.has(r))),
-    });
-    expect(await probeAnswerRelays(pool, { storage: memoryStorage() })).toEqual(
-      [],
-    );
-  });
-});
-
-describe('sweepAnswerRelays', () => {
-  it('enumerates and probes the relay population behind an exchange, leaving the answer relays alone', async () => {
-    const found = ['wss://found1.example', 'wss://found2.example'];
-    const pool = createMockPool({ failRelays: new Set([found[1]]) });
-    for (const seed of DEFAULT_RELAYS) {
-      pool.store.set(seed, found.map(discoveryEvent));
-    }
-    const storage = memoryStorage();
-    const answerRelays = DEFAULT_RELAYS.slice(0, ANSWER_RELAY_COUNT);
-
-    await sweepAnswerRelays(pool, answerRelays, { storage });
-
-    const byUrl = new Map(storage.relayHealth.map((r) => [r.url, r]));
-    expect([...byUrl.keys()].sort()).toEqual([...found].sort());
-    expect(byUrl.get(found[0])?.supportsStorage).toBe(true);
-    expect(byUrl.get(found[1])?.consecutiveFailures).toBe(1);
-    for (const url of found) expect(pool.closedRelays).toContain(url);
-    for (const url of answerRelays) {
-      expect(pool.closedRelays).not.toContain(url);
-    }
-  });
-
-  it('stops as soon as the signal fires and never throws', async () => {
-    const pool = createMockPool();
-    for (const seed of DEFAULT_RELAYS) {
-      pool.store.set(seed, [discoveryEvent('wss://late.example')]);
-    }
-    const storage = memoryStorage();
-    const controller = new AbortController();
-    controller.abort();
-    await expect(
-      sweepAnswerRelays(pool, DEFAULT_RELAYS.slice(0, 2), {
-        storage,
-        signal: controller.signal,
-      }),
-    ).resolves.toBeUndefined();
-    expect(storage.relayHealth).toEqual([]);
-  });
-});
-
 describe('offer to answer, end to end', () => {
   it("returns the receiver's answer to the sender without a second hop", async () => {
     const pool = createMockPool();
     // Sender: prove relays, then mint an offer that names them.
-    const relays = await probeAnswerRelays(pool, { storage: memoryStorage() });
+    const selection = await resolveTransferRelays(pool, memoryStorage(), {
+      isCancelled: () => false,
+      onControlProgress: () => {},
+      onUploadProgress: () => {},
+      stats: createTransferStats('sender'),
+    });
+    const relays = selection.controlRelays;
     const secret = generateAnswerSecret();
     const publicKey = new Uint8Array(65).fill(1);
     publicKey[0] = 4;

@@ -19,13 +19,14 @@ relays instead of a second QR scan / copy-paste:
   payload names the relays the answer will come back on, so both sides agree
   on the channel without a second out-of-band step.
 - Reuse the verified-relay logic from the Nostr file relay
-  (`src/lib/nostr-file/relay-pool.ts`) in full, minus the storage half: the
-  write→read probe of `DEFAULT_RELAYS`, NIP-66/NIP-65 discovery and the
-  IndexedDB candidate/health cache to backfill the set when defaults come up
-  short, and the same NIP-40 expiration. Answers are small, so the
-  control-sized probe (256 B) is the health bar throughout — no full-size
-  storage probe, no storage ring, and no background sweep behind a WebRTC
-  transfer.
+  (`resolveTransferRelays`) in full: the control-sized write→read probe of
+  `DEFAULT_RELAYS`, and — when defaults come up short — the same NIP-66/NIP-65
+  discovery and full-size probe the storage transfer runs, so a defunct default
+  is made up from a full-size-proven storage reserve rather than a weaker
+  control-sized discovery. The control-relay resolution is awaited before the
+  QR (the offer must name the relays); the storage ring and its background
+  sweep are prepared behind the exchange as relay preparation for Phase 2 (the
+  QR does not depend on them), never touching the file.
 - The answer rides an **encrypted side channel keyed from the offer**, the
   same way the Nostr file relay's control channel is keyed from its code, so
   relays see only ciphertext and the exchange keeps its current security
@@ -45,10 +46,39 @@ the user-facing flow in [MANUAL_EXCHANGE.md](MANUAL_EXCHANGE.md).
 
 #### Phase 2 — automatic relay fallback for the data path
 
-If the WebRTC connection fails after signaling (the `P2PConnectionError` case
-that today just fails with a suggestion), fall back to the Nostr file relay
-transport automatically, without the user having to find and check the
-experimental **Relay file through Nostr** switch:
+When the WebRTC connection cannot be established after signaling (the
+`P2PConnectionError` case that used to just fail with a suggestion), the file
+falls back to the Nostr relay transport automatically — the Nostr relay
+transport becomes the Manual Exchange stand-in for TURN, with no user opt-in.
+
+- The old opt-in **Relay file through Nostr** toggle is gone, and so is the
+  standalone `nostr-file-live` code payload. Nothing is uploaded ahead of
+  time: the relay engine runs only after a direct connection fails, so a
+  transfer that would have connected directly never touches a storage relay.
+- Both sides derive the relay session (transfer id + file key) from the
+  Manual Exchange ECDH shared secret (`deriveRelaySession`, HKDF), so no key
+  or id ever rides in a code. The control channel rides the same proven
+  signaling relays the offer already named for the answer channel, so the
+  session is ready the moment signaling completes.
+- The sender sends the file manifest as the first control-channel message
+  (it used to travel in the code), adopts the storage ring that was already
+  being prepared behind the exchange, and uploads a single copy per piece
+  exactly as before; the receiver, seeing its direct
+  connection fail, joins the same channel and pulls the pieces.
+- What matters is only whether the **offer named proven relays**, not how the
+  answer came back: returning the answer by QR / copy-paste instead of over
+  the relays does not disable the fallback, because both sides still share the
+  offer's relays and the derived session. The answer channel is just a
+  convenient way to pass the receiver's response back — the same relays carry
+  the file if the direct connection fails.
+- It still fails rather than falling back only when there is no relay path at
+  all: the offer named no relays (fewer than `MIN_CONTROL_RELAYS` were proven
+  when it was built), or the file is over the 100 MB relay cap.
+
+Status: implemented. Sender/receiver fallback lives in
+`use-manual-send.ts` / `use-manual-receive.ts`; the session derivation in
+`src/lib/nostr-file/session.ts`; the manifest-over-control-channel change in
+`src/lib/nostr-file/control.ts` / `upload-live.ts` / `download-live.ts`.
 
 #### Phase 3 — Manual Exchange becomes the default
 

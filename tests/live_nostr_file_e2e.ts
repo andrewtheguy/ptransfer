@@ -1,8 +1,10 @@
 /**
- * Live end-to-end test of the experimental Nostr file relay against real
+ * Live end-to-end test of the Nostr file relay — the Manual Exchange data
+ * path taken when no direct WebRTC connection can be made — against real
  * public relays: sender and receiver run side by side (two pools, like two
- * browsers), coordinate over the encrypted control channel, and the result
- * is byte-compared.
+ * browsers) with a shared session, as both sides of a failed exchange would
+ * have, coordinate over the encrypted control channel, and the result is
+ * byte-compared.
  *
  * Publishes real (expiring, NIP-40) events to public relays — run manually,
  * not part of `npm test`:
@@ -15,21 +17,21 @@
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.
  */
-import {
-  generateNostrFilePayloadBinary,
-  type NostrFileLivePayload,
-  parseAnyManualPayload,
-} from '../src/lib/manual-signaling';
 import { uint8ArrayToBase64 } from '../src/lib/nostr/events';
 import { sha256 } from '../src/lib/nostr-file/codec';
 import { receiveFileLive } from '../src/lib/nostr-file/download-live';
-import type { NostrFileManifest } from '../src/lib/nostr-file/manifest';
 import type {
   CachedRelay,
   RelayPoolState,
   RelayPoolStorage,
 } from '../src/lib/nostr-file/relay-pool';
+import type { RelaySession } from '../src/lib/nostr-file/session';
+import { createTransferStats } from '../src/lib/nostr-file/stats';
 import { createTransferPool } from '../src/lib/nostr-file/transfer-pool';
+import {
+  prepareStorageRelays,
+  resolveTransferRelays,
+} from '../src/lib/nostr-file/upload';
 import { sendFileLive } from '../src/lib/nostr-file/upload-live';
 
 const FILE_MB = Number(process.env.NOSTR_E2E_FILE_MB ?? '0.1');
@@ -66,8 +68,18 @@ function randomFile(): Uint8Array {
   return data;
 }
 
-function keyFromPayload(key: string): Uint8Array {
-  return Uint8Array.from(atob(key), (c) => c.charCodeAt(0));
+// In the app both sides derive this from the exchange's ECDH secret; here
+// the two "browsers" just share random material the same way.
+function newSession(): { sender: RelaySession; receiver: RelaySession } {
+  const transferId = Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, '0'),
+  ).join('');
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+  return {
+    sender: { transferId, keyBytes: new Uint8Array(keyBytes) },
+    receiver: { transferId, keyBytes: new Uint8Array(keyBytes) },
+  };
 }
 
 async function verify(sent: Uint8Array, got: Uint8Array): Promise<void> {
@@ -87,18 +99,65 @@ async function runLive(data: Uint8Array) {
   // stalled run winds down on both sides instead of hanging forever.
   const deadline = Date.now() + TIMEOUT_MS;
   const deadlineExceeded = () => Date.now() > deadline;
+  // Ends the background relay sweep with the pools.
+  const sweepAbort = new AbortController();
   try {
+    // What the sender does while building its offer: resolve the signaling
+    // relays the offer names, filling any defunct default from a full-size-
+    // proven storage reserve. They carry the answer and, on a failed direct
+    // connection, the relay transfer's control channel.
+    const started = Date.now();
+    const relayStorage = memoryStorage();
+    const selection = await resolveTransferRelays(senderPool, relayStorage, {
+      isCancelled: deadlineExceeded,
+      stats: createTransferStats('sender'),
+      onControlProgress: (checked, healthy) =>
+        process.stdout.write(`\rcontrol relays: ${healthy}/${checked} healthy `),
+      onUploadProgress: (p) => {
+        if (p.phase === 'health_check') {
+          process.stdout.write(
+            `\rreserve health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+          );
+        }
+      },
+    });
+    const controlRelays = selection.controlRelays;
+    console.log(
+      `\nControl relays ready after ${Date.now() - started}ms (${controlRelays.length}):`,
+      controlRelays.join(', '),
+    );
+    // Behind a real exchange the storage ring is prepared as soon as the
+    // control relays are known, while WebRTC is still trying; here the direct
+    // attempt is taken as failed at once. The ring reuses the resolution's
+    // storage (and its ring, when the reserves already discovered one).
+    const storageRelays = prepareStorageRelays(senderPool, {
+      controlRelays,
+      storage: relayStorage,
+      stats: selection.stats,
+      preselected: selection.storageRelays
+        ? {
+            storageRelays: selection.storageRelays,
+            unprobedCandidates: selection.unprobedCandidates,
+          }
+        : null,
+      signal: sweepAbort.signal,
+      isCancelled: deadlineExceeded,
+      onProgress: (p) => {
+        if (p.phase === 'health_check') {
+          process.stdout.write(
+            `\rstorage health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+          );
+        }
+      },
+    });
+    const session = newSession();
+    const since = Math.floor(Date.now() / 1000);
+
     console.log(
       'Sending',
       FILE_SIZE,
       'random bytes through Nostr relays (single copy)...',
     );
-    const started = Date.now();
-    let handoverResolve!: (p: NostrFileLivePayload) => void;
-    const handover = new Promise<NostrFileLivePayload>((resolve) => {
-      handoverResolve = resolve;
-    });
-
     const sendDone = sendFileLive(
       data,
       {
@@ -108,35 +167,12 @@ async function runLive(data: Uint8Array) {
       },
       {
         pool: senderPool,
-        storage: memoryStorage(),
+        session: session.sender,
+        controlRelays,
+        storageRelays,
         isCancelled: deadlineExceeded,
-        onReady: (manifest: NostrFileManifest, keyBytes) => {
-          console.log(
-            `\nCode ready after ${Date.now() - started}ms; control relays (${manifest.controlRelays.length}):`,
-            manifest.controlRelays.join(', '),
-          );
-          const payloadBinary = generateNostrFilePayloadBinary({
-            ...manifest,
-            type: 'nostr-file-live',
-            key: uint8ArrayToBase64(keyBytes),
-          } satisfies NostrFileLivePayload);
-          console.log('Manual payload size:', payloadBinary.length, 'bytes');
-          const parsed = parseAnyManualPayload(payloadBinary);
-          if (parsed?.kind !== 'nostr-file-live') {
-            throw new Error('Payload round-trip failed');
-          }
-          handoverResolve(parsed.payload);
-        },
         onProgress: (p) => {
-          if (p.phase === 'connecting') {
-            process.stdout.write(
-              `\rcontrol probe: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
-            );
-          } else if (p.phase === 'health_check') {
-            process.stdout.write(
-              `\rstorage health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
-            );
-          } else if (p.phase === 'transfer') {
+          if (p.phase === 'transfer') {
             process.stdout.write(
               `\rsender: uploaded ${p.chunksDone}/${p.chunksTotal}, receiver has ${p.receiverHave ?? 0}, re-sent ${p.resent ?? 0}, relays demoted ${p.relaysDemoted ?? 0}      `,
             );
@@ -146,23 +182,14 @@ async function runLive(data: Uint8Array) {
     );
     sendDone.catch(() => {});
 
-    const payload = await Promise.race([
-      handover,
-      sendDone.then(() => {
-        throw new Error('sender finished before handing over the code');
-      }),
-    ]);
-
     const receiveStarted = Date.now();
-    const received = await receiveFileLive(
-      payload,
-      keyFromPayload(payload.key),
-      {
-        pool: receiverPool,
-        isCancelled: deadlineExceeded,
-        onProgress: () => {},
-      },
-    );
+    const received = await receiveFileLive(session.receiver, controlRelays, {
+      pool: receiverPool,
+      isCancelled: deadlineExceeded,
+      since,
+      expiresAt: since + 3600,
+      onProgress: () => {},
+    });
     console.log(`\nReceiver done in ${Date.now() - receiveStarted}ms`);
     await sendDone;
     console.log(`Sender done in ${Date.now() - started}ms total`);
@@ -175,6 +202,7 @@ async function runLive(data: Uint8Array) {
     }
     throw err;
   } finally {
+    sweepAbort.abort();
     senderPool.destroy();
     receiverPool.destroy();
   }

@@ -20,6 +20,8 @@ import type {
   RelayPoolState,
   RelayPoolStorage,
 } from './relay-pool';
+import type { RelaySession } from './session';
+import { type PreparedStorageRelays, prepareStorageRelays } from './upload';
 import { type LiveSendProgress, sendFileLive } from './upload-live';
 
 // crypto.getRandomValues caps at 65536 bytes per call
@@ -43,6 +45,22 @@ const META = {
 };
 const never = () => false;
 const noProgress = () => {};
+
+// What both sides of a manual exchange derive from the ECDH secret; each
+// side gets its own copy of the key because the engines wipe theirs.
+function newSession(): { sender: RelaySession; receiver: RelaySession } {
+  const transferId = Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, '0'),
+  ).join('');
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+  return {
+    sender: { transferId, keyBytes: new Uint8Array(keyBytes) },
+    receiver: { transferId, keyBytes: new Uint8Array(keyBytes) },
+  };
+}
+
+const nowSec = () => Math.floor(Date.now() / 1000);
 
 function memoryStorage(
   initial: RelayPoolState | null = null,
@@ -87,9 +105,19 @@ function chunkPlacements(pool: MockPool): Map<number, string[]> {
   return out;
 }
 
+/** A ring the caller picked, as the hook's preparation hands it over. */
+function pickedRing(pool: MockPool, relays: string[]): PreparedStorageRelays {
+  return prepareStorageRelays(pool, {
+    controlRelays: CONTROL_RELAYS,
+    relayOverride: relays,
+    storage: memoryStorage(),
+  });
+}
+
 /**
- * Run sender and receiver against the same mock network, handing the
- * manifest + key over exactly as the manual payload would.
+ * Run sender and receiver against the same mock network with a shared
+ * session, as the two sides of a failed manual exchange would. The manifest
+ * resolves once the receiver has read it off the control channel.
  */
 async function liveRoundTrip(
   pool: MockPool,
@@ -103,46 +131,46 @@ async function liveRoundTrip(
     receiverCancelled?: () => boolean;
   } = {},
 ) {
-  type Handover = { manifest: NostrFileManifest; keyBytes: Uint8Array };
-  let readyResolve!: (v: Handover) => void;
-  const handover = new Promise<Handover>((resolve) => {
-    readyResolve = resolve;
+  const session = newSession();
+  const since = nowSec();
+  let manifestResolve!: (m: NostrFileManifest) => void;
+  const manifest = new Promise<NostrFileManifest>((resolve) => {
+    manifestResolve = resolve;
   });
+  let manifestSeen = false;
 
   const sendDone = sendFileLive(
     data,
     { ...META, precompressed: opts.precompressed ?? META.precompressed },
     {
       pool,
+      session: session.sender,
+      controlRelays: CONTROL_RELAYS,
+      storageRelays: pickedRing(pool, opts.relays ?? RELAYS),
       isCancelled: opts.senderCancelled ?? never,
-      controlRelayOverride: CONTROL_RELAYS,
-      dataRelayOverride: opts.relays ?? RELAYS,
       onProgress: opts.onSend ?? noProgress,
-      onReady: (m, keyBytes) =>
-        readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) }),
     },
   );
-  // The caller awaits sendDone; this only keeps an early rejection from
-  // being reported as unhandled meanwhile.
   sendDone.catch(() => {});
-  // Surface sender failures that happen before handover.
-  const ready = await Promise.race([
-    handover,
-    sendDone.then(() => {
-      throw new Error('sender finished before handing over the code');
-    }),
-  ]);
-  const receiveDone = receiveFileLive(ready.manifest, ready.keyBytes, {
+  const receiveDone = receiveFileLive(session.receiver, CONTROL_RELAYS, {
     pool,
     isCancelled: opts.receiverCancelled ?? never,
-    onProgress: opts.onReceive ?? noProgress,
+    since,
+    expiresAt: since + 3600,
+    onProgress: (p) => {
+      if (p.manifest && !manifestSeen) {
+        manifestSeen = true;
+        manifestResolve(p.manifest);
+      }
+      opts.onReceive?.(p);
+    },
   });
   receiveDone.catch(() => {});
-  return { manifest: ready.manifest, sendDone, receiveDone };
+  return { manifest, sendDone, receiveDone };
 }
 
 describe.sequential('live single-copy relay transfer', () => {
-  it('hands over the code before uploading and stores exactly one copy per chunk', async () => {
+  it('sends the manifest before uploading and stores exactly one copy per chunk', async () => {
     const pool = createMockPool();
     const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks
     const sendProgress: LiveSendProgress[] = [];
@@ -164,8 +192,7 @@ describe.sequential('live single-copy relay transfer', () => {
 
     expect(received).toEqual(data);
     expect(chunksUploadedAtHandover).toBe(0);
-    // The payload names the control relays only; the ring travels in avails.
-    expect(manifest.controlRelays).toEqual(CONTROL_RELAYS);
+    expect((await manifest).totalChunks).toBe(4);
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
     for (let i = 0; i < 4; i++) {
@@ -214,10 +241,10 @@ describe.sequential('live single-copy relay transfer', () => {
     );
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
-    expect(manifest.compression).toBe('deflate');
-    expect(manifest.fileSize).toBe(data.length);
-    expect(manifest.payloadSize).toBeLessThan(data.length / 10);
-    expect(manifest.totalChunks).toBe(1);
+    expect((await manifest).compression).toBe('deflate');
+    expect((await manifest).fileSize).toBe(data.length);
+    expect((await manifest).payloadSize).toBeLessThan(data.length / 10);
+    expect((await manifest).totalChunks).toBe(1);
     expect(chunkPlacements(pool).size).toBe(1);
   }, 15000);
 
@@ -233,10 +260,10 @@ describe.sequential('live single-copy relay transfer', () => {
     );
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
-    expect(manifest.compression).toBe('deflate');
-    expect(manifest.fileSize).toBe(data.length);
+    expect((await manifest).compression).toBe('deflate');
+    expect((await manifest).fileSize).toBe(data.length);
     // Random bytes do not compress; raw deflate adds stored-block framing.
-    expect(manifest.payloadSize).toBeGreaterThanOrEqual(data.length);
+    expect((await manifest).payloadSize).toBeGreaterThanOrEqual(data.length);
   }, 15000);
 
   it('never recompresses a payload from the multi-file/folder flow', async () => {
@@ -245,9 +272,9 @@ describe.sequential('live single-copy relay transfer', () => {
     const { manifest, sendDone, receiveDone } = await liveRoundTrip(pool, data);
     const [received] = await Promise.all([receiveDone, sendDone]);
     expect(received).toEqual(data);
-    expect(manifest.compression).toBe('none');
-    expect(manifest.payloadSize).toBe(data.length);
-    expect(manifest.totalChunks).toBe(4);
+    expect((await manifest).compression).toBe('none');
+    expect((await manifest).payloadSize).toBe(data.length);
+    expect((await manifest).totalChunks).toBe(4);
   }, 15000);
 
   it('re-sends only the pieces the receiver could not fetch, to the next relay', async () => {
@@ -437,63 +464,67 @@ describe.sequential('live single-copy relay transfer', () => {
     await expect(receiveDone).rejects.toThrow(/sender cancelled/i);
   }, 15000);
 
-  it('hands out the code before storage-relay discovery', async () => {
+  it('sends the manifest before the prepared ring resolves, then adopts it', async () => {
     const pool = createMockPool();
     const data = randomBytes(4 * NOSTR_FILE_CHUNK_SIZE - 5000); // 4 chunks
-    const phasesBeforeReady: string[] = [];
-    let discoveringAfterReady = false;
-    let ready = false;
+    let manifestOut = false;
+    let ringResolvedAfterManifest = false;
 
-    type Handover = { manifest: NostrFileManifest; keyBytes: Uint8Array };
-    let readyResolve!: (v: Handover) => void;
-    const handover = new Promise<Handover>((resolve) => {
-      readyResolve = resolve;
-    });
-    // No dataRelayOverride: the ring resolves for real from the candidate
-    // cache merged with fresh discovery. The cache still lists a signaling
-    // seed — the whole DEFAULT_RELAYS pool must never be rung.
+    // The ring was being prepared behind the exchange (real resolution from
+    // the candidate cache merged with fresh discovery, no override) and is
+    // still resolving when the direct attempt fails: the manifest must not
+    // wait for it. The cache still lists a signaling seed — the whole
+    // DEFAULT_RELAYS pool must never be rung.
     const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
     const storageRing = ['wss://s1.example', 'wss://s2.example'];
-    const sendDone = sendFileLive(data, META, {
-      pool,
-      isCancelled: never,
-      controlRelayOverride: controlRelays,
+    let releaseRing!: () => void;
+    const ringGate = new Promise<void>((r) => {
+      releaseRing = r;
+    });
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays,
       storage: memoryStorage({
         candidates: [DEFAULT_RELAYS[2], ...storageRing],
         discoveredAt: Date.now(),
         cursor: 0,
       }),
-      onProgress: (p) => {
-        if (!ready) phasesBeforeReady.push(p.phase);
-        else if (p.phase === 'discovering' || p.phase === 'health_check') {
-          discoveringAfterReady = true;
-        }
-      },
-      onReady: (m, keyBytes) => {
-        ready = true;
-        readyResolve({ manifest: m, keyBytes: new Uint8Array(keyBytes) });
-      },
     });
-    sendDone.catch(() => {});
-    const { manifest, keyBytes } = await Promise.race([
-      handover,
-      sendDone.then<Handover>(() => {
-        throw new Error('sender finished before handing over the code');
-      }),
-    ]);
-    // Discovery had not started when the code went out.
-    expect(phasesBeforeReady).not.toContain('discovering');
-    expect(phasesBeforeReady).not.toContain('health_check');
-
-    const received = await receiveFileLive(manifest, keyBytes, {
+    const held: PreparedStorageRelays = {
+      stats: prepared.stats,
+      ring: ringGate.then(() => prepared.ring),
+    };
+    held.ring.then(() => {
+      ringResolvedAfterManifest = manifestOut;
+    });
+    const session = newSession();
+    const since = nowSec();
+    const sendDone = sendFileLive(data, META, {
       pool,
+      session: session.sender,
+      controlRelays,
+      storageRelays: held,
       isCancelled: never,
       onProgress: noProgress,
     });
+    sendDone.catch(() => {});
+
+    const received = await receiveFileLive(session.receiver, controlRelays, {
+      pool,
+      isCancelled: never,
+      since,
+      expiresAt: since + 3600,
+      onProgress: (p) => {
+        if (p.manifest && !manifestOut) {
+          manifestOut = true;
+          releaseRing();
+        }
+      },
+    });
     await sendDone;
     expect(received).toEqual(data);
-    expect(discoveringAfterReady).toBe(true);
-    // The ring the receiver adopted from the avails is the resolved one:
+    expect(manifestOut).toBe(true);
+    expect(ringResolvedAfterManifest).toBe(true);
+    // The ring the receiver adopted from the avails is the prepared one:
     // every chunk landed on a storage candidate, never on a signaling relay.
     const placed = chunkPlacements(pool);
     expect(placed.size).toBe(4);
@@ -503,30 +534,64 @@ describe.sequential('live single-copy relay transfer', () => {
     }
   }, 15000);
 
+  it('reads a manifest published before it joined from the backlog', async () => {
+    // The sender's side of a failed connection can give up first: its
+    // manifest and first avail are on the relays before the receiver joins.
+    const pool = createMockPool();
+    const data = randomBytes(1000); // 1 chunk
+    const session = newSession();
+    const since = nowSec();
+    let receiverJoined = false;
+    const sendDone = sendFileLive(data, META, {
+      pool,
+      session: session.sender,
+      controlRelays: CONTROL_RELAYS,
+      storageRelays: pickedRing(pool, RELAYS),
+      isCancelled: never,
+      onProgress: noProgress,
+    });
+    sendDone.catch(() => {});
+    const deadline = Date.now() + 5000;
+    while (!(pool.store.get(CONTROL_RELAYS[0]) ?? []).some(isControlEvent)) {
+      if (Date.now() > deadline) throw new Error('manifest never published');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    receiverJoined = true;
+    const received = await receiveFileLive(session.receiver, CONTROL_RELAYS, {
+      pool,
+      isCancelled: never,
+      since,
+      expiresAt: since + 3600,
+      onProgress: noProgress,
+    });
+    await sendDone;
+    expect(receiverJoined).toBe(true);
+    expect(received).toEqual(data);
+  }, 15000);
+
   it('re-fetches a timed-out piece on its own clock, without a new announcement', async () => {
     // Scripted sender: announce the only chunk as available before the relay
     // actually serves it (late propagation), then go silent — no further
     // avails, no re-send. Only the receiver's own retry clock can recover.
     const pool = createMockPool();
     const data = randomBytes(1000); // 1 chunk
-    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const session = newSession();
+    const keyBytes = session.sender.keyBytes;
     const { secretKey, publicKey } = generateEphemeralKeys();
-    const transferId = 'ab'.repeat(16);
-    const createdAt = Math.floor(Date.now() / 1000);
+    const transferId = session.sender.transferId;
+    const createdAt = nowSec();
     const manifest: NostrFileManifest = {
       v: 7,
       fileName: 'late.bin',
       fileSize: data.length,
       mimeType: 'application/octet-stream',
       fileHash: uint8ArrayToBase64(await sha256(data)),
-      transferId,
       pubkey: publicKey,
       compression: 'none',
       payloadSize: data.length,
       chunkSize: 32768,
       totalChunks: 1,
       enc: 2,
-      controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,
     };
@@ -548,6 +613,7 @@ describe.sequential('live single-copy relay transfer', () => {
       },
     });
     try {
+      await channel.send({ t: 'manifest', manifest });
       await channel.send({
         t: 'avail',
         upto: 1,
@@ -556,9 +622,11 @@ describe.sequential('live single-copy relay transfer', () => {
         gens: [],
       });
 
-      const receiveDone = receiveFileLive(manifest, new Uint8Array(keyBytes), {
+      const receiveDone = receiveFileLive(session.receiver, CONTROL_RELAYS, {
         pool,
         isCancelled: never,
+        since: createdAt,
+        expiresAt: createdAt + 3600,
         onProgress: noProgress,
       });
       receiveDone.catch(() => {});
@@ -608,33 +676,49 @@ describe.sequential('live single-copy relay transfer', () => {
     }
   }, 25000);
 
-  it('rejects an expired manifest without joining the channel', async () => {
+  it('rejects an expired manifest from the sender', async () => {
     const pool = createMockPool();
-    const createdAt = Math.floor(Date.now() / 1000) - 100_000;
+    const session = newSession();
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const transferId = session.sender.transferId;
+    const createdAt = nowSec() - 100_000;
     const manifest: NostrFileManifest = {
       v: 7,
       fileName: 'x',
       fileSize: 10,
       mimeType: 'application/octet-stream',
       fileHash: `${'B'.repeat(43)}=`,
-      transferId: 'a'.repeat(32),
-      pubkey: 'c'.repeat(64),
+      pubkey: publicKey,
       compression: 'none',
       payloadSize: 10,
       chunkSize: 32768,
       totalChunks: 1,
       enc: 2,
-      controlRelays: CONTROL_RELAYS,
       createdAt,
       expiresAt: createdAt + 3600,
     };
-    await expect(
-      receiveFileLive(manifest, new Uint8Array(32), {
-        pool,
-        isCancelled: never,
-        onProgress: noProgress,
-      }),
-    ).rejects.toThrow(/expired/);
-    expect(pool.store.size).toBe(0);
+    const channel = openControlChannel(pool, CONTROL_RELAYS, {
+      transferId,
+      key: await deriveControlKey(session.sender.keyBytes, transferId),
+      role: 'sender',
+      secretKey,
+      since: createdAt,
+      expiresAt: nowSec() + 3600,
+      onMessage: () => {},
+    });
+    try {
+      await channel.send({ t: 'manifest', manifest });
+      await expect(
+        receiveFileLive(session.receiver, CONTROL_RELAYS, {
+          pool,
+          isCancelled: never,
+          since: nowSec(),
+          expiresAt: nowSec() + 3600,
+          onProgress: noProgress,
+        }),
+      ).rejects.toThrow(/expired/);
+    } finally {
+      channel.close();
+    }
   });
 });

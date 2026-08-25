@@ -32,32 +32,19 @@ import {
 import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import type { NostrFilePool } from './pool';
-import {
-  createIndexedDbRelayPool,
-  type RelayPoolStorage,
-  sweepRelayHealth,
-} from './relay-pool';
-import {
-  createTransferStats,
-  type NostrFileTransferStats,
-  relayStatsFor,
-} from './stats';
+import type { RelaySession } from './session';
+import { type NostrFileTransferStats, relayStatsFor } from './stats';
 import { Deferred, Signal } from './sync';
 import {
   NostrFileCancelledError,
+  type PreparedStorageRelays,
   publishWithRetry,
-  resolveTransferRelays,
-  resolveUploadRelays,
-  type UploadProgress,
 } from './upload';
 
 export interface LiveSendProgress {
-  /** 'connecting' is the control-relay probe, before the code is ready. */
-  phase: UploadProgress['phase'] | 'connecting' | 'transfer';
+  phase: 'hashing' | 'transfer';
   chunksDone?: number;
   chunksTotal?: number;
-  relaysChecked?: number;
-  relaysHealthy?: number;
   /** transfer phase: the receiver has sent at least one control message */
   receiverConnected?: boolean;
   /** transfer phase: chunks the receiver reported holding */
@@ -71,12 +58,16 @@ export interface LiveSendProgress {
 }
 
 /**
- * Live (single-copy) relay transfer, sender side.
+ * Live (single-copy) relay transfer, sender side — the Manual Exchange data
+ * path when no direct connection could be made.
  *
- * The manual payload is handed out right after hashing and relay selection.
- * Storage discovery normally runs after `onReady`; it runs first only when
- * failed default signaling relays need the unused storage reserves. The
- * sender stays online: each chunk is published to one ring relay (chunk i → ring[i % N],
+ * Nothing is uploaded ahead of time: this runs only once WebRTC has failed.
+ * The session (transfer id + file key) was derived from the exchange's ECDH
+ * secret on both sides, the control relays are the ones the offer named, and
+ * the storage ring was already being prepared behind the exchange
+ * (`prepareStorageRelays`), so the first thing this does is hash and chunk
+ * the file and send the manifest over the encrypted control channel; the
+ * ring is adopted as soon as it resolves. The sender then stays online: each chunk is published to one ring relay (chunk i → ring[i % N],
  * walking the ring on rejection), the ring itself plus availability are
  * announced over the encrypted control channel after every LIVE_BATCH_CHUNKS
  * chunks, and the receiver's acknowledgements name the
@@ -96,26 +87,30 @@ export async function sendFileLive(
     precompressed: boolean;
   },
   opts: {
-    onProgress: (p: LiveSendProgress) => void;
+    /** Ownership of `session.keyBytes` transfers here; it is wiped on return. */
+    session: RelaySession;
+    /** Proven signaling relays carrying the control channel (from the offer). */
+    controlRelays: string[];
     /**
-     * Called once the signaling set is resolved and the control channel is
-     * open. Storage selection may already be complete when its unused
-     * reserves were needed for signaling. Ownership of `keyBytes` transfers
-     * to the callee, which must wipe it.
+     * The storage ring being prepared behind the exchange, on the same pool.
+     * Its discovery tallies are continued here; the background sweep behind
+     * it belongs to the caller and runs on.
      */
-    onReady: (manifest: NostrFileManifest, keyBytes: Uint8Array) => void;
+    storageRelays: PreparedStorageRelays;
+    onProgress: (p: LiveSendProgress) => void;
     isCancelled: () => boolean;
     pool: NostrFilePool;
-    storage?: RelayPoolStorage;
-    controlRelayOverride?: string[];
-    dataRelayOverride?: string[];
   },
 ): Promise<void> {
-  const { onProgress, isCancelled, pool } = opts;
-  const storage = opts.storage ?? createIndexedDbRelayPool();
+  const { onProgress, isCancelled, pool, controlRelays } = opts;
+  const { transferId, keyBytes } = opts.session;
 
-  if (data.length === 0) throw new Error('Cannot send an empty file');
+  if (data.length === 0) {
+    wipeBufferSource(keyBytes);
+    throw new Error('Cannot send an empty file');
+  }
   if (data.length > NOSTR_FILE_MAX_BYTES) {
+    wipeBufferSource(keyBytes);
     throw new Error(
       `File too large for Nostr relay transfer (max ${NOSTR_FILE_MAX_BYTES / (1024 * 1024)} MB)`,
     );
@@ -125,31 +120,25 @@ export async function sendFileLive(
     if (isCancelled()) throw new NostrFileCancelledError();
   };
 
-  const stats = createTransferStats('sender');
+  const stats = opts.storageRelays.stats;
   stats.fileBytes = data.length;
   stats.chunkSize = NOSTR_FILE_CHUNK_SIZE;
+  for (const relay of controlRelays) relayStatsFor(stats, relay, 'control');
 
-  onProgress({ phase: 'hashing', stats });
-  const hashStarted = Date.now();
-  const fileHash = uint8ArrayToBase64(await sha256(data));
-  stats.phaseMs.hash = Date.now() - hashStarted;
-  // One deflate pass over the whole file before chunking, so a compressible
-  // file collapses into few chunks. A payload the multi-file/folder flow
-  // already compressed (a ZIP with deflated entries) travels as-is instead of
-  // being recompressed.
-  const compressStarted = Date.now();
-  const { payload, compression } = compressPayload(data, meta.precompressed);
-  stats.phaseMs.compress = Date.now() - compressStarted;
-  stats.payloadBytes = payload.length;
-  const transferId = Array.from(
-    crypto.getRandomValues(new Uint8Array(16)),
-    (b) => b.toString(16).padStart(2, '0'),
-  ).join('');
-  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
   const { secretKey, publicKey } = generateEphemeralKeys();
-  let keyHandedOver = false;
-
   try {
+    onProgress({ phase: 'hashing', stats });
+    const hashStarted = Date.now();
+    const fileHash = uint8ArrayToBase64(await sha256(data));
+    stats.phaseMs.hash = Date.now() - hashStarted;
+    // One deflate pass over the whole file before chunking, so a compressible
+    // file collapses into few chunks. A payload the multi-file/folder flow
+    // already compressed (a ZIP with deflated entries) travels as-is instead of
+    // being recompressed.
+    const compressStarted = Date.now();
+    const { payload, compression } = compressPayload(data, meta.precompressed);
+    stats.phaseMs.compress = Date.now() - compressStarted;
+    stats.payloadBytes = payload.length;
     const aesKey = await crypto.subtle.importKey(
       'raw',
       keyBytes as BufferSource,
@@ -163,21 +152,6 @@ export async function sendFileLive(
     stats.chunksTotal = total;
     throwIfCancelled();
 
-    const initialRelays = await resolveTransferRelays(pool, storage, {
-      controlRelayOverride: opts.controlRelayOverride,
-      dataRelayOverride: opts.dataRelayOverride,
-      isCancelled,
-      stats,
-      onControlProgress: (relaysChecked, relaysHealthy) =>
-        onProgress({
-          phase: 'connecting',
-          relaysChecked,
-          relaysHealthy,
-          stats,
-        }),
-      onUploadProgress: onProgress,
-    });
-    const controlRelays = initialRelays.controlRelays;
     const createdAt = Math.floor(Date.now() / 1000);
     const expiresAt = createdAt + NOSTR_FILE_EXPIRATION_SEC;
     const manifest: NostrFileManifest = {
@@ -186,14 +160,12 @@ export async function sendFileLive(
       fileSize: data.length,
       mimeType: meta.mimeType,
       fileHash,
-      transferId,
       pubkey: publicKey,
       compression,
       payloadSize: payload.length,
       chunkSize: NOSTR_FILE_CHUNK_SIZE,
       totalChunks: total,
       enc: 2,
-      controlRelays: [...controlRelays],
       createdAt,
       expiresAt,
     };
@@ -204,9 +176,8 @@ export async function sendFileLive(
     const placedPos = new Int32Array(total).fill(-1);
     const gen = new Uint32Array(total);
     const nextOffset = new Uint32Array(total);
-    // The data ring is usually late-bound after the code is handed out. It is
-    // already resolved when signaling had to borrow storage reserves. Empty
-    // ring = still looking.
+    // The data ring is late-bound: it was being prepared behind the exchange
+    // and may still be resolving. Empty ring = still looking.
     let ring: string[] = [];
     let ringSize = 0;
     let maxRetransmits = LIVE_MIN_RETRANSMITS_PER_CHUNK;
@@ -223,10 +194,6 @@ export async function sendFileLive(
     const retryQueue: number[] = [];
     const pendingRetry = new Set<number>();
 
-    // Ends the background relay sweep the moment the transfer winds down:
-    // the caller destroys the pool as soon as this function returns, so the
-    // sweep must not still be waiting on a probe timeout by then.
-    const sweepAbort = new AbortController();
     let finished = false;
     let succeeded = false;
     const outcome = new Deferred<void>();
@@ -241,7 +208,6 @@ export async function sendFileLive(
 
     const stop = () => {
       finished = true;
-      sweepAbort.abort();
       work.notify();
       control.notify();
     };
@@ -358,8 +324,9 @@ export async function sendFileLive(
     });
 
     try {
-      opts.onReady(manifest, keyBytes);
-      keyHandedOver = true;
+      // The manifest goes first, ahead of any availability, so a receiver
+      // that joins late reads it from the backlog before the placements.
+      await channel.send({ t: 'manifest', manifest });
       report();
 
       const buildAvail = (): Omit<AvailMessage, 'n'> => {
@@ -493,31 +460,17 @@ export async function sendFileLive(
       }, 1000);
 
       // First announcement goes out right away: an empty-ring avail tells a
-      // receiver who pasted the code early that the sender is here while
-      // storage relays are still being found.
+      // receiver that the sender is here while storage relays are still
+      // being found.
       availDirty = true;
       const loop = controlLoop().catch(fail);
 
-      // Discovery normally runs after code handout, but a signaling fallback
-      // may have resolved the ring already. Workers exist only once the ring
-      // does. A failure rejects `outcome`, and the teardown's best-effort
-      // cancel tells a waiting receiver to stop.
+      // The ring lands whenever its preparation finishes; workers exist only
+      // once it does. A failure rejects `outcome`, and the teardown's
+      // best-effort cancel tells a waiting receiver to stop.
       let workers: Promise<unknown> = Promise.resolve();
-      let sweep: Promise<void> = Promise.resolve();
       const uploadStart = (async () => {
-        let dataRelays = initialRelays.storageRelays;
-        let unprobed = initialRelays.unprobedCandidates;
-        if (dataRelays === null) {
-          const upload = await resolveUploadRelays(pool, storage, {
-            relayOverride: opts.dataRelayOverride,
-            excludeRelays: controlRelays,
-            isCancelled,
-            onProgress,
-            stats,
-          });
-          dataRelays = upload.storageRelays;
-          unprobed = upload.unprobedCandidates;
-        }
+        const dataRelays = await opts.storageRelays.ring;
         if (finished) return;
         ring = dataRelays;
         ringSize = dataRelays.length;
@@ -532,25 +485,6 @@ export async function sendFileLive(
             () => worker().catch(fail),
           ),
         );
-        // The foreground pass sampled: one page of discovery, capped, probed
-        // only until the ring filled. Behind the transfer, enumerate the whole
-        // relay population uncapped and probe as far as this transfer lasts,
-        // so the next one is not limited to what this one happened to need.
-        // The ring and control relays are carrying the file — hands off.
-        //
-        // A relay override means the caller picked the relays itself, so
-        // there is no discovery to continue and the sweep stays out of it.
-        if (!opts.dataRelayOverride?.length) {
-          // Swallowed at the assignment, not at the await: the sweep is
-          // best-effort, and a rejection surfacing from the teardown's
-          // `await sweep` would replace the transfer's real outcome error.
-          sweep = sweepRelayHealth(pool, storage, {
-            unprobed,
-            excludeRelays: [...controlRelays, ...dataRelays],
-            signal: sweepAbort.signal,
-            isCancelled,
-          }).catch(() => {});
-        }
       })().catch(fail);
 
       try {
@@ -566,17 +500,12 @@ export async function sendFileLive(
             new Promise((r) => setTimeout(r, 3000)),
           ]);
         }
-        // `stop()` already aborted the sweep, so this only collects its last
-        // cache write — it never waits out an in-flight probe.
-        await sweep;
       }
     } finally {
       channel.close();
     }
-  } catch (err) {
-    if (!keyHandedOver) wipeBufferSource(keyBytes);
-    throw err;
   } finally {
+    wipeBufferSource(keyBytes);
     wipeBufferSource(secretKey);
   }
 }
