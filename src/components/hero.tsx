@@ -27,7 +27,7 @@ export function Hero() {
           <p className="mt-3 max-w-md text-pretty text-base text-muted-foreground sm:mt-4 sm:text-lg">
             Share files and folders straight from your device with end-to-end
             encryption. No accounts or central file server: transfers try a
-            direct connection first, with an encrypted relay fallback in Manual
+            direct connection first, with an encrypted relay fallback in Code
             Exchange when needed.
           </p>
 

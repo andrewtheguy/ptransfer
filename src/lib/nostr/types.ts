@@ -15,7 +15,7 @@ export type TransferStatus =
   | 'idle'
   | 'connecting'
   | 'waiting_for_receiver'
-  // Confirmation-code handshake (Auto Exchange). The receiver shows a code
+  // Confirmation-code handshake (PIN Exchange). The receiver shows a code
   // derived from the SPAKE2 exchange; the sender parks until its operator types
   // the matching one, so a claim that front-ran the intended receiver stalls
   // here instead of receiving a file.
@@ -25,14 +25,14 @@ export type TransferStatus =
   | 'receiving'
   | 'complete'
   | 'error'
-  // Manual exchange states
+  // Code Exchange states
   | 'generating_offer'
   | 'showing_offer'
   | 'waiting_for_answer'
   | 'waiting_for_offer'
   | 'generating_answer'
   | 'showing_answer'
-  // Nostr file relay states: the Manual Exchange data path once a direct
+  // Nostr file relay states: the Code Exchange data path once a direct
   // connection has failed.
   | 'preparing'
   | 'discovering_relays'

@@ -1,8 +1,12 @@
-import { AlertCircle, Check, Copy, RefreshCw } from 'lucide-react';
+import { AlertCircle, Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
+import { buildPinUrl } from '@/lib/pin-link';
+import { generateTextQRCode } from '@/lib/qr-utils';
+
+const QR_WIDTH = 220;
 
 interface PinDisplayProps {
   /** The currently active PIN; rotates every PIN_ROTATION_MS. */
@@ -19,6 +23,7 @@ interface PinDisplayProps {
 export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(
     Math.ceil(PIN_WAIT_TIMEOUT_MS / 1000),
   );
@@ -91,6 +96,30 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     };
   }, []);
 
+  // Regenerate whenever the PIN changes, so rotation and "Generate a new PIN"
+  // both leave a scannable code for the PIN currently on screen.
+  useEffect(() => {
+    let active = true;
+    setQrUrl(null);
+
+    generateTextQRCode(buildPinUrl(window.location.origin, pin), {
+      width: QR_WIDTH,
+      errorCorrectionLevel: 'M',
+    })
+      .then((url) => {
+        if (active) setQrUrl(url);
+      })
+      .catch((err) => {
+        // The QR only saves the receiver some typing; the PIN below it is the
+        // real handoff, so a failure here just leaves the code hidden.
+        console.error('Failed to generate PIN QR code:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [pin]);
+
   const handleCopy = useCallback(async () => {
     // Clear any existing timeout
     if (timeoutRef.current) {
@@ -142,7 +171,34 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
 
   return (
     <div className="flex flex-col gap-4 p-6 rounded-lg bg-muted/50 border">
-      <h3 className="text-sm font-medium">Share this PIN with the receiver</h3>
+      <div className="space-y-1">
+        <h3 className="text-sm font-medium">
+          Share this PIN with the receiver
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Have them scan the code, or read them the PIN.
+        </p>
+      </div>
+
+      {/* Scannable PIN link: opens the receive page with the PIN filled in */}
+      <div className="flex justify-center">
+        <div className="p-2 bg-white rounded-lg">
+          <div
+            className="flex items-center justify-center"
+            style={{ width: QR_WIDTH, height: QR_WIDTH }}
+          >
+            {qrUrl ? (
+              <img
+                src={qrUrl}
+                alt="QR code linking to the receive page with this PIN"
+                className="block w-full h-auto"
+              />
+            ) : (
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* PIN Display */}
       <div className="flex flex-col gap-2">

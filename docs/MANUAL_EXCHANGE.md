@@ -1,14 +1,16 @@
-# Manual Exchange Mode Guide
+# Code Exchange Mode Guide
 
 This guide is intentionally high-level and user-focused.
 For protocol internals, signaling payload format, and implementation details, see `docs/ARCHITECTURE.md`.
 
-## What Manual Exchange Is
+## What Code Exchange Is
 
-Manual Exchange is the hand-carried signaling mode. Instead of a relay coordinating the
-two devices, **you** carry the sender's connection data across by hand — using a **QR code**,
-**copy/paste**, or a mix of the two. The two methods are interchangeable at every step:
-either side can scan or paste, whichever is more convenient.
+Both pTransfer modes are hand-carried — in PIN Exchange you carry a short PIN, and relays
+use it to coordinate the two devices. Code Exchange is the mode where you carry the *whole*
+connection code instead, so no relay coordinates anything: **you** move the sender's
+connection data across by hand — using a **QR code**, **copy/paste**, or a mix of the two.
+The two methods are interchangeable at every step: either side can scan or paste, whichever
+is more convenient.
 
 The receiver's response comes back the same way: as a QR code or copied text that the
 **sender** scans or pastes. Nothing enters the sender's page unless the sender takes it
@@ -29,7 +31,7 @@ otherwise.
 
 ## When to Use This
 
-Manual mode is useful when:
+Code Exchange is useful when:
 - You want to transfer files between two devices on the same local network without internet
   (with no internet, nothing but the two devices is involved — the relay step drops out on its own)
 - You prefer not to hand the rendezvous to a signaling server: neither the offer nor the
@@ -55,7 +57,7 @@ relays in the background while the connection data is prepared, so that part cos
 waiting; if some of them are down it looks for replacements first, and the offer code
 appears once it knows which relays to name.
 
-> Because the relay fallback is keyed from the Manual Exchange secret, treat the offer as
+> Because the relay fallback is keyed from the Code Exchange secret, treat the offer as
 > the secret for the whole transfer: anyone who obtains it before it expires can answer it
 > and derive the transfer keys — but their answer still only counts if the sender scans or
 > pastes it.
@@ -81,8 +83,8 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 ### Sender — present the offer
 
 1. Open the app and select your file(s)
-2. Under **Transfer mode**, select **Manual Exchange mode**
-3. Click **Start Manual Exchange**. If some default relays are unreachable, the page
+2. Under **Transfer mode**, select **Code Exchange**
+3. Click **Start Code Exchange**. If some default relays are unreachable, the page
    says it is looking for others before the code appears — the offer names whichever
    relays it settles on for the relay fallback
 4. The sender's offer appears as **a grid of QR codes** (typically 2-4, labeled "1 of N"),
@@ -94,11 +96,14 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 
 ### Receiver — take the offer, return an answer
 
-1. On the `/receive` page, choose **Manual Exchange mode** and click **Start Receive**
+1. Open the `/receive` page. There is no mode to choose — the page takes whatever the
+   sender handed you and works out which exchange it belongs to
 2. Take in the sender's offer by **either** method:
-   - **Scan tab:** point the camera at any one of the sender's QR codes, tap the link to open
-     the app if needed, then scan the remaining codes one by one (progress shows "Collected 1 of N")
-   - **Paste tab:** paste the copied offer text
+   - **Scan tab:** tap to start the camera, point it at any one of the sender's QR codes,
+     tap the link to open the app if needed, then scan the remaining codes one by one
+     (progress shows "Collected 1 of N")
+   - **Paste tab:** paste the copied offer text — it is recognized as the sender's code
+     as you paste — then press **Receive**
 3. Once the full offer is collected, the app validates it and generates your **answer**
 4. Your answer appears as a **single QR code** with a **Copy Data** button — send it back
    to the sender by **either** method
@@ -115,11 +120,11 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 When the offer/answer exchange succeeds but the two devices still cannot open a direct
 WebRTC connection — usually a restrictive NAT or firewall on both ends — the pages try to
 carry an eligible encrypted file (up to **100 MiB**) through public Nostr relays. This is
-the Manual Exchange stand-in for TURN, but it can still fail if storage relays are
+the Code Exchange stand-in for TURN, but it can still fail if storage relays are
 insufficient or do not deliver the pieces. (This page describes the user-facing behavior;
 the technical design is in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
 
-It is fully automatic — there is no switch, and nothing changes about how you use Manual
+It is fully automatic — there is no switch, and nothing changes about how you use Code
 Exchange:
 
 1. You run the normal offer/answer exchange above. Both sides then try to connect

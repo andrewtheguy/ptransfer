@@ -45,7 +45,7 @@ export interface LiveReceiveProgress {
 }
 
 /**
- * Live (single-copy) relay transfer, receiver side — the Manual Exchange
+ * Live (single-copy) relay transfer, receiver side — the Code Exchange
  * data path when no direct connection could be made.
  *
  * Joins the control channel on the offer's control relays with the session

@@ -1,7 +1,7 @@
 import { AES_KEY_LENGTH } from './constants';
 
 /**
- * ECDH key agreement for Manual Exchange mode.
+ * ECDH key agreement for Code Exchange.
  *
  * SECURITY: Keys are generated as non-extractable to prevent exfiltration.
  * Public keys can still be exported even when non-extractable.

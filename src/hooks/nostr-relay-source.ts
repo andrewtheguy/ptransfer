@@ -5,7 +5,7 @@ import {
 } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
-/** Input handling for the Nostr relay fallback in the Manual Exchange hooks. */
+/** Input handling for the Nostr relay fallback in the Code Exchange hooks. */
 
 export async function readSourceFully(
   source: TransferSource,

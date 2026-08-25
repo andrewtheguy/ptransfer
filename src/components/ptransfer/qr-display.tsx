@@ -21,7 +21,6 @@ interface QRDisplayProps {
   data: Uint8Array; // Binary data for QR code (PT01 obfuscated payload)
   label?: string;
   showCopyButton?: boolean;
-  clipboardData?: string; // Base64 payload for copy button
   showSize?: boolean;
 }
 
@@ -31,7 +30,6 @@ export function QRDisplay({
   data,
   label,
   showCopyButton = true,
-  clipboardData,
   showSize = true,
 }: QRDisplayProps) {
   const [copied, setCopied] = useState(false);
@@ -45,10 +43,8 @@ export function QRDisplay({
   // The exact payload the sender needs, matching what Copy Data writes.
   const copyPayload = useMemo(() => {
     if (!data || data.length === 0) return '';
-    return clipboardData && clipboardData.length > 0
-      ? clipboardData
-      : generateMutualClipboardData(data);
-  }, [clipboardData, data]);
+    return generateMutualClipboardData(data);
+  }, [data]);
 
   useEffect(() => {
     if (!data || data.length === 0) {

@@ -46,7 +46,7 @@ const META = {
 const never = () => false;
 const noProgress = () => {};
 
-// What both sides of a manual exchange derive from the ECDH secret; each
+// What both sides of a Code Exchange derive from the ECDH secret; each
 // side gets its own copy of the key because the engines wipe theirs.
 function newSession(): { sender: RelaySession; receiver: RelaySession } {
   const transferId = Array.from(
@@ -116,7 +116,7 @@ function pickedRing(pool: MockPool, relays: string[]): PreparedStorageRelays {
 
 /**
  * Run sender and receiver against the same mock network with a shared
- * session, as the two sides of a failed manual exchange would. The manifest
+ * session, as the two sides of a failed Code Exchange would. The manifest
  * resolves once the receiver has read it off the control channel.
  */
 async function liveRoundTrip(

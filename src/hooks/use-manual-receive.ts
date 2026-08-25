@@ -27,7 +27,7 @@ import type { ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 
-// Extended transfer status for Manual Exchange receive mode
+// Extended transfer status for Code Exchange receive mode
 export type ManualReceiveStatus =
   | 'idle'
   | 'waiting_for_offer'
@@ -58,7 +58,6 @@ export interface ManualReceiveState {
   currentRelays?: string[];
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
-  clipboardData?: string; // Base64 for copy button
 }
 
 export interface UseManualReceiveReturn {

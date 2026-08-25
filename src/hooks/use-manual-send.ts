@@ -41,7 +41,7 @@ import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 import { chunkBytesEstimate, readSourceFully } from './nostr-relay-source';
 
-// Extended transfer status for Manual Exchange mode
+// Extended transfer status for Code Exchange
 export type ManualTransferStatus =
   | 'idle'
   | 'generating_offer'

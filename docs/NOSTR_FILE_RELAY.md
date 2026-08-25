@@ -1,6 +1,6 @@
 # Nostr File Relay Architecture
 
-The Nostr file relay is the **Manual Exchange data-path fallback** — the stand-in for
+The Nostr file relay is the **Code Exchange data-path fallback** — the stand-in for
 TURN. When a direct WebRTC connection between the two devices cannot be established, an
 eligible encrypted file (up to 100 MiB) automatically attempts delivery through public
 Nostr relays. There is no toggle and no separate code, and **nothing is uploaded ahead of
@@ -49,7 +49,7 @@ piece is uploaded **once** while the receiver downloads alongside, and the two s
 coordinate over the control channel. Redundancy is created on demand — a piece is re-sent
 only after the receiver reports it could not fetch it, so the upload costs ~1× the file
 size plus the failed pieces. Both pages stay open until the receiver confirms the
-verified file. The outer Manual Exchange session still ends one hour after the offer was
+verified file. The outer Code Exchange session still ends one hour after the offer was
 created; relay-file manifests and chunks created after fallback begins carry their own
 one-hour NIP-40 window, but that does not extend the enclosing session.
 
@@ -135,7 +135,7 @@ then goes through:
   receiver assembles `payloadSize` bytes, inflates with the output bounded by
   `fileSize` (decompression-bomb guard, exact-size match required), then verifies the
   plaintext hash.
-- The AES-256-GCM key is the session file key both sides derived from the Manual
+- The AES-256-GCM key is the session file key both sides derived from the Code
   Exchange ECDH secret (`deriveRelaySession`). It never travels anywhere — not in a
   code, not to relays.
 - AAD = `ptransfer-nostr-file:v1:<transferId>:<index>:<total>` binds every chunk to its
@@ -191,13 +191,13 @@ already over (`assertManifestWindow`).
 
 ### Expiry and clocks
 
-The outer Manual Exchange session expires one hour after the offer's `createdAt`, so the
+The outer Code Exchange session expires one hour after the offer's `createdAt`, so the
 hooks can end the transfer before the relay engine's own later window. When fallback
 starts, the sender stamps the manifest and chunk events with a fresh
 `NOSTR_FILE_EXPIRATION_SEC` (1 hour) window; receiver control events retain the earlier
 offer deadline. The receiver initially watches from the offer window, then validates the
 manifest's fallback-time window with `CLOCK_SKEW_TOLERANCE_SEC` (±10 min) of clock-skew
-tolerance. None of these later event timestamps extends the enclosing Manual Exchange
+tolerance. None of these later event timestamps extends the enclosing Code Exchange
 session.
 
 ## Transfer Protocol (`upload-live.ts` / `download-live.ts` / `control.ts`)
@@ -206,7 +206,7 @@ session.
 
 Both peers derive an AES-256-GCM control key from the session file key (HKDF, info
 `ptransfer-nostr-file:v1:control`, salt = `transferId`), which itself comes from the
-Manual Exchange ECDH secret — so only the two peers of that exchange can read or forge
+Code Exchange ECDH secret — so only the two peers of that exchange can read or forge
 control messages.
 
 Messages ride the offer's **control relays** (already proved with a control-sized event,
@@ -303,7 +303,7 @@ sequenceDiagram
     participant V as Receiver
 
     Note over S: offer built: discover + health-check storage ring in background, then sweep
-    Note over S,V: Manual Exchange offer/answer done, direct WebRTC attempt running
+    Note over S,V: Code Exchange offer/answer done, direct WebRTC attempt running
     Note over S,V: both derive session (transferId + file key) from the ECDH secret
     S->>C: subscribe #x = transferId:ctl (watch for hello during the direct attempt)
     Note over V: ICE fails fast on the receiver's side
@@ -333,7 +333,7 @@ sequenceDiagram
 - **Relays see**: ciphertext, chunk count/sizes, timing, an ephemeral pubkey, the sealed
   control messages, and the two peers' activity timing — never plaintext, filenames, or
   the file hash
-- **The key is derived, never carried**: the file key comes from the Manual Exchange
+- **The key is derived, never carried**: the file key comes from the Code Exchange
   ECDH secret (`deriveRelaySession`), the same secret that already secured the direct
   transfer. No code contains it, and whoever could authentically deliver the offer
   can download and decrypt
@@ -351,7 +351,7 @@ sequenceDiagram
 | `NOSTR_FILE_MAX_BYTES` | 100 MiB | Hard cap on the plaintext payload |
 | `NOSTR_FILE_CHUNK_SIZE` | 48 KiB | Compressed-or-identity payload chunk size (~60 KiB encoded) |
 | `EVENT_KIND_FILE_CHUNK` | 30078 | NIP-78 addressable kind for chunks, probes, and control |
-| `NOSTR_FILE_EXPIRATION_SEC` | 3600 | Manifest/chunk window from fallback start; the outer Manual Exchange deadline may end the transfer earlier |
+| `NOSTR_FILE_EXPIRATION_SEC` | 3600 | Manifest/chunk window from fallback start; the outer Code Exchange deadline may end the transfer earlier |
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
 | `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
 | `CONTROL_RELAY_COUNT` | 6 | Target control relays (the relays the offer names) |
@@ -388,10 +388,10 @@ sequenceDiagram
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel (manifest is the first control message) |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
 | `src/lib/nostr-file/sync.ts` | `Deferred`/`Signal` async helpers |
-| `src/hooks/use-manual-send.ts`, `use-manual-receive.ts` | Manual Exchange hooks; each starts the relay engine when its direct WebRTC connection fails |
+| `src/hooks/use-manual-send.ts`, `use-manual-receive.ts` | Code Exchange hooks; each starts the relay engine when its direct WebRTC connection fails |
 | `src/hooks/nostr-relay-source.ts` | Source materialization / progress estimation |
 
-The relay engine is started from the Manual Exchange hooks the moment a direct connection
+The relay engine is started from the Code Exchange hooks the moment a direct connection
 fails (see `use-manual-send.ts` / `use-manual-receive.ts`). Tests are colocated
 (`src/lib/nostr-file/*.test.ts`) and run against the injectable in-memory relay network in
 `mock-pool.ts`. `npm test` runs the fast unit files first, then runs `live.test.ts` as a
