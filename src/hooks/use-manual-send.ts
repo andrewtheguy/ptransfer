@@ -80,8 +80,8 @@ interface ManualTransferStateBase {
   offerData?: Uint8Array; // Binary data for QR code
   /**
    * Answer-return channel state while the offer is up: 'waiting' when the
-   * receiver's response will arrive over relays on its own, 'unavailable'
-   * when no relay set was proven and it has to be scanned or pasted back.
+   * receiver may choose either relays or a hand return, 'unavailable' when no
+   * relay set was proven and it must be scanned or pasted back.
    */
   answerRelayStatus?: 'waiting' | 'unavailable';
   // Set on an error state when a direct P2P connection could not be established;

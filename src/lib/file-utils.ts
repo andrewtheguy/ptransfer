@@ -30,13 +30,13 @@ export function formatFileSize(bytes: number): string {
   if (bytes <= 0 || !Number.isFinite(bytes)) return '0 B';
 
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+  const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
   const i = Math.min(
     Math.floor(Math.log(bytes) / Math.log(k)),
     sizes.length - 1,
   );
 
-  // Bytes are whole numbers; larger units always show one decimal (e.g. "5.0 MB")
+  // Bytes are whole numbers; larger units always show one decimal (e.g. "5.0 MiB")
   const value = bytes / k ** i;
   return `${i === 0 ? value : value.toFixed(1)} ${sizes[i]}`;
 }

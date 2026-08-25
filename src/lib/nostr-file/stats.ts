@@ -46,8 +46,8 @@ export interface NostrFileRelayStats {
 export interface NostrFileTransferStats {
   role: 'sender' | 'receiver';
   fileBytes: number;
-  /** Bytes chunked onto relays after whole-payload compression; equals
-   * fileBytes when deflate would not shrink the file. */
+  /** Bytes chunked onto relays: deflated for a single file, or unchanged for
+   * an already-compressed generated ZIP archive. */
   payloadBytes: number;
   chunkSize: number;
   chunksTotal: number;

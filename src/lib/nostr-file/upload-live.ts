@@ -112,7 +112,7 @@ export async function sendFileLive(
   if (data.length > NOSTR_FILE_MAX_BYTES) {
     wipeBufferSource(keyBytes);
     throw new Error(
-      `File too large for Nostr relay transfer (max ${NOSTR_FILE_MAX_BYTES / (1024 * 1024)} MB)`,
+      `File too large for Nostr relay transfer (max ${NOSTR_FILE_MAX_BYTES / (1024 * 1024)} MiB)`,
     );
   }
 

@@ -8,18 +8,18 @@ describe('File Utils', () => {
       expect(formatFileSize(100)).toBe('100 B');
     });
 
-    it('should format KB', () => {
-      expect(formatFileSize(1024)).toBe('1.0 KB');
-      expect(formatFileSize(1536)).toBe('1.5 KB');
+    it('should format KiB', () => {
+      expect(formatFileSize(1024)).toBe('1.0 KiB');
+      expect(formatFileSize(1536)).toBe('1.5 KiB');
     });
 
-    it('should format MB', () => {
-      expect(formatFileSize(1024 * 1024)).toBe('1.0 MB');
-      expect(formatFileSize(2.5 * 1024 * 1024)).toBe('2.5 MB');
+    it('should format MiB', () => {
+      expect(formatFileSize(1024 * 1024)).toBe('1.0 MiB');
+      expect(formatFileSize(2.5 * 1024 * 1024)).toBe('2.5 MiB');
     });
 
-    it('should format GB', () => {
-      expect(formatFileSize(1024 * 1024 * 1024)).toBe('1.0 GB');
+    it('should format GiB', () => {
+      expect(formatFileSize(1024 * 1024 * 1024)).toBe('1.0 GiB');
     });
 
     it('should handle negative or invalid inputs', () => {

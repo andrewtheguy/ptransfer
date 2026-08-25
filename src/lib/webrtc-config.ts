@@ -2,9 +2,9 @@
  * WebRTC ICE Server Configuration
  *
  * Provides multiple public STUN servers for direct ICE candidate discovery.
- * TURN is intentionally unsupported: file transport must remain a direct
- * peer-to-peer connection, and connection attempts fail when no direct ICE
- * route can be established.
+ * TURN is intentionally unsupported, so WebRTC itself uses direct candidates
+ * only. Auto Exchange fails when no direct route can be established; Manual
+ * Exchange may switch to its separate Nostr file-relay fallback.
  */
 
 /**

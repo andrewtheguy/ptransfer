@@ -4,7 +4,7 @@
  * Colors are driven by theme tokens (fill-primary, fill-secondary, ...) so the
  * artwork tints to the palette and adapts to dark mode automatically. Offline-safe.
  *
- * Concept: two devices coordinating directly by exchanging QR codes (no relay).
+ * Concept: two devices beginning Manual Exchange by sharing QR codes.
  */
 interface IllustrationProps {
   className?: string;
@@ -16,7 +16,7 @@ export function QrModeIllustration({ className }: IllustrationProps) {
       viewBox="0 0 200 140"
       className={className}
       role="img"
-      aria-label="Two devices exchanging QR codes directly, with no relay server"
+      aria-label="Two devices beginning Manual Exchange with QR codes"
       xmlns="http://www.w3.org/2000/svg"
     >
       {/* Soft backdrop */}

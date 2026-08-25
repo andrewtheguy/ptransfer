@@ -95,13 +95,13 @@ export function SendTab() {
   }, [selectedFiles]);
 
   const pinModeDescription =
-    'Most reliable option. Sets up the connection automatically through relays using a short PIN you share; the same end-to-end encrypted transfer, without the manual handoff.';
+    'Sets up signaling automatically through relays using a short PIN you share, then transfers the file over direct WebRTC without a manual handoff.';
   const pinModeHowItWorksDescription =
-    'Same direct, end-to-end encrypted transfer as Manual Exchange — the difference is the handshake is exchanged automatically through relays, matched by your PIN, instead of by hand. Relays coordinate signaling and can see routing metadata, but they do not receive plaintext file contents or your decryption key.';
+    'The handshake is exchanged automatically through relays and authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Auto Exchange has no data-relay fallback if direct WebRTC fails.';
   const manualModeDescription =
-    'You hand the recipient a short signaling payload — by QR code or copy/paste — and their response comes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for your code; STUN may be used when internet is available. If a direct connection cannot be made, the encrypted file (up to 100 MB) is relayed through Nostr automatically. File data stays encrypted.';
+    'You hand the recipient an offer by QR or copy/paste. When the offer names relays, they choose whether to return their encrypted response through those relays or by QR/copy-paste. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
   const manualModeHowItWorksDescription =
-    'You hand the recipient a short signaling payload, either by scanning QR codes or by copy/paste. Their encrypted response comes back through Nostr relays when those are reachable, and by QR code or copy/paste when they are not. The signaling payload is obfuscated, not encrypted, so hand it only to the intended recipient — it is also what secures the response. If internet is available, STUN is used for connection setup metadata such as IP address and port; it does not receive your file contents or encryption keys. It also works without internet when the devices can reach each other over a network path, such as the same LAN/Wi-Fi — the relay step drops out on its own. If no direct route can be found and relays are reachable, the encrypted file itself is carried through Nostr relays (up to 100 MB) instead of failing — the relay stand-in for TURN.';
+    'The offer is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange and secures any relayed response. A chosen relay-return path does not silently switch to QR if publication fails. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the offer named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
   const handleSend = () => {
     // Set context with all the configuration

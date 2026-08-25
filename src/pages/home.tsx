@@ -23,18 +23,19 @@ const STEPS = [
     icon: KeyRound,
     title: 'Choose a mode',
     description:
-      'Auto Exchange for automatic signaling, or Manual Exchange to swap connection data by QR or copy/paste — both require a direct peer-to-peer route with no TURN relay fallback.',
+      'Auto Exchange uses automatic signaling and direct WebRTC. Manual Exchange swaps an offer by QR or copy/paste and can relay encrypted files when no direct route exists.',
   },
   {
     icon: Share2,
-    title: 'Share the key',
+    title: 'Share pairing info',
     description:
       'Hand off the PIN, or exchange the connection data — by QR code or copy/paste — with your recipient.',
   },
   {
     icon: Send,
-    title: 'Transfer directly',
-    description: 'Files move device-to-device, encrypted the whole way.',
+    title: 'Transfer securely',
+    description:
+      'Files stay end-to-end encrypted over direct WebRTC or Manual Exchange’s relay fallback.',
   },
 ] as const;
 
@@ -43,13 +44,13 @@ const FEATURES = [
     icon: Lock,
     title: 'End-to-end encryption',
     description:
-      'Content is encrypted with AES-256-GCM before it ever leaves your device. Only the PIN or a completed Manual Exchange can decrypt it.',
+      'Content is encrypted with AES-256-GCM before it leaves your device. Only the paired endpoints derive the content key; the PIN itself cannot decrypt a file.',
   },
   {
     icon: Zap,
-    title: 'Direct P2P transfer',
+    title: 'Direct P2P first',
     description:
-      'Files are sent directly between devices over WebRTC. The file data never touches a server — only your two devices.',
+      'Files normally travel directly over WebRTC. If that fails, eligible Manual Exchange files can use a temporary encrypted Nostr relay path.',
   },
   {
     icon: Shield,

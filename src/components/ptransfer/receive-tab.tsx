@@ -26,9 +26,9 @@ import { TransferStatus } from './transfer-status';
 
 const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const PIN_MODE_DESCRIPTION =
-  'Most reliable option. Sets up the connection automatically through relays using the PIN the sender shares; the same end-to-end encrypted transfer, without the manual handoff.';
+  'Sets up signaling automatically through relays using the PIN the sender shares, then receives the file over direct WebRTC without a manual handoff.';
 const MANUAL_MODE_DESCRIPTION =
-  'The sender hands you a short signaling payload — by QR code or copy/paste — and your response goes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for their code; STUN may be used when internet is available. If a direct connection cannot be made, the encrypted file (up to 100 MB) is relayed through Nostr automatically. File data stays encrypted.';
+  'The sender hands you an offer by QR or copy/paste. When it names relays, you choose whether to return your encrypted response through them or by QR/copy-paste. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
 
 type ReceiveMode = 'pin' | 'scan';
 

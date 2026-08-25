@@ -16,7 +16,7 @@ export type TransferStatus =
   | 'connecting'
   | 'waiting_for_receiver'
   // Confirmation-code handshake (Auto Exchange). The receiver shows a code
-  // derived from the ECDH exchange; the sender parks until its operator types
+  // derived from the SPAKE2 exchange; the sender parks until its operator types
   // the matching one, so a claim that front-ran the intended receiver stalls
   // here instead of receiving a file.
   | 'showing_confirmation_code'

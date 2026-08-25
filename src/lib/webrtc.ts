@@ -6,7 +6,7 @@ export type WebRTCSignal =
 type WebRTCData = string | ArrayBuffer | ArrayBufferView | Blob;
 
 // Backpressure threshold: pause sending while the send buffer exceeds this.
-const BACKPRESSURE_THRESHOLD = 1024 * 1024; // 1MB
+const BACKPRESSURE_THRESHOLD = 1024 * 1024; // 1 MiB
 
 export class WebRTCConnection {
   private pc: RTCPeerConnection;

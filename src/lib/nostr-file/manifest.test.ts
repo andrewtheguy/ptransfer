@@ -19,7 +19,7 @@ describe('isValidNostrFileManifest', () => {
     expiresAt: createdAt + 3600,
   };
 
-  it('accepts a 100 MB manifest', () => {
+  it('accepts a 100 MiB manifest', () => {
     expect(isValidNostrFileManifest(manifest)).toBe(true);
   });
 
@@ -78,7 +78,7 @@ describe('isValidNostrFileManifest', () => {
     ).toBe(false);
   });
 
-  it('rejects files over 100 MB', () => {
+  it('rejects files over 100 MiB', () => {
     expect(
       isValidNostrFileManifest({
         ...manifest,

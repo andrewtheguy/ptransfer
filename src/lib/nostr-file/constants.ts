@@ -5,11 +5,12 @@
 // Hard cap on the plaintext payload relayed through nostr events.
 export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
-// Payload chunk size (the payload is the whole file deflated once — or the
-// raw file when deflate would not shrink it). Encoded content per event is
-// bounded by z85(chunk + 12B nonce + 16B tag) = 61,475 B (~60 KB), just
-// under the ~63 KB content size measured against the public relay
-// population — relays that cap lower fail the full-size health probe.
+// Payload chunk size (a single-file payload is always deflated once; an
+// already-compressed generated ZIP archive travels unchanged). Encoded
+// content per event is bounded by z85(chunk + 12 B nonce + 16 B tag) =
+// 61,475 B (~60 KiB), just under the ~63 KiB content size measured against
+// the public relay population — relays that cap lower fail the full-size
+// health probe.
 export const NOSTR_FILE_CHUNK_SIZE = 49152;
 
 // NIP-78 addressable event kind used for chunk (and probe) events.
@@ -22,8 +23,9 @@ export const NOSTR_FILE_EXPIRATION_SEC = 3600; // 1 hour
 
 export const NOSTR_FILE_MANIFEST_VERSION = 7;
 
-// Codec identity: whole-payload deflate (skipped when it would not shrink)
-// before chunking, then per chunk AES-256-GCM (nonce||ct||tag) then Z85.
+// Codec identity: whole-payload deflate for a single file, or identity for an
+// already-compressed generated ZIP, then per-chunk AES-256-GCM
+// (nonce||ct||tag) and Z85.
 export const NOSTR_FILE_ENCRYPTION_LABEL = 'aes-256-gcm';
 export const NOSTR_FILE_AAD_PREFIX = 'ptransfer-nostr-file:v1';
 
@@ -101,7 +103,7 @@ export const DISCOVERY_PAGE_LIMIT = 500;
 export const DISCOVERY_MAX_PAGES = 20;
 export const DISCOVERY_PAGE_MAX_WAIT_MS = 8000;
 
-// Max `d` identifiers per fetch filter (~3 MB of content per query).
+// Max `d` identifiers per fetch filter (~3 MiB of content per query).
 export const D_TAG_FILTER_BATCH = 50;
 
 export const RELAY_QUERY_MAX_WAIT_MS = 15000;

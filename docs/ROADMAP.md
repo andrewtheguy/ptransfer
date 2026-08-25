@@ -4,20 +4,20 @@
 
 ### Answer Return over Nostr Relays (Manual Exchange, phased)
 
-Make Manual Exchange the low-friction default by removing the second manual
-hop and, eventually, the manual mode switching. Each phase stands alone and
-ships independently; the file-transfer path stays WebRTC unless a phase says
-otherwise.
+Make Manual Exchange a lower-friction option by making the second manual hop
+optional and, eventually, reversing the initial mode selection. Each phase
+stands alone and ships independently; the file-transfer path stays WebRTC
+unless a phase says otherwise.
 
-#### Phase 1 — automatic answer return (WebRTC unchanged)
+#### Phase 1 — optional answer return through relays (WebRTC unchanged)
 
-With **Relay file through Nostr** *unchecked* (the normal direct Manual
-Exchange flow), the receiver's answer goes back to the sender over Nostr
-relays instead of a second QR scan / copy-paste:
+When the Manual Exchange offer names proven relays, the receiver explicitly
+chooses whether its answer goes back through those relays or by a second QR /
+copy-paste handoff:
 
-- Only the **offer** is still carried by hand (QR or copy/paste). The offer
-  payload names the relays the answer will come back on, so both sides agree
-  on the channel without a second out-of-band step.
+- The **offer** is always carried by hand (QR or copy/paste). Its payload names
+  the relays that can return the answer, so choosing that path makes the offer
+  the only hand-carried payload; choosing QR/copy-paste still uses two.
 - Reuse the verified-relay logic from the Nostr file relay
   (`resolveTransferRelays`) in full: the control-sized write→read probe of
   `DEFAULT_RELAYS`, and — when defaults come up short — the same NIP-66/NIP-65
@@ -27,15 +27,14 @@ relays instead of a second QR scan / copy-paste:
   QR (the offer must name the relays); the storage ring and its background
   sweep are prepared behind the exchange as relay preparation for Phase 2 (the
   QR does not depend on them), never touching the file.
-- The answer rides an **encrypted side channel keyed from the offer**, the
-  same way the Nostr file relay's control channel is keyed from its code, so
-  relays see only ciphertext and the exchange keeps its current security
-  boundary (authenticity still rests on the offer's QR/clipboard path).
-- **Fallback to manual copy/paste is automatic**: if no relay set passes the
-  probe, or the answer does not arrive before a short deadline, the receiver
-  shows its answer QR / **Copy Data** exactly as today and the sender shows
-  its scan/paste input. The current two-hop flow remains the guaranteed path,
-  never a dead end.
+- The answer rides an **encrypted side channel keyed from a secret in the
+  offer**, so relays see only ciphertext and the exchange keeps its current
+  security boundary (authenticity still rests on the offer's QR/clipboard
+  path).
+- If no relay set passes the probe, the hand-carried answer is the only path.
+  If the receiver chooses relays and publication fails, the attempt ends and
+  both sides restart; the two answer-return paths do not silently fall back to
+  one another.
 - Still WebRTC: file bytes never touch a relay in this phase.
 
 Status: implemented (`src/lib/answer-channel.ts`, wired into
@@ -69,11 +68,13 @@ transport becomes the Manual Exchange stand-in for TURN, with no user opt-in.
   answer came back: returning the answer by QR / copy-paste instead of over
   the relays does not disable the fallback, because both sides still share the
   offer's relays and the derived session. The answer channel is just a
-  convenient way to pass the receiver's response back — the same relays carry
-  the file if the direct connection fails.
-- It still fails rather than falling back only when there is no relay path at
-  all: the offer named no relays (fewer than `MIN_CONTROL_RELAYS` were proven
-  when it was built), or the file is over the 100 MB relay cap.
+  convenient way to pass the receiver's response back. Those relays carry the
+  fallback's encrypted control channel; a separate discovered storage ring
+  carries the file pieces.
+- The fallback is unavailable when the offer named no relays (fewer than
+  `MIN_CONTROL_RELAYS` were proven when it was built) or the file exceeds the
+  100 MiB cap. It can also fail later if too few storage relays work or pieces
+  cannot be delivered.
 
 Status: implemented. Sender/receiver fallback lives in
 `use-manual-send.ts` / `use-manual-receive.ts`; the session derivation in
@@ -82,9 +83,9 @@ Status: implemented. Sender/receiver fallback lives in
 
 #### Phase 3 — Manual Exchange becomes the default
 
-Once Phase 1 removes the second hop and Phase 2 removes the dead end, Manual
-Exchange is no harder than Auto Exchange for most users and involves no
-signaling server by default:
+Once Phase 1 makes the second hop optional and Phase 2 removes many direct
+connection dead ends, Manual Exchange may be practical as the initial mode
+while still allowing a fully hand-carried signaling path:
 
 - Flip the Transfer mode default: Manual Exchange is selected on the send and
   receive tabs out of the box.

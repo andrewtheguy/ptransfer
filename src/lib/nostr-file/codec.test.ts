@@ -90,7 +90,7 @@ describe('chunk content codec', () => {
     expect(decoded).toEqual(chunk);
   });
 
-  it('encoded full-size chunk stays under the ~63 KB relay content cap', async () => {
+  it('encoded full-size chunk stays under the ~63 KiB relay content cap', async () => {
     const key = await makeKey();
     const chunk = crypto.getRandomValues(new Uint8Array(NOSTR_FILE_CHUNK_SIZE));
     const aad = chunkAad('a'.repeat(32), 0, 1);

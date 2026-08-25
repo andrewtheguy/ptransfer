@@ -66,7 +66,7 @@ describe('control channel key and sealing', () => {
       ],
     });
     // Deflate collapses the periodic map and the shared-prefix ring URLs:
-    // a few hundred bytes, not 3.2 KB + 16 URLs.
+    // a few hundred bytes, not ~3.1 KiB + 16 URLs.
     expect(sealed.length).toBeLessThan(800);
     expect(
       parseSenderMessage(

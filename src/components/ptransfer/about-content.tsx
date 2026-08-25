@@ -10,15 +10,18 @@ import { generateTextQRCode } from '@/lib/qr-utils';
 
 const VALUE_PROPS = [
   { icon: Lock, label: 'End-to-end encrypted' },
-  { icon: Zap, label: 'Direct peer-to-peer' },
+  { icon: Zap, label: 'Direct peer-to-peer first' },
   { icon: Shield, label: 'No sign-up' },
 ] as const;
 
 // Shared by every transfer, whatever mode you use.
 const COMMON_DETAILS = [
   { label: 'Content encryption:', value: 'AES-256-GCM' },
-  { label: 'File transport:', value: 'Direct peer-to-peer over WebRTC' },
-  { label: 'Max size:', value: '2 GB per transferred file or ZIP archive' },
+  { label: 'Primary transport:', value: 'Direct peer-to-peer over WebRTC' },
+  {
+    label: 'Size limits:',
+    value: '2 GiB selected input; 100 MiB for the Manual relay fallback',
+  },
 ] as const;
 
 // Specific to Auto Exchange mode.
@@ -30,7 +33,7 @@ const PIN_DETAILS = [
   {
     label: 'PIN format:',
     value:
-      '8 case-sensitive letters and digits with built-in checksum for typo detection',
+      '12 case-sensitive letters and digits: 3 public locator characters, 8 secret characters, and a checksum',
   },
   {
     label: 'PIN rotation:',
@@ -54,7 +57,8 @@ const QR_DETAILS = [
   { label: 'Key exchange:', value: 'ECDH' },
   {
     label: 'Signaling:',
-    value: 'Direct exchange via QR or copy/paste (no relay)',
+    value:
+      'Offer by QR/copy-paste; when relays are named, the receiver chooses relay return or QR/copy-paste for the answer',
   },
 ] as const;
 
@@ -111,9 +115,10 @@ export function AboutContent() {
             <p>
               pTransfer is a free, open-source tool for sending files and
               folders straight from one device to another with end-to-end
-              encryption. Your content is encrypted in your browser and travels
-              over a direct peer-to-peer connection — it's never uploaded to a
-              server or stored in the cloud.
+              encryption. Your content is encrypted in your browser and first
+              tries a direct peer-to-peer connection. If that connection cannot
+              be established, eligible Manual Exchange files can travel as
+              temporary ciphertext through public Nostr relays.
             </p>
             <p>
               There are no accounts and no tracking. Each transfer uses a fresh,
@@ -167,8 +172,9 @@ export function AboutContent() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl">Two ways to connect</h2>
           <p className="mt-3 text-muted-foreground">
-            Every transfer is end-to-end encrypted — the two modes differ only
-            in how the sending and receiving devices find each other.
+            Every transfer is end-to-end encrypted. The modes differ in
+            signaling and in whether a failed direct connection has a relay
+            fallback.
           </p>
         </div>
         <div className="mt-10 grid gap-6">
@@ -180,12 +186,11 @@ export function AboutContent() {
                 Auto Exchange mode
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                The same direct, end-to-end encrypted WebRTC transfer as Manual
-                Exchange — the difference is the handshake. Instead of you
-                exchanging it by QR or copy/paste, the app exchanges it
-                automatically through third-party relay servers, matched by a
-                short PIN you share. Relays can see routing metadata, but not
-                plaintext file contents or your decryption key.
+                Auto Exchange uses an end-to-end encrypted direct WebRTC
+                transfer. Instead of exchanging the handshake by QR or
+                copy/paste, the app carries it through third-party Nostr relays
+                and authenticates it with a SPAKE2 exchange driven by the PIN
+                you share. Auto Exchange has no file-relay fallback.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
@@ -205,8 +210,8 @@ export function AboutContent() {
                 </li>
                 <li>
                   File data is always transferred directly peer-to-peer over
-                  WebRTC — the relay coordinates signaling only and never
-                  carries file contents.
+                  WebRTC in this mode; Auto Exchange relays carry signaling, not
+                  file contents.
                 </li>
               </ul>
               <SpecList items={PIN_DETAILS} />
@@ -224,16 +229,13 @@ export function AboutContent() {
                 — by QR code or copy/paste — with no account and no coordination
                 server holding it. That payload is obfuscated, not encrypted, so
                 hand it only to the intended recipient: it is also what secures
-                the response. The recipient's response normally comes back
-                through Nostr relays, encrypted with a key derived from your
-                payload, so the relays see only ciphertext; if they are
-                unreachable, the response comes back by QR or copy/paste
-                instead. STUN may be used when internet is available; without
-                internet, no third-party servers are involved at all. When STUN
-                is used, it only sees connection setup metadata such as IP
-                address and port, not file contents or encryption keys. File
-                data remains encrypted throughout the transfer, regardless of
-                internet availability and whether STUN is used.
+                the response. When the offer names relays, the recipient chooses
+                whether to return the encrypted response through them or by QR
+                or copy/paste. A failed chosen relay return ends that attempt;
+                the app does not silently change paths. STUN may help find a
+                direct route when internet is available. If direct WebRTC fails,
+                an eligible encrypted file up to 100 MiB can use temporary
+                public Nostr relays instead.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
@@ -243,9 +245,8 @@ export function AboutContent() {
                 <li>
                   The offer is handed to the recipient directly — as a QR code
                   or by copy/paste — with no relay coordination service holding
-                  it. Their response normally returns through Nostr relays as
-                  ciphertext, and by QR code or copy/paste when those relays are
-                  unreachable.
+                  it. When relays are named, the recipient explicitly chooses an
+                  encrypted relay return or a hand-carried response.
                 </li>
                 <li>
                   With internet, STUN can assist direct candidate discovery
@@ -257,9 +258,8 @@ export function AboutContent() {
                   network with no third-party servers.
                 </li>
                 <li>
-                  Typically less reliable than Auto Exchange mode: you exchange
-                  the data by hand, and scanning adds the variables of camera
-                  quality and lighting.
+                  The initial handoff adds the variables of camera quality,
+                  lighting, or clipboard access.
                 </li>
               </ul>
               <SpecList items={QR_DETAILS} />
@@ -269,11 +269,12 @@ export function AboutContent() {
         <div className="mt-6 flex gap-3 rounded-2xl border border-dashed bg-muted/30 p-5 text-sm text-muted-foreground">
           <QrCode className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <p>
-            Either way, file data always travels over a direct peer-to-peer
-            WebRTC connection with no TURN relay to fall back on, so a transfer
-            that cannot establish a direct connection cannot complete. When that
-            happens and the two devices are together, transfer the file offline
-            with animated QR codes using{' '}
+            Both modes try direct WebRTC first, and neither configures a TURN
+            server. Auto Exchange fails if no direct route exists. Manual
+            Exchange can instead use its encrypted Nostr fallback for eligible
+            files up to 100 MiB, but that public-relay path is best-effort too.
+            If neither path completes and the devices are together, transfer the
+            file offline with animated QR codes using{' '}
             <a
               href={OFFLINE_QR_TRANSFER_URL}
               target="_blank"

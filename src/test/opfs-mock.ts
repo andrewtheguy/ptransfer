@@ -2,7 +2,7 @@
  * Minimal in-memory OPFS mock for tests.
  *
  * Node has no origin-private file system, and the scratch sinks require one
- * for payloads over 100MB. This implements just the surface the
+ * for payloads over 100 MiB. This implements just the surface the
  * app touches — `navigator.storage.getDirectory`, directory/file handles,
  * async key iteration and `createWritable` with the real API's swap-file
  * semantics (writes are invisible until `close()` commits them).

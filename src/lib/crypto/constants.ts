@@ -107,22 +107,21 @@ export const AES_TAG_LENGTH = 16; // bytes (128 bits)
 export const SALT_LENGTH = 16;
 
 // Encryption chunk size for P2P transfers
-// 128KB chunks, each encrypted with unique nonce
-// WebRTC data channel has ~256KB message limit, so 128KB + encryption overhead stays safe
-export const ENCRYPTION_CHUNK_SIZE = 128 * 1024; // 128KB
+// 128 KiB chunks, each encrypted with a unique nonce.
+// The WebRTC data channel has a ~256 KiB message limit, so 128 KiB plus
+// encryption overhead stays safe.
+export const ENCRYPTION_CHUNK_SIZE = 128 * 1024; // 128 KiB
 
-// Max size of a transferred payload (file or generated ZIP archive). Every
-// stage streams — multi-file/folder sends are zipped directly into the data
-// channel, the sender encrypts lazy 128KB source chunks, and the receiver
-// writes decrypted chunks to scratch storage — so the bound comes
-// from the 2-byte chunk-index range and disk quota, not RAM. Payloads over
-// MEMORY_SINK_MAX_BYTES require OPFS; browsers without it cannot transfer
-// them.
-export const MAX_MESSAGE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
+// Application cap on selected plaintext input (one file, or the total files
+// used to generate a ZIP). Every P2P stage streams: the sender encrypts lazy
+// 128 KiB wire chunks and the receiver writes plaintext to adaptive scratch
+// storage. The cap stays below the 2-byte chunk-index capacity; payloads over
+// MEMORY_SINK_MAX_BYTES require OPFS on the receiver.
+export const MAX_MESSAGE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 // Payloads at or below this size are buffered in memory during transfer;
 // larger payloads require OPFS scratch storage.
-export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100MB
+export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
 // PIN hint length.
 // 8 hex chars of output, but the hint is derived from the locator segment

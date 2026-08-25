@@ -63,7 +63,7 @@ function opfsSupported(): boolean {
 function requireOpfs(): void {
   if (!opfsSupported()) {
     throw new Error(
-      'This browser cannot store transfers over 100MB on disk (no OPFS support). Update to a current version of Chrome, Edge, Firefox, or Safari.',
+      'This browser cannot store transfers over 100 MiB on disk (no OPFS support). Update to a current version of Chrome, Edge, Firefox, or Safari.',
     );
   }
 }

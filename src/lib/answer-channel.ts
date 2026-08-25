@@ -17,8 +17,9 @@ import type { NostrFilePool, PoolSubscription } from './nostr-file/pool';
  * Only the sender's offer is carried by hand. The offer names a small set of
  * proven relays and carries a random secret; the receiver seals its answer
  * under a key derived from that secret and publishes it to those relays, so
- * the second hand-carried hop disappears. File bytes never touch a relay —
- * this replaces one copy/paste, nothing else.
+ * the second hand-carried hop disappears. This channel carries signaling
+ * only; if the direct WebRTC connection later fails, Manual Exchange can use
+ * the separate Nostr file-relay fallback.
  *
  * Relays see a temporary opaque blob on a derived tag: the channel key and
  * the channel tag both come from the offer's secret via HKDF, so a relay

@@ -59,8 +59,8 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  // Fallback input for the receiver's response, kept collapsed while the
-  // relay answer channel is live.
+  // Hand-return input for the receiver's response, kept collapsed while the
+  // offer also permits the receiver to choose a relay return.
   const [manualAnswerOpen, setManualAnswerOpen] = useState(false);
 
   // Hooks for transfer
@@ -96,8 +96,8 @@ export function SendTransferPage() {
   const manualState =
     activeHook.type === 'offline' ? activeHook.hook.state : null;
   const offerData = manualState?.offerData;
-  // 'waiting': the receiver's response comes back over relays on its own, so
-  // the scan/paste input is a fallback rather than the next step.
+  // 'waiting': the offer names relays, so the receiver chooses between that
+  // return path and the scan/paste input. 'unavailable': hand return only.
   const answerRelayStatus = manualState?.answerRelayStatus;
   const submitAnswer =
     activeHook.type === 'offline' ? activeHook.hook.submitAnswer : undefined;
@@ -216,8 +216,7 @@ export function SendTransferPage() {
         console.error('Failed to cancel transfer:', err);
       }
     }
-    // Update config to manual mode (dropping the relay-dependent Nostr file
-    // relay option) and restart the transfer flow
+    // Update config to Manual Exchange and restart the transfer flow.
     startedRef.current = false;
     setConfig({ ...config, methodChoice: 'offline' });
     setStep('checking');
@@ -269,9 +268,8 @@ export function SendTransferPage() {
                 Unable to connect to relay servers
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-300">
-                {config.methodChoice === 'online'
-                  ? 'Auto Exchange mode is temporarily unavailable. Switch to Manual Exchange mode or retry the connection.'
-                  : 'The Nostr file relay option is temporarily unavailable. Switch to a normal Manual Exchange transfer or retry the connection.'}
+                Auto Exchange mode is temporarily unavailable. Switch to Manual
+                Exchange mode or retry the connection.
               </p>
             </div>
           </div>
@@ -336,7 +334,7 @@ export function SendTransferPage() {
                     </ul>
                     <p className="text-sm text-muted-foreground">
                       {answerRelayStatus === 'waiting'
-                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way. If a direct connection cannot be made, the encrypted file is relayed through those same Nostr relays automatically.'
+                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way. If a direct connection cannot be made, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.'
                         : 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect.'}
                     </p>
                   </div>

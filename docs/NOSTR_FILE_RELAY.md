@@ -1,20 +1,21 @@
 # Nostr File Relay Architecture
 
 The Nostr file relay is the **Manual Exchange data-path fallback** — the stand-in for
-TURN. When a direct WebRTC connection between the two devices cannot be established, the
-encrypted file (up to 100 MB) is carried through public Nostr relays instead of failing.
-It is automatic: there is no toggle and no separate code, and **nothing is uploaded
-ahead of time** — the file engine runs only once the direct connection has failed, so a
-transfer that would have connected directly never puts a byte of the file on a storage
-relay. What *does* run ahead of time is relay preparation: as soon as the offer's relays
+TURN. When a direct WebRTC connection between the two devices cannot be established, an
+eligible encrypted file (up to 100 MiB) automatically attempts delivery through public
+Nostr relays. There is no toggle and no separate code, and **nothing is uploaded ahead of
+time** — the file engine runs only once the direct connection has failed, so a transfer
+that would have connected directly never puts a byte of the file on a storage relay. What
+*does* run ahead of time is relay preparation: as soon as the offer's relays
 are known, the sender discovers and health-checks a storage ring and keeps probing the
 relay population behind the exchange (`prepareStorageRelays`), so the shared relay cache
 is warmed either way and a failed direct attempt finds its ring ready. What matters is only that the
 offer named proven relays; whether the receiver returned the answer over those relays or
 by QR / copy-paste makes no difference, since both sides still share the offer's relays
 and the session derived from the exchange. When there is no relay path at all — the offer
-named no relays, or the file is over the 100 MB cap — the transfer fails as it always
-did.
+named no relays or the file is over the 100 MiB cap — the fallback is unavailable. It can
+also fail later if too few storage relays work or the selected relays do not deliver the
+pieces.
 
 This document is the architecture reference. For the user-facing guide see
 [MANUAL_EXCHANGE.md](MANUAL_EXCHANGE.md); for how this mode fits into the rest of the app
@@ -48,7 +49,9 @@ piece is uploaded **once** while the receiver downloads alongside, and the two s
 coordinate over the control channel. Redundancy is created on demand — a piece is re-sent
 only after the receiver reports it could not fetch it, so the upload costs ~1× the file
 size plus the failed pieces. Both pages stay open until the receiver confirms the
-verified file; the hour-long window runs from the offer's `createdAt`.
+verified file. The outer Manual Exchange session still ends one hour after the offer was
+created; relay-file manifests and chunks created after fallback begins carry their own
+one-hour NIP-40 window, but that does not extend the enclosing session.
 
 ## Shared Foundations
 
@@ -61,8 +64,9 @@ control-sized write→read round trip (`CONTROL_PROBE_BYTES` 256 B,
 `CONTROL_PROBE_TIMEOUT_MS` 4 s). When fewer than `CONTROL_RELAY_COUNT` (6) pass, each
 defunct default is replaced by a **full-size-proven storage reserve** — one of the
 `SIGNALING_RESERVE_RELAY_COUNT` (4) relays that passed the full-size probe and were held
-outside the ring — not by a weaker control-sized discovery, so a control relay is always
-proven to serve real chunks. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
+outside the ring — not by a weaker control-sized discovery. Passing defaults are proven
+for control-sized messages; only their discovered replacements are also proven at full
+chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
 names no relays at all — and then there is no answer channel and no relay fallback. See the answer-return channel section in
 [ARCHITECTURE.md](ARCHITECTURE.md#answer-return-channel-srclibanswer-channelts).
 
@@ -109,18 +113,22 @@ names no relays at all — and then there is no answer channel and no relay fall
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 
-The plaintext (file or ZIP, materialized in memory, ≤ 100 MB) is **deflated once as a
-whole** (`compressPayload`), then the compressed payload is split into
-`NOSTR_FILE_CHUNK_SIZE` = 48 KiB chunks. Each chunk goes through:
+The plaintext (file or ZIP, materialized in memory, ≤ 100 MiB) is passed through
+`compressPayload`, then the resulting payload is split into
+`NOSTR_FILE_CHUNK_SIZE` = 48 KiB chunks. A single-file payload is deflated once as a
+whole; a multi-file/folder ZIP is already compressed and travels unchanged. Each chunk
+then goes through:
 
 ```
-whole-file deflate → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
+[whole-file deflate for a single file | identity for a generated ZIP]
+    → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
 ```
 
-- Compressing before chunking means a highly compressible file collapses into a few
-  chunks instead of one event per 48 KiB of plaintext. When deflate would not shrink
-  the file (media, archives with compressed entries), the file is chunked as-is and the
-  manifest says `compression: 'none'` — already-compressed data is never recompressed.
+- Compressing before chunking means a highly compressible single file collapses into a
+  few chunks instead of one event per 48 KiB of plaintext. Single files are always
+  deflated, even when the output is slightly larger; only payloads from the
+  multi-file/folder ZIP flow use `compression: 'none'`, because their entries have
+  already been deflated and the archive is never recompressed.
   The manifest carries `payloadSize` (the chunked byte count) next to `fileSize`; the
   receiver assembles `payloadSize` bytes, inflates with the output bounded by
   `fileSize` (decompression-bomb guard, exact-size match required), then verifies the
@@ -132,8 +140,8 @@ whole-file deflate → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → 
   transfer and position — a tampered, substituted, or misplaced chunk fails GCM and is
   simply treated as missing.
 - Z85 (base85): ~1.25× expansion vs base64's ~1.33×, and JSON-escape free. A 48 KiB
-  chunk encodes to ~60 KB, just under the ~63 KB event-content ceiling measured
-  against the public relay population. A 100 MB incompressible file is
+  chunk encodes to ~60 KiB, just under the ~63 KiB event-content ceiling measured
+  against the public relay population. A 100 MiB incompressible file is
   ~2134 chunks.
 
 ### Chunk event schema (`events.ts`)
@@ -153,10 +161,11 @@ carry no filename, size, or plaintext hash — file metadata travels only in the
 manifest, and the `transferId` derived from the exchange's ECDH secret (rather than the
 file hash) reveals nothing and prevents known-file confirmation against public relays.
 
-**Every published event carries the NIP-40 `expiration` tag (1 hour), health-check probes
-and control messages included** — this mode never asks relays to hold data beyond one
-transfer window. The 1-hour value is a client-enforced transfer deadline plus a deletion
-*request*: compliant relays stop serving and prune expired events, but NIP-40 does not
+**Every published event carries a NIP-40 `expiration` tag, health-check probes and control
+messages included.** Chunk and probe events request one hour of retention from their
+creation; control events use the applicable session/manifest deadline and may request
+less. These values are client-enforced deadlines plus deletion *requests*: compliant
+relays stop serving and prune expired events, but NIP-40 does not
 guarantee deletion or provide cryptographic erasure — a non-compliant relay could retain
 its copy. Confidentiality never depends on relay deletion: chunks orphaned by a cancelled
 or failed upload are AES-256-GCM ciphertext under a key that was never published.
@@ -180,12 +189,14 @@ already over (`assertManifestWindow`).
 
 ### Expiry and clocks
 
-Everything must finish within `NOSTR_FILE_EXPIRATION_SEC` (1 hour) of the offer's
-`createdAt` (the exchange start), which both sides pass into the engine as the session
-`expiresAt`. The receiver rejects an expired manifest, tolerating
-`CLOCK_SKEW_TOLERANCE_SEC` (±10 min) of wall-clock disagreement. Both UIs show the
-remaining time. Because the fallback starts only after a direct connection has already
-been attempted, some of the hour is spent before the first chunk moves.
+The outer Manual Exchange session expires one hour after the offer's `createdAt`, so the
+hooks can end the transfer before the relay engine's own later window. When fallback
+starts, the sender stamps the manifest and chunk events with a fresh
+`NOSTR_FILE_EXPIRATION_SEC` (1 hour) window; receiver control events retain the earlier
+offer deadline. The receiver initially watches from the offer window, then validates the
+manifest's fallback-time window with `CLOCK_SKEW_TOLERANCE_SEC` (±10 min) of clock-skew
+tolerance. None of these later event timestamps extends the enclosing Manual Exchange
+session.
 
 ## Transfer Protocol (`upload-live.ts` / `download-live.ts` / `control.ts`)
 
@@ -270,7 +281,7 @@ sender completes on `done`.
 
 On each `avail`, the receiver fetches every announced chunk it lacks from the one relay it
 was placed on (grouped per relay, in parallel, `authors` + `#d` filters, ≤
-`D_TAG_FILTER_BATCH` (50) ids per filter, ~3 MB of content per query), skipping chunks
+`D_TAG_FILTER_BATCH` (50) ids per filter, ~3 MiB of content per query), skipping chunks
 whose `(pos, gen)` it already tried within the last `LIVE_FETCH_RETRY_MS` (10 s), then
 answers with an `ack` listing what is still missing at the placement it actually asked —
 never the newest announced one, so an announcement landing mid-fetch cannot blame a relay
@@ -295,7 +306,7 @@ sequenceDiagram
     Note over S,V: both derive session (transferId + file key) from the ECDH secret
     S->>C: manifest (sealed; file metadata + chunk layout)
     S->>C: avail {upto: 0, relays: []} (sender online, ring still resolving)
-    V->>C: subscribe #35;x = transferId:ctl
+    V->>C: subscribe #x = transferId:ctl
     C->>V: manifest (from backlog if V joined late)
     V->>C: hello (sealed control event)
     C->>S: hello
@@ -335,9 +346,9 @@ sequenceDiagram
 | Constant | Value | Meaning |
 |---|---|---|
 | `NOSTR_FILE_MAX_BYTES` | 100 MiB | Hard cap on the plaintext payload |
-| `NOSTR_FILE_CHUNK_SIZE` | 48 KiB | Plaintext chunk size (~60 KB encoded) |
+| `NOSTR_FILE_CHUNK_SIZE` | 48 KiB | Compressed-or-identity payload chunk size (~60 KiB encoded) |
 | `EVENT_KIND_FILE_CHUNK` | 30078 | NIP-78 addressable kind for chunks, probes, and control |
-| `NOSTR_FILE_EXPIRATION_SEC` | 3600 | NIP-40 lifetime on every event; transfer deadline |
+| `NOSTR_FILE_EXPIRATION_SEC` | 3600 | Manifest/chunk window from fallback start; the outer Manual Exchange deadline may end the transfer earlier |
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
 | `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
 | `CONTROL_RELAY_COUNT` | 6 | Target control relays (the offer's answer relays) |
@@ -346,9 +357,9 @@ sequenceDiagram
 | `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
-| `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop after the 16-relay storage ring plus a few spares pass |
+| `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop after the 16-relay storage ring plus four signaling reserves pass |
 | `RELAY_CANDIDATE_TTL_MS` | 24 h | Lifetime of discovered candidates and relay-health priority |
-| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MB per query) |
+| `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MiB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |
 | `LIVE_FETCH_RETRY_MS` | 10 s | Receiver retry clock: re-fetch a still-missing placement and re-run a cycle without a new announcement |
@@ -369,7 +380,7 @@ sequenceDiagram
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
 | `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
-| `src/lib/nostr-file/upload.ts` | Publish-with-retry, storage-ring resolution (`resolveUploadRelays`) |
+| `src/lib/nostr-file/upload.ts` | Publish-with-retry, control/storage relay resolution, and background storage preparation |
 | `src/lib/nostr-file/session.ts` | `deriveRelaySession`: transfer id + file key from the exchange's ECDH secret |
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel (manifest is the first control message) |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |

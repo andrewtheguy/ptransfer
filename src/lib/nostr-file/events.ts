@@ -24,7 +24,7 @@ function chunkDTag(transferId: string, index: number): string {
  * Build a signed chunk event. Addressable (NIP-78) with a derived `d` tag so
  * the manifest never needs per-chunk event ids, and explicitly temporary via
  * the NIP-40 expiration tag. Deliberately carries no filename/size/plaintext
- * hash — file metadata travels only in the manual payload.
+ * hash — file metadata travels in the separately encrypted manifest.
  */
 export function buildChunkEvent(
   secretKey: Uint8Array,
