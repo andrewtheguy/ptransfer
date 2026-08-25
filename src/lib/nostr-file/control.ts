@@ -22,9 +22,9 @@ import { type NostrFileTransferStats, relayStatsFor } from './stats';
  * Both peers derive the same AES-GCM key from the session file key (HKDF,
  * distinct info label), which itself comes from the Manual Exchange ECDH
  * secret, so only the two peers of that exchange can read or forge control
- * messages. Messages ride on the control relays — the proven signaling
- * relays the offer named for the answer channel, probed with a control-sized
- * event (the chunk ring is announced over this channel instead) — as addressable events of the chunk
+ * messages. Messages ride on the control relays — the proven relays the
+ * offer named, probed with a control-sized event (the chunk ring is
+ * announced over this channel instead) — as addressable events of the chunk
  * kind with a unique `d` tag per message and the usual NIP-40 expiration, so
  * a peer that subscribes late — or whose socket dropped — gets the stored
  * backlog via the `since` filter.

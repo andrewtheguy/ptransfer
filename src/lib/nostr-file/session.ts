@@ -9,8 +9,8 @@ import { RELAY_SESSION_INFO } from './constants';
  * identifier (the public `d`/`x` tag namespace on relays) and the same raw
  * 32-byte file key (which keys the chunks and, via `deriveControlKey`, the
  * encrypted control channel). The control relays are the proven relays the
- * offer already named for the answer channel, so the session is ready the
- * moment signaling completes — and costs nothing until a direct connection
+ * offer already named, so the session is ready the moment signaling
+ * completes — and costs nothing until a direct connection
  * actually fails and the file has to go through relays.
  */
 export interface RelaySession {

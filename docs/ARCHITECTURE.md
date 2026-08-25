@@ -20,7 +20,7 @@ By default, Nostr is used for signaling. Manual Exchange is available as an alte
 
 | Feature | Nostr / Auto Exchange (Default) | Manual Exchange (Hand-Carried Offer) |
 |---------|-----------------|---------------------------------------|
-| Signaling path | Decentralized relays | Offer by QR/copy-paste; answer by the receiver's choice of encrypted relay return or QR/copy-paste |
+| Signaling path | Decentralized relays | Offer and answer both by QR/copy-paste; the sender scans or pastes the answer |
 | ICE servers | STUN only (Google + Cloudflare); no TURN | STUN only (same WebRTC config); no TURN |
 | File transport | Direct WebRTC only | Direct WebRTC first; automatic Nostr relay fallback up to 100 MiB when available |
 | Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE | Offer is only obfuscated and must be delivered authentically; relay-returned answer and fallback file pieces are encrypted |
@@ -47,7 +47,7 @@ flowchart TD
 
     subgraph Manual[Manual setup]
         M1[QR/clipboard offer<br/>obfuscated PT01 payload]
-        M2[Answer returned by chosen path:<br/>sealed relay event or QR/clipboard]
+        M2[QR/clipboard answer<br/>scanned or pasted by the sender]
         M1 --> M2
     end
 
@@ -116,14 +116,8 @@ sequenceDiagram
     Receiver->>Receiver: Scan remaining QR codes in-app
     Receiver->>Receiver: Reassemble chunks, parse payload, derive shared secret
     Receiver->>Receiver: Create WebRTC answer
-    alt Offer named answer relays and receiver chooses them
-        Receiver->>Relays: Publish answer sealed under the offer's secret
-        Relays-->>Sender: Sealed answer (sender already subscribed)
-    else No relays proven, or receiver chooses hand return
-        Receiver-->>Sender: Display Answer QR (single binary QR) / Copy Data
-    else Receiver chose relays but none accepted
-        Note over Sender,Receiver: Exchange fails; both sides restart
-    end
+    Receiver-->>Sender: Display Answer QR (single binary QR) / Copy Data
+    Sender->>Sender: Scan or paste the answer (the only way it enters the page)
     Sender->>Receiver: Process answer, establish WebRTC
     alt WebRTC data channel opens
         Sender->>Receiver: Transfer over shared P2P protocol
@@ -135,12 +129,12 @@ sequenceDiagram
     end
 ```
 
-The answer-return hop itself carries only signaling. The separate Manual Exchange relay
+Relays carry no signaling in Manual Exchange. The separate Manual Exchange relay
 fallback may carry encrypted file pieces after the direct WebRTC attempt fails.
 
 **Requirements:**
 - Receiver needs a phone camera to scan the sender's URL QR codes (or can use clipboard copy/paste as fallback)
-- Sender needs a camera or clipboard when the receiver chooses a hand-carried answer or the offer names no answer relays
+- Sender needs a camera or clipboard to take the receiver's answer back in
 
 **Network Requirements:**
 - **With internet**: Can work across different networks when ICE finds a direct route; if it cannot, an eligible file up to 100 MiB can use the Nostr relay fallback
@@ -369,12 +363,12 @@ Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. 
 - Sender generates WebRTC offer with ICE candidates
 - Both offer and answer include a required finite `createdAt` timestamp. The receiver rejects an offer older than `TRANSFER_EXPIRATION_MS`; the sender validates the answer timestamp's shape and enforces expiry against its own offer/session start time
 - Payload is obfuscated using a time-bucketed seed to avoid casual inspection.
-- The offer additionally carries `answerRelays` + `answerSecret` when relays were proven while it was being built, and the receiver returns its answer over that channel instead of a second hand-carried code (see [Answer Return Channel](#answer-return-channel-srclibanswer-channelts)). The two fields travel together or not at all; an answer carrying them, or an offer carrying half of them, is rejected as malformed.
+- The offer additionally carries `relays` when relays were proven while it was being built: the control relays of the data-path fallback (see [Offer relays](#offer-relays-srclibmanual-signalingts)). The field is offer-only and must be a usable list; an answer carrying it, or an offer carrying an unusable list, is rejected as malformed. The answer is never carried over relays — it enters the sender's page only through the sender's own scan or paste.
 
 > [!IMPORTANT]
 > **Security boundary**: Manual signaling payloads are not cryptographically confidential. The time-bucketed obfuscation deters casual inspection and the 1-hour TTL prevents stale offers from starting a session, but someone who captures the QR/clipboard payload can potentially recover metadata and SDP/ICE details. File-content confidentiality comes from the ECDH-derived AES-256-GCM key, assuming the offer is delivered over an authentic QR/clipboard path.
 >
-> **The offer is the whole secret.** With the answer returning over relays, capturing the offer is enough to answer it: the captor derives the same channel from `answerSecret`, publishes its own answer, and becomes the receiver — the sender takes the first answer that opens under the channel key. The offer already had to be shared over a trusted channel; this makes that the *only* thing protecting the transfer, where before a captor also had to get its answer into the sender's hands. Relays themselves learn nothing beyond an opaque blob on a derived tag, both parties' IPs, and timing.
+> **The sender's scan or paste is the gate.** Someone who captures the offer can build a valid answer to it, but that answer only counts if the sender deliberately scans or pastes it — there is no channel by which a bystander can push a response into the sender's page. An earlier revision let the receiver publish the answer to the offer's relays; it was removed because it made the offer alone sufficient to become the receiver.
 
 **Binary Payload Format (PT01):**
 
@@ -458,13 +452,11 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 *Answer (Receiver → Sender):*
 | Method | Encoding | Use Case |
 |--------|----------|----------|
-| Nostr relay event | AES-256-GCM-sealed PT01 answer | Explicit receiver choice when the offer named usable relays |
 | QR Code | PT01 obfuscated binary (single QR) | Camera available, sender already in-app |
 | Copy/Paste | Base64-encoded binary | No camera, text-safe for clipboard |
 
 **Key Features:**
-- The receiver explicitly chooses relay return or a hand-carried answer when the offer names usable relays; relay publication failure ends that attempt instead of silently changing the choice
-- No signaling server required for the offer, and none at all when relays are unavailable — the exchange completes hand-to-hand as before
+- No signaling server involved at all: offer and answer both go hand-to-hand, and the answer enters the sender's page only when the sender scans or pastes it
 - Multi-QR offer: payload split into URL-based QR codes (~400 bytes each) for easy phone scanning
 - Receiver scans any QR code with phone camera → app opens at `/r` route with first chunk → scans remaining codes in-app
 - Copy/paste fallback for environments without camera
@@ -476,14 +468,15 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 
 **Security Model:**
 - **Nostr**: The rotating PIN drives a SPAKE2 exchange; the mutual claim/confirm handshake is sealed with session keys only matching PAKE peers hold, and signals and content are encrypted with keys off the same root. Nothing published can test a PIN offline, public transfer IDs cannot start the sender state machine, and a leaked PIN decrypts no content — file metadata is never exposed to relays in plaintext (the published confirm is sealed ciphertext relays cannot decrypt)
-- **Manual**: The hand-carried signaling payload is obfuscated and time-limited, not encrypted. Direct content uses an ECDH-derived AES-256-GCM key over the data channel; the fallback derives a separate relay session and file key from the same ECDH secret. The relayed answer is encrypted under a key derived from the offer's answer-channel secret. These protections assume the offer's QR/clipboard delivery is authentic, making the offer the single secret gating the exchange — see the security boundary note above
+- **Manual**: The hand-carried signaling payload is obfuscated and time-limited, not encrypted. Direct content uses an ECDH-derived AES-256-GCM key over the data channel; the fallback derives a separate relay session and file key from the same ECDH secret. These protections assume the offer's QR/clipboard delivery is authentic; the sender's own scan or paste of the answer is what admits a receiver — see the security boundary note above
 - **All modes**: Once WebRTC connection is established, DTLS encrypts all data in transit, and file content is additionally encrypted with the shared chunk protocol
 
-### Answer Return Channel (`src/lib/answer-channel.ts`)
+### Offer Relays (`src/lib/manual-signaling.ts`)
 
-Returns the receiver's answer over Nostr relays when the receiver chooses that option, so
-Manual Exchange then needs only one hand-carried code. This channel moves signaling,
-never file bytes; the separate data-path fallback is described below.
+While the offer is built, the sender proves a small set of Nostr relays and names them in
+the offer's `relays` field. They carry no signaling — the answer always comes back by
+hand — and exist only so the data-path fallback described below has a proven control
+channel the moment the direct WebRTC attempt fails.
 
 - **Relay selection (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`).**
   Reused whole from the storage transfer, so the exchange inherits its exact
@@ -491,8 +484,8 @@ never file bytes; the separate data-path fallback is described below.
   probes `DEFAULT_RELAYS` with the control-sized write→read round trip
   (`healthCheckRelays` at `CONTROL_PROBE_BYTES` / `CONTROL_PROBE_TIMEOUT_MS`,
   target `CONTROL_RELAY_COUNT`). Read-back matters: the sender needs relays that
-  *serve* the answer, not just accept it. This step is awaited, because the
-  offer must name the relays before its QR can be shown.
+  *serve* control messages, not just accept them. This step is awaited, because
+  the offer must name the relays before its QR can be shown.
 - **Backfill from full-size-proven reserves.** When fewer than
   `CONTROL_RELAY_COUNT` defaults pass, storage discovery runs *early* and each
   defunct default is replaced by one of its `SIGNALING_RESERVE_RELAY_COUNT` (4)
@@ -523,40 +516,16 @@ never file bytes; the separate data-path fallback is described below.
 - **Cost and floor.** The default probe runs under the ICE gathering wait, so
   it usually costs no extra time; backfill can outlast it, and since the offer
   has to name its relays, the sender reports the phase and waits. Fewer than
-  `MIN_CONTROL_RELAYS` usable relays is not an error — the offer simply goes
-  out manual-only.
-- **Channel derivation.** The offer carries a random 32-byte secret. Both sides
-  run HKDF-SHA256 over it with distinct info labels to get a 16-byte channel
-  tag (hex, the public `x`/`d` identifier) and a non-extractable AES-256-GCM
-  key. The tag reveals nothing about the key, so a relay cannot link the two.
-- **Message.** One kind-30078 addressable event — the same kind the file relay
-  probes under, so a relay that passed accepts it — tagged
-  `['d', '<tag>:answer']`, `['x', '<tag>']`, and a NIP-40 `expiration` at the
-  offer's own 1-hour deadline. Content is base64 of AES-GCM over the *same*
-  PT01 answer blob the manual path would have shown, with AAD binding it to
-  the channel tag. Signed by a throwaway key.
-- **Choice.** Publishing is never implicit: once the answer is built, the
-  receiver's hook parks in `choosing_answer_return` and the UI asks
-  "send through relays" or "show a code". Only the first publishes; the second
-  goes straight to the hand-carried code.
-- **Delivery.** The receiver publishes to every named relay with the shared
-  retry/backoff policy, stops waiting once two accept (or all settle, or
-  `ANSWER_PUBLISH_TIMEOUT_MS` elapses), and fails only when none did. The
-  sender subscribes *before* it shows the offer, with `since` backdated by
-  `CLOCK_SKEW_TOLERANCE_SEC`, so nothing published early is missed; it takes
-  the first event that opens under the channel key and tears the pool down
-  immediately after.
-- **Fallback.** Nothing about the manual path is removed. No proven relays →
-  the offer names none and both sides run the two-hop exchange. If the receiver
-  chooses relay return and publishing is refused, the attempt errors and both
-  sides must restart. On the sender, the scan/paste input is always present, collapsed behind
-  "Scan or paste the receiver's response" while the channel is live. The two
-  return paths do not fall back to each other: the receiver's choice is
-  final, so a relay refusal ends the exchange rather than silently switching.
-- **Doubling as the fallback control channel.** The proven relays an offer names for the
-  answer are exactly the control relays the data-path fallback rides if the
-  direct WebRTC connection then fails (see the next section). Proving them
-  once serves both.
+  `MIN_CONTROL_RELAYS` usable relays is not an error — the offer simply names
+  none, and a failed direct connection then has no fallback.
+- **Validation.** `normalizeOfferRelays` accepts only a list of at most
+  `CONTROL_RELAY_COUNT` distinct, normalized `wss://` URLs with at least
+  `MIN_CONTROL_RELAYS` entries; anything else makes the offer malformed rather
+  than silently relay-less, and an answer may never carry the field.
+- **Control channel of the fallback.** The relays an offer names are exactly
+  the control relays the data-path fallback rides if the direct WebRTC
+  connection then fails (see the next section). Nothing is published to them
+  during signaling.
 
 ### Nostr File Relay (`src/lib/nostr-file/`) — Manual Exchange data-path fallback
 
@@ -607,10 +576,10 @@ Handles direct peer-to-peer connections using WebRTC data channels.
 **`use-manual-send.ts`** - Sender logic (Manual Exchange):
 1. Validate the lazy transfer source and its advertised/estimated size
 2. Generate ECDH keypair and salt
-3. Create the WebRTC offer and gather ICE candidates while proving answer relays; if an answer channel is available, start preparing storage relays in the background without reading file data
-4. Obfuscate the offer payload (salt, ECDH public key, file metadata, and optional answer-channel fields): JSON → deflate → obfuscate → binary
-5. Display it as a multi-QR URL grid (chunked into ~400-byte URL QR codes) plus a base64 copy button; subscribe for a sealed relay answer when available
-6. Accept the receiver's answer from the relay subscription or scan/paste path and derive the ECDH shared secret
+3. Create the WebRTC offer and gather ICE candidates while proving the relays the offer names; if enough pass, start preparing storage relays in the background without reading file data
+4. Obfuscate the offer payload (salt, ECDH public key, file metadata, and the optional relay list): JSON → deflate → obfuscate → binary
+5. Display it as a multi-QR URL grid (chunked into ~400-byte URL QR codes) plus a base64 copy button
+6. Accept the receiver's answer from the scan/paste input and derive the ECDH shared secret
 7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds)
 8. On success, encrypt/send 128 KiB chunks over the data channel and wait for its `ACK`
 9. On connection failure, if the fallback is eligible, materialize the source (up to 100 MiB) and run `sendFileLive`; otherwise surface the P2P failure
@@ -670,7 +639,7 @@ In Nostr mode, the rendezvous payload is published as plaintext JSON — deliber
 
 | Data | Auto Exchange P2P | Manual Exchange P2P | Manual Nostr fallback |
 |------|-------------------|---------------------|-----------------------|
-| Setup / rendezvous | Plaintext rendezvous record (blinded SPAKE2 element, nonce, relay hints; no file metadata) | Obfuscated PT01 offer; answer is either hand-carried PT01 or a sealed relay event | Same Manual Exchange setup; the offer's answer relays become the encrypted control relays |
+| Setup / rendezvous | Plaintext rendezvous record (blinded SPAKE2 element, nonce, relay hints; no file metadata) | Obfuscated PT01 offer; hand-carried PT01 answer | Same Manual Exchange setup; the relays the offer named become the encrypted control relays |
 | Authentication / key agreement | Claim and confirm sealed with PAKE-derived AES-GCM keys; the confirm carries metadata and the human confirmation code gates WebRTC signaling | ECDH public keys in the offer/answer; authenticity rests on the offer's QR/clipboard delivery path | Relay session id and file key derived from the same ECDH secret; encrypted manifest authenticates metadata inside the control channel |
 | WebRTC signals | AES-GCM encrypted under the PAKE-derived `signals` key on Nostr events | Included in the obfuscated offer/answer | Not used after the failed direct attempt |
 | Transfer completion | Plain `ACK` inside the encrypted WebRTC data channel after `DONE` validation | Same P2P `DONE` / `ACK` protocol | Sealed `done` control message after whole-file SHA-256 verification |
@@ -735,10 +704,9 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 |---------|----------|---------|
 | Nostr P2P connection | 30 seconds | Time to establish WebRTC connection after relay signaling starts |
 | Manual P2P connection when the offer names relays | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`); a timeout starts the automatic fallback only if the file and prepared storage set are eligible |
-| Manual P2P connection when the offer names no relays | 120 seconds | Direct-attempt window when there is no answer/control channel (`MANUAL_CONNECTION_TIMEOUT_MS`) |
+| Manual P2P connection when the offer names no relays | 120 seconds | Direct-attempt window when there is no control channel (`MANUAL_CONNECTION_TIMEOUT_MS`) |
 | ICE gathering | 5 seconds | Bounded wait while preparing Manual offer/answer QR payloads |
-| Answer-relay probe | 4 seconds | Per-relay write→read bound when proving the answer-return relays (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means a manual-only offer |
-| Answer publish | 10 seconds | Receiver's bound on getting its sealed answer onto the relays (`ANSWER_PUBLISH_TIMEOUT_MS`); ends early once two relays accept |
+| Offer-relay probe | 4 seconds | Per-relay write→read bound when proving the relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means an offer without relays |
 | Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
 | Data-channel ACK wait | 30 seconds | Sender wait after `DONE:<chunkCount>:<byteCount>` for receiver `ACK` |
 | P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |
@@ -792,8 +760,8 @@ PIN rotation and the NIP-40 `expiration` tag are **liveness controls, not crypto
 
 **Confidentiality and authenticity are in scope. Availability is not.** This applies to the whole system, not just to the claim race — most concretely to the Nostr relays, which is where an attacker would aim first.
 
-- **The relays are not ours.** Auto signaling, optional Manual answer return, and the Manual data fallback ride public Nostr relays this project neither operates, hosts, nor pays for. There is no service capacity or availability guarantee the app controls. An operator can rate-limit events, drop them, or disappear tomorrow.
-- **Attacking relays blocks paths, not protection.** Unavailable signaling relays can hide an Auto Exchange rendezvous or prevent a Manual answer return. Unavailable storage relays can stop the fallback. They do not weaken the PIN/confirmation code, reveal keys, or turn authenticated ciphertext into plaintext; the failure is non-delivery.
+- **The relays are not ours.** Auto signaling and the Manual data fallback ride public Nostr relays this project neither operates, hosts, nor pays for. There is no service capacity or availability guarantee the app controls. An operator can rate-limit events, drop them, or disappear tomorrow.
+- **Attacking relays blocks paths, not protection.** Unavailable signaling relays can hide an Auto Exchange rendezvous. Unavailable storage relays can stop the fallback. They do not weaken the PIN/confirmation code, reveal keys, or turn authenticated ciphertext into plaintext; the failure is non-delivery.
 - **Manual signaling can avoid relays.** A QR/clipboard offer and answer can establish the same direct P2P path without Nostr, but only when the devices can form a direct ICE route. The built-in relay lists are fixed; custom relay configuration remains a roadmap item.
 - **Direct delivery is best-effort too.** WebRTC is STUN-only with no TURN server. Auto Exchange therefore fails when no direct route exists; Manual Exchange's application-level Nostr fallback improves that case but remains best-effort public infrastructure.
 

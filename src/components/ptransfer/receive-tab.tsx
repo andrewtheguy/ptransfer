@@ -18,7 +18,6 @@ import {
 } from '@/lib/file-utils';
 import type { PinKeyMaterial } from '@/lib/types';
 import { AnswerReturn } from './answer-return';
-import { AnswerReturnChoice } from './answer-return-choice';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { type PinChangePayload, PinInput, type PinInputRef } from './pin-input';
 import { QRInput } from './qr-input';
@@ -28,7 +27,7 @@ const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const PIN_MODE_DESCRIPTION =
   'Sets up signaling automatically through relays using the PIN the sender shares, then receives the file over direct WebRTC without a manual handoff.';
 const MANUAL_MODE_DESCRIPTION =
-  'The sender hands you an offer by QR or copy/paste. When it names relays, you choose whether to return your encrypted response through them or by QR/copy-paste. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
+  'The sender hands you an offer by QR or copy/paste, and you hand your response back the same way. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
 
 type ReceiveMode = 'pin' | 'scan';
 
@@ -62,7 +61,7 @@ export function ReceiveTab() {
     typeof activeHook.receive === 'function'
       ? activeHook.receive
       : undefined;
-  const { startReceive, submitOffer, chooseAnswerReturn } = manualHook;
+  const { startReceive, submitOffer } = manualHook;
 
   // Auto Exchange only: the code the receiver reads out to the sender.
   const confirmationCode = isManualMode ? null : nostrHook.confirmationCode;
@@ -80,7 +79,6 @@ export function ReceiveTab() {
     typeof rawStateAny.clipboardData === 'string'
       ? rawStateAny.clipboardData
       : undefined;
-  const answerRelayed = rawStateAny.answerRelayed === true;
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pinInactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,8 +247,6 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const showQRInput = isManualMode && state.status === 'waiting_for_offer';
-  const showAnswerChoice =
-    isManualMode && state.status === 'choosing_answer_return';
   const showQRDisplay =
     isManualMode && answerData && state.status === 'showing_answer';
 
@@ -406,17 +402,11 @@ export function ReceiveTab() {
             </div>
           )}
 
-          {/* The receiver decides how the answer goes back */}
-          {showAnswerChoice && (
-            <AnswerReturnChoice onChoose={chooseAnswerReturn} />
-          )}
-
-          {/* The receiver's answer step: relayed, or carried back by hand */}
+          {/* The receiver's answer, carried back to the sender by hand */}
           {showQRDisplay && answerData && (
             <AnswerReturn
               answerData={answerData}
               clipboardData={clipboardData}
-              answerRelayed={answerRelayed}
             />
           )}
 

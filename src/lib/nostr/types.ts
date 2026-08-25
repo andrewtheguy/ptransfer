@@ -31,7 +31,6 @@ export type TransferStatus =
   | 'waiting_for_answer'
   | 'waiting_for_offer'
   | 'generating_answer'
-  | 'choosing_answer_return'
   | 'showing_answer'
   // Nostr file relay states: the Manual Exchange data path once a direct
   // connection has failed.

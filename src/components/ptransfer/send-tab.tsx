@@ -99,9 +99,9 @@ export function SendTab() {
   const pinModeHowItWorksDescription =
     'The handshake is exchanged automatically through relays and authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Auto Exchange has no data-relay fallback if direct WebRTC fails.';
   const manualModeDescription =
-    'You hand the recipient an offer by QR or copy/paste. When the offer names relays, they choose whether to return their encrypted response through those relays or by QR/copy-paste. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
+    'You hand the recipient an offer by QR or copy/paste, and they hand their response back the same way. If direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.';
   const manualModeHowItWorksDescription =
-    'The offer is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange and secures any relayed response. A chosen relay-return path does not silently switch to QR if publication fails. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the offer named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
+    'The offer is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The response only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the offer named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
   const handleSend = () => {
     // Set context with all the configuration
