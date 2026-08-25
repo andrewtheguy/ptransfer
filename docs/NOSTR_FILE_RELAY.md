@@ -61,12 +61,15 @@ The control relays are not resolved here at all — they are the relays the offe
 proved while the offer was built by `resolveTransferRelays`
 (`src/lib/nostr-file/upload.ts`): the six `DEFAULT_RELAYS` seeds probed with a
 control-sized write→read round trip (`CONTROL_PROBE_BYTES` 256 B,
-`CONTROL_PROBE_TIMEOUT_MS` 4 s). When fewer than `CONTROL_RELAY_COUNT` (6) pass, each
-defunct default is replaced by a **full-size-proven storage reserve** — one of the
-`SIGNALING_RESERVE_RELAY_COUNT` (4) relays that passed the full-size probe and were held
-outside the ring — not by a weaker control-sized discovery. Passing defaults are proven
-for control-sized messages; only their discovered replacements are also proven at full
-chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
+`CONTROL_PROBE_TIMEOUT_MS` 4 s). When fewer than `CONTROL_RELAY_COUNT` (6) pass, storage
+discovery runs and its candidates are full-size-probed **only until the gap is filled**:
+each defunct default is replaced by a relay proven to serve real chunks, not by a weaker
+control-sized discovery, and the probe stops the moment enough have passed. Nothing else
+blocks the code — the 16-relay storage ring is never built before it. Whatever that probe
+left over (relays that passed after the gap filled, candidates never reached) is handed
+to the background ring preparation so it does not discover or probe twice. Passing
+defaults are proven for control-sized messages; only their discovered replacements are
+also proven at full chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
 names no relays at all — and then there is no relay fallback. See the offer-relays section in
 [ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibmanual-signalingts).
 
@@ -90,18 +93,17 @@ names no relays at all — and then there is no relay fallback. See the offer-re
    (`HEALTH_CHECK_PROBE_BYTES` = 48 KiB), read back and byte-compared. A relay with a
    small event-size cap therefore fails here instead of rejecting real chunks mid-upload.
    Probes carry the same NIP-40 expiration as everything else. Checking stops once
-   `HEALTH_CHECK_TARGET_COUNT` (20) relays pass — 16 for the storage ring and four
-   signaling reserves, without probing the whole candidate list (only ~1 in 6 public
-   candidates passes the full-size probe).
+   `HEALTH_CHECK_TARGET_COUNT` (16, the storage ring) relays pass, without probing the
+   whole candidate list (only ~1 in 6 public candidates passes the full-size probe).
    Per-relay round-trip time is measured (`HealthyRelay.rttMs`) and the fastest passers
    are kept. Sockets are dropped as soon as a relay has no further job — a failed probe,
    a pass after the target filled, a seed once discovery finishes, or a healthy relay the
-   batch and signaling-reserve selection skipped — because with reconnect enabled a
+   batch selection skipped — because with reconnect enabled a
    lingering dead socket would retry forever, spamming connections for the rest of the transfer. Both engines
    run on a tracked pool (`createTransferPool`) that force-closes even sockets still
    mid-handshake — nostr-tools only closes fully open ones — and refuses new sockets
    after `destroy()`, so no connection or reconnect loop outlives the transfer.
-3. **Select the batch and reserves**: up to `UPLOAD_RELAY_COUNT` (16) relays via a
+3. **Select the batch**: up to `UPLOAD_RELAY_COUNT` (16) relays via a
    rotating cursor persisted with the candidate cache, load-balancing across uploads. The transfer's
    control relays and the whole `DEFAULT_RELAYS` signaling pool are filtered out of the
    candidates first (also catching stale caches written before seeds were barred). The
@@ -358,7 +360,7 @@ sequenceDiagram
 | `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
-| `HEALTH_CHECK_TARGET_COUNT` | 20 | Stop after the 16-relay storage ring plus four signaling reserves pass |
+| `HEALTH_CHECK_TARGET_COUNT` | 16 | Stop once the storage ring has passed (the signaling backfill stops at its own gap size) |
 | `RELAY_CANDIDATE_TTL_MS` | 24 h | Lifetime of discovered candidates and relay-health priority |
 | `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MiB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |

@@ -104,7 +104,7 @@ async function runLive(data: Uint8Array) {
   try {
     // What the sender does while building its offer: resolve the relays the
     // offer names, filling any defunct default from a full-size-proven
-    // storage reserve. On a failed direct connection they carry the relay
+    // discovered relay. On a failed direct connection they carry the relay
     // transfer's control channel.
     const started = Date.now();
     const relayStorage = memoryStorage();
@@ -116,7 +116,7 @@ async function runLive(data: Uint8Array) {
       onUploadProgress: (p) => {
         if (p.phase === 'health_check') {
           process.stdout.write(
-            `\rreserve health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
+            `\rbackfill health check: ${p.relaysHealthy}/${p.relaysChecked} healthy `,
           );
         }
       },
@@ -129,17 +129,12 @@ async function runLive(data: Uint8Array) {
     // Behind a real exchange the storage ring is prepared as soon as the
     // control relays are known, while WebRTC is still trying; here the direct
     // attempt is taken as failed at once. The ring reuses the resolution's
-    // storage (and its ring, when the reserves already discovered one).
+    // storage (and whatever the backfill's discovery left over, if any).
     const storageRelays = prepareStorageRelays(senderPool, {
       controlRelays,
       storage: relayStorage,
       stats: selection.stats,
-      preselected: selection.storageRelays
-        ? {
-            storageRelays: selection.storageRelays,
-            unprobedCandidates: selection.unprobedCandidates,
-          }
-        : null,
+      discovered: selection.discovered,
       signal: sweepAbort.signal,
       isCancelled: deadlineExceeded,
       onProgress: (p) => {
