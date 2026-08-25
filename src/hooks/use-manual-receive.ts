@@ -56,12 +56,11 @@ export interface ManualReceiveState {
   answerData?: Uint8Array; // Binary data for QR code
   clipboardData?: string; // Base64 for copy button
   /**
-   * Outcome of returning the answer over the relays the offer named:
-   * 'sent' when at least one relay took it (the sender gets it without a
-   * second hand-carried hop), 'failed' when none did. Absent when the offer
-   * named no relays, which is the plain two-hop exchange.
+   * True when the answer went back over the relays the offer named, so the
+   * sender gets it without a second hand-carried hop. Absent for the
+   * hand-carried exchange.
    */
-  answerRelayStatus?: 'sent' | 'failed';
+  answerRelayed?: boolean;
 }
 
 /**
@@ -429,10 +428,10 @@ export function useManualReceive(): UseManualReceiveReturn {
       // answer goes back: sealed under the offer's secret and published to
       // those relays (the sender is already listening), or hand-carried as a
       // code for the sender to scan or paste. The choice is explicit so the
-      // receiver knows which one happened. A relay refusal is not fatal — the
-      // answer code is shown and the exchange finishes as it always did.
+      // receiver knows which one happened, and it is final: the two paths do
+      // not fall back to each other, so a relay refusal ends the exchange.
       const answerChannel = answerChannelFromOffer(offerPayload);
-      let answerRelayStatus: 'sent' | 'failed' | undefined;
+      let answerRelayed = false;
       let returnMethod: AnswerReturnMethod = 'manual';
       if (answerChannel) {
         setState({
@@ -462,9 +461,11 @@ export function useManualReceive(): UseManualReceiveReturn {
               (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
             ),
           });
-          answerRelayStatus = 'sent';
+          answerRelayed = true;
         } catch {
-          answerRelayStatus = 'failed';
+          throw new Error(
+            "Could not send your response over the relays named in the sender's code. Both sides need to start over.",
+          );
         } finally {
           answerPoolRef.current = null;
           pool.destroy();
@@ -476,12 +477,11 @@ export function useManualReceive(): UseManualReceiveReturn {
       // Show answer and wait for connection
       setState({
         status: 'showing_answer',
-        message:
-          answerRelayStatus === 'sent'
-            ? 'Response sent — waiting for the sender to connect'
-            : 'Show this to sender and wait for connection',
+        message: answerRelayed
+          ? 'Response sent — waiting for the sender to connect'
+          : 'Show this to sender and wait for connection',
         answerData: answerBinary,
-        answerRelayStatus,
+        answerRelayed,
         contentType: 'file',
         fileMetadata,
       });

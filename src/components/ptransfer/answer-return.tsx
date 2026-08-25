@@ -1,31 +1,28 @@
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { QRDisplay } from './qr-display';
 
 export interface AnswerReturnProps {
   answerData: Uint8Array;
   clipboardData?: string;
   /**
-   * Outcome of the relay path the receiver chose: 'sent' collapses the code
-   * behind a disclosure, 'failed' explains why it has to be carried back
-   * after all, and undefined is the hand-carried exchange (chosen, or the
-   * only option when the offer named no relays).
+   * True when the answer went back over the relays the receiver chose: the
+   * sender already has it and there is no code to show — once it lands the
+   * sender's page moves on and stops accepting a scanned or pasted one.
+   * False is the hand-carried exchange (chosen, or the only option when the
+   * offer named no relays). The two never fall back to each other.
    */
-  answerRelayStatus?: 'sent' | 'failed';
+  answerRelayed: boolean;
 }
 
 /**
  * The receiver's half of the answer step: either "already sent, nothing to
- * do" with the code one tap away, or the QR / copy-paste instructions.
+ * do", or the QR / copy-paste instructions.
  */
 export function AnswerReturn({
   answerData,
   clipboardData,
-  answerRelayStatus,
+  answerRelayed,
 }: AnswerReturnProps) {
-  const [showCode, setShowCode] = useState(false);
-
-  if (answerRelayStatus === 'sent' && !showCode) {
+  if (answerRelayed) {
     return (
       <div className="space-y-3 rounded-lg bg-muted/50 border p-4">
         <p className="font-medium">Response sent to the sender</p>
@@ -35,9 +32,6 @@ export function AnswerReturn({
           on its own once the sender has it. If the sender's page reports a
           failed connection, both sides need to start over.
         </p>
-        <Button variant="outline" size="sm" onClick={() => setShowCode(true)}>
-          Show response code instead
-        </Button>
       </div>
     );
   }
@@ -46,12 +40,6 @@ export function AnswerReturn({
     <div className="space-y-4">
       <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
         <p className="font-medium">Send your response back to the sender</p>
-        {answerRelayStatus === 'failed' && (
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            The relays named in the sender's code did not take your response, so
-            it has to go back by hand after all.
-          </p>
-        )}
         <p className="text-sm text-muted-foreground">
           Get your response back to the sender by the QR code below or
           copy/paste the data:
