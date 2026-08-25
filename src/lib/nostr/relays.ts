@@ -8,9 +8,11 @@ export const DEFAULT_RELAYS = [
   'wss://relay.snort.social',
 ] as const;
 
-// RFC 2606/6761 names that never resolve on the public internet — a listed
-// "relay" there is placeholder junk. `.example` (TLD) stays usable: it is
-// this codebase's own test-fixture convention and never appears in the wild.
+// Names RFC 2606/6761 reserve, so a listed "relay" there is placeholder junk.
+// RESERVED_DOMAINS do resolve — IANA runs them for documentation — but they
+// will never host a relay. RESERVED_TLDS are the ones guaranteed not to
+// resolve. `.example` (TLD) stays usable: it is this codebase's own
+// test-fixture convention and never appears in the wild.
 const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
 const RESERVED_TLDS = ['.test', '.invalid'];
 
