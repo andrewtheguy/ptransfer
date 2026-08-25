@@ -105,7 +105,7 @@ All signaling methods share the same **data-channel transfer protocol**: P2P tra
 - **Nostr** (default): Requires internet. Decentralized relay signaling. Devices can be on different networks.
 - **Manual Exchange**: No internet required. Hand over the sender's signaling payload via QR scan or copy/paste (camera optional); the receiver's response returns over Nostr relays when reachable — sealed with a key derived from the sender's payload — and by QR/copy-paste otherwise. With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
 
-**Data Transfer**: WebRTC P2P only. STUN may help the peers discover a direct route, but TURN relaying is not supported. If a direct P2P connection cannot be established, the transfer does not complete — there is no automatic in-app fallback. When this happens, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. The one exception is the experimental opt-in **Relay file through Nostr** option in Manual Exchange (`nostr-file-live` payload): it makes no WebRTC connection at all and instead carries the encrypted pieces through public Nostr relays — see [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md).
+**Data Transfer**: WebRTC P2P first. STUN may help the peers discover a direct route; TURN relaying is not configured. In **Manual Exchange**, when a direct P2P connection cannot be established and the offer named relays, the encrypted file (up to 100 MB) is relayed through public Nostr relays automatically — the Nostr relay stand-in for TURN. Nothing is uploaded ahead of time: the relay path runs only once the direct connection has failed, so a transfer that would have connected directly never touches a storage relay. What matters is only that the offer named proven relays — returning the answer by QR/copy-paste instead of over the relays does not disable the fallback. It still fails (with the offline-QR suggestion below) only when there is no relay path at all — the offer named no relays, or the file is over the 100 MB cap. In **Auto Exchange** a failed direct connection has no relay fallback and the transfer does not complete. When a transfer cannot complete, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. See [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) for the relay transport.
 
 See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encryption specifics.
 
@@ -119,7 +119,7 @@ Receivers choose the matching receive mode:
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
 - [Manual Exchange](./docs/MANUAL_EXCHANGE.md) - User guide for the Manual Exchange mode
-- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the experimental relay-file-through-Nostr transfer
+- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Manual Exchange
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
 
 ## License

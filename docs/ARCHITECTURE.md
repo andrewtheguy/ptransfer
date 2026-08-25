@@ -469,22 +469,35 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 Returns the receiver's answer over Nostr relays so Manual Exchange needs only
 one hand-carried code. It moves signaling, never file bytes.
 
-- **Relay selection.** This is the file relay's signaling resolution with the
-  storage half removed. While WebRTC creates the offer and gathers candidates,
-  the sender probes `DEFAULT_RELAYS` with the control-sized write→read round
-  trip (`healthCheckRelays` at `CONTROL_PROBE_BYTES` /
-  `CONTROL_PROBE_TIMEOUT_MS`, target `CONTROL_RELAY_COUNT`). Read-back matters:
-  the sender needs relays that *serve* the answer, not just accept it.
-- **Backfill.** When fewer than `CONTROL_RELAY_COUNT` defaults pass, the gap is
-  filled from the discovered relay population exactly as a Nostr file transfer
-  fills its signaling set — `getRelayCandidates` (NIP-66/NIP-65 discovery
-  merged into the cached candidate and health stores in IndexedDB), ranked for
-  `control` capability and probed at that size, with the verdicts written back
-  through `saveRelayHealth`. A manual exchange therefore both reads from and
-  feeds the same relay knowledge the file relay uses. What it does *not* do is
-  the storage half: no full-size probe, no storage ring, no background sweep —
-  an answer is a small message, and the sender is about to move the file over
-  WebRTC.
+- **Relay selection (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`).**
+  Reused whole from the storage transfer, so the exchange inherits its exact
+  robustness. While WebRTC creates the offer and gathers candidates, the sender
+  probes `DEFAULT_RELAYS` with the control-sized write→read round trip
+  (`healthCheckRelays` at `CONTROL_PROBE_BYTES` / `CONTROL_PROBE_TIMEOUT_MS`,
+  target `CONTROL_RELAY_COUNT`). Read-back matters: the sender needs relays that
+  *serve* the answer, not just accept it. This step is awaited, because the
+  offer must name the relays before its QR can be shown.
+- **Backfill from full-size-proven reserves.** When fewer than
+  `CONTROL_RELAY_COUNT` defaults pass, storage discovery runs *early* and each
+  defunct default is replaced by one of its `SIGNALING_RESERVE_RELAY_COUNT` (4)
+  reserve relays — relays that passed the **full-size** (`HEALTH_CHECK_PROBE_BYTES`)
+  probe and were deliberately held outside the 16-relay ring. A defunct default
+  is thus made up by a relay proven to serve real chunks, never by a weaker
+  control-sized discovery. The control set and the ring stay disjoint. This is
+  the one case where storage discovery precedes the QR; it is uncommon (the
+  defaults usually pass) and is the price of a robust control channel.
+- **Storage preparation (`prepareStorageRelays`, `src/lib/nostr-file/upload.ts`).**
+  The storage ring itself is prepared in the **background**, since the QR does
+  not depend on it. When the defaults all passed, this discovers, full-size-probes,
+  and selects the ring here; when the signaling backfill already selected a ring
+  to borrow reserves from, that ring is adopted as-is (`preselected`) rather than
+  discovered twice. Either way an uncapped sweep then probes the rest of the relay
+  population for as long as the exchange lasts. No file byte is involved — this
+  warms the IndexedDB relay cache for every future transfer, and hands a failed
+  direct attempt its ring ready-made rather than starting discovery only after
+  WebRTC has given up. Its abort
+  signal is tied to the pool's teardown, and probes still in flight at that
+  moment are voided rather than recorded as relay failures.
 - **Cache capability.** `CachedRelay` tracks `supportsControl` and
   `supportsStorage` separately, and `saveRelayHealth` takes the capability the
   probe actually proved. A full-size success sets both; a control-sized success
@@ -509,8 +522,7 @@ one hand-carried code. It moves signaling, never file bytes.
 - **Choice.** Publishing is never implicit: once the answer is built, the
   receiver's hook parks in `choosing_answer_return` and the UI asks
   "send through relays" or "show a code". Only the first publishes; the second
-  goes straight to the hand-carried code. (The Nostr file relay option has no
-  answer step and is untouched.)
+  goes straight to the hand-carried code.
 - **Delivery.** The receiver publishes to every named relay with the shared
   retry/backoff policy, stops waiting once two accept (or all settle, or
   `ANSWER_PUBLISH_TIMEOUT_MS` elapses), and fails only when none did. The
@@ -520,16 +532,23 @@ one hand-carried code. It moves signaling, never file bytes.
   immediately after.
 - **Fallback.** Nothing about the manual path is removed. No proven relays →
   the offer names none and both sides run the two-hop exchange. Publishing
-  refused → the receiver shows its answer code with an explanation. Published
-  → the code stays one tap away under "Show response code instead". On the
+  refused → the receiver shows its answer code with an explanation. On the
   sender, the scan/paste input is always present, collapsed behind
-  "Scan or paste the receiver's response" while the channel is live.
+  "Scan or paste the receiver's response" while the channel is live. The two
+  return paths do not fall back to each other: the receiver's choice is
+  final, so a relay refusal ends the exchange rather than silently switching.
+- **Doubling as the data channel.** The proven relays an offer names for the
+  answer are exactly the control relays the data-path fallback rides if the
+  direct WebRTC connection then fails (see the next section). Proving them
+  once serves both.
 
-### Nostr File Relay (`src/lib/nostr-file/`) — Experimental
+### Nostr File Relay (`src/lib/nostr-file/`) — Manual Exchange data-path fallback
 
-An opt-in Manual Exchange variant (Advanced options → "Relay file through Nostr", max 100 MB) that replaces the direct WebRTC connection with encrypted pieces carried through public Nostr relays — the peers never connect to each other. The payload (`nostr-file-live`) is handed out *before* the upload, each piece is stored once, and an encrypted control channel on a few dedicated signaling relays (carried in the payload) lets the receiver report the pieces it could not fetch so only those are re-sent. The storage-relay ring itself is announced over that channel, not in the payload, and never includes the signaling relays. Both sides stay online.
+The Manual Exchange stand-in for TURN: when a direct WebRTC connection between the two devices cannot be established, the encrypted file (up to 100 MB) is carried through public Nostr relays instead of failing. It is automatic — there is no toggle and no separate code. Nothing is uploaded ahead of time: the engine runs only once the direct connection has failed, so a transfer that would have connected directly never touches a storage relay. What matters is only that the offer named proven relays (the answer channel exists); how the receiver returned the answer — over the relays or by QR/copy-paste — does not affect it. It still fails (surfacing a `P2PConnectionError`) only when there is no relay path at all — the offer named no relays, or the file is over the 100 MB cap.
 
-The pipeline is `whole-file deflate → chunk → AES-256-GCM → Z85` (deflate is skipped — never re-applied — for payloads the multi-file/folder flow already compressed, i.e. ZIPs with deflated entries; single-file payloads always deflate), 48 KiB chunks as kind-30078 events with a 1-hour NIP-40 expiration, over NIP-66/65 relay discovery with full-chunk-size write→read health probes for the storage ring (control relays get a quick small-event probe instead, so the code is ready before discovery finishes); the manifest travels only inside the PT01 payload — which, unlike the signaling payloads, **contains the decryption key**, so it must only travel over a trusted channel. Relays see only ciphertext, sizes, timing, and an ephemeral pubkey.
+The session is derived, not carried. Once the offer/answer exchange has produced the ECDH shared secret, both sides run `deriveRelaySession` (HKDF over that secret with a fallback-specific label) to arrive at the same transfer id (the `d`/`x` tag namespace on relays) and the same raw 32-byte file key — so no key or id ever appears in a code. The control channel rides the proven signaling relays the offer already named for the answer channel. The sender sends the file **manifest as the first control-channel message** (it no longer travels in any code), adopts the storage ring prepared behind the exchange as soon as it resolves, and uploads a single copy per piece; the receiver joins the same channel, reads the manifest from the backlog, and pulls the pieces, reporting any it could not fetch so only those are re-sent. The storage-relay ring is announced over the control channel, never includes the signaling relays, and both sides stay online.
+
+The pipeline is `whole-file deflate → chunk → AES-256-GCM → Z85` (deflate is skipped — never re-applied — for payloads the multi-file/folder flow already compressed, i.e. ZIPs with deflated entries; single-file payloads always deflate), 48 KiB chunks as kind-30078 events with a 1-hour NIP-40 expiration, over NIP-66/65 relay discovery with full-chunk-size write→read health probes for the storage ring (the control relays are already proven by the answer-channel probe). The file key comes from the ECDH secret the two devices already share, so relays see only ciphertext, sizes, timing, and an ephemeral pubkey.
 
 The full architecture — relay discovery and placement ring, chunk event schema, manifest format, the live control-channel protocol (message vocabulary, re-sends, relay demotion), sequence diagrams, security model, and all tunables — is documented in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
 

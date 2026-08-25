@@ -16,7 +16,11 @@ import {
   type SignalingPayload,
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
+import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
+import { receiveFileLive } from '@/lib/nostr-file/download-live';
+import { deriveRelaySession } from '@/lib/nostr-file/session';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
+import { NostrFileCancelledError } from '@/lib/nostr-file/upload';
 import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
@@ -33,6 +37,8 @@ export type ManualReceiveStatus =
   | 'showing_answer'
   | 'connecting'
   | 'receiving'
+  // Relay fallback after a failed direct connection.
+  | 'fetching'
   | 'complete'
   | 'error';
 
@@ -84,6 +90,11 @@ export interface UseManualReceiveReturn {
 
 const ICE_GATHER_TIMEOUT_MS = 5000;
 const MANUAL_CONNECTION_TIMEOUT_MS = 120000;
+// Matches the sender: once a relay fallback is available, cap the direct
+// attempt so neither side rides out the full backstop before relaying.
+const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
+const RELAY_FALLBACK_MESSAGE =
+  'No direct connection — receiving the file through Nostr instead';
 
 export function useManualReceive(): UseManualReceiveReturn {
   const [state, setState] = useState<TransferState & ManualReceiveState>({
@@ -99,8 +110,9 @@ export function useManualReceive(): UseManualReceiveReturn {
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
   const sinkRef = useRef<AppendSink | null>(null);
-  // Pool carrying the answer to the relays, held only for the publish. Cancel
-  // reaches it through this ref so an abandoned receive stops publishing
+  // Pool carrying the answer to the relays (held for the publish) or, after
+  // a failed direct connection, the relay transfer. Cancel reaches it
+  // through this ref so an abandoned receive stops talking to relays
   // instead of finishing the round on a dead session.
   const answerPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
     null,
@@ -321,6 +333,7 @@ export function useManualReceive(): UseManualReceiveReturn {
           setState((s) => ({ ...s, progress: { current, total } })),
       });
       let dataChannelResolver: (() => void) | null = null;
+      let connectionFailedRejecter: ((error: Error) => void) | null = null;
       let answerSDPResolver: (() => void) | null = null;
 
       const rtc = new WebRTCConnection(
@@ -346,6 +359,18 @@ export function useManualReceive(): UseManualReceiveReturn {
         },
         (data) => {
           receiver.onMessage(data);
+        },
+        (connectionState) => {
+          // A dead route is known long before the connection timeout; the
+          // relay fallback (below) starts from it right away.
+          if (
+            connectionState === 'failed' ||
+            connectionState === 'disconnected'
+          ) {
+            connectionFailedRejecter?.(
+              new P2PConnectionError('Connection failed'),
+            );
+          }
         },
       );
 
@@ -486,24 +511,128 @@ export function useManualReceive(): UseManualReceiveReturn {
         fileMetadata,
       });
 
-      // Wait for data channel to open
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new P2PConnectionError('Connection timeout'));
-        }, MANUAL_CONNECTION_TIMEOUT_MS);
+      // Wait for the data channel to open. When no direct route exists and
+      // the offer named relays, the file comes through them instead;
+      // without relays, or past the relay size cap, the failure stands.
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(
+            () => {
+              reject(new P2PConnectionError('Connection timeout'));
+            },
+            answerChannel
+              ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
+              : MANUAL_CONNECTION_TIMEOUT_MS,
+          );
 
-        dataChannelResolver = () => {
-          clearTimeout(timeout);
-          resolve();
-        };
+          dataChannelResolver = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+          connectionFailedRejecter = (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          };
 
-        // Check if already open
-        const dc = rtc.getDataChannel();
-        if (dc && dc.readyState === 'open') {
-          clearTimeout(timeout);
-          resolve();
+          // Check if already open
+          const dc = rtc.getDataChannel();
+          if (dc && dc.readyState === 'open') {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+      } catch (error) {
+        connectionFailedRejecter = null;
+        if (
+          !(error instanceof P2PConnectionError) ||
+          !answerChannel ||
+          abandoned()
+        ) {
+          throw error;
         }
-      });
+        if (fileSize > NOSTR_FILE_MAX_BYTES) {
+          throw new P2PConnectionError(
+            `${error.message}. The file is over ${formatFileSize(NOSTR_FILE_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+          );
+        }
+        // The WebRTC side is done for; the relay transfer assembles the
+        // file itself, so the streaming receiver and its sink go too.
+        receiver.dispose();
+        rtc.close();
+        rtcRef.current = null;
+        discardSink();
+
+        const pool = createTransferPool();
+        answerPoolRef.current = pool;
+        let lastStats: TransferState['stats'];
+        const relayState = {
+          contentType: 'file' as const,
+          fileMetadata,
+          currentRelays: answerChannel.relays,
+        };
+        setState({
+          status: 'fetching',
+          message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
+          progress: { current: 0, total: fileSize },
+          ...relayState,
+        });
+        let data: Uint8Array;
+        try {
+          const session = await deriveRelaySession(sharedSecretKey, salt);
+          data = await receiveFileLive(session, answerChannel.relays, {
+            pool,
+            isCancelled: abandoned,
+            since: Math.floor(offerPayload.createdAt / 1000),
+            expiresAt: Math.floor(
+              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
+            ),
+            onProgress: (p) => {
+              if (abandoned()) return;
+              lastStats = p.stats;
+              const total = p.manifest?.fileSize ?? fileSize;
+              const chunkBytes = Math.ceil(total / Math.max(p.chunksTotal, 1));
+              setState({
+                status: 'fetching',
+                message: !p.manifest
+                  ? `${RELAY_FALLBACK_MESSAGE}. Waiting for the sender...`
+                  : p.chunksDone === p.chunksTotal
+                    ? 'All pieces received — verifying...'
+                    : `Receiving pieces through relays... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
+                progress: {
+                  current: Math.min(p.chunksDone * chunkBytes, total),
+                  total,
+                },
+                ...relayState,
+                stats: p.stats,
+              });
+            },
+          });
+        } catch (relayError) {
+          if (relayError instanceof NostrFileCancelledError) return;
+          throw relayError;
+        } finally {
+          if (answerPoolRef.current === pool) answerPoolRef.current = null;
+          pool.destroy();
+        }
+        if (abandoned()) return;
+        setReceivedContent({
+          contentType: 'file',
+          data: new Blob([data as BlobPart], {
+            type: mimeType || 'application/octet-stream',
+          }),
+          fileName,
+          fileSize: data.length,
+          mimeType,
+        });
+        setState({
+          status: 'complete',
+          message: 'File received through Nostr relays!',
+          contentType: 'file',
+          fileMetadata: { fileName, fileSize: data.length, mimeType },
+          stats: lastStats,
+        });
+        return;
+      }
 
       if (abandoned()) return;
 

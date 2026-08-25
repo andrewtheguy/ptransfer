@@ -25,10 +25,6 @@ import {
   type UseManualSendReturn,
   useManualSend,
 } from '@/hooks/use-manual-send';
-import {
-  type UseNostrRelayLiveSendReturn,
-  useNostrRelayLiveSend,
-} from '@/hooks/use-nostr-relay-live-send';
 import { type UseNostrSendReturn, useNostrSend } from '@/hooks/use-nostr-send';
 import {
   archiveTimestamp,
@@ -52,8 +48,7 @@ type TransferStep =
 // Discriminated union for type-safe hook access
 type ActiveHook =
   | { type: 'online'; hook: UseNostrSendReturn }
-  | { type: 'offline'; hook: UseManualSendReturn }
-  | { type: 'nostr-file-live'; hook: UseNostrRelayLiveSendReturn };
+  | { type: 'offline'; hook: UseManualSendReturn };
 
 export function SendTransferPage() {
   const navigate = useNavigate();
@@ -71,22 +66,17 @@ export function SendTransferPage() {
   // Hooks for transfer
   const nostrHook = useNostrSend();
   const manualHook = useManualSend();
-  const nostrRelayLiveHook = useNostrRelayLiveSend();
 
   const startedRef = useRef(false);
 
   // Determine which hook to use based on config with discriminated union
   const isOnline = config?.methodChoice === 'online';
-  const nostrFileRelay =
-    config?.methodChoice === 'offline' && config.nostrFileRelay;
   const activeHook: ActiveHook = useMemo(
     () =>
       isOnline
         ? { type: 'online', hook: nostrHook }
-        : nostrFileRelay
-          ? { type: 'nostr-file-live', hook: nostrRelayLiveHook }
-          : { type: 'offline', hook: manualHook },
-    [isOnline, nostrFileRelay, nostrHook, manualHook, nostrRelayLiveHook],
+        : { type: 'offline', hook: manualHook },
+    [isOnline, nostrHook, manualHook],
   );
 
   // Extract common state from active hook
@@ -229,7 +219,7 @@ export function SendTransferPage() {
     // Update config to manual mode (dropping the relay-dependent Nostr file
     // relay option) and restart the transfer flow
     startedRef.current = false;
-    setConfig({ ...config, methodChoice: 'offline', nostrFileRelay: false });
+    setConfig({ ...config, methodChoice: 'offline' });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);
@@ -346,7 +336,7 @@ export function SendTransferPage() {
                     </ul>
                     <p className="text-sm text-muted-foreground">
                       {answerRelayStatus === 'waiting'
-                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way.'
+                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way. If a direct connection cannot be made, the encrypted file is relayed through those same Nostr relays automatically.'
                         : 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect.'}
                     </p>
                   </div>
@@ -390,41 +380,6 @@ export function SendTransferPage() {
           {/* Manual Exchange mode: other states (connecting, transferring, etc.) */}
           {activeHook.type === 'offline' &&
             state.status !== 'showing_offer' && (
-              <TransferStatus state={state} />
-            )}
-
-          {/* Live Nostr file relay: the code is up while the transfer runs */}
-          {activeHook.type === 'nostr-file-live' &&
-            state.status === 'showing_payload' &&
-            state.payloadData && (
-              <div className="space-y-4">
-                <div className="rounded-lg bg-muted/50 border p-4 space-y-2">
-                  <p className="font-medium">
-                    Hand over the code now — keep this page open
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Give the receiver the code below — by QR codes or{' '}
-                    <strong>Copy Data</strong> — over a trusted channel; it
-                    contains the decryption key. Your encrypted pieces upload in
-                    the background and the receiver downloads them as they land;
-                    anything they could not fetch is sent again automatically.
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    This page completes on its own once the receiver has
-                    verified the whole file. Both of you must stay online until
-                    then.
-                  </p>
-                </div>
-
-                <MultiQRDisplay data={state.payloadData} />
-
-                <TransferStatus state={state} />
-              </div>
-            )}
-
-          {/* Live Nostr file relay: before the code exists */}
-          {activeHook.type === 'nostr-file-live' &&
-            state.status !== 'showing_payload' && (
               <TransferStatus state={state} />
             )}
 

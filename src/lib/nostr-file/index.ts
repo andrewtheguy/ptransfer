@@ -7,6 +7,7 @@ export * from './fetch';
 export * from './manifest';
 export type * from './pool';
 export * from './relay-pool';
+export * from './session';
 export * from './stats';
 export * from './transfer-pool';
 export * from './upload';

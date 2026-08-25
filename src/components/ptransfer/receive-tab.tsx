@@ -11,13 +11,11 @@ import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useManualReceive } from '@/hooks/use-manual-receive';
 import { useNostrReceive } from '@/hooks/use-nostr-receive';
-import { useNostrRelayReceive } from '@/hooks/use-nostr-relay-receive';
 import {
   downloadFile,
   formatFileSize,
   getMimeTypeDescription,
 } from '@/lib/file-utils';
-import { parseAnyManualPayload } from '@/lib/manual-signaling';
 import type { PinKeyMaterial } from '@/lib/types';
 import { AnswerReturn } from './answer-return';
 import { AnswerReturnChoice } from './answer-return-choice';
@@ -30,7 +28,7 @@ const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const PIN_MODE_DESCRIPTION =
   'Most reliable option. Sets up the connection automatically through relays using the PIN the sender shares; the same end-to-end encrypted transfer, without the manual handoff.';
 const MANUAL_MODE_DESCRIPTION =
-  'The sender hands you a short signaling payload — by QR code or copy/paste — and your response goes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for their code; STUN may be used when internet is available. File data stays encrypted.';
+  'The sender hands you a short signaling payload — by QR code or copy/paste — and your response goes back through Nostr relays as ciphertext (or by QR/copy-paste when relays are unreachable). No account, no coordination server for their code; STUN may be used when internet is available. If a direct connection cannot be made, the encrypted file (up to 100 MB) is relayed through Nostr automatically. File data stays encrypted.';
 
 type ReceiveMode = 'pin' | 'scan';
 
@@ -48,23 +46,11 @@ export function ReceiveTab() {
   // All hooks must be called unconditionally (React rules)
   const nostrHook = useNostrReceive();
   const manualHook = useManualReceive();
-  const nostrFileHook = useNostrRelayReceive();
 
   // Determine which hook to use based on mode
   const isManualMode = receiveMode === 'scan';
 
-  // Manual Exchange serves two payload kinds: WebRTC signaling and the
-  // experimental Nostr file relay. The pasted/scanned payload decides which
-  // flow runs (see handleOfferSubmit); this tracks the switch.
-  const [manualFlow, setManualFlow] = useState<'signaling' | 'nostr-file'>(
-    'signaling',
-  );
-
-  const activeHook = isManualMode
-    ? manualFlow === 'nostr-file'
-      ? nostrFileHook
-      : manualHook
-    : nostrHook;
+  const activeHook = isManualMode ? manualHook : nostrHook;
 
   const { state: rawState, receivedContent, cancel, reset } = activeHook;
 
@@ -77,23 +63,6 @@ export function ReceiveTab() {
       ? activeHook.receive
       : undefined;
   const { startReceive, submitOffer, chooseAnswerReturn } = manualHook;
-
-  // Route a pasted/scanned Manual Exchange payload to the right flow: a
-  // Nostr file relay payload starts the relay download directly (no answer
-  // step); anything else follows the normal signaling path.
-  const handleOfferSubmit = useCallback(
-    (binary: Uint8Array) => {
-      const parsed = parseAnyManualPayload(binary);
-      if (parsed?.kind === 'nostr-file-live') {
-        manualHook.cancel();
-        setManualFlow('nostr-file');
-        void nostrFileHook.start(parsed.payload);
-        return;
-      }
-      submitOffer(binary);
-    },
-    [manualHook, nostrFileHook, submitOffer],
-  );
 
   // Auto Exchange only: the code the receiver reads out to the sender.
   const confirmationCode = isManualMode ? null : nostrHook.confirmationCode;
@@ -238,7 +207,6 @@ export function ReceiveTab() {
 
   const handleReset = () => {
     reset();
-    setManualFlow('signaling');
     clearPinInactivityTimeout();
     // Clear PIN from ref and input
     pinSecretRef.current = null;
@@ -433,7 +401,7 @@ export function ReceiveTab() {
               <QRInput
                 expectedType="offer"
                 label="Scan or paste the sender's code"
-                onSubmit={handleOfferSubmit}
+                onSubmit={submitOffer}
               />
             </div>
           )}
@@ -478,14 +446,7 @@ export function ReceiveTab() {
 
           <div className="flex gap-2">
             {isActive && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  cancel();
-                  setManualFlow('signaling');
-                }}
-                className="flex-1"
-              >
+              <Button variant="outline" onClick={cancel} className="flex-1">
                 <X className="mr-2 h-4 w-4" />
                 Cancel
               </Button>

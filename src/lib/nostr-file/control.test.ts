@@ -134,6 +134,39 @@ describe('control message validation', () => {
     ...overrides,
   });
 
+  it('accepts a manifest message and refuses avails until one arrived', () => {
+    const createdAt = 1_700_000_000;
+    const manifest = {
+      v: 7,
+      fileName: 'a.bin',
+      fileSize: 10,
+      mimeType: 'application/octet-stream',
+      fileHash: `${'B'.repeat(43)}=`,
+      pubkey: 'c'.repeat(64),
+      compression: 'none',
+      payloadSize: 10,
+      chunkSize: 32768,
+      totalChunks: 1,
+      enc: 2,
+      createdAt,
+      expiresAt: createdAt + 3600,
+    };
+    expect(parseSenderMessage({ t: 'manifest', n: 1, manifest }, null)).toEqual(
+      { t: 'manifest', n: 1, manifest },
+    );
+    expect(
+      parseSenderMessage(
+        { t: 'manifest', n: 1, manifest: { ...manifest, totalChunks: 2 } },
+        null,
+      ),
+    ).toBeNull();
+    expect(parseSenderMessage(avail({}), null)).toBeNull();
+    expect(parseSenderMessage({ t: 'cancel', n: 1 }, null)).toEqual({
+      t: 'cancel',
+      n: 1,
+    });
+  });
+
   it('accepts well-formed messages and rejects out-of-range fields', () => {
     expect(parseSenderMessage(avail({ gens: [[2, 1]] }), 4)).toEqual(
       avail({ gens: [[2, 1]] }),

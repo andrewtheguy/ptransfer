@@ -1,5 +1,4 @@
 import { wipeBufferSource } from '../crypto/memory';
-import { base64ToUint8Array } from '../nostr/events';
 import { chunkAad, decodeChunkContent } from './codec';
 import { CLOCK_SKEW_TOLERANCE_SEC, RELAY_QUERY_MAX_WAIT_MS } from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
@@ -9,28 +8,20 @@ import { type NostrFileTransferStats, relayStatsFor } from './stats';
 
 /** Receiver-side pieces of the relay flow. */
 
-/** Decode the payload's base64 key field into raw bytes. */
-export function decodePayloadKey(key: string): Uint8Array {
-  return base64ToUint8Array(key);
-}
-
 /**
  * Reject a manifest whose window is over (or not yet begun, by a device
- * clock that is far off). Wipes `keyBytes` before throwing.
+ * clock that is far off).
  */
 export function assertManifestWindow(
   manifest: NostrFileManifest,
-  keyBytes: Uint8Array,
   nowSec: number = Math.floor(Date.now() / 1000),
 ): void {
   if (nowSec > manifest.expiresAt + CLOCK_SKEW_TOLERANCE_SEC) {
-    wipeBufferSource(keyBytes);
     throw new Error(
       'This transfer has expired — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
     );
   }
   if (manifest.createdAt > nowSec + CLOCK_SKEW_TOLERANCE_SEC) {
-    wipeBufferSource(keyBytes);
     throw new Error(
       'This transfer appears to be from the future — check that your device clock is set correctly.',
     );
@@ -61,6 +52,7 @@ export async function importDecryptKey(
  */
 export async function fetchChunksFromRelay(
   pool: NostrFilePool,
+  transferId: string,
   manifest: NostrFileManifest,
   aesKey: CryptoKey,
   relay: string,
@@ -75,11 +67,7 @@ export async function fetchChunksFromRelay(
 ): Promise<void> {
   const { stats } = opts;
   const relayStats = relayStatsFor(stats, relay, 'storage');
-  const filters = buildChunkFilters(
-    manifest.pubkey,
-    manifest.transferId,
-    indices,
-  );
+  const filters = buildChunkFilters(manifest.pubkey, transferId, indices);
   for (const filter of filters) {
     opts.throwIfCancelled();
     stats.queries++;
@@ -99,11 +87,7 @@ export async function fetchChunksFromRelay(
       stats.bytesReceived += event.content.length;
       relayStats.eventsReceived++;
       relayStats.bytesDown += event.content.length;
-      const parsed = parseChunkEvent(
-        event,
-        manifest.pubkey,
-        manifest.transferId,
-      );
+      const parsed = parseChunkEvent(event, manifest.pubkey, transferId);
       if (!parsed) {
         stats.corruptEvents++;
         relayStats.corruptEvents++;
@@ -124,7 +108,7 @@ export async function fetchChunksFromRelay(
         plaintext = await decodeChunkContent(
           aesKey,
           content,
-          chunkAad(manifest.transferId, index, manifest.totalChunks),
+          chunkAad(transferId, index, manifest.totalChunks),
           manifest.chunkSize,
         );
       } catch {

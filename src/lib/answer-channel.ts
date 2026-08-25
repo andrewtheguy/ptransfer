@@ -1,10 +1,8 @@
 import { type Event, finalizeEvent } from 'nostr-tools';
 import { decrypt, encrypt } from './crypto/aes-gcm';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from './nostr/events';
-import { DEFAULT_RELAYS, normalizeRelayUrl } from './nostr/relays';
+import { normalizeRelayUrl } from './nostr/relays';
 import {
-  CONTROL_PROBE_BYTES,
-  CONTROL_PROBE_TIMEOUT_MS,
   CONTROL_RELAY_COUNT,
   EVENT_KIND_FILE_CHUNK,
   MIN_CONTROL_RELAYS,
@@ -12,15 +10,6 @@ import {
   PUBLISH_MAX_RETRIES,
 } from './nostr-file/constants';
 import type { NostrFilePool, PoolSubscription } from './nostr-file/pool';
-import {
-  createIndexedDbRelayPool,
-  getRelayCandidates,
-  type HealthyRelay,
-  healthCheckRelays,
-  type RelayPoolStorage,
-  saveRelayHealth,
-  sweepRelayHealth,
-} from './nostr-file/relay-pool';
 
 /**
  * Nostr answer-return channel for Manual Exchange.
@@ -139,146 +128,6 @@ function answerAad(tag: string): Uint8Array {
 
 function answerDTag(tag: string): string {
   return `${tag}:answer`;
-}
-
-/** What the sender is doing while it resolves the offer's relays. */
-export type AnswerRelayPhase =
-  | 'probing_defaults'
-  | 'discovering'
-  | 'probing_discovered';
-
-export interface AnswerRelayOptions {
-  /** Candidate and health cache; defaults to the shared IndexedDB one. */
-  storage?: RelayPoolStorage;
-  isCancelled?: () => boolean;
-  onProgress?: (phase: AnswerRelayPhase) => void;
-}
-
-/**
- * Fill the signaling set from the discovered relay population when the
- * defaults come up short: the same candidate list the file relay builds
- * (NIP-66/NIP-65 discovery merged into the cached candidate and health
- * stores), ranked for control-sized writes and probed at that size, since an
- * answer is a small message and no chunk ever rides these relays.
- *
- * Probe verdicts are written back to the cache, so a manual exchange both
- * reads from and feeds the same relay knowledge a Nostr file transfer uses.
- */
-async function backfillAnswerRelays(
-  pool: NostrFilePool,
-  healthyDefaults: HealthyRelay[],
-  opts: AnswerRelayOptions,
-): Promise<HealthyRelay[]> {
-  const storage = opts.storage ?? createIndexedDbRelayPool();
-  const seeds = new Set(
-    DEFAULT_RELAYS.map(normalizeRelayUrl).filter(
-      (url): url is string => url !== null,
-    ),
-  );
-  opts.onProgress?.('discovering');
-  const candidates = (
-    await getRelayCandidates(pool, storage, { capability: 'control' })
-  ).filter((url) => {
-    const normalized = normalizeRelayUrl(url);
-    return normalized !== null && !seeds.has(normalized);
-  });
-  // Discovery reopened every seed. The ones that did not pass the probe have
-  // no further job here, so their sockets (and reconnect loops) stop again.
-  const keep = new Set(healthyDefaults.map((relay) => relay.url));
-  const doneSeeds = [...seeds].filter((url) => !keep.has(url));
-  if (doneSeeds.length > 0) pool.close?.(doneSeeds);
-  if (candidates.length === 0 || opts.isCancelled?.()) return [];
-
-  opts.onProgress?.('probing_discovered');
-  const successes: HealthyRelay[] = [];
-  const failures: string[] = [];
-  const healthy = await healthCheckRelays(pool, candidates, {
-    probeBytes: CONTROL_PROBE_BYTES,
-    timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
-    targetCount: ANSWER_RELAY_COUNT - healthyDefaults.length,
-    isCancelled: opts.isCancelled,
-    onProgress: (_checked, _healthyCount, url, rttMs) => {
-      if (rttMs === null) failures.push(url);
-      else successes.push({ url, rttMs });
-    },
-  });
-  await saveRelayHealth(storage, successes, failures, {
-    capability: 'control',
-  }).catch(() => {});
-  return healthy;
-}
-
-/**
- * Resolve the relays the offer will name, using the file relay's signaling
- * logic without its storage half: probe the six defaults with a
- * control-sized write->read round trip, and when fewer than
- * ANSWER_RELAY_COUNT pass, backfill from the discovered relay population.
- * The result is fastest-first, defaults ahead of backfill.
- *
- * Returns an empty list when fewer than MIN_ANSWER_RELAYS are usable — the
- * caller then hands out a manual-only offer. Never throws: a failed
- * resolution is a fallback, not an error.
- */
-export async function probeAnswerRelays(
-  pool: NostrFilePool,
-  opts: AnswerRelayOptions = {},
-): Promise<string[]> {
-  const abandon = (relays: HealthyRelay[]): string[] => {
-    if (relays.length > 0) pool.close?.(relays.map((relay) => relay.url));
-    return [];
-  };
-  try {
-    opts.onProgress?.('probing_defaults');
-    const defaults = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
-      probeBytes: CONTROL_PROBE_BYTES,
-      timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
-      targetCount: ANSWER_RELAY_COUNT,
-      isCancelled: opts.isCancelled,
-    });
-    if (opts.isCancelled?.()) return abandon(defaults);
-
-    const selected =
-      defaults.length < ANSWER_RELAY_COUNT
-        ? [...defaults, ...(await backfillAnswerRelays(pool, defaults, opts))]
-        : defaults;
-    if (opts.isCancelled?.()) return abandon(selected);
-    if (selected.length < MIN_ANSWER_RELAYS) return abandon(selected);
-    return selected.slice(0, ANSWER_RELAY_COUNT).map((relay) => relay.url);
-  } catch {
-    return [];
-  }
-}
-
-export interface AnswerRelaySweepOptions {
-  /** Candidate and health cache; defaults to the shared IndexedDB one. */
-  storage?: RelayPoolStorage;
-  /** Ends the sweep at once; probes in flight are abandoned. */
-  signal?: AbortSignal;
-  isCancelled?: () => boolean;
-}
-
-/**
- * The background relay pass behind a manual exchange: the same uncapped
- * enumeration and probing `sendFileLive` runs behind a Nostr file transfer,
- * so an exchange that only ever touches signaling relays still extends the
- * shared relay knowledge the next transfer starts from. The answer relays
- * are carrying the exchange and are left alone.
- *
- * Best-effort: never throws, and returns as soon as `signal` fires — the
- * caller destroys the pool right after, and the sweep's last cache write is
- * the only thing this promise waits on.
- */
-export function sweepAnswerRelays(
-  pool: NostrFilePool,
-  answerRelays: string[],
-  opts: AnswerRelaySweepOptions = {},
-): Promise<void> {
-  const storage = opts.storage ?? createIndexedDbRelayPool();
-  return sweepRelayHealth(pool, storage, {
-    excludeRelays: answerRelays,
-    signal: opts.signal,
-    isCancelled: opts.isCancelled,
-  }).catch(() => {});
 }
 
 /** Offer-side validation of the relay list the receiver is asked to use. */

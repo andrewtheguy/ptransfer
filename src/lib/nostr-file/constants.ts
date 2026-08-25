@@ -1,5 +1,6 @@
-// Experimental Nostr file relay (live single-copy transfer for Manual
-// Exchange).
+// Nostr file relay: the Manual Exchange fallback data path, used when the
+// direct WebRTC connection between the two devices cannot be established
+// (a live single-copy transfer through public relays, in place of TURN).
 
 // Hard cap on the plaintext payload relayed through nostr events.
 export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
@@ -44,9 +45,10 @@ export const UPLOAD_CHUNK_CONCURRENCY = 16;
 
 export const HEALTH_CHECK_CONCURRENCY = 16;
 export const HEALTH_CHECK_TIMEOUT_MS = 8000;
-// Healthy relays left after the 16-node storage ring is selected. They can
-// fill gaps in the default signaling set instead of being probed and then
-// discarded.
+// Healthy relays left after the storage ring is selected. When a manual
+// exchange's default signaling relays are defunct, these full-size-proven
+// spares — not weaker control-sized discoveries — make up the control set,
+// so a defunct default is replaced by a relay proven to serve real chunks.
 export const SIGNALING_RESERVE_RELAY_COUNT = 4;
 // Stop health-checking once the storage ring plus its signaling reserves
 // have passed, without probing the entire candidate list (only ~1 in 6 public
@@ -68,11 +70,12 @@ export const BACKGROUND_PROBE_CONCURRENCY = 4;
 // final flush), so a page closed mid-sweep still keeps most of the work.
 export const BACKGROUND_PROBE_SAVE_BATCH = 8;
 
-// The encrypted control channel rides six proven signaling relays embedded in
-// the manual payload. DEFAULT_RELAYS are checked with a small probe first; if
-// any fail, unused full-size-proven storage reserves fill the gaps.
+// The encrypted control channel rides the proven signaling relays the offer
+// names for the answer channel. DEFAULT_RELAYS are checked with a small probe
+// first; if any fail, discovered control-capable relays fill the gaps.
 export const CONTROL_RELAY_COUNT = 6;
-// Fewer usable control relays than this and a send refuses to start.
+// Fewer usable control relays than this and the offer goes out without a
+// relay channel — no answer return over relays, no relay fallback.
 export const MIN_CONTROL_RELAYS = 2;
 // Control probe payload size — a sealed control message is a few hundred
 // bytes, so a size-capped relay that would reject chunks may still pass.
@@ -132,6 +135,9 @@ export const LIVE_RELAY_DEMOTE_MISSES = 2;
 export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
+// HKDF info label for the relay session (transfer id + file key) both sides
+// derive from the Manual Exchange ECDH shared secret.
+export const RELAY_SESSION_INFO = 'ptransfer-nostr-file:v1:session';
 // Decompression bound for a control message body (a full ~2100-chunk map
 // with every chunk listed is well under this).
 export const CONTROL_MESSAGE_MAX_BYTES = 256 * 1024;
