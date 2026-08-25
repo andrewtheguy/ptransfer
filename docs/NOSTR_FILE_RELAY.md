@@ -33,15 +33,15 @@ exchange's own.
 
 Two separate relay sets do two different jobs:
 
-- **Control relays** (2–6): the proven signaling relays the offer already named for the
-  answer channel (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`). They carry only the
+- **Control relays** (2–6): the proven relays the offer already named
+  (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`). They carry only the
   encrypted control channel — a relay that caps event sizes or rate-limits large writes
   (fine for signaling, useless for 48 KiB chunks) still serves perfectly here.
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
   ring is announced over the control channel. The whole `DEFAULT_RELAYS` signaling pool
   is barred from the ring, so the two sets never overlap.
 
-Because the answer channel already proved the control relays, the sender's first act on
+Because the offer already proved the control relays, the sender's first act on
 fallback is to hash and chunk the file and send the **manifest as the first control
 message**; the storage ring, prepared behind the exchange since the offer was built, is
 adopted as soon as it has resolved. It then keeps running: each
@@ -55,10 +55,10 @@ one-hour NIP-40 window, but that does not extend the enclosing session.
 
 ## Shared Foundations
 
-### Control relays (`answer-channel.ts`)
+### Control relays (the offer's `relays` field)
 
-The control relays are not resolved here at all — they are the relays the offer named for
-the answer return, proved while the offer was built by `resolveTransferRelays`
+The control relays are not resolved here at all — they are the relays the offer named,
+proved while the offer was built by `resolveTransferRelays`
 (`src/lib/nostr-file/upload.ts`): the six `DEFAULT_RELAYS` seeds probed with a
 control-sized write→read round trip (`CONTROL_PROBE_BYTES` 256 B,
 `CONTROL_PROBE_TIMEOUT_MS` 4 s). When fewer than `CONTROL_RELAY_COUNT` (6) pass, each
@@ -67,8 +67,8 @@ defunct default is replaced by a **full-size-proven storage reserve** — one of
 outside the ring — not by a weaker control-sized discovery. Passing defaults are proven
 for control-sized messages; only their discovered replacements are also proven at full
 chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
-names no relays at all — and then there is no answer channel and no relay fallback. See the answer-return channel section in
-[ARCHITECTURE.md](ARCHITECTURE.md#answer-return-channel-srclibanswer-channelts).
+names no relays at all — and then there is no relay fallback. See the offer-relays section in
+[ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibmanual-signalingts).
 
 ### Storage relay discovery and health check (`relay-pool.ts`)
 
@@ -178,7 +178,7 @@ code: version, file name/size/MIME, base64 SHA-256 of the plaintext, the ephemer
 pubkey, the whole-payload compression mode (`deflate` or `none`) and the compressed
 payload size, chunk size, total chunks, and created/expiry timestamps. The transfer id
 and control relays are session-level — the id is derived from the ECDH secret
-(`session.ts`), the relays are the offer's answer relays — so neither is repeated in the
+(`session.ts`), the relays are the offer's relays — so neither is repeated in the
 manifest. The storage ring is not in it either — that arrives in the `avail` messages.
 
 Because chunk `d` tags are derived from `transferId` and index, the manifest needs no
@@ -207,9 +207,8 @@ Both peers derive an AES-256-GCM control key from the session file key (HKDF, in
 Manual Exchange ECDH secret — so only the two peers of that exchange can read or forge
 control messages.
 
-Messages ride the offer's **control relays** (the answer relays, already proved with a
-control-sized event, so the same relay never has to accept both signaling and 48 KiB
-chunks) as addressable events of the chunk kind with a unique `d` tag per message
+Messages ride the offer's **control relays** (already proved with a control-sized event,
+so the same relay never has to accept both control messages and 48 KiB chunks) as addressable events of the chunk kind with a unique `d` tag per message
 (`<transferId>:ctl:<role>:<n>`), an `x` tag `<transferId>:ctl` for the subscription
 filter, and the usual NIP-40 expiration; they carry the sealed, deflated JSON as base64.
 Because they are stored, a peer that subscribes late or whose socket dropped
@@ -231,7 +230,7 @@ Anti-replay/misuse properties:
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|
 | `manifest` | sender → receiver | `n`, `manifest` | First message: what is being relayed (file metadata, chunk layout, sender pubkey). Sizes the receiver's state; an `avail` before it arrives is rejected |
-| `hello` | receiver → sender | `n` | Receiver is online and subscribed |
+| `hello` | receiver → sender | `n` | Receiver is online and subscribed; sent only after its direct attempt failed, so a sender still trying the direct route treats it as "no direct connection is possible" and switches to relays right away |
 | `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET` — 64 positions of encoding headroom; the actual ring is capped at `UPLOAD_RELAY_COUNT` = 16); `gens` lists re-sent chunks with their current generation |
 | `ack` | receiver → sender | `n`, `avail`, `have`, `missing` | Outcome of fetching what avail `avail` announced: total chunks held, plus `missing` as `[index, pos, gen]` triples — tried at that exact placement and not found / not decryptable |
 | `done` | receiver → sender | `n` | Whole-file SHA-256 verified |
@@ -302,14 +301,16 @@ sequenceDiagram
     participant V as Receiver
 
     Note over S: offer built: discover + health-check storage ring in background, then sweep
-    Note over S,V: Manual Exchange offer/answer done, direct WebRTC connection failed
+    Note over S,V: Manual Exchange offer/answer done, direct WebRTC attempt running
     Note over S,V: both derive session (transferId + file key) from the ECDH secret
+    S->>C: subscribe #x = transferId:ctl (watch for hello during the direct attempt)
+    Note over V: ICE fails fast on the receiver's side
+    V->>C: subscribe #x = transferId:ctl
+    V->>C: hello (sealed control event)
+    C->>S: hello — sender abandons the direct attempt at once
     S->>C: manifest (sealed; file metadata + chunk layout)
     S->>C: avail {upto: 0, relays: []} (sender online, ring still resolving)
-    V->>C: subscribe #x = transferId:ctl
-    C->>V: manifest (from backlog if V joined late)
-    V->>C: hello (sealed control event)
-    C->>S: hello
+    C->>V: manifest
     loop upload, 16 in flight
         S->>R: chunk i → ring[i % N] (walk ring on rejection)
         S->>C: avail {upto, relays: ring, map, gens} every 64 chunks + 15s heartbeat
@@ -351,7 +352,7 @@ sequenceDiagram
 | `NOSTR_FILE_EXPIRATION_SEC` | 3600 | Manifest/chunk window from fallback start; the outer Manual Exchange deadline may end the transfer earlier |
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
 | `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
-| `CONTROL_RELAY_COUNT` | 6 | Target control relays (the offer's answer relays) |
+| `CONTROL_RELAY_COUNT` | 6 | Target control relays (the relays the offer names) |
 | `MIN_CONTROL_RELAYS` | 2 | Fewest control relays; below this the offer names none and there is no fallback |
 | `CONTROL_PROBE_BYTES` | 256 | Control probe payload (a sealed control message is a few hundred bytes) |
 | `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |

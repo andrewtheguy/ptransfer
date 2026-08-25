@@ -1,12 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  type AnswerChannel,
-  type AnswerWatch,
-  deriveAnswerChannel,
-  generateAnswerSecret,
-  watchForAnswer,
-} from '@/lib/answer-channel';
-import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
   generateECDHKeyPair,
@@ -14,6 +7,7 @@ import {
   MAX_MESSAGE_SIZE,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
+import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
@@ -21,12 +15,13 @@ import {
   parseMutualPayload,
   type SignalingPayload,
 } from '@/lib/manual-signaling';
-import {
-  CLOCK_SKEW_TOLERANCE_SEC,
-  NOSTR_FILE_MAX_BYTES,
-} from '@/lib/nostr-file/constants';
+import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
+import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
-import { deriveRelaySession } from '@/lib/nostr-file/session';
+import {
+  deriveRelaySession,
+  type RelaySession,
+} from '@/lib/nostr-file/session';
 import {
   createTransferStats,
   type NostrFileTransferStats,
@@ -78,12 +73,6 @@ interface ManualTransferStateBase {
   currentRelays?: string[];
   totalRelays?: number;
   offerData?: Uint8Array; // Binary data for QR code
-  /**
-   * Answer-return channel state while the offer is up: 'waiting' when the
-   * receiver may choose either relays or a hand return, 'unavailable' when no
-   * relay set was proven and it must be scanned or pasted back.
-   */
-  answerRelayStatus?: 'waiting' | 'unavailable';
   // Set on an error state when a direct P2P connection could not be established;
   // drives the offline-QR fallback suggestion in the UI.
   connectionFailed?: boolean;
@@ -124,7 +113,7 @@ type RelayResolvePhase =
   | 'probing_discovered';
 /** Shown only when relay resolution outlasts WebRTC offer creation. */
 const RELAY_PHASE_MESSAGES: Record<RelayResolvePhase, string> = {
-  probing_defaults: 'Checking relays for the response...',
+  probing_defaults: 'Checking relays for the fallback...',
   discovering: 'Looking for more storage relays to back them up...',
   probing_discovered: 'Testing the storage relays we found...',
 };
@@ -159,29 +148,20 @@ export function useManualSend(): UseManualSendReturn {
   >(null);
   const answerRejectRef = useRef<((error: Error) => void) | null>(null);
 
-  // Relay pool and subscription carrying the receiver's answer back.
+  // Relay pool behind the exchange: proves the relays the offer names and,
+  // if the direct connection fails, carries the file.
   const poolRef = useRef<ReturnType<typeof createTransferPool> | null>(null);
-  const answerWatchRef = useRef<AnswerWatch | null>(null);
   // Storage-ring preparation and the relay enumeration running on behind
   // the exchange; aborted with the pool so a teardown never waits out a
   // probe, and never records its own teardown as relay failures.
   const sweepAbortRef = useRef<AbortController | null>(null);
-  // A relayed answer that landed before the flow was ready for it. The watch
-  // stops at the first one, so it is held here rather than dropped.
-  const pendingAnswerRef = useRef<Uint8Array | null>(null);
 
-  const closeAnswerWatch = useCallback(() => {
-    answerWatchRef.current?.close();
-    answerWatchRef.current = null;
-  }, []);
-
-  const teardownAnswerRelay = useCallback(() => {
-    closeAnswerWatch();
+  const teardownRelayPool = useCallback(() => {
     sweepAbortRef.current?.abort();
     sweepAbortRef.current = null;
     poolRef.current?.destroy();
     poolRef.current = null;
-  }, [closeAnswerWatch]);
+  }, []);
 
   const clearExpirationTimeout = useCallback(() => {
     if (expirationTimeoutRef.current) {
@@ -194,8 +174,7 @@ export function useManualSend(): UseManualSendReturn {
     cancelledRef.current = true;
     sendingRef.current = false;
     clearExpirationTimeout();
-    teardownAnswerRelay();
-    pendingAnswerRef.current = null;
+    teardownRelayPool();
     answerResolverRef.current = null;
     answerRejectRef.current = null;
     ecdhPrivateKeyRef.current = null;
@@ -205,10 +184,10 @@ export function useManualSend(): UseManualSendReturn {
       rtcRef.current = null;
     }
     setState({ status: 'idle' });
-  }, [clearExpirationTimeout, teardownAnswerRelay]);
+  }, [clearExpirationTimeout, teardownRelayPool]);
 
-  // Both paths to an answer — the relay channel and a scanned/pasted code —
-  // land here, so validation and TTL enforcement stay in one place.
+  // The scanned or pasted answer lands here; the sender's explicit action is
+  // the only way an answer ever enters the flow.
   const submitAnswer = useCallback(async (answerBinary: Uint8Array) => {
     if (!answerResolverRef.current) return;
 
@@ -245,7 +224,6 @@ export function useManualSend(): UseManualSendReturn {
       if (sendingRef.current) return;
       sendingRef.current = true;
       cancelledRef.current = false;
-      pendingAnswerRef.current = null;
 
       try {
         // Validate and sanitize metadata
@@ -301,21 +279,21 @@ export function useManualSend(): UseManualSendReturn {
         const salt = generateSalt();
         saltRef.current = salt;
 
-        // Resolve the relays the offer will name while WebRTC creates the
-        // offer and gathers candidates, so the probe of the defaults costs no
-        // extra wait. Robustness matches the storage transfer: the defaults
-        // are control-probed, and a defunct default is replaced by a
+        // Resolve the relays the offer will name (the control relays of the
+        // file-relay fallback) while WebRTC creates the offer and gathers
+        // candidates, so the probe of the defaults costs no extra wait.
+        // Robustness matches the storage transfer: the defaults are
+        // control-probed, and a defunct default is replaced by a
         // full-size-proven storage reserve, not a weaker control-sized
         // discovery — so the same discovery pass may run and can outlast ICE
         // gathering, which is reported and waited out. A failure or a set
-        // below the floor is caught: the offer simply goes out manual-only and
-        // the answer is scanned or pasted back as before.
-        teardownAnswerRelay();
+        // below the floor is caught: the offer simply goes out without
+        // relays, and a failed direct connection then has no fallback.
+        teardownRelayPool();
         const pool = createTransferPool();
         poolRef.current = pool;
         const relayStorage = createIndexedDbRelayPool();
         const relayStats = createTransferStats('sender');
-        const answerSecret = generateAnswerSecret();
         let relayPhase: RelayResolvePhase = 'probing_defaults';
         let relayDone = false;
         let awaitingRelays = false;
@@ -361,7 +339,7 @@ export function useManualSend(): UseManualSendReturn {
             });
             sendingRef.current = false;
             answerResolverRef.current = null;
-            teardownAnswerRelay();
+            teardownRelayPool();
             ecdhPrivateKeyRef.current = null;
             saltRef.current = null;
             if (rtcRef.current) {
@@ -437,16 +415,15 @@ export function useManualSend(): UseManualSendReturn {
         const selection = await relayProbe;
         awaitingRelays = false;
         if (cancelledRef.current) return;
-        const answerRelays = selection?.controlRelays ?? [];
-        let channel: AnswerChannel | null = null;
+        const offerRelays = selection?.controlRelays ?? [];
         // Set once the direct attempt has failed: from then on the storage
         // preparation's progress is the transfer's progress.
         let relayFallbackActive = false;
         let storageRelays: PreparedStorageRelays | null = null;
-        if (selection && answerRelays.length > 0) {
-          // The signaling relays are settled; the storage ring is prepared in
+        if (selection && offerRelays.length > 0) {
+          // The control relays are settled; the storage ring is prepared in
           // the background on the same pool and relay cache — the offer's QR
-          // does not depend on it. When the signaling fallback already had to
+          // does not depend on it. When control resolution already had to
           // discover and full-size-probe a ring to borrow reserves, that ring
           // is adopted as-is (`preselected`) instead of discovered again;
           // otherwise discovery runs here. Either way the sweep then keeps
@@ -456,7 +433,7 @@ export function useManualSend(): UseManualSendReturn {
           const sweepAbort = new AbortController();
           sweepAbortRef.current = sweepAbort;
           storageRelays = prepareStorageRelays(pool, {
-            controlRelays: answerRelays,
+            controlRelays: offerRelays,
             storage: relayStorage,
             stats: selection.stats,
             preselected: selection.storageRelays
@@ -477,14 +454,13 @@ export function useManualSend(): UseManualSendReturn {
                     : `${RELAY_FALLBACK_MESSAGE}. Testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
                 contentType: 'file',
                 fileMetadata: { fileName, fileSize, mimeType },
-                currentRelays: answerRelays,
+                currentRelays: offerRelays,
                 stats: p.stats,
               });
             },
           });
-          channel = await deriveAnswerChannel(answerSecret);
         } else {
-          teardownAnswerRelay();
+          teardownRelayPool();
         }
 
         // Generate binary offer data with ECDH public key
@@ -499,36 +475,19 @@ export function useManualSend(): UseManualSendReturn {
             mimeType,
             publicKey: ecdhKeyPair.publicKeyBytes,
             salt,
-            ...(channel ? { answerRelays, answerSecret } : {}),
+            ...(storageRelays ? { relays: offerRelays } : {}),
           },
         );
 
         if (cancelledRef.current) return;
 
-        // Listen for the sealed answer before the code is shared, so one
-        // published while we were still preparing is not missed.
-        if (channel) {
-          answerWatchRef.current = watchForAnswer(pool, answerRelays, {
-            channel,
-            since:
-              Math.floor(sessionStartTime / 1000) - CLOCK_SKEW_TOLERANCE_SEC,
-            onAnswer: (binary) => {
-              if (answerResolverRef.current) void submitAnswer(binary);
-              else pendingAnswerRef.current = binary;
-            },
-          });
-        }
-
         // Show offer and wait for answer
         setState({
           status: 'showing_offer',
-          message: channel
-            ? 'Show this to receiver — their response comes back on its own'
-            : 'Show this to receiver, then scan/paste their response',
+          message: 'Show this to receiver, then scan/paste their response',
           offerData: offerBinary,
           contentType: 'file',
           fileMetadata: { fileName, fileSize, mimeType },
-          answerRelayStatus: channel ? 'waiting' : 'unavailable',
         });
 
         // Wait for answer to be submitted
@@ -536,11 +495,6 @@ export function useManualSend(): UseManualSendReturn {
           (resolve, reject) => {
             answerResolverRef.current = resolve;
             answerRejectRef.current = reject;
-
-            // An answer that beat this promise into existence.
-            const early = pendingAnswerRef.current;
-            pendingAnswerRef.current = null;
-            if (early) void submitAnswer(early);
 
             // Check periodically if cancelled
             const checkInterval = setInterval(() => {
@@ -552,11 +506,9 @@ export function useManualSend(): UseManualSendReturn {
           },
         );
 
-        // The answer is in hand; the watch has nothing left to do. The pool
-        // stays up so the background sweep runs on behind the P2P transfer,
-        // as it does behind a Nostr one; the final teardown ends it.
-        closeAnswerWatch();
-
+        // The answer is in hand. The pool stays up so the background sweep
+        // runs on behind the P2P transfer, as it does behind a Nostr one; the
+        // final teardown ends it.
         if (cancelledRef.current) return;
 
         // Enforce TTL: refuse to proceed with old answers/offers
@@ -608,31 +560,65 @@ export function useManualSend(): UseManualSendReturn {
         // offer named relays, the file goes through them instead (see
         // relayFallback); without relays, or past the relay size cap, the
         // failure stands as it always did.
+        //
+        // With a fallback available, the relay session is derived now and
+        // the control relays are watched for the receiver's `hello` while
+        // the direct attempt runs: the receiver gives up on the direct route
+        // long before this side's ICE agent does, and its hello — sealed
+        // under the session key only it and this side hold — is the earliest
+        // word that the file has to go through relays.
+        let relaySession: RelaySession | null = null;
+        let helloWatch: ReturnType<typeof watchForReceiverHello> | null = null;
+        if (storageRelays !== null) {
+          relaySession = await deriveRelaySession(
+            sharedSecretKey,
+            saltRef.current,
+          );
+          if (cancelledRef.current) {
+            wipeBufferSource(relaySession.keyBytes);
+            return;
+          }
+          helloWatch = watchForReceiverHello(pool, offerRelays, relaySession, {
+            since: Math.floor(sessionStartTime / 1000),
+            expiresAt: Math.floor(
+              (sessionStartTime + TRANSFER_EXPIRATION_MS) / 1000,
+            ),
+            stats: storageRelays.stats,
+          });
+        }
         try {
           await waitForDataChannel(
             rtc,
-            answerRelays.length > 0
+            storageRelays !== null
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : MANUAL_CONNECTION_TIMEOUT_MS,
+            helloWatch?.hello ?? null,
           );
         } catch (error) {
           if (
             !(error instanceof P2PConnectionError) ||
             storageRelays === null ||
+            relaySession === null ||
             cancelledRef.current
           ) {
+            if (relaySession) wipeBufferSource(relaySession.keyBytes);
             throw error;
           }
           if (content.estimatedSize > NOSTR_FILE_MAX_BYTES) {
+            wipeBufferSource(relaySession.keyBytes);
             throw new P2PConnectionError(
               `${error.message}. The file is over ${formatFileSize(NOSTR_FILE_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
             );
           }
           rtc.close();
           rtcRef.current = null;
-          await relayFallback(storageRelays);
+          await relayFallback(storageRelays, relaySession);
           return;
+        } finally {
+          helloWatch?.close();
         }
+        // The direct route opened; the relay session is not needed.
+        if (relaySession) wipeBufferSource(relaySession.keyBytes);
 
         if (cancelledRef.current) return;
 
@@ -671,20 +657,21 @@ export function useManualSend(): UseManualSendReturn {
 
         /**
          * The relay data path: the session both sides derive from the ECDH
-         * secret keys the transfer, the offer's answer relays carry its
+         * secret keys the transfer, the relays the offer named carry its
          * control channel, and the storage ring prepared behind the exchange
          * holds the pieces. Only now is the file read, hashed, and uploaded —
          * nothing was staged while a direct connection was still possible.
          */
         async function relayFallback(
           storageRelays: PreparedStorageRelays,
+          session: RelaySession,
         ): Promise<void> {
           relayFallbackActive = true;
           const fileMetadata = { fileName, fileSize, mimeType };
           const relayState = {
             contentType: 'file' as const,
             fileMetadata,
-            currentRelays: answerRelays,
+            currentRelays: offerRelays,
           };
           setState({
             status: 'preparing',
@@ -692,16 +679,20 @@ export function useManualSend(): UseManualSendReturn {
             ...relayState,
           });
           const isCancelled = () => cancelledRef.current;
-          const data = await readSourceFully(content, isCancelled);
-          if (data.length === 0) throw new Error('File is empty');
-          if (cancelledRef.current) return;
-          if (!saltRef.current) {
-            throw new Error('Cryptographic state missing. Please try again.');
+          // `session.keyBytes` belong to sendFileLive once it runs; until
+          // then every exit wipes them here.
+          let data: Uint8Array;
+          try {
+            data = await readSourceFully(content, isCancelled);
+          } catch (error) {
+            wipeBufferSource(session.keyBytes);
+            throw error;
           }
-          const session = await deriveRelaySession(
-            sharedSecretKey,
-            saltRef.current,
-          );
+          if (data.length === 0 || cancelledRef.current) {
+            wipeBufferSource(session.keyBytes);
+            if (cancelledRef.current) return;
+            throw new Error('File is empty');
+          }
           const relayFileSize = data.length;
           let lastStats: NostrFileTransferStats | undefined;
           try {
@@ -711,7 +702,7 @@ export function useManualSend(): UseManualSendReturn {
               {
                 pool,
                 session,
-                controlRelays: answerRelays,
+                controlRelays: offerRelays,
                 storageRelays,
                 isCancelled,
                 onProgress: (p) => {
@@ -777,9 +768,15 @@ export function useManualSend(): UseManualSendReturn {
           });
         }
 
+        /**
+         * Resolve when the data channel opens; reject on ICE failure, on
+         * the timeout, or as soon as `receiverGaveUp` settles (the receiver
+         * has reported over the relays that no direct route exists).
+         */
         async function waitForDataChannel(
           rtc: WebRTCConnection,
           timeoutMs: number,
+          receiverGaveUp: Promise<void> | null,
         ) {
           await new Promise<void>((resolve, reject) => {
             const pc = rtc.getPeerConnection();
@@ -788,8 +785,19 @@ export function useManualSend(): UseManualSendReturn {
               cleanup();
               reject(new P2PConnectionError('Connection timeout'));
             }, timeoutMs);
+            let settled = false;
+            receiverGaveUp?.then(() => {
+              if (settled) return;
+              cleanup();
+              reject(
+                new P2PConnectionError(
+                  'The receiver reports no direct connection is possible',
+                ),
+              );
+            });
 
             const cleanup = () => {
+              settled = true;
               clearTimeout(timeout);
               pc.onconnectionstatechange = null;
               if (dc) {
@@ -833,8 +841,7 @@ export function useManualSend(): UseManualSendReturn {
         }
       } finally {
         clearExpirationTimeout();
-        teardownAnswerRelay();
-        pendingAnswerRef.current = null;
+        teardownRelayPool();
         sendingRef.current = false;
         answerResolverRef.current = null;
         answerRejectRef.current = null;
@@ -846,12 +853,7 @@ export function useManualSend(): UseManualSendReturn {
         }
       }
     },
-    [
-      clearExpirationTimeout,
-      closeAnswerWatch,
-      submitAnswer,
-      teardownAnswerRelay,
-    ],
+    [clearExpirationTimeout, teardownRelayPool],
   );
 
   // Memoize return object to prevent unnecessary re-renders in consumers

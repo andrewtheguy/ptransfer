@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from 'react';
-import { deriveAnswerChannel, publishAnswer } from '@/lib/answer-channel';
 import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
@@ -10,9 +9,9 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
-  answerChannelFromOffer,
   generateMutualAnswerBinary,
   parseMutualPayload,
+  relaysFromOffer,
   type SignalingPayload,
 } from '@/lib/manual-signaling';
 import type { TransferState } from '@/lib/nostr';
@@ -33,7 +32,6 @@ export type ManualReceiveStatus =
   | 'idle'
   | 'waiting_for_offer'
   | 'generating_answer'
-  | 'choosing_answer_return'
   | 'showing_answer'
   | 'connecting'
   | 'receiving'
@@ -61,29 +59,13 @@ export interface ManualReceiveState {
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
   clipboardData?: string; // Base64 for copy button
-  /**
-   * True when the answer went back over the relays the offer named, so the
-   * sender gets it without a second hand-carried hop. Absent for the
-   * hand-carried exchange.
-   */
-  answerRelayed?: boolean;
 }
-
-/**
- * How the receiver returns the answer when the offer named relays: over
- * those relays, or hand-carried (QR / copy-paste) for the sender to scan or
- * paste. The receiver picks explicitly so neither side is surprised by
- * where the response went.
- */
-export type AnswerReturnMethod = 'relay' | 'manual';
 
 export interface UseManualReceiveReturn {
   state: TransferState & ManualReceiveState;
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
-  /** Resolves the 'choosing_answer_return' step. No-op in any other state. */
-  chooseAnswerReturn: (method: AnswerReturnMethod) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -110,20 +92,16 @@ export function useManualReceive(): UseManualReceiveReturn {
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
   const sinkRef = useRef<AppendSink | null>(null);
-  // Pool carrying the answer to the relays (held for the publish) or, after
-  // a failed direct connection, the relay transfer. Cancel reaches it
-  // through this ref so an abandoned receive stops talking to relays
-  // instead of finishing the round on a dead session.
-  const answerPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
+  // Pool carrying the relay transfer after a failed direct connection.
+  // Cancel reaches it through this ref so an abandoned receive stops talking
+  // to relays instead of finishing the round on a dead session.
+  const relayPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
     null,
   );
 
-  // The steps a receive blocks on until the UI settles them. Cancel rejects
-  // whichever is pending so the flow unwinds immediately.
+  // The step a receive blocks on until the UI settles it. Cancel rejects it
+  // while pending so the flow unwinds immediately.
   const offerStepRef = useRef<PendingStep<SignalingPayload> | null>(null);
-  const answerReturnStepRef = useRef<PendingStep<AnswerReturnMethod> | null>(
-    null,
-  );
   // Identifies the receive currently in charge of the refs. A cancelled run
   // that is still unwinding compares against it before touching shared
   // state, so a restart right after cancel is never clobbered.
@@ -140,30 +118,19 @@ export function useManualReceive(): UseManualReceiveReturn {
     // payload stays readable until reset.
     if (receivingRef.current) discardSink();
     cancelledRef.current = true;
-    const answerPool = answerPoolRef.current;
-    answerPoolRef.current = null;
-    if (answerPool) answerPool.destroy();
+    const relayPool = relayPoolRef.current;
+    relayPoolRef.current = null;
+    if (relayPool) relayPool.destroy();
     receivingRef.current = false;
-    const cancelledError = new Error('Cancelled');
     const offerStep = offerStepRef.current;
     offerStepRef.current = null;
-    offerStep?.reject(cancelledError);
-    const answerReturnStep = answerReturnStepRef.current;
-    answerReturnStepRef.current = null;
-    answerReturnStep?.reject(cancelledError);
+    offerStep?.reject(new Error('Cancelled'));
     if (rtcRef.current) {
       rtcRef.current.close();
       rtcRef.current = null;
     }
     setState({ status: 'idle' });
   }, [discardSink]);
-
-  const chooseAnswerReturn = useCallback((method: AnswerReturnMethod) => {
-    const step = answerReturnStepRef.current;
-    if (!step) return;
-    answerReturnStepRef.current = null;
-    step.resolve(method);
-  }, []);
 
   const reset = useCallback(() => {
     cancel();
@@ -336,8 +303,7 @@ export function useManualReceive(): UseManualReceiveReturn {
       let connectionFailedRejecter: ((error: Error) => void) | null = null;
       let answerSDPResolver: (() => void) | null = null;
       // A dead route can be known before the wait promise below exists (while
-      // the receiver is still choosing how to return the answer, or ICE is
-      // gathering). With no rejecter to hand it to yet, the failure is held
+      // ICE is still gathering, or the answer code is being built). With no rejecter to hand it to yet, the failure is held
       // here so the wait fails fast instead of riding out the full timeout.
       let earlyConnectionFailure: Error | null = null;
 
@@ -456,64 +422,16 @@ export function useManualReceive(): UseManualReceiveReturn {
         mimeType: mimeType!,
       };
 
-      // When the offer named an answer channel, the receiver decides how the
-      // answer goes back: sealed under the offer's secret and published to
-      // those relays (the sender is already listening), or hand-carried as a
-      // code for the sender to scan or paste. The choice is explicit so the
-      // receiver knows which one happened, and it is final: the two paths do
-      // not fall back to each other, so a relay refusal ends the exchange.
-      const answerChannel = answerChannelFromOffer(offerPayload);
-      let answerRelayed = false;
-      let returnMethod: AnswerReturnMethod = 'manual';
-      if (answerChannel) {
-        setState({
-          status: 'choosing_answer_return',
-          message: 'Choose how to return your response',
-          answerData: answerBinary,
-          contentType: 'file',
-          fileMetadata,
-        });
-        const answerReturnStep = createPendingStep<AnswerReturnMethod>();
-        answerReturnStepRef.current = answerReturnStep;
-        returnMethod = await answerReturnStep.promise;
-        if (abandoned()) return;
-      }
-      if (answerChannel && returnMethod === 'relay') {
-        setState({
-          status: 'generating_answer',
-          message: 'Sending your response to the sender...',
-        });
-        const pool = createTransferPool();
-        answerPoolRef.current = pool;
-        try {
-          await publishAnswer(pool, answerChannel.relays, {
-            channel: await deriveAnswerChannel(answerChannel.secret),
-            answer: answerBinary,
-            expiresAt: Math.floor(
-              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
-            ),
-          });
-          answerRelayed = true;
-        } catch {
-          throw new Error(
-            "Could not send your response over the relays named in the sender's code. Both sides need to start over.",
-          );
-        } finally {
-          answerPoolRef.current = null;
-          pool.destroy();
-        }
-      }
-
-      if (abandoned()) return;
+      // The relays the offer named, if any: the control relays of the
+      // file-relay fallback used only after the direct connection fails.
+      // The answer itself is always hand-carried back to the sender.
+      const offerRelays = relaysFromOffer(offerPayload);
 
       // Show answer and wait for connection
       setState({
         status: 'showing_answer',
-        message: answerRelayed
-          ? 'Response sent — waiting for the sender to connect'
-          : 'Show this to sender and wait for connection',
+        message: 'Show this to sender and wait for connection',
         answerData: answerBinary,
-        answerRelayed,
         contentType: 'file',
         fileMetadata,
       });
@@ -532,7 +450,7 @@ export function useManualReceive(): UseManualReceiveReturn {
             () => {
               reject(new P2PConnectionError('Connection timeout'));
             },
-            answerChannel
+            offerRelays
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : MANUAL_CONNECTION_TIMEOUT_MS,
           );
@@ -557,7 +475,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         connectionFailedRejecter = null;
         if (
           !(error instanceof P2PConnectionError) ||
-          !answerChannel ||
+          !offerRelays ||
           abandoned()
         ) {
           throw error;
@@ -575,12 +493,12 @@ export function useManualReceive(): UseManualReceiveReturn {
         discardSink();
 
         const pool = createTransferPool();
-        answerPoolRef.current = pool;
+        relayPoolRef.current = pool;
         let lastStats: TransferState['stats'];
         const relayState = {
           contentType: 'file' as const,
           fileMetadata,
-          currentRelays: answerChannel.relays,
+          currentRelays: offerRelays,
         };
         setState({
           status: 'fetching',
@@ -591,7 +509,7 @@ export function useManualReceive(): UseManualReceiveReturn {
         let data: Uint8Array;
         try {
           const session = await deriveRelaySession(sharedSecretKey, salt);
-          data = await receiveFileLive(session, answerChannel.relays, {
+          data = await receiveFileLive(session, offerRelays, {
             pool,
             isCancelled: abandoned,
             since: Math.floor(offerPayload.createdAt / 1000),
@@ -623,7 +541,7 @@ export function useManualReceive(): UseManualReceiveReturn {
           if (relayError instanceof NostrFileCancelledError) return;
           throw relayError;
         } finally {
-          if (answerPoolRef.current === pool) answerPoolRef.current = null;
+          if (relayPoolRef.current === pool) relayPoolRef.current = null;
           pool.destroy();
         }
         if (abandoned()) return;
@@ -726,7 +644,6 @@ export function useManualReceive(): UseManualReceiveReturn {
       if (runRef.current === run) {
         receivingRef.current = false;
         offerStepRef.current = null;
-        answerReturnStepRef.current = null;
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;
@@ -740,7 +657,6 @@ export function useManualReceive(): UseManualReceiveReturn {
     receivedContent,
     startReceive,
     submitOffer,
-    chooseAnswerReturn,
     cancel,
     reset,
   };

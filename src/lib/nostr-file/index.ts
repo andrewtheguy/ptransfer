@@ -4,6 +4,7 @@ export * from './control';
 export * from './download-live';
 export * from './events';
 export * from './fetch';
+export * from './hello-watch';
 export * from './manifest';
 export type * from './pool';
 export * from './relay-pool';

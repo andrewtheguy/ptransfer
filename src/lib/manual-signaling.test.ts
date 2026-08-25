@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  answerChannelFromOffer,
   estimatePayloadSize,
   generateMutualAnswerBinary,
   generateMutualClipboardData,
   generateMutualOfferBinary,
   isMutualPayload,
   isValidSignalingPayload,
+  normalizeOfferRelays,
   parseClipboardPayload,
   parseMutualPayload,
+  relaysFromOffer,
   type SignalingPayload,
 } from './manual-signaling';
 
@@ -150,12 +151,11 @@ describe('Manual Signaling Utils', () => {
   });
 });
 
-describe('offer-borne answer channel', () => {
+describe('offer-borne fallback relays', () => {
   const mockOffer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
   const publicKey = new Uint8Array(65).fill(1);
   publicKey[0] = 4;
   const salt = new Uint8Array(16).fill(2);
-  const secret = new Uint8Array(32).fill(3);
   const relays = ['wss://r1.example', 'wss://r2.example'];
   const metadata = {
     createdAt: Date.now(),
@@ -167,28 +167,39 @@ describe('offer-borne answer channel', () => {
     salt,
   };
 
-  it('round-trips the relays and secret an offer advertises', () => {
+  it('round-trips the relays an offer advertises', () => {
     const binary = generateMutualOfferBinary(mockOffer, [], {
       ...metadata,
-      answerRelays: relays,
-      answerSecret: secret,
+      relays,
     });
     const parsed = parseMutualPayload(binary);
     expect(parsed).not.toBeNull();
-    const channel = answerChannelFromOffer(parsed as SignalingPayload);
-    expect(channel?.relays).toEqual(relays);
-    expect(channel?.secret).toEqual(secret);
+    expect(relaysFromOffer(parsed as SignalingPayload)).toEqual(relays);
   });
 
-  it('advertises no channel when relays were not proven', () => {
+  it('advertises no relays when none were proven', () => {
     const binary = generateMutualOfferBinary(mockOffer, [], metadata);
     const parsed = parseMutualPayload(binary) as SignalingPayload;
-    expect(parsed.answerRelays).toBeUndefined();
-    expect(parsed.answerSecret).toBeUndefined();
-    expect(answerChannelFromOffer(parsed)).toBeNull();
+    expect(parsed.relays).toBeUndefined();
+    expect(relaysFromOffer(parsed)).toBeNull();
   });
 
-  it('rejects half-formed or misplaced channel fields', () => {
+  it('never carries an answer channel: an answer has no relay field', () => {
+    const answer = parseMutualPayload(
+      generateMutualAnswerBinary({ type: 'answer', sdp: 'v=0' }, [], publicKey),
+    ) as SignalingPayload;
+    expect(answer.relays).toBeUndefined();
+    expect(relaysFromOffer(answer)).toBeNull();
+    expect(Object.keys(answer).sort()).toEqual([
+      'candidates',
+      'createdAt',
+      'publicKey',
+      'sdp',
+      'type',
+    ]);
+  });
+
+  it('rejects a misplaced or unusable relay list', () => {
     const base = {
       type: 'offer',
       sdp: 'sdp',
@@ -196,48 +207,64 @@ describe('offer-borne answer channel', () => {
       createdAt: Date.now(),
       publicKey: Array.from(publicKey),
     };
-    const answerSecret = `${'A'.repeat(43)}=`;
-    expect(isValidSignalingPayload({ ...base, answerRelays: relays })).toBe(
+    expect(isValidSignalingPayload({ ...base, relays })).toBe(true);
+    // Offer-only: an answer may never name relays.
+    expect(isValidSignalingPayload({ ...base, type: 'answer', relays })).toBe(
       false,
     );
-    expect(isValidSignalingPayload({ ...base, answerSecret })).toBe(false);
-    expect(
-      isValidSignalingPayload({ ...base, answerRelays: relays, answerSecret }),
-    ).toBe(true);
-    // Offer-only: an answer may never carry the channel.
-    expect(
-      isValidSignalingPayload({
-        ...base,
-        type: 'answer',
-        answerRelays: relays,
-        answerSecret,
-      }),
-    ).toBe(false);
     // A relay list that cannot be used is a malformed offer, not a silent
-    // downgrade to the manual hop.
+    // downgrade to a relay-less one.
     expect(
-      isValidSignalingPayload({
-        ...base,
-        answerRelays: ['wss://r1.example'],
-        answerSecret,
-      }),
+      isValidSignalingPayload({ ...base, relays: ['wss://r1.example'] }),
     ).toBe(false);
+    expect(isValidSignalingPayload({ ...base, relays: 'wss://r1' })).toBe(
+      false,
+    );
+    // Legacy answer-channel fields are not part of the format any more.
     expect(
       isValidSignalingPayload({
         ...base,
         answerRelays: relays,
-        answerSecret: 'too short',
+        answerSecret: `${'A'.repeat(43)}=`,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      relaysFromOffer({
+        ...base,
+        answerRelays: relays,
+      } as unknown as SignalingPayload),
+    ).toBeNull();
   });
 
-  it('keeps a channel-bearing offer within a few hundred extra bytes', () => {
+  it('keeps a relay-bearing offer within a couple hundred extra bytes', () => {
     const plain = generateMutualOfferBinary(mockOffer, [], metadata);
-    const withChannel = generateMutualOfferBinary(mockOffer, [], {
+    const withRelays = generateMutualOfferBinary(mockOffer, [], {
       ...metadata,
-      answerRelays: relays,
-      answerSecret: secret,
+      relays,
     });
-    expect(withChannel.length - plain.length).toBeLessThan(200);
+    expect(withRelays.length - plain.length).toBeLessThan(200);
+  });
+});
+
+describe('normalizeOfferRelays', () => {
+  it('normalizes a usable list', () => {
+    expect(
+      normalizeOfferRelays(['wss://R1.example/', 'wss://r2.example']),
+    ).toEqual(['wss://r1.example', 'wss://r2.example']);
+  });
+
+  it('rejects a list below the floor, with duplicates, or with junk', () => {
+    expect(normalizeOfferRelays(['wss://r1.example'])).toBeNull();
+    expect(
+      normalizeOfferRelays(['wss://r1.example', 'wss://r1.example/']),
+    ).toBeNull();
+    expect(normalizeOfferRelays(['wss://r1.example', 42])).toBeNull();
+    expect(normalizeOfferRelays(['wss://r1.example', 'nope'])).toBeNull();
+    expect(normalizeOfferRelays('wss://r1.example')).toBeNull();
+    expect(
+      normalizeOfferRelays(
+        Array.from({ length: 7 }, (_, i) => `wss://r${i}.example`),
+      ),
+    ).toBeNull();
   });
 });

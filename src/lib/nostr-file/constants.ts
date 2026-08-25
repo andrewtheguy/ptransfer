@@ -72,13 +72,13 @@ export const BACKGROUND_PROBE_CONCURRENCY = 4;
 // final flush), so a page closed mid-sweep still keeps most of the work.
 export const BACKGROUND_PROBE_SAVE_BATCH = 8;
 
-// The encrypted control channel rides the proven signaling relays the offer
-// names for the answer channel. DEFAULT_RELAYS are checked with a small probe
+// The encrypted control channel rides the proven relays the offer names for
+// the file-relay fallback. DEFAULT_RELAYS are checked with a small probe
 // first; a default that fails is filled from a reserve that passed the
 // full-size HEALTH_CHECK_PROBE_BYTES probe, not from a control-sized discovery.
 export const CONTROL_RELAY_COUNT = 6;
-// Fewer usable control relays than this and the offer goes out without a
-// relay channel — no answer return over relays, no relay fallback.
+// Fewer usable control relays than this and the offer goes out without
+// relays — no relay fallback.
 export const MIN_CONTROL_RELAYS = 2;
 // Control probe payload size — a sealed control message is a few hundred
 // bytes, so a size-capped relay that would reject chunks may still pass.

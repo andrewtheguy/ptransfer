@@ -102,10 +102,10 @@ async function runLive(data: Uint8Array) {
   // Ends the background relay sweep with the pools.
   const sweepAbort = new AbortController();
   try {
-    // What the sender does while building its offer: resolve the signaling
-    // relays the offer names, filling any defunct default from a full-size-
-    // proven storage reserve. They carry the answer and, on a failed direct
-    // connection, the relay transfer's control channel.
+    // What the sender does while building its offer: resolve the relays the
+    // offer names, filling any defunct default from a full-size-proven
+    // storage reserve. On a failed direct connection they carry the relay
+    // transfer's control channel.
     const started = Date.now();
     const relayStorage = memoryStorage();
     const selection = await resolveTransferRelays(senderPool, relayStorage, {

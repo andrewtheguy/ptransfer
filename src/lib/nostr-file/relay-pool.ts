@@ -33,8 +33,8 @@ const KIND_RELAY_LIST = 10002;
 /**
  * What a probe proved about a relay. `storage` is a full-size chunk write; a
  * relay that passes it necessarily takes a control-sized message too, so the
- * two flags are not independent. `control` is the small write the signaling
- * and answer channels need.
+ * two flags are not independent. `control` is the small write the control
+ * channel needs.
  */
 export type RelayCapability = 'control' | 'storage';
 

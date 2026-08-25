@@ -58,7 +58,7 @@ const QR_DETAILS = [
   {
     label: 'Signaling:',
     value:
-      'Offer by QR/copy-paste; when relays are named, the receiver chooses relay return or QR/copy-paste for the answer',
+      'Offer and answer both by QR/copy-paste; relays carry only the file fallback',
   },
 ] as const;
 
@@ -228,14 +228,12 @@ export function AboutContent() {
                 Coordination starts by handing the recipient a signaling payload
                 — by QR code or copy/paste — with no account and no coordination
                 server holding it. That payload is obfuscated, not encrypted, so
-                hand it only to the intended recipient: it is also what secures
-                the response. When the offer names relays, the recipient chooses
-                whether to return the encrypted response through them or by QR
-                or copy/paste. A failed chosen relay return ends that attempt;
-                the app does not silently change paths. STUN may help find a
-                direct route when internet is available. If direct WebRTC fails,
-                an eligible encrypted file up to 100 MiB can use temporary
-                public Nostr relays instead.
+                hand it only to the intended recipient. The recipient hands the
+                response back the same way — by QR or copy/paste — and it only
+                enters the sender's page when the sender scans or pastes it.
+                STUN may help find a direct route when internet is available. If
+                direct WebRTC fails, an eligible encrypted file up to 100 MiB
+                can use temporary public Nostr relays instead.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
@@ -245,8 +243,7 @@ export function AboutContent() {
                 <li>
                   The offer is handed to the recipient directly — as a QR code
                   or by copy/paste — with no relay coordination service holding
-                  it. When relays are named, the recipient explicitly chooses an
-                  encrypted relay return or a hand-carried response.
+                  it, and the response comes back the same way.
                 </li>
                 <li>
                   With internet, STUN can assist direct candidate discovery

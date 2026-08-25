@@ -11,7 +11,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnswerReturn } from '@/components/ptransfer/answer-return';
-import { AnswerReturnChoice } from '@/components/ptransfer/answer-return-choice';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useChunkCollector } from '@/hooks/use-chunk-collector';
@@ -42,7 +41,6 @@ export function ReceiveChunkedPage() {
     receivedContent,
     startReceive,
     submitOffer,
-    chooseAnswerReturn,
     cancel,
     reset,
   } = useManualReceive();
@@ -308,18 +306,9 @@ export function ReceiveChunkedPage() {
           <TransferStatus state={receiveState} />
         )}
 
-        {/* The receiver decides how the answer goes back */}
-        {receiveState.status === 'choosing_answer_return' && (
-          <AnswerReturnChoice onChoose={chooseAnswerReturn} />
-        )}
-
-        {/* The receiver's answer step: relayed, or carried back by hand */}
+        {/* The receiver's answer, carried back to the sender by hand */}
         {showQRDisplay && answerData && (
-          <AnswerReturn
-            answerData={answerData}
-            clipboardData={clipboardData}
-            answerRelayed={receiveState.answerRelayed === true}
-          />
+          <AnswerReturn answerData={answerData} clipboardData={clipboardData} />
         )}
 
         {/* Download completed file */}

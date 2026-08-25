@@ -1,10 +1,15 @@
 import { deflateSync, inflateSync } from 'fflate';
+import { normalizeRelayUrl } from './nostr/relays';
 import {
-  decodeAnswerSecret,
-  encodeAnswerSecret,
-  normalizeAnswerRelays,
-} from './answer-channel';
+  CONTROL_RELAY_COUNT,
+  MIN_CONTROL_RELAYS,
+} from './nostr-file/constants';
 import type { WireEncoding } from './transfer-source';
+
+/** Relays an offer may name, at most. */
+export const OFFER_RELAY_COUNT = CONTROL_RELAY_COUNT;
+/** Fewer usable relays than this and the offer names none. */
+export const MIN_OFFER_RELAYS = MIN_CONTROL_RELAYS;
 
 // Deterministic deflate helpers (avoid browser stream API stalls).
 function deflateCompress(data: Uint8Array): Uint8Array {
@@ -72,33 +77,34 @@ export interface SignalingPayload {
   salt?: number[]; // Salt for content encryption key derivation (from ECDH shared secret)
   /**
    * Offer-only, and only when relays were proven before the code was made:
-   * the relays the receiver publishes its sealed answer to, and the secret
-   * keying that channel. Both travel together or not at all; without them the
-   * answer comes back by hand as before.
+   * the control relays of the Nostr file-relay fallback, used if the direct
+   * WebRTC connection fails. Signaling itself is always carried by hand —
+   * the answer goes back by QR or copy/paste, never over these relays.
    */
-  answerRelays?: string[];
-  /** base64(32-byte answer-channel secret) */
-  answerSecret?: string;
+  relays?: string[];
+}
+
+/** Offer-side validation of the relay list the receiver is asked to use. */
+export function normalizeOfferRelays(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > OFFER_RELAY_COUNT) return null;
+  const relays: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.length >= 200) return null;
+    const normalized = normalizeRelayUrl(entry);
+    if (normalized === null || relays.includes(normalized)) return null;
+    relays.push(normalized);
+  }
+  return relays.length >= MIN_OFFER_RELAYS ? relays : null;
 }
 
 /**
- * The answer channel an offer advertises, or null when it advertises none.
- * A half-formed or malformed channel invalidates the whole offer (see
+ * The fallback relays an offer names, or null when it names none. A
+ * malformed relay list invalidates the whole offer (see
  * isValidSignalingPayload), so this only ever sees well-formed input.
  */
-export function answerChannelFromOffer(
-  payload: SignalingPayload,
-): { relays: string[]; secret: Uint8Array } | null {
-  if (payload.type !== 'offer') return null;
-  if (
-    payload.answerRelays === undefined ||
-    payload.answerSecret === undefined
-  ) {
-    return null;
-  }
-  const relays = normalizeAnswerRelays(payload.answerRelays);
-  const secret = decodeAnswerSecret(payload.answerSecret);
-  return relays && secret ? { relays, secret } : null;
+export function relaysFromOffer(payload: SignalingPayload): string[] | null {
+  if (payload.type !== 'offer' || payload.relays === undefined) return null;
+  return normalizeOfferRelays(payload.relays);
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -207,22 +213,17 @@ export function isValidSignalingPayload(
     return false;
   if (!Number.isFinite(p.createdAt)) return false;
   if (!isValidPublicKeyArray(p.publicKey)) return false;
-  return isValidAnswerChannelFields(p);
+  return isValidRelaysField(p);
 }
 
 /**
- * The answer-channel fields are offer-only and all-or-nothing: an answer
- * carrying them, or an offer carrying half of them (or an unusable relay
- * list), is malformed rather than silently manual-only.
+ * The relay list is offer-only: an answer carrying it, or an offer carrying
+ * an unusable one, is malformed rather than silently relay-less.
  */
-function isValidAnswerChannelFields(p: Record<string, unknown>): boolean {
-  const hasRelays = p.answerRelays !== undefined;
-  const hasSecret = p.answerSecret !== undefined;
-  if (!hasRelays && !hasSecret) return true;
-  if (!hasRelays || !hasSecret || p.type !== 'offer') return false;
-  if (typeof p.answerSecret !== 'string') return false;
-  if (decodeAnswerSecret(p.answerSecret) === null) return false;
-  return normalizeAnswerRelays(p.answerRelays) !== null;
+function isValidRelaysField(p: Record<string, unknown>): boolean {
+  if (p.relays === undefined) return true;
+  if (p.type !== 'offer') return false;
+  return normalizeOfferRelays(p.relays) !== null;
 }
 
 /**
@@ -257,18 +258,10 @@ export function generateMutualOfferBinary(
     mimeType: string;
     publicKey: Uint8Array; // ECDH public key (65 bytes)
     salt: Uint8Array; // Salt for AES key derivation
-    /** Omitted together when no relay set was proven for the answer. */
-    answerRelays?: string[];
-    answerSecret?: Uint8Array;
+    /** Omitted when no relay set was proven for the fallback. */
+    relays?: string[];
   },
 ): Uint8Array {
-  const answerChannel =
-    metadata.answerRelays && metadata.answerSecret
-      ? {
-          answerRelays: metadata.answerRelays,
-          answerSecret: encodeAnswerSecret(metadata.answerSecret),
-        }
-      : {};
   const payload: SignalingPayload = {
     type: 'offer',
     sdp: offer.sdp || '',
@@ -280,7 +273,7 @@ export function generateMutualOfferBinary(
     mimeType: metadata.mimeType,
     publicKey: Array.from(metadata.publicKey),
     salt: Array.from(metadata.salt),
-    ...answerChannel,
+    ...(metadata.relays ? { relays: metadata.relays } : {}),
   };
 
   return encodeManualPayload(payload);

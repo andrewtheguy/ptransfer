@@ -8,7 +8,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 - **100% Static - No Backend Required**: The entire app is a static site that can be hosted on any static hosting service (GitHub Pages, Netlify, Vercel, S3, etc.). No server-side code, no database, no backend infrastructure needed.
 - **Works offline**: No internet required after page load when using Manual Exchange on same local network
-- **Flexible signaling**: Nostr (default) or Manual Exchange — you hand over the offer (QR/copy-paste), then the receiver explicitly chooses whether to return the encrypted response over Nostr relays or by QR/copy-paste. If relay publication fails after the relay option is chosen, both sides must restart; the app does not silently switch return paths. With internet, Manual Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
+- **Flexible signaling**: Nostr (default) or Manual Exchange — you hand over the offer (QR/copy-paste) and the receiver hands the response back the same way; the response only enters the sender's page when the sender scans or pastes it. With internet, Manual Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
 - **Rotating PIN pairing (Nostr)**: A case-sensitive 12-character PIN (letters and digits only) that rotates every 2 minutes locates the sender and drives a SPAKE2 password-authenticated key exchange; nothing published to relays can be used to guess the PIN offline
 - **Confirmation code (Nostr)**: After entering the PIN, the receiver is shown an 8-character code the sender must type in before anything is sent — so someone who spots the PIN over your shoulder cannot quietly take the file
 - **File or folder transfer**: Send a file, or a ZIP archive created from multiple files/a folder. Everything is compressed behind the scenes: a single file is deflated during the transfer and restored on receipt, while multi-file/folder ZIP output (whose entries are already deflated) is never recompressed. The 2 GiB limit is checked against the total size of the selected input files before compression — a selection over 2 GiB cannot be sent, even if it would compress smaller. On the direct P2P path, the sender reads selected files lazily without scratch storage and receivers keep payloads up to 100 MiB in memory before spilling to OPFS. The Manual Exchange relay fallback instead materializes payloads in memory and is capped at 100 MiB. See [Browser Requirements](#browser-requirements)
@@ -40,13 +40,13 @@ identifiers to pTransfer and is incompatible with earlier releases.
 3. Choose Auto Exchange mode or Manual Exchange mode
 4. For Auto Exchange, click "Start Auto Exchange" and share the displayed 12-character PIN with the receiver. The PIN rotates automatically every 2 minutes while keeping the immediately previous PIN bucket valid; a countdown under the PIN shows when the next one appears. Selecting "Generate a new PIN" replaces it immediately and invalidates all retained older PIN generations.
 5. Once someone claims the transfer, ask them for the confirmation code on their screen and enter it. Nothing is sent until it matches, so a stranger who saw the PIN cannot receive the file.
-6. For Manual Exchange, click "Start Manual Exchange" and give the receiver the QR/copy-paste signaling payload. If the offer names working relays, the receiver chooses whether to return the response through them or show a QR/copy-paste response for you to take back.
+6. For Manual Exchange, click "Start Manual Exchange" and give the receiver the QR/copy-paste signaling payload, then scan or paste the response they show you.
 
 ### Receiving
 
 1. Choose the transfer mode that matches the sender
 2. For Auto Exchange mode, enter the PIN currently shown on the sender's screen and click "Receive", then read the confirmation code that appears back to the sender
-3. For Manual Exchange mode, click "Start Receive", then scan or paste the sender's signaling payload. When offered a choice, either send the response through the named relays or show a code for the sender to scan/paste.
+3. For Manual Exchange mode, click "Start Receive", then scan or paste the sender's signaling payload and show the sender the response code to scan or paste.
 4. Click "Download File" to save
 
 ## Security
@@ -103,9 +103,9 @@ When WebRTC succeeds, all signaling methods share the same **data-channel transf
 
 **Signaling Methods** (sender chooses):
 - **Nostr** (default): Requires internet. Decentralized relay signaling. Devices can be on different networks.
-- **Manual Exchange**: No internet required. Hand over the sender's signaling payload via QR scan or copy/paste (camera optional); when the offer names relays, the receiver chooses between returning the sealed response through them or returning it by QR/copy-paste. With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
+- **Manual Exchange**: No internet required. Both the sender's offer and the receiver's response are handed over via QR scan or copy/paste (camera optional); relays never carry signaling in this mode. With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network.
 
-**Data Transfer**: WebRTC P2P first. STUN may help the peers discover a direct route; TURN relaying is not configured. In **Manual Exchange**, when a direct P2P connection cannot be established and the offer named relays, the encrypted file (up to 100 MiB) is relayed through public Nostr relays automatically — the Nostr relay stand-in for TURN. No file data is uploaded ahead of time: the relay path runs only once the direct connection has failed, so a transfer that connects directly never puts file bytes on a storage relay. What matters is only that the offer named proven relays — returning the answer by QR/copy-paste instead of over the relays does not disable the fallback. The fallback is unavailable when the offer named no relays or the file exceeds the 100 MiB cap, and it can still fail if too few storage relays work. In **Auto Exchange** a failed direct connection has no relay fallback and the transfer does not complete. When a transfer cannot complete, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. See [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) for the relay transport.
+**Data Transfer**: WebRTC P2P first. STUN may help the peers discover a direct route; TURN relaying is not configured. In **Manual Exchange**, when a direct P2P connection cannot be established and the offer named relays, the encrypted file (up to 100 MiB) is relayed through public Nostr relays automatically — the Nostr relay stand-in for TURN. No file data is uploaded ahead of time: the relay path runs only once the direct connection has failed, so a transfer that connects directly never puts file bytes on a storage relay. What matters is only that the offer named proven relays. The fallback is unavailable when the offer named no relays or the file exceeds the 100 MiB cap, and it can still fail if too few storage relays work. In **Auto Exchange** a failed direct connection has no relay fallback and the transfer does not complete. When a transfer cannot complete, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. See [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) for the relay transport.
 
 See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encryption specifics.
 
@@ -113,7 +113,7 @@ See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encry
 
 Receivers choose the matching receive mode:
 - **Auto Exchange mode**: Nostr signaling with the rotating PIN shown on the sender's screen.
-- **Manual Exchange mode**: The sender's signaling payload is handed over directly via QR scan or copy/paste. The receiver chooses whether its encrypted response uses the named relays or QR/copy-paste; if direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
+- **Manual Exchange mode**: The sender's signaling payload is handed over directly via QR scan or copy/paste, and the response goes back the same way; if direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
 
 ## Documentation
 

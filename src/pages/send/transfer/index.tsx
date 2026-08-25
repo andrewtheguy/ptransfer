@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   CheckCircle2,
-  ChevronDown,
   Loader2,
   RotateCcw,
 } from 'lucide-react';
@@ -15,11 +14,6 @@ import { PinDisplay } from '@/components/ptransfer/pin-display';
 import { QRInput } from '@/components/ptransfer/qr-input';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 import { useSend } from '@/contexts/send-context';
 import {
   type UseManualSendReturn,
@@ -59,9 +53,6 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  // Hand-return input for the receiver's response, kept collapsed while the
-  // offer also permits the receiver to choose a relay return.
-  const [manualAnswerOpen, setManualAnswerOpen] = useState(false);
 
   // Hooks for transfer
   const nostrHook = useNostrSend();
@@ -96,9 +87,6 @@ export function SendTransferPage() {
   const manualState =
     activeHook.type === 'offline' ? activeHook.hook.state : null;
   const offerData = manualState?.offerData;
-  // 'waiting': the offer names relays, so the receiver chooses between that
-  // return path and the scan/paste input. 'unavailable': hand return only.
-  const answerRelayStatus = manualState?.answerRelayStatus;
   const submitAnswer =
     activeHook.type === 'offline' ? activeHook.hook.submitAnswer : undefined;
 
@@ -333,9 +321,11 @@ export function SendTransferPage() {
                       </li>
                     </ul>
                     <p className="text-sm text-muted-foreground">
-                      {answerRelayStatus === 'waiting'
-                        ? 'The receiver then chooses how to return their response: through Nostr relays, which land on this page by themselves, or as a code for you to scan or paste below. Keep this page open either way. If a direct connection cannot be made, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.'
-                        : 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect.'}
+                      Either way, the receiver then sends their response back
+                      the same way — scan or paste it below to connect. If a
+                      direct connection cannot be made, an eligible encrypted
+                      file up to 100 MiB can use the automatic Nostr relay
+                      fallback.
                     </p>
                   </div>
                 </div>
@@ -344,34 +334,12 @@ export function SendTransferPage() {
                 <MultiQRDisplay data={offerData} />
 
                 {/* Input for receiver's response */}
-                {answerRelayStatus === 'waiting' ? (
-                  <Collapsible
-                    open={manualAnswerOpen}
-                    onOpenChange={setManualAnswerOpen}
-                    className="pt-2 border-t"
-                  >
-                    <div className="flex items-center gap-2 pb-3 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      Waiting for the receiver's response...
-                    </div>
-                    <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
-                      <ChevronDown
-                        className={`h-4 w-4 transition-transform ${manualAnswerOpen ? 'rotate-180' : ''}`}
-                      />
-                      Scan or paste the receiver's response
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="pt-3">
-                      <QRInput onSubmit={submitAnswer} expectedType="answer" />
-                    </CollapsibleContent>
-                  </Collapsible>
-                ) : (
-                  <div className="pt-2 border-t">
-                    <p className="text-sm font-medium mb-3">
-                      Scan or paste receiver's response
-                    </p>
-                    <QRInput onSubmit={submitAnswer} expectedType="answer" />
-                  </div>
-                )}
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium mb-3">
+                    Scan or paste receiver's response
+                  </p>
+                  <QRInput onSubmit={submitAnswer} expectedType="answer" />
+                </div>
               </div>
             )}
 
