@@ -393,10 +393,13 @@ sequenceDiagram
 The relay engine is started from the Code Exchange hooks the moment a direct connection
 fails (see `use-code-send.ts` / `use-code-receive.ts`). Tests are colocated
 (`src/lib/nostr-file/*.test.ts`) and run against the injectable in-memory relay network in
-`mock-pool.ts`. `npm test` runs the fast unit files first, then runs `live.test.ts` as a
-separate sequential integration phase so its real-time transfer deadlines do not compete
-with parallel unit workers. Either phase can be run directly with `npm run test:unit` or
-`npm run test:integration:nostr-file`.
+`mock-pool.ts`. They are split into two vitest projects. `npm test` runs the `unit`
+project only (~6s). `live.test.ts` is the `integration` project: it drives whole transfers
+and waits out real-time heartbeats, retry clocks, and idle deadlines, so it takes ~60s on
+its own and is opt-in via `npm run test:integration:nostr-file`. Its project sets
+`fileParallelism: false` so those deadlines never compete with parallel unit workers,
+however the run was started. `npm run test:all` runs both, and is what to run before
+pushing a change to the transfer engine.
 
 Public-relay end-to-end coverage is opt-in because it publishes expiring events to shared
 infrastructure. Run `npm run test:live` to execute `tests/live_nostr_file_e2e.ts` followed

@@ -1,5 +1,18 @@
 import type { Event, Filter } from 'nostr-tools';
+import { CONTROL_RELAY_COUNT } from './constants';
 import type { NostrFilePool } from './pool';
+
+/**
+ * The signaling seed pool for tests. Every entry point that probes or
+ * discovers from signaling relays takes a `seeds` option, so tests pass these
+ * and never reach for DEFAULT_RELAYS — editing the real signaling pool is a
+ * product decision and must not move a single test. Sized at
+ * CONTROL_RELAY_COUNT so a full control set can be filled from seeds alone.
+ */
+export const SEED_RELAYS = Array.from(
+  { length: CONTROL_RELAY_COUNT },
+  (_, i) => `wss://seed-${i}.example`,
+);
 
 /**
  * In-memory relay network for tests: per-relay event stores, query/filter

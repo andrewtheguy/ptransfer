@@ -14,6 +14,7 @@ import {
 } from './constants';
 import type { NostrFilePool } from './pool';
 import {
+  canonicalUrls,
   createIndexedDbRelayPool,
   getRelayCandidates,
   type HealthyRelay,
@@ -101,15 +102,14 @@ export interface UploadRelaySelection {
   unprobedCandidates: string[];
 }
 
-/** Excluded-URL matcher: the given relays plus the DEFAULT_RELAYS signaling pool. */
-function storageExclusion(excludeRelays: string[]): (url: string) => boolean {
-  // DEFAULT_RELAYS is also filtered here (not just in discovery) so a stale
+/** Excluded-URL matcher: the given relays plus the signaling seed pool. */
+function storageExclusion(
+  excludeRelays: string[],
+  seeds: string[],
+): (url: string) => boolean {
+  // The seeds are also filtered here (not just in discovery) so a stale
   // candidate cache written before seeds were barred cannot resurface them.
-  const excluded = new Set(
-    [...excludeRelays, ...DEFAULT_RELAYS]
-      .map(normalizeRelayUrl)
-      .filter((url): url is string => url !== null),
-  );
+  const excluded = new Set(canonicalUrls([...excludeRelays, ...seeds]));
   return (url: string) => {
     const normalized = normalizeRelayUrl(url);
     return normalized === null || excluded.has(normalized);
@@ -126,21 +126,21 @@ async function discoverStorageCandidates(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
   excludeRelays: string[],
+  seeds: string[],
   stats: NostrFileTransferStats,
 ): Promise<string[]> {
-  const isExcluded = storageExclusion(excludeRelays);
+  const isExcluded = storageExclusion(excludeRelays, seeds);
   const discoverStarted = Date.now();
   const candidates = (
-    await getRelayCandidates(pool, storage, { capability: 'storage' })
+    await getRelayCandidates(pool, storage, { capability: 'storage', seeds })
   ).filter((url) => !isExcluded(url));
   stats.candidates = candidates.length;
   stats.phaseMs.discover = Date.now() - discoverStarted;
-  const controlSet = new Set(
-    excludeRelays
-      .map(normalizeRelayUrl)
-      .filter((url): url is string => url !== null),
-  );
-  const doneSeeds = DEFAULT_RELAYS.filter((url) => !controlSet.has(url));
+  // Both sides canonical: a seed compared in any other form would not match
+  // the control set and its socket would be closed out from under the
+  // control channel it is carrying.
+  const controlSet = new Set(canonicalUrls(excludeRelays));
+  const doneSeeds = seeds.filter((url) => !controlSet.has(url));
   if (doneSeeds.length > 0) pool.close?.(doneSeeds);
   return candidates;
 }
@@ -219,7 +219,7 @@ async function probeStorageCandidates(
 /**
  * The relay ring for an upload: the caller's override, or discovery +
  * health check + rotating batch selection. Relays in `excludeRelays` (the
- * transfer's control relays) and the whole DEFAULT_RELAYS signaling pool
+ * transfer's control relays) and the whole signaling seed pool
  * never join the ring, whichever path picks it — signaling relays are chosen
  * for small messages, not full-size chunks, and chunk traffic must not compete
  * with the control channel. `discovered` skips discovery: an earlier pass's
@@ -233,6 +233,12 @@ export async function resolveUploadRelays(
   opts: {
     relayOverride?: string[];
     excludeRelays: string[];
+    /**
+     * Signaling seed pool: probed for the control channel, queried for
+     * discovery, and barred from the storage ring. Defaults to
+     * DEFAULT_RELAYS.
+     */
+    seeds?: string[];
     discovered?: DiscoveredStorageRelays | null;
     isCancelled: () => boolean;
     onProgress: (p: UploadProgress) => void;
@@ -247,7 +253,8 @@ export async function resolveUploadRelays(
     for (const relay of relays) relayStatsFor(stats, relay, 'storage');
     return relays;
   };
-  const isExcluded = storageExclusion(opts.excludeRelays);
+  const seeds = canonicalUrls(opts.seeds ?? [...DEFAULT_RELAYS]);
+  const isExcluded = storageExclusion(opts.excludeRelays, seeds);
   if (opts.relayOverride && opts.relayOverride.length > 0) {
     const usable = [
       ...new Set(
@@ -273,6 +280,7 @@ export async function resolveUploadRelays(
       pool,
       storage,
       opts.excludeRelays,
+      seeds,
       stats,
     );
   }
@@ -319,7 +327,7 @@ export interface TransferRelaySelection {
 
 /**
  * Resolve the control (signaling) relays the offer will name, before the code
- * is shown. Only what the code needs is awaited here: probe the DEFAULT_RELAYS
+ * is shown. Only what the code needs is awaited here: probe the signaling
  * seeds with a control-sized write->read round trip, and when fewer than
  * CONTROL_RELAY_COUNT pass, discover storage candidates and full-size-probe
  * them only until the gap is filled — a defunct default is replaced by a relay
@@ -336,6 +344,12 @@ export async function resolveTransferRelays(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
   opts: {
+    /**
+     * Signaling seed pool: probed for the control channel, queried for
+     * discovery, and barred from the storage ring. Defaults to
+     * DEFAULT_RELAYS.
+     */
+    seeds?: string[];
     isCancelled: () => boolean;
     onControlProgress: (checked: number, healthy: number) => void;
     onUploadProgress: (p: UploadProgress) => void;
@@ -343,6 +357,7 @@ export async function resolveTransferRelays(
   },
 ): Promise<TransferRelaySelection> {
   const { stats } = opts;
+  const seeds = canonicalUrls(opts.seeds ?? [...DEFAULT_RELAYS]);
   const throwIfCancelled = () => {
     if (opts.isCancelled()) throw new NostrFileCancelledError();
   };
@@ -358,7 +373,7 @@ export async function resolveTransferRelays(
   };
 
   const probeStarted = Date.now();
-  const healthyDefaults = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
+  const healthyDefaults = await healthCheckRelays(pool, seeds, {
     probeBytes: CONTROL_PROBE_BYTES,
     timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
     targetCount: CONTROL_RELAY_COUNT,
@@ -377,6 +392,7 @@ export async function resolveTransferRelays(
       pool,
       storage,
       healthyDefaults.map((relay) => relay.url),
+      seeds,
       stats,
     );
     throwIfCancelled();
@@ -449,6 +465,12 @@ export function prepareStorageRelays(
     stats?: NostrFileTransferStats;
     /** What `resolveTransferRelays`'s backfill discovery left over, if any. */
     discovered?: DiscoveredStorageRelays | null;
+    /**
+     * Signaling seed pool: probed for the control channel, queried for
+     * discovery, and barred from the storage ring. Defaults to
+     * DEFAULT_RELAYS.
+     */
+    seeds?: string[];
     storage?: RelayPoolStorage;
     relayOverride?: string[];
     signal?: AbortSignal;
@@ -468,6 +490,7 @@ export function prepareStorageRelays(
     if (opts.relayOverride?.length) return;
     void sweepRelayHealth(pool, storage, {
       unprobed,
+      seeds: opts.seeds,
       excludeRelays: [...opts.controlRelays, ...ring],
       signal: opts.signal,
       isCancelled,
@@ -477,6 +500,7 @@ export function prepareStorageRelays(
     const upload = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.relayOverride,
       excludeRelays: opts.controlRelays,
+      seeds: opts.seeds,
       discovered: opts.discovered,
       isCancelled,
       onProgress: opts.onProgress ?? (() => {}),

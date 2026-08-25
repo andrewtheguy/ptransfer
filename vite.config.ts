@@ -1,8 +1,10 @@
 import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { configDefaults, defineConfig } from 'vitest/config';
+
+const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
 function getGitCommitHash(): string {
   // Cloudflare Pages exposes the deployed commit via this env var. Local builds
@@ -13,6 +15,32 @@ function getGitCommitHash(): string {
 
 // https://vite.dev/config/
 export default defineConfig({
+  test: {
+    // `src/lib/nostr-file/live.test.ts` drives whole transfers through the
+    // mock relay network and waits out real-time heartbeats, retry clocks and
+    // idle deadlines — ~60s against ~6s for every other file combined — so it
+    // is a project of its own rather than part of the unit run. Splitting it
+    // here (not just in an npm script) is what keeps `fileParallelism: false`
+    // attached to the file: its real-time deadlines must never compete with
+    // parallel unit workers, however the run was started.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          exclude: [...configDefaults.exclude, INTEGRATION_TESTS],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          include: [INTEGRATION_TESTS],
+          fileParallelism: false,
+        },
+      },
+    ],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0'),
     __GIT_COMMIT_HASH__: JSON.stringify(getGitCommitHash()),
