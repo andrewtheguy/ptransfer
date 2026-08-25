@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  computeAnswerTranscriptHash,
   computeOfferTranscriptHash,
   decodeAnswerConfirmation,
   generateMutualOfferBinary,
@@ -549,17 +550,23 @@ export function useCodeSend(): UseCodeSendReturn {
         );
 
         // Key confirmation before anything in the answer is acted on. The tag
-        // is keyed by the shared secret just derived and bound to this exact
-        // offer, so only a peer that read this offer and completed the same
-        // agreement can produce it: an answer meant for another transfer, a
-        // replayed answer, or one whose SDP or public key was altered fails
-        // here instead of surfacing later as a connection that never opens.
-        // The offer stays the only secret gating the transfer — this does not
-        // make an offer captured off the screen harmless.
+        // is keyed by the shared secret just derived and bound to both this
+        // offer and the answer's own contents, so only a peer that read this
+        // offer and completed the same agreement can produce one, and only
+        // for the answer it actually sent: an answer meant for another
+        // transfer, a replayed answer, and one whose SDP or candidates were
+        // altered on the way back all fail here instead of surfacing later as
+        // a connection that never opens. The offer stays the only secret
+        // gating the transfer — this does not make an offer captured off the
+        // screen harmless.
         const expectedConfirmation = await deriveAnswerConfirmation(
           sharedSecretKey,
           saltRef.current,
-          await computeOfferTranscriptHash(offerBinary),
+          {
+            offerTranscriptHash: await computeOfferTranscriptHash(offerBinary),
+            answerTranscriptHash:
+              await computeAnswerTranscriptHash(answerPayload),
+          },
         );
         const presentedConfirmation = decodeAnswerConfirmation(
           answerPayload.confirm,

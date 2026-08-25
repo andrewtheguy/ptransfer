@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeAnswerTranscriptHash,
   computeOfferTranscriptHash,
   decodeAnswerConfirmation,
   encodeAnswerConfirmation,
@@ -37,7 +38,8 @@ describe('Code Exchange Signaling Utils', () => {
   const mockPublicKey = new Uint8Array(65).fill(1);
   mockPublicKey[0] = 4; // Uncompressed point prefix
   const mockSalt = new Uint8Array(16).fill(2);
-  const mockConfirmation = new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3);
+  const stubSigner = async () =>
+    new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3);
 
   it('should generate and parse mutual offer binary correctly', async () => {
     const metadata = {
@@ -78,7 +80,7 @@ describe('Code Exchange Signaling Utils', () => {
       { type: 'answer', sdp: mockOffer.sdp },
       mockCandidates,
       mockPublicKey,
-      mockConfirmation,
+      stubSigner,
       createdAt,
     );
 
@@ -89,7 +91,9 @@ describe('Code Exchange Signaling Utils', () => {
     expect(parsed?.type).toBe('answer');
     expect(parsed?.sdp).toBe(mockOffer.sdp);
     expect(parsed?.publicKey).toEqual(Array.from(mockPublicKey));
-    expect(decodeAnswerConfirmation(parsed?.confirm)).toEqual(mockConfirmation);
+    expect(decodeAnswerConfirmation(parsed?.confirm)).toEqual(
+      await stubSigner(),
+    );
   });
 
   it('should obfuscate data (output should not contain cleartext JSON)', async () => {
@@ -196,13 +200,13 @@ describe('offer-borne fallback relays', () => {
     expect(relaysFromOffer(parsed)).toBeNull();
   });
 
-  it('never carries an answer channel: an answer has no relay field', () => {
+  it('never carries an answer channel: an answer has no relay field', async () => {
     const answer = parseMutualPayload(
-      generateMutualAnswerBinary(
+      await generateMutualAnswerBinary(
         { type: 'answer', sdp: 'v=0' },
         [],
         publicKey,
-        new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3),
+        async () => new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3),
       ),
     ) as SignalingPayload;
     expect(answer.relays).toBeUndefined();
@@ -275,6 +279,9 @@ describe('answer confirmation tag', () => {
   const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
   const salt = new Uint8Array(16).fill(2);
   const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'v=0\r\na' };
+  const iceCandidates = [
+    { candidate: 'candidate:1 1 UDP 123 10.0.0.1 5000 typ host' },
+  ] as RTCIceCandidate[];
 
   /** The offer bytes a sender would show, for a fresh sender keypair. */
   async function makeOffer(fileName = 'test.txt') {
@@ -291,70 +298,133 @@ describe('answer confirmation tag', () => {
     return { senderKeys, binary };
   }
 
-  it('lets the sender confirm an answer built from its own offer', async () => {
-    const { senderKeys, binary } = await makeOffer();
-
-    // Receiver: derives against the offer's key and tags its answer.
-    const parsed = parseMutualPayload(binary) as SignalingPayload;
+  /** What the receiver does: agree on a key, then sign the answer it sends. */
+  async function makeAnswer(
+    offerBinary: Uint8Array,
+    candidates: RTCIceCandidate[] = [],
+  ) {
+    const parsed = parseMutualPayload(offerBinary) as SignalingPayload;
     const receiverKeys = await generateECDHKeyPair();
-    const receiverSecret = await deriveSharedSecretKey(
+    const secret = await deriveSharedSecretKey(
       receiverKeys.privateKey,
       new Uint8Array(parsed.publicKey),
     );
-    const answerBinary = generateMutualAnswerBinary(
+    const offerTranscriptHash = await computeOfferTranscriptHash(offerBinary);
+    const binary = await generateMutualAnswerBinary(
       answer,
-      [],
+      candidates,
       receiverKeys.publicKeyBytes,
-      await deriveAnswerConfirmation(
-        receiverSecret,
-        salt,
-        await computeOfferTranscriptHash(binary),
+      (answerTranscriptHash) =>
+        deriveAnswerConfirmation(secret, salt, {
+          offerTranscriptHash,
+          answerTranscriptHash,
+        }),
+    );
+    return { binary, receiverKeys };
+  }
+
+  /** What the sender does: recompute the tag it expects for what it holds. */
+  async function expectedTag(
+    senderPrivateKey: CryptoKey,
+    offerBinary: Uint8Array,
+    answerPayload: SignalingPayload,
+  ) {
+    return deriveAnswerConfirmation(
+      await deriveSharedSecretKey(
+        senderPrivateKey,
+        new Uint8Array(answerPayload.publicKey),
       ),
-    );
-
-    // Sender: recomputes from its own offer bytes and the answer's key.
-    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
-    const senderSecret = await deriveSharedSecretKey(
-      senderKeys.privateKey,
-      new Uint8Array(answerPayload.publicKey),
-    );
-    const expected = await deriveAnswerConfirmation(
-      senderSecret,
       salt,
-      await computeOfferTranscriptHash(binary),
+      {
+        offerTranscriptHash: await computeOfferTranscriptHash(offerBinary),
+        answerTranscriptHash: await computeAnswerTranscriptHash(answerPayload),
+      },
     );
+  }
 
-    expect(decodeAnswerConfirmation(answerPayload.confirm)).toEqual(expected);
+  it('lets the sender confirm an answer built from its own offer', async () => {
+    const { senderKeys, binary } = await makeOffer();
+    const { binary: answerBinary } = await makeAnswer(binary, iceCandidates);
+
+    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
+    expect(decodeAnswerConfirmation(answerPayload.confirm)).toEqual(
+      await expectedTag(senderKeys.privateKey, binary, answerPayload),
+    );
+  });
+
+  it('rejects an answer whose SDP was edited in transit', async () => {
+    const { senderKeys, binary } = await makeOffer();
+    const { binary: answerBinary } = await makeAnswer(binary, iceCandidates);
+    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
+
+    // Public key and tag left intact — only the SDP is swapped.
+    const tampered: SignalingPayload = {
+      ...answerPayload,
+      sdp: `${answerPayload.sdp}\r\na=recvonly`,
+    };
+
+    expect(decodeAnswerConfirmation(tampered.confirm)).not.toEqual(
+      await expectedTag(senderKeys.privateKey, binary, tampered),
+    );
+  });
+
+  it('rejects an answer whose ICE candidates were edited in transit', async () => {
+    const { senderKeys, binary } = await makeOffer();
+    const { binary: answerBinary } = await makeAnswer(binary, iceCandidates);
+    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
+
+    for (const candidates of [
+      [],
+      [
+        ...answerPayload.candidates,
+        'candidate:2 1 UDP 1 10.0.0.9 6000 typ host',
+      ],
+      ['candidate:1 1 UDP 123 10.0.0.2 5000 typ host'],
+    ]) {
+      const tampered: SignalingPayload = { ...answerPayload, candidates };
+      expect(decodeAnswerConfirmation(tampered.confirm)).not.toEqual(
+        await expectedTag(senderKeys.privateKey, binary, tampered),
+      );
+    }
+  });
+
+  it('rejects an answer whose timestamp was edited in transit', async () => {
+    const { senderKeys, binary } = await makeOffer();
+    const { binary: answerBinary } = await makeAnswer(binary);
+    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
+
+    const tampered: SignalingPayload = {
+      ...answerPayload,
+      createdAt: answerPayload.createdAt + 1,
+    };
+
+    expect(decodeAnswerConfirmation(tampered.confirm)).not.toEqual(
+      await expectedTag(senderKeys.privateKey, binary, tampered),
+    );
   });
 
   it('does not verify against a different offer', async () => {
     const a = await makeOffer('a.txt');
     const b = await makeOffer('b.txt');
-    const receiverKeys = await generateECDHKeyPair();
-    const secret = await deriveSharedSecretKey(
-      receiverKeys.privateKey,
-      new Uint8Array(
-        (parseMutualPayload(a.binary) as SignalingPayload).publicKey,
-      ),
-    );
+    const { binary: answerBinary } = await makeAnswer(a.binary);
+    const answerPayload = parseMutualPayload(answerBinary) as SignalingPayload;
 
-    const forA = await deriveAnswerConfirmation(
-      secret,
-      salt,
-      await computeOfferTranscriptHash(a.binary),
+    // The answer is genuine and unaltered; only the offer it is checked
+    // against differs.
+    expect(decodeAnswerConfirmation(answerPayload.confirm)).toEqual(
+      await expectedTag(a.senderKeys.privateKey, a.binary, answerPayload),
     );
-    const forB = await deriveAnswerConfirmation(
-      secret,
-      salt,
-      await computeOfferTranscriptHash(b.binary),
+    expect(decodeAnswerConfirmation(answerPayload.confirm)).not.toEqual(
+      await expectedTag(a.senderKeys.privateKey, b.binary, answerPayload),
     );
-
-    expect(forA).not.toEqual(forB);
   });
 
   it('does not verify for a peer that answered with a different key', async () => {
     const { senderKeys, binary } = await makeOffer();
-    const transcript = await computeOfferTranscriptHash(binary);
+    const binding = {
+      offerTranscriptHash: await computeOfferTranscriptHash(binary),
+      answerTranscriptHash: 'f'.repeat(64),
+    };
     const [one, two] = await Promise.all([
       generateECDHKeyPair(),
       generateECDHKeyPair(),
@@ -368,7 +438,7 @@ describe('answer confirmation tag', () => {
             keys.publicKeyBytes,
           ),
           salt,
-          transcript,
+          binding,
         ),
       ),
     );
@@ -376,7 +446,7 @@ describe('answer confirmation tag', () => {
     expect(first).not.toEqual(second);
   });
 
-  it('hashes the container bytes, so any edit changes the transcript', async () => {
+  it('hashes the offer container bytes, so any edit changes the transcript', async () => {
     const { binary } = await makeOffer();
     const tampered = new Uint8Array(binary);
     tampered[tampered.length - 1] ^= 0xff;
@@ -385,6 +455,37 @@ describe('answer confirmation tag', () => {
     expect(await computeOfferTranscriptHash(tampered)).not.toBe(
       await computeOfferTranscriptHash(binary),
     );
+  });
+
+  it('hashes every answer field the sender acts on, and not the tag', async () => {
+    const { binary: answerBinary } = await makeAnswer(
+      (await makeOffer()).binary,
+    );
+    const payload = parseMutualPayload(answerBinary) as SignalingPayload;
+    const base = await computeAnswerTranscriptHash(payload);
+
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+    // The tag lives inside the payload it covers, so it cannot cover itself.
+    expect(
+      await computeAnswerTranscriptHash({
+        ...payload,
+        confirm: encodeAnswerConfirmation(
+          new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(1),
+        ),
+      }),
+    ).toBe(base);
+    // Everything else the sender reads is covered.
+    for (const edit of [
+      { sdp: 'v=0' },
+      { candidates: ['candidate:9 1 UDP 1 10.0.0.9 9000 typ host'] },
+      { createdAt: payload.createdAt + 1 },
+      { publicKey: Array.from((await generateECDHKeyPair()).publicKeyBytes) },
+      { type: 'offer' as const },
+    ]) {
+      expect(
+        await computeAnswerTranscriptHash({ ...payload, ...edit }),
+      ).not.toBe(base);
+    }
   });
 
   it('requires a well-formed tag on every answer', async () => {
@@ -428,16 +529,11 @@ describe('answer confirmation tag', () => {
   });
 
   it('costs an answer only a few dozen bytes', async () => {
-    const withTag = generateMutualAnswerBinary(
-      answer,
-      [],
-      (await generateECDHKeyPair()).publicKeyBytes,
-      new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3),
-    );
-    const parsed = parseMutualPayload(withTag) as SignalingPayload;
+    const { binary } = await makeAnswer((await makeOffer()).binary);
+    const parsed = parseMutualPayload(binary) as SignalingPayload;
     const { confirm: _confirm, ...withoutTag } = parsed;
     expect(
-      withTag.length - estimatePayloadSize(withoutTag as SignalingPayload),
+      binary.length - estimatePayloadSize(withoutTag as SignalingPayload),
     ).toBeLessThan(64);
   });
 });

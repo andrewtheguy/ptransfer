@@ -157,7 +157,10 @@ describe('Confirmation code', () => {
 });
 
 describe('Code Exchange answer confirmation', () => {
-  const transcript = 'a'.repeat(64);
+  const binding = {
+    offerTranscriptHash: 'a'.repeat(64),
+    answerTranscriptHash: 'b'.repeat(64),
+  };
 
   /** The shared secret both sides of a Code Exchange reach. */
   async function ecdhSecret(): Promise<CryptoKey> {
@@ -172,36 +175,49 @@ describe('Code Exchange answer confirmation', () => {
     const secret = await ecdhSecret();
     const salt = generateSalt();
 
-    const first = await deriveAnswerConfirmation(secret, salt, transcript);
-    const second = await deriveAnswerConfirmation(secret, salt, transcript);
+    const first = await deriveAnswerConfirmation(secret, salt, binding);
+    const second = await deriveAnswerConfirmation(secret, salt, binding);
 
     expect(first).toHaveLength(ANSWER_CONFIRMATION_BYTES);
     expect(first).toEqual(second);
   });
 
-  it('separates transcripts, salts, and shared secrets', async () => {
+  it('separates both transcripts, salts, and shared secrets', async () => {
     const secret = await ecdhSecret();
     const salt = generateSalt();
-    const base = await deriveAnswerConfirmation(secret, salt, transcript);
+    const base = await deriveAnswerConfirmation(secret, salt, binding);
 
     expect(
-      await deriveAnswerConfirmation(secret, salt, 'b'.repeat(64)),
+      await deriveAnswerConfirmation(secret, salt, {
+        ...binding,
+        offerTranscriptHash: 'c'.repeat(64),
+      }),
     ).not.toEqual(base);
     expect(
-      await deriveAnswerConfirmation(secret, generateSalt(), transcript),
+      await deriveAnswerConfirmation(secret, salt, {
+        ...binding,
+        answerTranscriptHash: 'c'.repeat(64),
+      }),
+    ).not.toEqual(base);
+    // The two halves are not interchangeable: swapping them is a different
+    // binding, not the same one read the other way round.
+    expect(
+      await deriveAnswerConfirmation(secret, salt, {
+        offerTranscriptHash: binding.answerTranscriptHash,
+        answerTranscriptHash: binding.offerTranscriptHash,
+      }),
     ).not.toEqual(base);
     expect(
-      await deriveAnswerConfirmation(await ecdhSecret(), salt, transcript),
+      await deriveAnswerConfirmation(secret, generateSalt(), binding),
+    ).not.toEqual(base);
+    expect(
+      await deriveAnswerConfirmation(await ecdhSecret(), salt, binding),
     ).not.toEqual(base);
   });
 
   it('rejects a salt below the minimum width', async () => {
     await expect(
-      deriveAnswerConfirmation(
-        await ecdhSecret(),
-        new Uint8Array(8),
-        transcript,
-      ),
+      deriveAnswerConfirmation(await ecdhSecret(), new Uint8Array(8), binding),
     ).rejects.toThrow(/Salt too short/);
   });
 });

@@ -75,11 +75,12 @@ export interface SignalingPayload {
   publicKey: number[];
   /**
    * Answer-only. Base64 key-confirmation tag over the ECDH shared secret,
-   * bound to a digest of the offer container the receiver acted on (see
-   * deriveAnswerConfirmation). The sender recomputes it from its own offer
-   * bytes and refuses the answer unless it matches, so an answer that belongs
-   * to another transfer — or that never passed through a peer holding this
-   * offer — is rejected before any signal is applied.
+   * bound to a digest of the offer container the receiver acted on and to a
+   * digest of this answer's own fields (see deriveAnswerConfirmation). The
+   * sender recomputes both and refuses the answer unless the tag matches, so
+   * an answer that belongs to another transfer, that never passed through a
+   * peer holding this offer, or that was altered on the way back is rejected
+   * before any signal is applied.
    */
   confirm?: string;
   // Offer-only fields:
@@ -214,13 +215,46 @@ function decodeCodePayload(binary: Uint8Array): unknown {
 export async function computeOfferTranscriptHash(
   offerBinary: Uint8Array,
 ): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    offerBinary as BufferSource,
-  );
-  return Array.from(new Uint8Array(digest), (b) =>
-    b.toString(16).padStart(2, '0'),
-  ).join('');
+  return sha256Hex(offerBinary as BufferSource);
+}
+
+const ANSWER_TRANSCRIPT_LABEL = 'ptransfer:code-exchange-answer-transcript:v1';
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(data: BufferSource): Promise<string> {
+  return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', data)));
+}
+
+/**
+ * Digest of an answer's own contents: every field the sender acts on, and only
+ * those. The confirmation tag is bound to this, so editing an answer's SDP or
+ * ICE candidates in transit — leaving its public key and tag intact — makes
+ * the sender derive a different tag and reject it.
+ *
+ * Unlike the offer digest this cannot hash the container bytes: the tag lives
+ * inside them, so it would have to cover itself. It hashes a canonical JSON
+ * array instead, which fixes element order here rather than depending on key
+ * ordering, and whose string escaping means no field value can forge a
+ * delimiter into another. The `confirm` field is excluded by construction;
+ * fields outside this list do not exist in the format (`relays` is rejected on
+ * an answer) and no consumer reads any.
+ */
+export async function computeAnswerTranscriptHash(
+  payload: SignalingPayload,
+): Promise<string> {
+  const canonical = JSON.stringify([
+    ANSWER_TRANSCRIPT_LABEL,
+    payload.type,
+    payload.sdp,
+    payload.candidates,
+    payload.createdAt,
+    toHex(Uint8Array.from(payload.publicKey)),
+  ]);
+
+  return sha256Hex(new TextEncoder().encode(canonical));
 }
 
 /** Base64 of the raw confirmation tag, as it travels in the answer. */
@@ -349,30 +383,44 @@ export function generateMutualOfferBinary(
 }
 
 /**
+ * Produces the key-confirmation tag for an answer whose transcript hashes to
+ * `answerTranscriptHash`. In practice this closes over the shared secret and
+ * the offer digest and calls deriveAnswerConfirmation.
+ */
+export type AnswerConfirmationSigner = (
+  answerTranscriptHash: string,
+) => Promise<Uint8Array>;
+
+/**
  * Generate mutual answer as binary data
  * Format: [PT01 magic (4 bytes)][obfuscated compressed payload]
  *
- * Carries the key-confirmation tag the sender checks before it applies the
- * answer; see deriveAnswerConfirmation.
+ * The tag has to cover the exact fields being encoded, so the payload is built
+ * first, hashed, and only then handed to `sign` — rather than taking a tag the
+ * caller derived from values it believes match. That makes it impossible for
+ * the transcript and the encoded answer to drift apart.
  */
-export function generateMutualAnswerBinary(
+export async function generateMutualAnswerBinary(
   answer: RTCSessionDescriptionInit,
   candidates: RTCIceCandidate[],
   publicKey: Uint8Array, // ECDH public key (65 bytes)
-  /** Key-confirmation tag from deriveAnswerConfirmation (raw bytes). */
-  confirmation: Uint8Array,
+  sign: AnswerConfirmationSigner,
   createdAt: number = Date.now(),
-): Uint8Array {
+): Promise<Uint8Array> {
   const payload: SignalingPayload = {
     type: 'answer',
     sdp: answer.sdp || '',
     candidates: candidates.map((c) => c.candidate),
     createdAt,
     publicKey: Array.from(publicKey),
-    confirm: encodeAnswerConfirmation(confirmation),
   };
 
-  return encodeCodePayload(payload);
+  const confirmation = await sign(await computeAnswerTranscriptHash(payload));
+
+  return encodeCodePayload({
+    ...payload,
+    confirm: encodeAnswerConfirmation(confirmation),
+  });
 }
 
 /**

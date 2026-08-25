@@ -63,7 +63,7 @@ const QR_DETAILS = [
   {
     label: 'Response check:',
     value:
-      'The response carries a tag derived from the shared key and the code it answers; the sender verifies it automatically, so a response from another transfer is refused. Nothing to read out or type',
+      'The response carries a tag derived from the shared key, the code it answers, and its own contents; the sender verifies it automatically, so a response from another transfer or altered in transit is refused. Nothing to read out or type',
   },
 ] as const;
 

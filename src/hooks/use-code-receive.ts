@@ -287,14 +287,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         senderPublicKey,
       );
       const key = await deriveAESKeyFromSecretKey(sharedSecretKey, salt);
-      // Proves to the sender that this answer came from a peer that read its
-      // offer and reached the same shared secret; travels inside the answer
-      // code with nothing for either operator to read or type.
-      const answerConfirmation = await deriveAnswerConfirmation(
-        sharedSecretKey,
-        salt,
-        offerTranscriptHash,
-      );
+      // Signs the answer once its fields are settled: proves to the sender
+      // that this answer, unaltered, came from a peer that read its offer and
+      // reached the same shared secret. Travels inside the answer code with
+      // nothing for either operator to read or type.
+      const signAnswer = (answerTranscriptHash: string) =>
+        deriveAnswerConfirmation(sharedSecretKey, salt, {
+          offerTranscriptHash,
+          answerTranscriptHash,
+        });
 
       if (abandoned()) return;
 
@@ -444,7 +445,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         answerSDP,
         iceCandidates,
         ecdhKeyPair.publicKeyBytes,
-        answerConfirmation,
+        signAnswer,
       );
 
       const fileMetadata = {

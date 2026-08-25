@@ -191,17 +191,38 @@ export async function deriveConfirmationCode(
 const ANSWER_CONFIRMATION_LABEL = 'ptransfer:code-exchange:v1:answer-confirm';
 
 /**
+ * The two transcripts an answer confirmation tag is bound to, so that a tag
+ * attests to *this* answer against *this* offer rather than merely to a shared
+ * secret.
+ */
+export interface AnswerConfirmationBinding {
+  /**
+   * SHA-256 of the offer container the receiver acted on (see
+   * computeOfferTranscriptHash in code-signaling.ts).
+   */
+  offerTranscriptHash: string;
+  /**
+   * SHA-256 of the answer's own canonicalized fields — type, SDP, ICE
+   * candidates, timestamp, public key — everything the sender acts on except
+   * the tag itself (see computeAnswerTranscriptHash in code-signaling.ts).
+   */
+  answerTranscriptHash: string;
+}
+
+/**
  * Derive the Code Exchange answer confirmation tag: the key-confirmation value
  * the receiver puts in its answer and the sender recomputes before it acts on
  * that answer.
  *
- * The tag is keyed by the ECDH shared secret and bound to a digest of the
- * exact offer container the receiver read (see computeOfferTranscriptHash in
- * code-signaling.ts), so producing one requires having held that offer and
- * completed the key agreement against the public key inside it. An answer
- * lifted from another transfer, an answer replayed against a fresh offer, and
- * an answer whose SDP or public key was edited in transit all yield a tag the
- * sender does not expect.
+ * The tag is keyed by the ECDH shared secret and bound to both transcripts.
+ * The offer digest means producing one requires having held that offer and
+ * completed the key agreement against the public key inside it, so an answer
+ * lifted from another transfer or replayed against a fresh offer fails. The
+ * answer digest extends that to the answer's own contents: edit its SDP or its
+ * ICE candidates in transit and the sender derives a different tag, even
+ * though the public key and the tag were left untouched. Without it the tag
+ * would say only "someone who read this offer produced *an* answer", which is
+ * not the same as "this is that answer".
  *
  * It is checked by the machine, not by a human — unlike the PIN Exchange
  * confirmation code (deriveConfirmationCode), nothing is displayed and nothing
@@ -212,7 +233,7 @@ const ANSWER_CONFIRMATION_LABEL = 'ptransfer:code-exchange:v1:answer-confirm';
 export async function deriveAnswerConfirmation(
   sharedSecretKey: CryptoKey,
   salt: Uint8Array,
-  offerTranscriptHash: string,
+  binding: AnswerConfirmationBinding,
 ): Promise<Uint8Array> {
   if (salt.length < SALT_LENGTH) {
     throw new Error(
@@ -220,7 +241,14 @@ export async function deriveAnswerConfirmation(
     );
   }
 
-  const info = `${ANSWER_CONFIRMATION_LABEL}|${offerTranscriptHash}`;
+  // Both transcripts are fixed-length hex, so '|' cannot appear inside a field
+  // and the join is unambiguous.
+  const info = [
+    ANSWER_CONFIRMATION_LABEL,
+    binding.offerTranscriptHash,
+    binding.answerTranscriptHash,
+  ].join('|');
+
   const bits = await crypto.subtle.deriveBits(
     {
       name: 'HKDF',

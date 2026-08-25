@@ -122,10 +122,11 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 
 ### Responses are checked against your code
 
-The receiver's response carries a short tag it derives from the shared key and from the
-exact code it read. Before the sender acts on a response — before it connects and before
-any file data moves — it recomputes that tag from the code it is showing and refuses
-anything that does not match, with "Response does not match this transfer."
+The receiver's response carries a short tag it derives from three things: the shared key,
+the exact code it read, and the contents of the response itself. Before the sender acts on
+a response — before it connects and before any file data moves — it recomputes that tag
+from the code it is showing and the response it was handed, and refuses anything that does
+not match, with "Response does not match this transfer."
 
 This is automatic and invisible: no confirmation code appears on either screen and neither
 person has to read anything aloud. It means a response belonging to a **different**
