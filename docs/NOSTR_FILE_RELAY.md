@@ -230,7 +230,7 @@ Anti-replay/misuse properties:
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|
 | `manifest` | sender → receiver | `n`, `manifest` | First message: what is being relayed (file metadata, chunk layout, sender pubkey). Sizes the receiver's state; an `avail` before it arrives is rejected |
-| `hello` | receiver → sender | `n` | Receiver is online and subscribed |
+| `hello` | receiver → sender | `n` | Receiver is online and subscribed; sent only after its direct attempt failed, so a sender still trying the direct route treats it as "no direct connection is possible" and switches to relays right away |
 | `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET` — 64 positions of encoding headroom; the actual ring is capped at `UPLOAD_RELAY_COUNT` = 16); `gens` lists re-sent chunks with their current generation |
 | `ack` | receiver → sender | `n`, `avail`, `have`, `missing` | Outcome of fetching what avail `avail` announced: total chunks held, plus `missing` as `[index, pos, gen]` triples — tried at that exact placement and not found / not decryptable |
 | `done` | receiver → sender | `n` | Whole-file SHA-256 verified |
@@ -301,14 +301,16 @@ sequenceDiagram
     participant V as Receiver
 
     Note over S: offer built: discover + health-check storage ring in background, then sweep
-    Note over S,V: Manual Exchange offer/answer done, direct WebRTC connection failed
+    Note over S,V: Manual Exchange offer/answer done, direct WebRTC attempt running
     Note over S,V: both derive session (transferId + file key) from the ECDH secret
+    S->>C: subscribe #x = transferId:ctl (watch for hello during the direct attempt)
+    Note over V: ICE fails fast on the receiver's side
+    V->>C: subscribe #x = transferId:ctl
+    V->>C: hello (sealed control event)
+    C->>S: hello — sender abandons the direct attempt at once
     S->>C: manifest (sealed; file metadata + chunk layout)
     S->>C: avail {upto: 0, relays: []} (sender online, ring still resolving)
-    V->>C: subscribe #x = transferId:ctl
-    C->>V: manifest (from backlog if V joined late)
-    V->>C: hello (sealed control event)
-    C->>S: hello
+    C->>V: manifest
     loop upload, 16 in flight
         S->>R: chunk i → ring[i % N] (walk ring on rejection)
         S->>C: avail {upto, relays: ring, map, gens} every 64 chunks + 15s heartbeat

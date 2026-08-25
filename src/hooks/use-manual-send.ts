@@ -7,6 +7,7 @@ import {
   MAX_MESSAGE_SIZE,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
+import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
@@ -15,8 +16,12 @@ import {
   type SignalingPayload,
 } from '@/lib/manual-signaling';
 import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
+import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
-import { deriveRelaySession } from '@/lib/nostr-file/session';
+import {
+  deriveRelaySession,
+  type RelaySession,
+} from '@/lib/nostr-file/session';
 import {
   createTransferStats,
   type NostrFileTransferStats,
@@ -555,31 +560,65 @@ export function useManualSend(): UseManualSendReturn {
         // offer named relays, the file goes through them instead (see
         // relayFallback); without relays, or past the relay size cap, the
         // failure stands as it always did.
+        //
+        // With a fallback available, the relay session is derived now and
+        // the control relays are watched for the receiver's `hello` while
+        // the direct attempt runs: the receiver gives up on the direct route
+        // long before this side's ICE agent does, and its hello — sealed
+        // under the session key only it and this side hold — is the earliest
+        // word that the file has to go through relays.
+        let relaySession: RelaySession | null = null;
+        let helloWatch: ReturnType<typeof watchForReceiverHello> | null = null;
+        if (storageRelays !== null) {
+          relaySession = await deriveRelaySession(
+            sharedSecretKey,
+            saltRef.current,
+          );
+          if (cancelledRef.current) {
+            wipeBufferSource(relaySession.keyBytes);
+            return;
+          }
+          helloWatch = watchForReceiverHello(pool, offerRelays, relaySession, {
+            since: Math.floor(sessionStartTime / 1000),
+            expiresAt: Math.floor(
+              (sessionStartTime + TRANSFER_EXPIRATION_MS) / 1000,
+            ),
+            stats: storageRelays.stats,
+          });
+        }
         try {
           await waitForDataChannel(
             rtc,
             storageRelays !== null
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : MANUAL_CONNECTION_TIMEOUT_MS,
+            helloWatch?.hello ?? null,
           );
         } catch (error) {
           if (
             !(error instanceof P2PConnectionError) ||
             storageRelays === null ||
+            relaySession === null ||
             cancelledRef.current
           ) {
+            if (relaySession) wipeBufferSource(relaySession.keyBytes);
             throw error;
           }
           if (content.estimatedSize > NOSTR_FILE_MAX_BYTES) {
+            wipeBufferSource(relaySession.keyBytes);
             throw new P2PConnectionError(
               `${error.message}. The file is over ${formatFileSize(NOSTR_FILE_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
             );
           }
           rtc.close();
           rtcRef.current = null;
-          await relayFallback(storageRelays);
+          await relayFallback(storageRelays, relaySession);
           return;
+        } finally {
+          helloWatch?.close();
         }
+        // The direct route opened; the relay session is not needed.
+        if (relaySession) wipeBufferSource(relaySession.keyBytes);
 
         if (cancelledRef.current) return;
 
@@ -625,6 +664,7 @@ export function useManualSend(): UseManualSendReturn {
          */
         async function relayFallback(
           storageRelays: PreparedStorageRelays,
+          session: RelaySession,
         ): Promise<void> {
           relayFallbackActive = true;
           const fileMetadata = { fileName, fileSize, mimeType };
@@ -639,16 +679,20 @@ export function useManualSend(): UseManualSendReturn {
             ...relayState,
           });
           const isCancelled = () => cancelledRef.current;
-          const data = await readSourceFully(content, isCancelled);
-          if (data.length === 0) throw new Error('File is empty');
-          if (cancelledRef.current) return;
-          if (!saltRef.current) {
-            throw new Error('Cryptographic state missing. Please try again.');
+          // `session.keyBytes` belong to sendFileLive once it runs; until
+          // then every exit wipes them here.
+          let data: Uint8Array;
+          try {
+            data = await readSourceFully(content, isCancelled);
+          } catch (error) {
+            wipeBufferSource(session.keyBytes);
+            throw error;
           }
-          const session = await deriveRelaySession(
-            sharedSecretKey,
-            saltRef.current,
-          );
+          if (data.length === 0 || cancelledRef.current) {
+            wipeBufferSource(session.keyBytes);
+            if (cancelledRef.current) return;
+            throw new Error('File is empty');
+          }
           const relayFileSize = data.length;
           let lastStats: NostrFileTransferStats | undefined;
           try {
@@ -724,9 +768,15 @@ export function useManualSend(): UseManualSendReturn {
           });
         }
 
+        /**
+         * Resolve when the data channel opens; reject on ICE failure, on
+         * the timeout, or as soon as `receiverGaveUp` settles (the receiver
+         * has reported over the relays that no direct route exists).
+         */
         async function waitForDataChannel(
           rtc: WebRTCConnection,
           timeoutMs: number,
+          receiverGaveUp: Promise<void> | null,
         ) {
           await new Promise<void>((resolve, reject) => {
             const pc = rtc.getPeerConnection();
@@ -735,8 +785,19 @@ export function useManualSend(): UseManualSendReturn {
               cleanup();
               reject(new P2PConnectionError('Connection timeout'));
             }, timeoutMs);
+            let settled = false;
+            receiverGaveUp?.then(() => {
+              if (settled) return;
+              cleanup();
+              reject(
+                new P2PConnectionError(
+                  'The receiver reports no direct connection is possible',
+                ),
+              );
+            });
 
             const cleanup = () => {
+              settled = true;
               clearTimeout(timeout);
               pc.onconnectionstatechange = null;
               if (dc) {

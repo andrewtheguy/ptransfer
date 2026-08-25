@@ -580,9 +580,9 @@ Handles direct peer-to-peer connections using WebRTC data channels.
 4. Obfuscate the offer payload (salt, ECDH public key, file metadata, and the optional relay list): JSON → deflate → obfuscate → binary
 5. Display it as a multi-QR URL grid (chunked into ~400-byte URL QR codes) plus a base64 copy button
 6. Accept the receiver's answer from the scan/paste input and derive the ECDH shared secret
-7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds)
+7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds). With a fallback available, the relay session is derived up front and the control relays are watched for the receiver's sealed `hello` (`watchForReceiverHello`): the receiver's ICE agent declares the direct route dead long before the sender's, so its `hello` ends the direct attempt at once instead of waiting out the window
 8. On success, encrypt/send 128 KiB chunks over the data channel and wait for its `ACK`
-9. On connection failure, if the fallback is eligible, materialize the source (up to 100 MiB) and run `sendFileLive`; otherwise surface the P2P failure
+9. On connection failure (ICE failure, timeout, or the receiver's `hello`), if the fallback is eligible, materialize the source (up to 100 MiB) and run `sendFileLive`; otherwise surface the P2P failure
 
 **`use-manual-receive.ts`** - Receiver logic (Manual Exchange):
 1. Wait for offer data (from multi-QR chunk collector or paste)
@@ -590,8 +590,8 @@ Handles direct peer-to-peer connections using WebRTC data channels.
 3. Generate ECDH keypair, derive shared secret and AES key
 4. Create WebRTC answer with ICE candidates
 5. Obfuscate answer payload: JSON → deflate → obfuscate → single binary QR code
-6. If the offer named relays, ask the receiver to publish the sealed answer or show its QR/copy-paste form; a failed chosen relay publication ends the attempt
-7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds)
+6. Show the answer as a QR code / copy-paste text for the sender to scan or paste
+7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds); an ICE `failed` state ends the attempt immediately
 8. On success, decrypt/authenticate incoming chunks into the adaptive receive sink, validate `DONE:<chunkCount>:<byteCount>`, and send the data-channel `ACK`
 9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive`; otherwise surface the P2P failure
 10. Present the received content
@@ -703,7 +703,7 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 | Timeout | Duration | Purpose |
 |---------|----------|---------|
 | Nostr P2P connection | 30 seconds | Time to establish WebRTC connection after relay signaling starts |
-| Manual P2P connection when the offer names relays | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`); a timeout starts the automatic fallback only if the file and prepared storage set are eligible |
+| Manual P2P connection when the offer names relays | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`); a timeout starts the automatic fallback only if the file and prepared storage set are eligible. The sender cuts the window short as soon as the receiver's `hello` shows up on the control relays |
 | Manual P2P connection when the offer names no relays | 120 seconds | Direct-attempt window when there is no control channel (`MANUAL_CONNECTION_TIMEOUT_MS`) |
 | ICE gathering | 5 seconds | Bounded wait while preparing Manual offer/answer QR payloads |
 | Offer-relay probe | 4 seconds | Per-relay write→read bound when proving the relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means an offer without relays |

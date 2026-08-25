@@ -125,7 +125,8 @@ Exchange:
 1. You run the normal offer/answer exchange above. Both sides then try to connect
    directly, as always.
 2. If that direct connection cannot be made, both pages switch to the relay path on their
-   own. The sender encrypts the file and uploads it to a set of discovered storage relays
+   own. The receiver usually notices first; as soon as it checks in over the relays, the
+   sender stops waiting on the direct attempt too. The sender encrypts the file and uploads it to a set of discovered storage relays
    as **temporary events with a 1-hour NIP-40 expiration** (a deletion request compliant
    relays honor, not guaranteed erasure — the file stays protected by its encryption
    regardless), **one copy each**. The receiver downloads the pieces while the sender is
