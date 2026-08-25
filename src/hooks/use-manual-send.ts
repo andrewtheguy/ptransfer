@@ -284,9 +284,10 @@ export function useManualSend(): UseManualSendReturn {
         // candidates, so the probe of the defaults costs no extra wait.
         // Robustness matches the storage transfer: the defaults are
         // control-probed, and a defunct default is replaced by a
-        // full-size-proven storage reserve, not a weaker control-sized
-        // discovery — so the same discovery pass may run and can outlast ICE
-        // gathering, which is reported and waited out. A failure or a set
+        // full-size-proven discovered relay, not a weaker control-sized
+        // discovery — so a discovery pass may run (probing only until the
+        // gap is filled) and can outlast ICE gathering, which is reported
+        // and waited out. A failure or a set
         // below the floor is caught: the offer simply goes out without
         // relays, and a failed direct connection then has no fallback.
         teardownRelayPool();
@@ -424,8 +425,8 @@ export function useManualSend(): UseManualSendReturn {
           // The control relays are settled; the storage ring is prepared in
           // the background on the same pool and relay cache — the offer's QR
           // does not depend on it. When control resolution already had to
-          // discover and full-size-probe a ring to borrow reserves, that ring
-          // is adopted as-is (`preselected`) instead of discovered again;
+          // discover candidates to backfill a defunct default, the ring is
+          // probed from what it left unprobed instead of discovering again;
           // otherwise discovery runs here. Either way the sweep then keeps
           // probing the rest of the population for as long as the exchange
           // lasts, warming the shared cache and handing a failed direct
@@ -436,12 +437,7 @@ export function useManualSend(): UseManualSendReturn {
             controlRelays: offerRelays,
             storage: relayStorage,
             stats: selection.stats,
-            preselected: selection.storageRelays
-              ? {
-                  storageRelays: selection.storageRelays,
-                  unprobedCandidates: selection.unprobedCandidates,
-                }
-              : null,
+            discovered: selection.discovered,
             signal: sweepAbort.signal,
             isCancelled: () => cancelledRef.current,
             onProgress: (p) => {

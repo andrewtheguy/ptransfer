@@ -6,6 +6,7 @@ import {
   CONTROL_RELAY_COUNT,
   DISCOVERY_CANDIDATE_CAP,
   DISCOVERY_CANDIDATE_LIMIT,
+  HEALTH_CHECK_CONCURRENCY,
   RELAY_CACHE_HEALTH_STORE,
   RELAY_CACHE_STATE_STORE,
   UPLOAD_RELAY_COUNT,
@@ -534,13 +535,13 @@ describe('resolveTransferRelays', () => {
     stats: createTransferStats('sender'),
   });
 
-  it('fills failed default signaling relays from the full-size storage reserves', async () => {
+  it('fills failed default signaling relays from full-size-proven discoveries', async () => {
     const candidates = Array.from(
       { length: 20 },
       (_, i) => `wss://storage-${i}.example`,
     );
     // One default is a blackhole (accepts writes, serves nothing) so the
-    // control probe fails it and a reserve must make up the gap.
+    // control probe fails it and a discovered relay must make up the gap.
     const pool = createMockPool({
       blackholeRelays: new Set([DEFAULT_RELAYS[0]]),
     });
@@ -549,20 +550,32 @@ describe('resolveTransferRelays', () => {
       candidates.map((url) => makeEvent(30166, [['d', url]])),
     );
     const o = opts();
-    const selection = await resolveTransferRelays(pool, memoryStorage(), o);
+    const storage = memoryStorage();
+    const selection = await resolveTransferRelays(pool, storage, o);
     const relays = selection.controlRelays;
     const defaultSet = new Set<string>(DEFAULT_RELAYS);
     expect(relays).toHaveLength(CONTROL_RELAY_COUNT);
     expect(relays).not.toContain(DEFAULT_RELAYS[0]);
     // Exactly the one gap is filled, and from a full-size-proven storage
     // relay, not a default.
-    expect(relays.filter((url) => !defaultSet.has(url))).toHaveLength(1);
-    // The ring resolved as a side effect and stays disjoint from the control
-    // set, so the caller does not discover twice.
-    expect(selection.storageRelays).toHaveLength(16);
-    for (const url of selection.storageRelays ?? []) {
-      expect(relays).not.toContain(url);
-    }
+    const backfilled = relays.filter((url) => !defaultSet.has(url));
+    expect(backfilled).toHaveLength(1);
+    // Probing stopped as soon as the gap was filled: no ring was built here.
+    // Every other candidate is handed on for the background ring — proven if
+    // its probe was already in flight, unprobed otherwise — and none is lost.
+    const { proven, unprobed } = selection.discovered ?? {
+      proven: [],
+      unprobed: [],
+    };
+    expect(proven.length + unprobed.length).toBe(candidates.length - 1);
+    expect(unprobed.length).toBeGreaterThanOrEqual(
+      candidates.length - HEALTH_CHECK_CONCURRENCY,
+    );
+    expect(proven.map((r) => r.url)).not.toContain(backfilled[0]);
+    expect(unprobed).not.toContain(backfilled[0]);
+    expect(
+      storage.relayHealth.filter((r) => r.lastCheckedAt !== null).length,
+    ).toBeLessThanOrEqual(HEALTH_CHECK_CONCURRENCY);
     expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
     // Every default is either picked for the channel or its socket is closed.
     for (const url of DEFAULT_RELAYS) {
@@ -572,7 +585,7 @@ describe('resolveTransferRelays', () => {
     }
   });
 
-  it('uses cached storage reserves when every default signaling relay fails', async () => {
+  it('backfills the whole control set from cached candidates when every default fails', async () => {
     const now = Date.now();
     const candidates = Array.from(
       { length: 20 },
@@ -590,14 +603,38 @@ describe('resolveTransferRelays', () => {
     const selection = await resolveTransferRelays(pool, storage, opts());
 
     // No default survived, so the whole control set is full-size-proven
-    // reserves, disjoint from the ring.
-    expect(selection.storageRelays).toHaveLength(16);
-    expect(selection.controlRelays).toHaveLength(4);
-    expect(
-      new Set([...(selection.storageRelays ?? []), ...selection.controlRelays]),
-    ).toEqual(new Set(candidates));
+    // discovered relays; the rest of the candidates go on to the ring.
+    expect(selection.controlRelays).toHaveLength(CONTROL_RELAY_COUNT);
+    const leftover = [
+      ...(selection.discovered?.proven ?? []).map((r) => r.url),
+      ...(selection.discovered?.unprobed ?? []),
+    ];
     for (const relay of selection.controlRelays) {
-      expect(selection.storageRelays).not.toContain(relay);
+      expect(candidates).toContain(relay);
+      expect(leftover).not.toContain(relay);
+    }
+    expect(new Set([...selection.controlRelays, ...leftover])).toEqual(
+      new Set(candidates),
+    );
+
+    // The background ring continues from the leftovers without a second
+    // discovery and stays disjoint from the control set.
+    const phases: string[] = [];
+    const prepared = prepareStorageRelays(pool, {
+      controlRelays: selection.controlRelays,
+      storage,
+      stats: selection.stats,
+      discovered: selection.discovered,
+      onProgress: (p) => {
+        phases.push(p.phase);
+      },
+    });
+    const ring = await prepared.ring;
+    expect(phases).not.toContain('discovering');
+    expect(ring.length).toBeGreaterThanOrEqual(2);
+    for (const relay of ring) {
+      expect(selection.controlRelays).not.toContain(relay);
+      expect(candidates).toContain(relay);
     }
   });
 
@@ -611,13 +648,12 @@ describe('resolveTransferRelays', () => {
     for (const url of selection.controlRelays) {
       expect(DEFAULT_RELAYS as readonly string[]).toContain(url);
     }
-    expect(selection.storageRelays).toBeNull();
-    expect(selection.unprobedCandidates).toEqual([]);
+    expect(selection.discovered).toBeNull();
     // Discovery never ran, so the cache is untouched.
     expect(storage.relayHealth).toEqual([]);
   });
 
-  it('throws when neither the defaults nor the reserves reach the floor', async () => {
+  it('throws when neither the defaults nor discovery reach the floor', async () => {
     const pool = createMockPool({ blackholeRelays: new Set(DEFAULT_RELAYS) });
     // No candidates anywhere: control probe fails, discovery finds nothing.
     await expect(
@@ -916,49 +952,48 @@ describe('prepareStorageRelays', () => {
     expect(storage.relayHealth).toEqual([]);
   });
 
-  it('adopts a preselected ring without rediscovering and sweeps its leftovers', async () => {
+  it('rings pre-discovered candidates without rediscovering and sweeps the rest', async () => {
     const control = [DEFAULT_RELAYS[0]];
-    const ringRelays = ['wss://ring-a.example', 'wss://ring-b.example'];
-    const leftover = [
-      'wss://leftover-ok.example',
-      'wss://leftover-down.example',
+    const handed = [
+      'wss://ring-a.example',
+      'wss://ring-b.example',
+      'wss://ring-down.example',
     ];
-    const pool = createMockPool({ failRelays: new Set([leftover[1]]) });
+    const elsewhere = 'wss://population-only.example';
+    const pool = createMockPool({ failRelays: new Set([handed[2]]) });
     for (const seed of DEFAULT_RELAYS) {
-      pool.store.set(seed, leftover.map(discoveryEvent));
+      pool.store.set(seed, [discoveryEvent(elsewhere)]);
     }
     const storage = memoryStorage();
-    let discovered = false;
+    const phases: string[] = [];
     const prepared = prepareStorageRelays(pool, {
       controlRelays: control,
       storage,
-      preselected: { storageRelays: ringRelays, unprobedCandidates: leftover },
-      onProgress: () => {
-        discovered = true;
+      discovered: { proven: [], unprobed: handed },
+      onProgress: (p) => {
+        phases.push(p.phase);
       },
     });
-    expect(await prepared.ring).toEqual(ringRelays);
-    // The ring came ready-made: no discovery/health-check progress fired.
-    expect(discovered).toBe(false);
-    expect(prepared.stats.relays.map((r) => r.url)).toEqual(
-      expect.arrayContaining(ringRelays),
-    );
-    // The sweep still runs behind it over the leftovers.
+    expect((await prepared.ring).sort()).toEqual([handed[0], handed[1]]);
+    // The ring was probed from the handed-over candidates: no discovery ran.
+    expect(phases).not.toContain('discovering');
+    expect(phases).toContain('health_check');
+    // The sweep still enumerates the population behind it.
     const deadline = Date.now() + 5000;
-    const seen = () =>
+    const checked = () =>
       new Set(
         storage.relayHealth
           .filter((r) => r.lastCheckedAt !== null)
           .map((r) => r.url),
       );
-    while (!leftover.every((url) => seen().has(url))) {
+    while (!checked().has(elsewhere)) {
       if (Date.now() > deadline) throw new Error('sweep never finished');
       await settle();
     }
     const byUrl = new Map(storage.relayHealth.map((r) => [r.url, r]));
-    expect(byUrl.get(leftover[0])?.supportsStorage).toBe(true);
-    expect(byUrl.get(leftover[1])?.supportsStorage).toBe(false);
-    for (const url of [...control, ...ringRelays]) {
+    expect(byUrl.get(handed[2])?.supportsStorage).toBe(false);
+    expect(byUrl.get(elsewhere)?.supportsStorage).toBe(true);
+    for (const url of [...control, handed[0], handed[1]]) {
       expect(pool.closedRelays).not.toContain(url);
     }
   });

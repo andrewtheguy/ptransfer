@@ -486,21 +486,25 @@ channel the moment the direct WebRTC attempt fails.
   target `CONTROL_RELAY_COUNT`). Read-back matters: the sender needs relays that
   *serve* control messages, not just accept them. This step is awaited, because
   the offer must name the relays before its QR can be shown.
-- **Backfill from full-size-proven reserves.** When fewer than
-  `CONTROL_RELAY_COUNT` defaults pass, storage discovery runs *early* and each
-  defunct default is replaced by one of its `SIGNALING_RESERVE_RELAY_COUNT` (4)
-  reserve relays — relays that passed the **full-size** (`HEALTH_CHECK_PROBE_BYTES`)
-  probe and were deliberately held outside the 16-relay ring. A defunct default
-  is thus made up by a relay proven to serve real chunks, never by a weaker
-  control-sized discovery. The control set and the ring stay disjoint. This is
-  the one case where storage discovery precedes the QR; it is uncommon (the
-  defaults usually pass) and is the price of a robust control channel.
+- **Backfill from full-size-proven discoveries.** When fewer than
+  `CONTROL_RELAY_COUNT` defaults pass, storage discovery runs *early* and its
+  candidates are **full-size** (`HEALTH_CHECK_PROBE_BYTES`) probed only until
+  the gap is filled — the probe early-stops at the number of missing relays, so
+  the QR waits for one discovery page plus a handful of probes, never for the
+  16-relay ring. A defunct default is thus made up by a relay proven to serve
+  real chunks, never by a weaker control-sized discovery. The control set and
+  the ring stay disjoint. Relays that passed after the gap filled and candidates
+  the probe never reached are handed on (`discovered`) so the background ring
+  preparation neither discovers nor probes them again. This is the one case
+  where storage discovery precedes the QR; it is uncommon (the defaults usually
+  pass) and is the price of a robust control channel.
 - **Storage preparation (`prepareStorageRelays`, `src/lib/nostr-file/upload.ts`).**
   The storage ring itself is prepared in the **background**, since the QR does
   not depend on it. When the defaults all passed, this discovers, full-size-probes,
-  and selects the ring here; when the signaling backfill already selected a ring
-  to borrow reserves from, that ring is adopted as-is (`preselected`) rather than
-  discovered twice. Either way an uncapped sweep then probes the rest of the relay
+  and selects the ring here; when the signaling backfill already discovered, the
+  ring is selected from what it left over (`discovered`: proven relays as they
+  are, unprobed ones probed) rather than discovered twice. Either way an uncapped
+  sweep then probes the rest of the relay
   population for as long as the exchange lasts. No file byte is involved — this
   warms the IndexedDB relay cache for every future transfer, and hands a failed
   direct attempt its ring ready-made rather than starting discovery only after

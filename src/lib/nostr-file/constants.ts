@@ -47,16 +47,11 @@ export const UPLOAD_CHUNK_CONCURRENCY = 16;
 
 export const HEALTH_CHECK_CONCURRENCY = 16;
 export const HEALTH_CHECK_TIMEOUT_MS = 8000;
-// Healthy relays left after the storage ring is selected. When a manual
-// exchange's default signaling relays are defunct, these full-size-proven
-// spares — not weaker control-sized discoveries — make up the control set,
-// so a defunct default is replaced by a relay proven to serve real chunks.
-export const SIGNALING_RESERVE_RELAY_COUNT = 4;
-// Stop health-checking once the storage ring plus its signaling reserves
-// have passed, without probing the entire candidate list (only ~1 in 6 public
-// candidates passes the full-size probe).
-export const HEALTH_CHECK_TARGET_COUNT =
-  UPLOAD_RELAY_COUNT + SIGNALING_RESERVE_RELAY_COUNT;
+// Stop health-checking once the storage ring has passed, without probing the
+// entire candidate list (only ~1 in 6 public candidates passes the full-size
+// probe). A manual exchange whose default signaling relays are defunct probes
+// only until the gap in its control set is filled, before the code is shown.
+export const HEALTH_CHECK_TARGET_COUNT = UPLOAD_RELAY_COUNT;
 // Probe payload size. A full-size chunk, so a relay that caps event size below
 // a real chunk fails the probe instead of rejecting every chunk placed on it.
 export const HEALTH_CHECK_PROBE_BYTES = NOSTR_FILE_CHUNK_SIZE;
@@ -74,8 +69,9 @@ export const BACKGROUND_PROBE_SAVE_BATCH = 8;
 
 // The encrypted control channel rides the proven relays the offer names for
 // the file-relay fallback. DEFAULT_RELAYS are checked with a small probe
-// first; a default that fails is filled from a reserve that passed the
-// full-size HEALTH_CHECK_PROBE_BYTES probe, not from a control-sized discovery.
+// first; a default that fails is filled from a discovered relay that passed
+// the full-size HEALTH_CHECK_PROBE_BYTES probe (probing stops once the gap is
+// filled), not from a control-sized discovery.
 export const CONTROL_RELAY_COUNT = 6;
 // Fewer usable control relays than this and the offer goes out without
 // relays — no relay fallback.

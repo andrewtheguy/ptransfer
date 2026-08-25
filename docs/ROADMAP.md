@@ -23,12 +23,13 @@ channel the moment signaling completes:
 - Reuse the verified-relay logic from the Nostr file relay
   (`resolveTransferRelays`) in full: the control-sized write→read probe of
   `DEFAULT_RELAYS`, and — when defaults come up short — the same NIP-66/NIP-65
-  discovery and full-size probe the storage transfer runs, so a defunct default
-  is made up from a full-size-proven storage reserve rather than a weaker
-  control-sized discovery. The control-relay resolution is awaited before the
-  QR (the offer must name the relays); the storage ring and its background
-  sweep are prepared behind the exchange as relay preparation for Phase 2 (the
-  QR does not depend on them), never touching the file.
+  discovery and full-size probe the storage transfer runs, stopped as soon as
+  the gap is filled, so a defunct default is made up from a full-size-proven
+  discovered relay rather than a weaker control-sized discovery. Only the
+  control-relay resolution is awaited before the QR (the offer must name the
+  relays); the storage ring and its background sweep are prepared behind the
+  exchange as relay preparation for Phase 2 (the QR does not depend on them),
+  never touching the file.
 - If no relay set passes the probe, the offer names none and Phase 2 is
   unavailable for that transfer.
 - Still WebRTC: file bytes never touch a relay in this phase.
