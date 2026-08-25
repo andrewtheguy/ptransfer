@@ -1,6 +1,7 @@
 import { encodeCrockfordBase32 } from './base32';
 import {
   AES_KEY_LENGTH,
+  ANSWER_CONFIRMATION_BYTES,
   CONFIRMATION_CODE_BYTES,
   SALT_LENGTH,
 } from './constants';
@@ -185,6 +186,81 @@ export async function deriveConfirmationCode(
   );
 
   return encodeCrockfordBase32(new Uint8Array(bits));
+}
+
+const ANSWER_CONFIRMATION_LABEL = 'ptransfer:code-exchange:v1:answer-confirm';
+
+/**
+ * The two transcripts an answer confirmation tag is bound to, so that a tag
+ * attests to *this* answer against *this* offer rather than merely to a shared
+ * secret.
+ */
+export interface AnswerConfirmationBinding {
+  /**
+   * SHA-256 of the offer container the receiver acted on (see
+   * computeOfferTranscriptHash in code-signaling.ts).
+   */
+  offerTranscriptHash: string;
+  /**
+   * SHA-256 of the answer's own canonicalized fields — type, SDP, ICE
+   * candidates, timestamp, public key — everything the sender acts on except
+   * the tag itself (see computeAnswerTranscriptHash in code-signaling.ts).
+   */
+  answerTranscriptHash: string;
+}
+
+/**
+ * Derive the Code Exchange answer confirmation tag: the key-confirmation value
+ * the receiver puts in its answer and the sender recomputes before it acts on
+ * that answer.
+ *
+ * The tag is keyed by the ECDH shared secret and bound to both transcripts.
+ * The offer digest means producing one requires having held that offer and
+ * completed the key agreement against the public key inside it, so an answer
+ * lifted from another transfer or replayed against a fresh offer fails. The
+ * answer digest extends that to the answer's own contents: edit its SDP or its
+ * ICE candidates in transit and the sender derives a different tag, even
+ * though the public key and the tag were left untouched. Without it the tag
+ * would say only "someone who read this offer produced *an* answer", which is
+ * not the same as "this is that answer".
+ *
+ * It is checked by the machine, not by a human — unlike the PIN Exchange
+ * confirmation code (deriveConfirmationCode), nothing is displayed and nothing
+ * is typed. Nor does it authenticate *who* answered: the offer is the only
+ * secret Code Exchange has, so anyone who captured it can derive this tag too.
+ * See ANSWER_CONFIRMATION_BYTES for exactly what it does and does not cover.
+ */
+export async function deriveAnswerConfirmation(
+  sharedSecretKey: CryptoKey,
+  salt: Uint8Array,
+  binding: AnswerConfirmationBinding,
+): Promise<Uint8Array> {
+  if (salt.length < SALT_LENGTH) {
+    throw new Error(
+      `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+    );
+  }
+
+  // Both transcripts are fixed-length hex, so '|' cannot appear inside a field
+  // and the join is unambiguous.
+  const info = [
+    ANSWER_CONFIRMATION_LABEL,
+    binding.offerTranscriptHash,
+    binding.answerTranscriptHash,
+  ].join('|');
+
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: salt as BufferSource,
+      info: new TextEncoder().encode(info),
+    },
+    sharedSecretKey,
+    ANSWER_CONFIRMATION_BYTES * 8,
+  );
+
+  return new Uint8Array(bits);
 }
 
 /**

@@ -60,6 +60,11 @@ const QR_DETAILS = [
     value:
       'Offer and answer both by QR/copy-paste; relays carry only the file fallback',
   },
+  {
+    label: 'Response check:',
+    value:
+      'The response carries a tag derived from the shared key, the code it answers, and its own contents; the sender verifies it automatically, so a response from another transfer or altered in transit is refused. Nothing to read out or type',
+  },
 ] as const;
 
 function SpecList({

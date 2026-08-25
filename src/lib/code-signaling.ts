@@ -1,4 +1,5 @@
 import { deflateSync, inflateSync } from 'fflate';
+import { ANSWER_CONFIRMATION_BYTES } from './crypto/constants';
 import { normalizeRelayUrl } from './nostr/relays';
 import {
   CONTROL_RELAY_COUNT,
@@ -19,6 +20,11 @@ function deflateCompress(data: Uint8Array): Uint8Array {
 function deflateDecompress(data: Uint8Array): Uint8Array {
   return inflateSync(data);
 }
+
+// Base64 of ANSWER_CONFIRMATION_BYTES: 16 bytes -> 22 characters plus '=='.
+const ANSWER_CONFIRMATION_B64_LENGTH =
+  Math.ceil(ANSWER_CONFIRMATION_BYTES / 3) * 4;
+const ANSWER_CONFIRMATION_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 // Magic header: "PT01" = pTransfer Code Exchange signaling format version 1
 const MAGIC_HEADER_V1 = new Uint8Array([0x50, 0x54, 0x30, 0x31]);
@@ -67,6 +73,16 @@ export interface SignalingPayload {
   createdAt: number;
   // ECDH public key for mutual exchange (65 bytes P-256 uncompressed)
   publicKey: number[];
+  /**
+   * Answer-only. Base64 key-confirmation tag over the ECDH shared secret,
+   * bound to a digest of the offer container the receiver acted on and to a
+   * digest of this answer's own fields (see deriveAnswerConfirmation). The
+   * sender recomputes both and refuses the answer unless the tag matches, so
+   * an answer that belongs to another transfer, that never passed through a
+   * peer holding this offer, or that was altered on the way back is rejected
+   * before any signal is applied.
+   */
+  confirm?: string;
   // Offer-only fields:
   fileName?: string;
   /** Input size of the payload; a progress hint, never the wire length. */
@@ -188,6 +204,81 @@ function decodeCodePayload(binary: Uint8Array): unknown {
 }
 
 /**
+ * Digest of the exact offer container the two sides must agree on.
+ *
+ * The input is the PT01 bytes themselves, not a re-serialization of the parsed
+ * fields: every path hands the container through unmodified (copy/paste is
+ * base64 of these bytes, and the chunked QR path reassembles them under a
+ * CRC32 check), so hashing the bytes commits to everything the offer carried,
+ * including fields a future reader would not know to canonicalize.
+ */
+export async function computeOfferTranscriptHash(
+  offerBinary: Uint8Array,
+): Promise<string> {
+  return sha256Hex(offerBinary as BufferSource);
+}
+
+const ANSWER_TRANSCRIPT_LABEL = 'ptransfer:code-exchange-answer-transcript:v1';
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(data: BufferSource): Promise<string> {
+  return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', data)));
+}
+
+/**
+ * Digest of an answer's own contents: every field the sender acts on, and only
+ * those. The confirmation tag is bound to this, so editing an answer's SDP or
+ * ICE candidates in transit — leaving its public key and tag intact — makes
+ * the sender derive a different tag and reject it.
+ *
+ * Unlike the offer digest this cannot hash the container bytes: the tag lives
+ * inside them, so it would have to cover itself. It hashes a canonical JSON
+ * array instead, which fixes element order here rather than depending on key
+ * ordering, and whose string escaping means no field value can forge a
+ * delimiter into another. The `confirm` field is excluded by construction;
+ * fields outside this list do not exist in the format (`relays` is rejected on
+ * an answer) and no consumer reads any.
+ */
+export async function computeAnswerTranscriptHash(
+  payload: SignalingPayload,
+): Promise<string> {
+  const canonical = JSON.stringify([
+    ANSWER_TRANSCRIPT_LABEL,
+    payload.type,
+    payload.sdp,
+    payload.candidates,
+    payload.createdAt,
+    toHex(Uint8Array.from(payload.publicKey)),
+  ]);
+
+  return sha256Hex(new TextEncoder().encode(canonical));
+}
+
+/** Base64 of the raw confirmation tag, as it travels in the answer. */
+export function encodeAnswerConfirmation(tag: Uint8Array): string {
+  return uint8ArrayToBase64(tag);
+}
+
+/**
+ * The raw tag an answer carries, or null when the field is missing, not
+ * base64, or not exactly ANSWER_CONFIRMATION_BYTES long.
+ */
+export function decodeAnswerConfirmation(value: unknown): Uint8Array | null {
+  if (typeof value !== 'string') return null;
+  if (value.length !== ANSWER_CONFIRMATION_B64_LENGTH) return null;
+  if (!ANSWER_CONFIRMATION_B64.test(value)) return null;
+  try {
+    const bytes = base64ToUint8Array(value);
+    return bytes.length === ANSWER_CONFIRMATION_BYTES ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse base64 clipboard data to binary payload
  */
 export function parseClipboardPayload(base64: string): Uint8Array | null {
@@ -213,7 +304,19 @@ export function isValidSignalingPayload(
     return false;
   if (!Number.isFinite(p.createdAt)) return false;
   if (!isValidPublicKeyArray(p.publicKey)) return false;
+  if (!isValidConfirmField(p)) return false;
   return isValidRelaysField(p);
+}
+
+/**
+ * The confirmation tag is answer-only and mandatory there: an answer without
+ * one cannot be checked against the offer, so it is malformed rather than
+ * merely unverified. An offer carrying one is malformed too — there is nothing
+ * earlier for it to be bound to.
+ */
+function isValidConfirmField(p: Record<string, unknown>): boolean {
+  if (p.type === 'offer') return p.confirm === undefined;
+  return decodeAnswerConfirmation(p.confirm) !== null;
 }
 
 /**
@@ -280,15 +383,30 @@ export function generateMutualOfferBinary(
 }
 
 /**
+ * Produces the key-confirmation tag for an answer whose transcript hashes to
+ * `answerTranscriptHash`. In practice this closes over the shared secret and
+ * the offer digest and calls deriveAnswerConfirmation.
+ */
+export type AnswerConfirmationSigner = (
+  answerTranscriptHash: string,
+) => Promise<Uint8Array>;
+
+/**
  * Generate mutual answer as binary data
  * Format: [PT01 magic (4 bytes)][obfuscated compressed payload]
+ *
+ * The tag has to cover the exact fields being encoded, so the payload is built
+ * first, hashed, and only then handed to `sign` — rather than taking a tag the
+ * caller derived from values it believes match. That makes it impossible for
+ * the transcript and the encoded answer to drift apart.
  */
-export function generateMutualAnswerBinary(
+export async function generateMutualAnswerBinary(
   answer: RTCSessionDescriptionInit,
   candidates: RTCIceCandidate[],
   publicKey: Uint8Array, // ECDH public key (65 bytes)
+  sign: AnswerConfirmationSigner,
   createdAt: number = Date.now(),
-): Uint8Array {
+): Promise<Uint8Array> {
   const payload: SignalingPayload = {
     type: 'answer',
     sdp: answer.sdp || '',
@@ -297,7 +415,12 @@ export function generateMutualAnswerBinary(
     publicKey: Array.from(publicKey),
   };
 
-  return encodeCodePayload(payload);
+  const confirmation = await sign(await computeAnswerTranscriptHash(payload));
+
+  return encodeCodePayload({
+    ...payload,
+    confirm: encodeAnswerConfirmation(confirmation),
+  });
 }
 
 /**

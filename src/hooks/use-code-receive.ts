@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import {
+  computeOfferTranscriptHash,
   generateMutualAnswerBinary,
   parseMutualPayload,
   relaysFromOffer,
@@ -7,6 +8,7 @@ import {
 } from '@/lib/code-signaling';
 import {
   deriveAESKeyFromSecretKey,
+  deriveAnswerConfirmation,
   deriveSharedSecretKey,
   generateECDHKeyPair,
   MAX_MESSAGE_SIZE,
@@ -60,6 +62,17 @@ export interface CodeReceiveState {
   answerData?: Uint8Array; // Binary data for QR code
 }
 
+/**
+ * An accepted offer, plus the digest of the container it arrived in. The
+ * digest is what the answer's confirmation tag is bound to, so it has to be
+ * taken from the bytes the receiver was handed rather than recomputed from
+ * the parsed payload later.
+ */
+interface IncomingOffer {
+  payload: SignalingPayload;
+  transcriptHash: string;
+}
+
 export interface UseCodeReceiveReturn {
   state: TransferState & CodeReceiveState;
   receivedContent: ReceivedContent | null;
@@ -100,7 +113,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
   // The step a receive blocks on until the UI settles it. Cancel rejects it
   // while pending so the flow unwinds immediately.
-  const offerStepRef = useRef<PendingStep<SignalingPayload> | null>(null);
+  const offerStepRef = useRef<PendingStep<IncomingOffer> | null>(null);
   // Identifies the receive currently in charge of the refs. A cancelled run
   // that is still unwinding compares against it before touching shared
   // state, so a restart right after cancel is never clobbered.
@@ -154,7 +167,12 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       step.reject(new Error('Expected offer, got answer'));
       return;
     }
-    step.resolve(parsed);
+    // Hash the container as it arrived, before anything downstream can
+    // reshape it; the answer's confirmation tag is bound to this exact value.
+    step.resolve({
+      payload: parsed,
+      transcriptHash: await computeOfferTranscriptHash(offerData),
+    });
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doReceive is defined below and only invoked at call time; references stable refs/setState
@@ -184,9 +202,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       });
 
       // Wait for offer to be submitted
-      const offerStep = createPendingStep<SignalingPayload>();
+      const offerStep = createPendingStep<IncomingOffer>();
       offerStepRef.current = offerStep;
-      const offerPayload = await offerStep.promise;
+      const { payload: offerPayload, transcriptHash: offerTranscriptHash } =
+        await offerStep.promise;
 
       if (abandoned()) return;
 
@@ -268,6 +287,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         senderPublicKey,
       );
       const key = await deriveAESKeyFromSecretKey(sharedSecretKey, salt);
+      // Signs the answer once its fields are settled: proves to the sender
+      // that this answer, unaltered, came from a peer that read its offer and
+      // reached the same shared secret. Travels inside the answer code with
+      // nothing for either operator to read or type.
+      const signAnswer = (answerTranscriptHash: string) =>
+        deriveAnswerConfirmation(sharedSecretKey, salt, {
+          offerTranscriptHash,
+          answerTranscriptHash,
+        });
 
       if (abandoned()) return;
 
@@ -417,6 +445,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         answerSDP,
         iceCandidates,
         ecdhKeyPair.publicKeyBytes,
+        signAnswer,
       );
 
       const fileMetadata = {

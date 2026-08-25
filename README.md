@@ -115,7 +115,7 @@ See [Architecture](./docs/ARCHITECTURE.md) for detailed transfer flows and encry
 
 One input accepts both modes; the page works out which one the sender used from what it is given:
 - **PIN Exchange**: the rotating PIN from the sender's screen — typed, pasted, or scanned from the PIN QR. Signaling then runs over Nostr, and a confirmation code appears for the receiver to read back.
-- **Code Exchange**: the sender's signaling payload, scanned from their QR codes or pasted as copied text. The response code that appears goes back to the sender the same way; if direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
+- **Code Exchange**: the sender's signaling payload, scanned from their QR codes or pasted as copied text. The response code that appears goes back to the sender the same way, carrying a tag derived from the shared key, the exact code it answers, and the response's own contents — the sender checks it automatically and refuses a response belonging to another transfer or altered on the way back, with nothing for either person to read out or type. If direct WebRTC later fails, files up to 100 MiB can also use the automatic Nostr relay fallback.
 
 ## Documentation
 

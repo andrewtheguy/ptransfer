@@ -364,11 +364,38 @@ Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. 
 - Both offer and answer include a required finite `createdAt` timestamp. The receiver rejects an offer older than `TRANSFER_EXPIRATION_MS`; the sender validates the answer timestamp's shape and enforces expiry against its own offer/session start time
 - Payload is obfuscated using a time-bucketed seed to avoid casual inspection.
 - The offer additionally carries `relays` when relays were proven while it was being built: the control relays of the data-path fallback (see [Offer relays](#offer-relays-srclibcode-signalingts)). The field is offer-only and must be a usable list; an answer carrying it, or an offer carrying an unusable list, is rejected as malformed. The answer is never carried over relays — it enters the sender's page only through the sender's own scan or paste.
+- The answer carries a required `confirm` tag binding it to the offer it answers and to its own contents (see [Answer confirmation tag](#answer-confirmation-tag)). The field is answer-only and mandatory there; an offer carrying one, or an answer without a well-formed one, is rejected as malformed.
 
 > [!IMPORTANT]
 > **Security boundary**: Code Exchange signaling payloads are not cryptographically confidential. The time-bucketed obfuscation deters casual inspection and the 1-hour TTL prevents stale offers from starting a session, but someone who captures the QR/clipboard payload can potentially recover metadata and SDP/ICE details. File-content confidentiality comes from the ECDH-derived AES-256-GCM key, assuming the offer is delivered over an authentic QR/clipboard path.
 >
 > **The sender's scan or paste is the gate.** Someone who captures the offer can build a valid answer to it, but that answer only counts if the sender deliberately scans or pastes it — there is no channel by which a bystander can push a response into the sender's page. An earlier revision let the receiver publish the answer to the offer's relays; it was removed because it made the offer alone sufficient to become the receiver.
+
+#### Answer confirmation tag
+
+The answer's `confirm` field is a 16-byte key-confirmation tag, base64-encoded, that the sender checks before it acts on the answer at all. Neither operator ever sees it: it is derived, carried, and verified inside the payload the two sides already exchange, and nothing is displayed or typed.
+
+**Derivation** (`deriveAnswerConfirmation` in `src/lib/crypto/kdf.ts`):
+
+```
+offerHash  = SHA-256(offer PT01 container bytes)              # computeOfferTranscriptHash
+answerHash = SHA-256(JSON [label, type, sdp, candidates,      # computeAnswerTranscriptHash
+                           createdAt, hex(publicKey)])
+tag        = HKDF-SHA256(ECDH shared secret,
+                         salt = offer salt,
+                         info = "ptransfer:code-exchange:v1:answer-confirm"
+                                + "|" + offerHash + "|" + answerHash)[0..16]
+```
+
+Once it has the shared secret, the receiver holds it until the answer exists: it builds the answer payload, hashes that payload, and only then derives the tag over the result and encodes it into the answer. The sender recomputes it from its *own* offer bytes and the answer it parsed, and compares in constant time (`constantTimeEqualBytes`); a mismatch aborts the transfer before `handleSignal` is called, before the content key is derived, and before any file byte moves.
+
+The **offer** digest hashes the container bytes rather than a re-serialization of the parsed fields. Every path delivers those bytes unmodified — copy/paste is base64 of exactly them, and the chunked QR path reassembles them under a CRC32 check — so the digest commits to the whole offer, including any field a future reader would not know to canonicalize.
+
+The **answer** digest cannot do the same, because the tag lives inside the container it would have to cover. It hashes a canonical JSON array of the answer's fields instead — element order fixed there rather than left to key ordering, and JSON string escaping keeping any value from forging a delimiter into another. It covers every field the sender acts on (`type`, `sdp`, `candidates`, `createdAt`, `publicKey`) and, necessarily, not `confirm` itself; `relays` is rejected outright on an answer, and no consumer reads a field outside that list. Because `generateMutualAnswerBinary` builds the payload, hashes it, and only then calls the signer, the transcript and the encoded answer cannot drift apart.
+
+**What it closes.** Producing a valid tag requires having held this offer, having completed an ECDH agreement against the public key inside it, *and* sending exactly the answer that was signed. So an answer belonging to a different transfer, an answer replayed against a fresh offer, and an answer whose SDP or ICE candidates were altered after the receiver produced it — public key and tag left intact — are all rejected outright, immediately and with a clear message, instead of being applied and then surfacing minutes later as a connection that never opens or a chunk that will not authenticate. It also rules out cross-session confusion when an operator has more than one transfer open and pastes the wrong response.
+
+**What it does not close.** It is not the PIN Exchange confirmation code and does not do that job. The offer remains the only secret gating a Code Exchange transfer, so whoever captures the offer derives the same shared secret and can produce a valid tag too; the sender's deliberate scan or paste is still the gate on *who* answers (see the security boundary above). Closing that would require a secret the capturer does not have, which in this method means something an operator reads out — PIN Exchange is where that lives.
 
 **Binary Payload Format (PT01):**
 
