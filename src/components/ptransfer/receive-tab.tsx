@@ -1,6 +1,12 @@
-import { Download, FileDown, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, Download, FileDown, RotateCcw, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
+import { Switch } from '@/components/ui/switch';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { usePinReceive } from '@/hooks/use-pin-receive';
 import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
@@ -43,6 +49,12 @@ export function ReceiveTab() {
   } = useCodeReceive();
 
   const [route, setRoute] = useState<ReceiveRoute>('none');
+  // PIN Exchange only: carry the Nostr signaling through the browser Tor
+  // client. Each side chooses it for its own device.
+  const [anonymousSignaling, setAnonymousSignaling] = useState(false);
+  const [anonymousWebSocketBridge, setAnonymousWebSocketBridge] =
+    useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Failures before either hook owns the transfer, which therefore have no
   // state of their own to report through.
   const [startError, setStartError] = useState<string | null>(null);
@@ -77,7 +89,13 @@ export function ReceiveTab() {
         try {
           // The hook wipes the scalar once its PAKE runs are done.
           const pakeSecret = await derivePakeSecret(input.pin);
-          await receive({ pakeSecret, locator: getPinLocator(input.pin) });
+          await receive(
+            { pakeSecret, locator: getPinLocator(input.pin) },
+            {
+              enabled: anonymousSignaling,
+              webSocketBridge: anonymousWebSocketBridge,
+            },
+          );
         } catch (err) {
           // receive() reports its own failures through state; reaching here
           // means the transfer never started, so hand the box back.
@@ -96,7 +114,7 @@ export function ReceiveTab() {
       // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
       // the paste box redirects a single chunk link to the Scan tab.
     },
-    [receive, startReceive],
+    [receive, startReceive, anonymousSignaling, anonymousWebSocketBridge],
   );
 
   // submitOffer is a no-op until doReceive has armed its offer step, so hand
@@ -153,6 +171,79 @@ export function ReceiveTab() {
             initialPin={initialPin}
             error={startError}
           />
+
+          {/* Advanced options */}
+          <Collapsible
+            open={advancedOpen}
+            onOpenChange={setAdvancedOpen}
+            className="rounded-lg border bg-muted/30 p-3"
+          >
+            <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
+              <ChevronDown
+                className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+              />
+              Advanced options
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 pt-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <label
+                    htmlFor="receive-anonymous-signaling"
+                    className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                  >
+                    Anonymous signaling
+                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                      Experimental
+                    </span>
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Applies to a PIN: routes Nostr signaling through Tor inside
+                    your browser so the Nostr relays see a Tor exit instead of
+                    your IP address. This starts much more slowly and is less
+                    reliable. It does not anonymize the direct WebRTC transfer:
+                    the sender and STUN services may still see network metadata.
+                    Each person must enable this option on their own device to
+                    protect both sides.
+                  </p>
+                </div>
+                <Switch
+                  id="receive-anonymous-signaling"
+                  checked={anonymousSignaling}
+                  onCheckedChange={setAnonymousSignaling}
+                  className="mt-0.5"
+                />
+              </div>
+              {anonymousSignaling && (
+                <div className="flex items-start gap-3 border-l-2 pl-3">
+                  <input
+                    id="receive-anonymous-websocket-bridge"
+                    type="checkbox"
+                    checked={anonymousWebSocketBridge}
+                    onChange={(event) =>
+                      setAnonymousWebSocketBridge(event.target.checked)
+                    }
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+                  />
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="receive-anonymous-websocket-bridge"
+                      className="cursor-pointer text-sm font-medium"
+                    >
+                      Reach Tor over WebSocket instead of WebRTC
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Connects straight to the Snowflake bridge over a
+                      WebSocket, skipping the broker, STUN, and the volunteer
+                      WebRTC proxy. It often starts faster and works where
+                      WebRTC is blocked, but it always contacts the same Tor
+                      Project address, so it is easier to block and no volunteer
+                      proxy sits between you and the bridge.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
 
           <div className="text-xs text-muted-foreground text-center pb-2">
             File data is encrypted before transfer. Relays or STUN may still see

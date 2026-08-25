@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  ChevronDown,
   ChevronRight,
   FileUp,
   FolderUp,
@@ -12,7 +13,13 @@ import {
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Switch } from '@/components/ui/switch';
 import type { TransferMode } from '@/contexts/send-context';
 import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
@@ -46,6 +53,10 @@ export function SendTab() {
   const { setConfig } = useSend();
 
   const [transferMode, setTransferMode] = useState<TransferMode>('pin');
+  const [anonymousSignaling, setAnonymousSignaling] = useState(false);
+  const [anonymousWebSocketBridge, setAnonymousWebSocketBridge] =
+    useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -55,6 +66,7 @@ export function SendTab() {
   const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
   const isOverLimit = totalSize > MAX_MESSAGE_SIZE;
   const canSend = selectedFiles.length > 0 && !isOverLimit;
+  const anonymousSignalingActive = transferMode === 'pin' && anonymousSignaling;
   // Anything beyond a single loose file is zipped; folder selections always
   // zip so their structure is preserved.
   const willZip =
@@ -107,6 +119,10 @@ export function SendTab() {
     setConfig({
       selectedFiles,
       transferMode,
+      anonymousSignaling: {
+        enabled: anonymousSignalingActive,
+        webSocketBridge: anonymousWebSocketBridge,
+      },
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -387,6 +403,80 @@ export function SendTab() {
         </RadioGroup>
       </div>
 
+      {/* Advanced options */}
+      {transferMode === 'pin' && (
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="rounded-lg border bg-muted/30 p-3"
+        >
+          <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+            />
+            Advanced options
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-3 pt-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <label
+                  htmlFor="send-anonymous-signaling"
+                  className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                >
+                  Anonymous signaling
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                    Experimental
+                  </span>
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Routes Nostr signaling through Tor inside your browser so the
+                  Nostr relays see a Tor exit instead of your IP address. This
+                  starts much more slowly and is less reliable. It does not
+                  anonymize the direct WebRTC transfer: your recipient and STUN
+                  services may still see network metadata. Each person must
+                  enable this option on their own device to protect both sides.
+                </p>
+              </div>
+              <Switch
+                id="send-anonymous-signaling"
+                checked={anonymousSignaling}
+                onCheckedChange={setAnonymousSignaling}
+                className="mt-0.5"
+              />
+            </div>
+            {anonymousSignaling && (
+              <div className="flex items-start gap-3 border-l-2 pl-3">
+                <input
+                  id="send-anonymous-websocket-bridge"
+                  type="checkbox"
+                  checked={anonymousWebSocketBridge}
+                  onChange={(event) =>
+                    setAnonymousWebSocketBridge(event.target.checked)
+                  }
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+                />
+                <div className="space-y-1">
+                  <label
+                    htmlFor="send-anonymous-websocket-bridge"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Reach Tor over WebSocket instead of WebRTC
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Connects straight to the Snowflake bridge over a WebSocket,
+                    skipping the broker, STUN, and the volunteer WebRTC proxy.
+                    It often starts faster and works where WebRTC is blocked,
+                    but it always contacts the same Tor Project address, so it
+                    is easier to block and no volunteer proxy sits between you
+                    and the bridge.
+                  </p>
+                </div>
+              </div>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
       {/* How it works info box */}
       <div className="rounded-lg bg-gradient-to-br from-primary/5 to-accent/5 border border-primary/10 p-4">
         <div className="flex items-start gap-3">
@@ -401,7 +491,9 @@ export function SendTab() {
                   Show the recipient your PIN — as a QR code they scan, or read
                   out — so they can connect and decrypt your files.
                   <br />
-                  {pinModeHowItWorksDescription}
+                  {anonymousSignalingActive
+                    ? 'Nostr signaling is routed through Tor. File data still uses a direct encrypted WebRTC connection.'
+                    : pinModeHowItWorksDescription}
                 </>
               ) : (
                 <>

@@ -28,9 +28,5 @@ public/*.wasm
 
 tmp/
 
-# Rust/WASM build artifacts
-rust/**/target/
-rust/**/pkg/
-
 CLAUDE.local.md
 .claude/settings.local.json

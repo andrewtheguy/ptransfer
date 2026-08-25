@@ -50,6 +50,9 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  // Bumped by Retry: the preparation effect keys off it so a retry re-runs the
+  // relay check and file preparation even though the config is unchanged.
+  const [retryCount, setRetryCount] = useState(0);
 
   // Hooks for transfer
   const pinHook = usePinSend();
@@ -94,6 +97,8 @@ export function SendTransferPage() {
   }, [config, navigate]);
 
   // Prepare the direct file or lazy ZIP source
+  // Retry must redo the relay check and file preparation with an unchanged config.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is a deliberate re-run trigger
   useEffect(() => {
     if (!config || startedRef.current) return;
 
@@ -104,7 +109,12 @@ export function SendTransferPage() {
         // PIN Exchange uses the fixed signaling set. The Code Exchange
         // Nostr-file route resolves its own cached/discovered fallbacks, so a
         // failed fixed-set preflight must not block it before that can run.
-        if (config.transferMode === 'pin') {
+        // Anonymous signaling reaches the relays through Tor, so the direct
+        // preflight neither applies to it nor should run outside the circuit.
+        if (
+          config.transferMode === 'pin' &&
+          !config.anonymousSignaling.enabled
+        ) {
           if (cancelled) return;
           setStep('checking');
           const result = await testRelayAvailability();
@@ -154,7 +164,7 @@ export function SendTransferPage() {
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, retryCount]);
 
   // Start transfer when file is ready
   useEffect(() => {
@@ -165,7 +175,11 @@ export function SendTransferPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: sync step state when starting transfer
     setStep('active');
 
-    void activeHook.hook.send(transferSource);
+    if (activeHook.type === 'pin') {
+      void activeHook.hook.send(transferSource, config.anonymousSignaling);
+    } else {
+      void activeHook.hook.send(transferSource);
+    }
   }, [step, transferSource, config, activeHook]);
 
   // Track completion - sync local step with hook state
@@ -202,7 +216,11 @@ export function SendTransferPage() {
     }
     // Update config to Code Exchange and restart the transfer flow.
     startedRef.current = false;
-    setConfig({ ...config, transferMode: 'code' });
+    setConfig({
+      ...config,
+      transferMode: 'code',
+      anonymousSignaling: { enabled: false, webSocketBridge: false },
+    });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);
@@ -219,6 +237,7 @@ export function SendTransferPage() {
     startedRef.current = false;
     setStep('checking');
     setError(null);
+    setRetryCount((count) => count + 1);
   }, [cancel]);
 
   const handleSendAnother = useCallback(() => {

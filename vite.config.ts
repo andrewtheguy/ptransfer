@@ -59,10 +59,13 @@ export default defineConfig({
         enabled: false, // Disable PWA in development to avoid caching issues
       },
       workbox: {
-        // Cache all static assets including workers and WASM
+        // Cache all static assets including workers and WASM. The QR WASM is
+        // precached because Code Exchange has to work offline.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,wasm}'],
-        // Increase max file size for WASM files (zxing-wasm can be large)
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
+        // The browser Tor client is a multi-megabyte, opt-in WASM asset that
+        // is useless offline anyway: fetch it on demand when Anonymous
+        // Signaling is enabled instead of pushing it onto every install.
+        globIgnores: ['**/anonymous_signaling_wasm_bg*.wasm'],
       },
       manifest: {
         name: 'pTransfer',

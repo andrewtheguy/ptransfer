@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import type { AnonymousSignalingConfig } from '@/lib/nostr';
 
 export type TransferMode = 'pin' | 'code';
 
@@ -17,6 +18,8 @@ interface SendConfig {
 
   // Configuration
   transferMode: TransferMode;
+  /** Route PIN Exchange Nostr signaling through the browser Tor client. */
+  anonymousSignaling: AnonymousSignalingConfig;
 }
 
 interface SendContextState {

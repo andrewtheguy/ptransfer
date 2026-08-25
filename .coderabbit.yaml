@@ -1,5 +1,0 @@
-reviews:
-  path_filters:
-    - "!rust/webtor-rs/subtle-tls/**"
-    - "!rust/webtor-rs/webtor/**"
-    - "!rust/webtor-rs/vendor/**"

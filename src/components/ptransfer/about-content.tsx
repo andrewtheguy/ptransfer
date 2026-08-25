@@ -214,6 +214,12 @@ export function AboutContent() {
                   plaintext file contents or your decryption key.
                 </li>
                 <li>
+                  The experimental Anonymous signaling option routes this
+                  device&apos;s Nostr connections through Tor. It is slower and
+                  less reliable, and does not anonymize the direct WebRTC
+                  connection from the peer or STUN.
+                </li>
+                <li>
                   File data is always transferred directly peer-to-peer over
                   WebRTC in this mode; PIN Exchange relays carry signaling, not
                   file contents.

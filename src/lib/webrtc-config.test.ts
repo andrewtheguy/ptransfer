@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getIceServers, getWebRTCConfig } from './webrtc-config';
+import { getIceServers, getStunUrls, getWebRTCConfig } from './webrtc-config';
 
 describe('WebRTC configuration', () => {
   it('configures STUN discovery without TURN relay fallback', () => {
@@ -12,5 +12,10 @@ describe('WebRTC configuration', () => {
     }
 
     expect(getWebRTCConfig().iceServers).toEqual(servers);
+    expect(getStunUrls()).toEqual([
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun.cloudflare.com:3478',
+    ]);
   });
 });

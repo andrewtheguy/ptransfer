@@ -22,6 +22,7 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
+  type AnonymousSignalingConfig,
   base64ToUint8Array,
   type ClaimPayload,
   type ConfirmPayload,
@@ -119,7 +120,10 @@ export interface UsePinReceiveReturn {
    * moment the rendezvous payload opens until the sender's confirm arrives.
    */
   confirmationCode: string | null;
-  receive: (pinMaterial: PinKeyMaterial) => Promise<void>;
+  receive: (
+    pinMaterial: PinKeyMaterial,
+    anonymousSignaling: AnonymousSignalingConfig,
+  ) => Promise<void>;
   cancel: () => void;
   reset: () => void;
 }
@@ -165,7 +169,10 @@ export function usePinReceive(): UsePinReceiveReturn {
   }, [cancel, discardSink]);
 
   const receive = useCallback(
-    async (pinMaterial: PinKeyMaterial) => {
+    async (
+      pinMaterial: PinKeyMaterial,
+      anonymousSignaling: AnonymousSignalingConfig,
+    ) => {
       // Guard against concurrent invocations
       if (receivingRef.current) return;
       receivingRef.current = true;
@@ -211,9 +218,28 @@ export function usePinReceive(): UsePinReceiveReturn {
         if (cancelledRef.current) return;
 
         // Connect to relays
-        setState({ status: 'connecting', message: 'Connecting to relays...' });
-        const client = createNostrClient([...DEFAULT_RELAYS]);
+        setState({
+          status: 'connecting',
+          message: anonymousSignaling.enabled
+            ? 'Building a Tor circuit for anonymous signaling...'
+            : 'Connecting to relays...',
+        });
+        const client = createNostrClient([...DEFAULT_RELAYS], {
+          anonymousSignaling,
+        });
         clientRef.current = client;
+
+        if (cancelledRef.current) return;
+
+        if (anonymousSignaling.enabled) {
+          await client.waitForAnonymousTransport();
+          if (cancelledRef.current) return;
+          setState({
+            status: 'connecting',
+            message: 'Tor verified. Connecting to Nostr relays through Tor...',
+          });
+        }
+        await client.waitForConnection();
 
         if (cancelledRef.current) return;
 

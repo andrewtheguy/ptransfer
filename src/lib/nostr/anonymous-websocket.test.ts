@@ -1,0 +1,158 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const cacheMocks = vi.hoisted(() => ({
+  load: vi.fn(async () => 'cached-directory'),
+  save: vi.fn(async () => undefined),
+}));
+
+const wasmMocks = vi.hoisted(() => {
+  const sent: string[] = [];
+  const closeSocket = vi.fn(async () => undefined);
+  const closeClient = vi.fn();
+  let received = false;
+  const socket = {
+    send: vi.fn(async (text: string) => {
+      sent.push(text);
+    }),
+    receive: vi.fn(async () => {
+      if (!received) {
+        received = true;
+        return '["EOSE","subscription"]';
+      }
+      return null;
+    }),
+    close: closeSocket,
+  };
+  const client = {
+    connect: vi.fn(async () => socket),
+    directoryCache: vi.fn(async () => '{"version":1}'),
+    close: closeClient,
+  };
+  return {
+    client,
+    closeClient,
+    closeSocket,
+    sent,
+    init: vi.fn(async () => undefined),
+    create: vi.fn(async () => client),
+    reset() {
+      received = false;
+      sent.length = 0;
+    },
+  };
+});
+
+vi.mock('./tor-directory-cache', () => ({
+  loadTorDirectoryCache: cacheMocks.load,
+  saveTorDirectoryCache: cacheMocks.save,
+}));
+
+vi.mock('@andrewtheguy/anonymous-signaling-wasm', () => ({
+  default: wasmMocks.init,
+  AnonymousSignalingClient: { create: wasmMocks.create },
+}));
+
+import { AnonymousSignalingTransport } from './anonymous-websocket';
+
+describe('AnonymousSignalingTransport', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wasmMocks.reset();
+  });
+
+  it('adapts the WASM socket to the browser WebSocket event API', async () => {
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: false,
+    });
+    await transport.waitUntilReady();
+
+    const socket = new transport.websocketImplementation('wss://relay.example');
+    const open = new Promise<void>((resolve) =>
+      socket.addEventListener('open', () => resolve(), { once: true }),
+    );
+    const message = new Promise<string>((resolve) =>
+      socket.addEventListener(
+        'message',
+        (event) => resolve((event as MessageEvent<string>).data),
+        { once: true },
+      ),
+    );
+    const closed = new Promise<void>((resolve) =>
+      socket.addEventListener('close', () => resolve(), { once: true }),
+    );
+
+    await open;
+    socket.send('["REQ","subscription",{}]');
+
+    await expect(message).resolves.toBe('["EOSE","subscription"]');
+    await closed;
+    expect(wasmMocks.create).toHaveBeenCalledWith(
+      'cached-directory',
+      [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun.cloudflare.com:3478',
+      ],
+      false,
+    );
+    await vi.waitFor(() =>
+      expect(cacheMocks.save).toHaveBeenCalledWith('{"version":1}'),
+    );
+    expect(wasmMocks.client.connect).toHaveBeenCalledWith(
+      'wss://relay.example',
+    );
+    expect(wasmMocks.sent).toEqual(['["REQ","subscription",{}]']);
+
+    transport.close();
+    await vi.waitFor(() => expect(wasmMocks.closeClient).toHaveBeenCalled());
+  });
+
+  it('asks webtor for the direct WebSocket bridge when requested', async () => {
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: true,
+    });
+    await transport.waitUntilReady();
+
+    expect(wasmMocks.create).toHaveBeenCalledWith(
+      'cached-directory',
+      expect.any(Array),
+      true,
+    );
+    transport.close();
+  });
+
+  it('rejects non-text Nostr messages', async () => {
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: false,
+    });
+    await transport.waitUntilReady();
+    const socket = new transport.websocketImplementation('wss://relay.example');
+    await new Promise<void>((resolve) =>
+      socket.addEventListener('open', () => resolve(), { once: true }),
+    );
+
+    expect(() => socket.send(new Uint8Array([1, 2, 3]))).toThrow(
+      'Nostr signaling only supports text messages',
+    );
+    transport.close();
+  });
+
+  it('fails instead of waiting forever when Tor initialization stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      wasmMocks.create.mockImplementationOnce(() => new Promise(() => {}));
+      const transport = new AnonymousSignalingTransport({
+        webSocketBridge: false,
+      });
+      const failure = expect(transport.waitUntilReady()).rejects.toThrow(
+        'Anonymous signaling could not establish and verify Tor within 5 minutes',
+      );
+
+      await vi.advanceTimersByTimeAsync(300_000);
+      await failure;
+      transport.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

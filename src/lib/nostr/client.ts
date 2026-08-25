@@ -1,14 +1,70 @@
-import { type Event, type Filter, mergeFilters, SimplePool } from 'nostr-tools';
-import { DEFAULT_RELAYS, normalizeRelayUrl } from './relays';
+import {
+  type Event,
+  type Filter,
+  mergeFilters,
+  verifyEvent,
+} from 'nostr-tools';
+import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
+import { AnonymousSignalingTransport } from './anonymous-websocket';
+import { normalizeRelayUrl } from './relays';
+
+const DIRECT_RELAY_CONNECTION_TIMEOUT_MS = 10_000;
+const ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS = 180_000;
+
+class SignalingPool extends AbstractSimplePool {
+  private readonly connectionTimeoutMs: number;
+
+  constructor(
+    websocketImplementation: typeof WebSocket | undefined,
+    connectionTimeoutMs: number,
+  ) {
+    super({ verifyEvent, websocketImplementation });
+    this.connectionTimeoutMs = connectionTimeoutMs;
+  }
+
+  override ensureRelay(url: string, params?: { connectionTimeout?: number }) {
+    return super.ensureRelay(url, {
+      ...params,
+      connectionTimeout: Math.max(
+        params?.connectionTimeout ?? 0,
+        this.connectionTimeoutMs,
+      ),
+    });
+  }
+}
+
+export interface AnonymousSignalingConfig {
+  /** Route Nostr signaling through the browser Tor client. */
+  enabled: boolean;
+  /**
+   * Reach the Snowflake bridge over a direct WebSocket instead of a volunteer
+   * WebRTC proxy. Ignored unless `enabled`.
+   */
+  webSocketBridge: boolean;
+}
+
+export interface NostrClientOptions {
+  anonymousSignaling: AnonymousSignalingConfig;
+}
 
 export class NostrClient {
-  private pool: SimplePool;
+  private pool: AbstractSimplePool;
   private relays: string[];
   private subscriptions: Map<string, { close: () => void }>;
   private connectionReady: Promise<void>;
+  private anonymousTransport: AnonymousSignalingTransport | null;
 
-  constructor(relays: string[] = [...DEFAULT_RELAYS]) {
-    this.pool = new SimplePool();
+  constructor(relays: string[], options: NostrClientOptions) {
+    const { enabled, webSocketBridge } = options.anonymousSignaling;
+    this.anonymousTransport = enabled
+      ? new AnonymousSignalingTransport({ webSocketBridge })
+      : null;
+    this.pool = new SignalingPool(
+      this.anonymousTransport?.websocketImplementation,
+      enabled
+        ? ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS
+        : DIRECT_RELAY_CONNECTION_TIMEOUT_MS,
+    );
     // Normalize and dedupe relay URLs
     this.relays = [
       ...new Set(
@@ -21,6 +77,12 @@ export class NostrClient {
 
     // Pre-connect to all relays and wait for at least one to be ready
     this.connectionReady = this.ensureConnected();
+    // Nothing awaits connectionReady until the first publish/query, so a
+    // failure before then — an anonymous transport that never finishes
+    // bootstrapping, most of all — surfaces as an unhandled rejection and
+    // buries the real error in console noise. Marking it handled costs real
+    // awaiters nothing: they await this same promise and still see the error.
+    void this.connectionReady.catch(() => {});
   }
 
   /**
@@ -31,28 +93,25 @@ export class NostrClient {
     await this.connectionReady;
   }
 
+  /** Wait until the anonymous transport has verified a working Tor exit. */
+  async waitForAnonymousTransport(): Promise<void> {
+    await this.anonymousTransport?.waitUntilReady();
+  }
+
   /**
    * Ensure at least one relay is connected
    */
-  private ensureConnected(): Promise<void> {
-    // Give relays time to connect by doing a dummy subscription
-    // This triggers connection establishment in SimplePool
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(), 3000); // Max 3s wait
-
-      // Subscribe to a filter that won't match anything, just to trigger connection
-      const sub = this.pool.subscribeMany(
-        this.relays,
-        { kinds: [99999], limit: 1 },
-        {
-          oneose: () => {
-            clearTimeout(timeout);
-            sub.close();
-            resolve();
-          },
-        },
+  private async ensureConnected(relays = this.relays): Promise<void> {
+    await this.anonymousTransport?.waitUntilReady();
+    try {
+      await Promise.any(relays.map((relay) => this.pool.ensureRelay(relay)));
+    } catch {
+      throw new Error(
+        this.anonymousTransport
+          ? 'Tor was verified, but could not connect to any Nostr relay'
+          : 'Could not connect to any Nostr relay',
       );
-    });
+    }
   }
 
   /**
@@ -158,6 +217,8 @@ export class NostrClient {
     }
     this.subscriptions.clear();
     this.pool.close(this.relays);
+    this.anonymousTransport?.close();
+    this.anonymousTransport = null;
   }
 
   /**
@@ -186,13 +247,16 @@ export class NostrClient {
     console.log(`Added ${toAdd.length} backup relays:`, toAdd);
 
     // Wait for new relay connections
-    await this.ensureConnected();
+    await this.ensureConnected(toAdd);
   }
 }
 
 /**
  * Create and return a NostrClient instance
  */
-export function createNostrClient(relays?: string[]): NostrClient {
-  return new NostrClient(relays);
+export function createNostrClient(
+  relays: string[],
+  options: NostrClientOptions,
+): NostrClient {
+  return new NostrClient(relays, options);
 }

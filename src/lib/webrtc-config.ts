@@ -28,6 +28,16 @@ export function getIceServers(): RTCIceServer[] {
 }
 
 /**
+ * Get the canonical STUN URL list for transports that cannot consume the
+ * browser RTCIceServer objects directly, such as the Rust Snowflake binding.
+ */
+export function getStunUrls(): string[] {
+  return STUN_SERVERS.flatMap(({ urls }) =>
+    typeof urls === 'string' ? [urls] : urls,
+  );
+}
+
+/**
  * Get complete RTCConfiguration with ICE servers.
  * Use this when creating a new RTCPeerConnection.
  */
