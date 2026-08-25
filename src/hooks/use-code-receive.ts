@@ -346,6 +346,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         },
       );
 
+      if (abandoned()) {
+        rtc.close();
+        return;
+      }
       rtcRef.current = rtc;
 
       // Handle offer signal

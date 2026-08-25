@@ -129,7 +129,15 @@ async function main(): Promise<void> {
     console.log('Compressed payload:', obfuscated.length - 4, 'bytes');
     console.log('Decompressed JSON:', jsonBytes.length, 'bytes');
 
-    const payload = JSON.parse(jsonBytes.toString('utf8')) as unknown;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(jsonBytes.toString('utf8')) as unknown;
+    } catch {
+      console.error(
+        '\nInvalid payload: decompressed PT01 data is not valid JSON.',
+      );
+      process.exit(1);
+    }
     console.log('Payload kind:', payloadKind(payload));
     console.log('\n=== Payload ===');
     console.log(JSON.stringify(payload, null, 2));

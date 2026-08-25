@@ -658,6 +658,7 @@ export function usePinReceive(): UsePinReceiveReturn {
             for (const candidate of candidates) {
               await client.publish(candidate.claimEvent);
             }
+            if (settled || cancelledRef.current) return;
             // Backstop for relays that processed the publish before the
             // subscription: poll for an already-stored confirm.
             queryPoll = setInterval(() => {

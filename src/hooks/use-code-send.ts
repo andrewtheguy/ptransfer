@@ -332,11 +332,14 @@ export function useCodeSend(): UseCodeSendReturn {
         clearExpirationTimeout();
         expirationTimeoutRef.current = setTimeout(() => {
           if (!cancelledRef.current && sendingRef.current) {
+            cancelledRef.current = true;
             setState({
               status: 'error',
               message: 'Session expired. Please try again.',
             });
-            sendingRef.current = false;
+            answerRejectRef.current?.(
+              new Error('Session expired. Please try again.'),
+            );
             answerResolverRef.current = null;
             teardownRelayPool();
             ecdhPrivateKeyRef.current = null;
@@ -487,14 +490,27 @@ export function useCodeSend(): UseCodeSendReturn {
         // Wait for answer to be submitted
         const answerPayload = await new Promise<SignalingPayload>(
           (resolve, reject) => {
-            answerResolverRef.current = resolve;
-            answerRejectRef.current = reject;
+            let checkInterval: ReturnType<typeof setInterval> | null = null;
+            const cleanup = () => {
+              if (checkInterval !== null) clearInterval(checkInterval);
+              checkInterval = null;
+            };
+            const resolveAnswer = (payload: SignalingPayload) => {
+              cleanup();
+              resolve(payload);
+            };
+            const rejectAnswer = (error: Error) => {
+              cleanup();
+              reject(error);
+            };
+
+            answerResolverRef.current = resolveAnswer;
+            answerRejectRef.current = rejectAnswer;
 
             // Check periodically if cancelled
-            const checkInterval = setInterval(() => {
+            checkInterval = setInterval(() => {
               if (cancelledRef.current) {
-                clearInterval(checkInterval);
-                reject(new Error('Cancelled'));
+                rejectAnswer(new Error('Cancelled'));
               }
             }, 500);
           },
@@ -780,15 +796,21 @@ export function useCodeSend(): UseCodeSendReturn {
               reject(new P2PConnectionError('Connection timeout'));
             }, timeoutMs);
             let settled = false;
-            receiverGaveUp?.then(() => {
-              if (settled) return;
-              cleanup();
-              reject(
-                new P2PConnectionError(
-                  'The receiver reports no direct connection is possible',
-                ),
-              );
-            });
+            receiverGaveUp?.then(
+              () => {
+                if (settled) return;
+                cleanup();
+                reject(
+                  new P2PConnectionError(
+                    'The receiver reports no direct connection is possible',
+                  ),
+                );
+              },
+              () => {
+                // A failed hello watch only disables this early-exit signal;
+                // ICE failure and the connection timeout remain authoritative.
+              },
+            );
 
             const cleanup = () => {
               settled = true;
