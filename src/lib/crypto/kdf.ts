@@ -1,6 +1,7 @@
 import { encodeCrockfordBase32 } from './base32';
 import {
   AES_KEY_LENGTH,
+  ANSWER_CONFIRMATION_BYTES,
   CONFIRMATION_CODE_BYTES,
   SALT_LENGTH,
 } from './constants';
@@ -185,6 +186,53 @@ export async function deriveConfirmationCode(
   );
 
   return encodeCrockfordBase32(new Uint8Array(bits));
+}
+
+const ANSWER_CONFIRMATION_LABEL = 'ptransfer:code-exchange:v1:answer-confirm';
+
+/**
+ * Derive the Code Exchange answer confirmation tag: the key-confirmation value
+ * the receiver puts in its answer and the sender recomputes before it acts on
+ * that answer.
+ *
+ * The tag is keyed by the ECDH shared secret and bound to a digest of the
+ * exact offer container the receiver read (see computeOfferTranscriptHash in
+ * code-signaling.ts), so producing one requires having held that offer and
+ * completed the key agreement against the public key inside it. An answer
+ * lifted from another transfer, an answer replayed against a fresh offer, and
+ * an answer whose SDP or public key was edited in transit all yield a tag the
+ * sender does not expect.
+ *
+ * It is checked by the machine, not by a human — unlike the PIN Exchange
+ * confirmation code (deriveConfirmationCode), nothing is displayed and nothing
+ * is typed. Nor does it authenticate *who* answered: the offer is the only
+ * secret Code Exchange has, so anyone who captured it can derive this tag too.
+ * See ANSWER_CONFIRMATION_BYTES for exactly what it does and does not cover.
+ */
+export async function deriveAnswerConfirmation(
+  sharedSecretKey: CryptoKey,
+  salt: Uint8Array,
+  offerTranscriptHash: string,
+): Promise<Uint8Array> {
+  if (salt.length < SALT_LENGTH) {
+    throw new Error(
+      `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+    );
+  }
+
+  const info = `${ANSWER_CONFIRMATION_LABEL}|${offerTranscriptHash}`;
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: salt as BufferSource,
+      info: new TextEncoder().encode(info),
+    },
+    sharedSecretKey,
+    ANSWER_CONFIRMATION_BYTES * 8,
+  );
+
+  return new Uint8Array(bits);
 }
 
 /**

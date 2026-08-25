@@ -1,11 +1,15 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  computeOfferTranscriptHash,
+  decodeAnswerConfirmation,
   generateMutualOfferBinary,
   parseMutualPayload,
   type SignalingPayload,
 } from '@/lib/code-signaling';
 import {
+  constantTimeEqualBytes,
   deriveAESKeyFromSecretKey,
+  deriveAnswerConfirmation,
   deriveSharedSecretKey,
   generateECDHKeyPair,
   generateSalt,
@@ -543,6 +547,32 @@ export function useCodeSend(): UseCodeSendReturn {
           ecdhPrivateKeyRef.current,
           receiverPublicKey,
         );
+
+        // Key confirmation before anything in the answer is acted on. The tag
+        // is keyed by the shared secret just derived and bound to this exact
+        // offer, so only a peer that read this offer and completed the same
+        // agreement can produce it: an answer meant for another transfer, a
+        // replayed answer, or one whose SDP or public key was altered fails
+        // here instead of surfacing later as a connection that never opens.
+        // The offer stays the only secret gating the transfer — this does not
+        // make an offer captured off the screen harmless.
+        const expectedConfirmation = await deriveAnswerConfirmation(
+          sharedSecretKey,
+          saltRef.current,
+          await computeOfferTranscriptHash(offerBinary),
+        );
+        const presentedConfirmation = decodeAnswerConfirmation(
+          answerPayload.confirm,
+        );
+        if (
+          !presentedConfirmation ||
+          !constantTimeEqualBytes(presentedConfirmation, expectedConfirmation)
+        ) {
+          throw new Error(
+            'Response does not match this transfer. Make sure you scanned the response to this code, then try again.',
+          );
+        }
+
         const key = await deriveAESKeyFromSecretKey(
           sharedSecretKey,
           saltRef.current,

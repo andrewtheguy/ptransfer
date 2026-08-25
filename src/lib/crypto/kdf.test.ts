@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { decrypt, encrypt } from './aes-gcm';
-import { CONFIRMATION_CODE_LENGTH } from './constants';
+import {
+  ANSWER_CONFIRMATION_BYTES,
+  CONFIRMATION_CODE_LENGTH,
+} from './constants';
+import { deriveSharedSecretKey, generateECDHKeyPair } from './ecdh';
 import {
   type ConfirmationCodeBinding,
+  deriveAnswerConfirmation,
   deriveConfirmationCode,
   deriveHandshakeSealKeys,
   derivePinSessionKeys,
@@ -147,6 +152,56 @@ describe('Confirmation code', () => {
     const { sender } = await pakeRoots();
     await expect(
       deriveConfirmationCode(sender, new Uint8Array(8), binding),
+    ).rejects.toThrow(/Salt too short/);
+  });
+});
+
+describe('Code Exchange answer confirmation', () => {
+  const transcript = 'a'.repeat(64);
+
+  /** The shared secret both sides of a Code Exchange reach. */
+  async function ecdhSecret(): Promise<CryptoKey> {
+    const [a, b] = await Promise.all([
+      generateECDHKeyPair(),
+      generateECDHKeyPair(),
+    ]);
+    return deriveSharedSecretKey(a.privateKey, b.publicKeyBytes);
+  }
+
+  it('derives a fixed-width tag, stable for one secret and transcript', async () => {
+    const secret = await ecdhSecret();
+    const salt = generateSalt();
+
+    const first = await deriveAnswerConfirmation(secret, salt, transcript);
+    const second = await deriveAnswerConfirmation(secret, salt, transcript);
+
+    expect(first).toHaveLength(ANSWER_CONFIRMATION_BYTES);
+    expect(first).toEqual(second);
+  });
+
+  it('separates transcripts, salts, and shared secrets', async () => {
+    const secret = await ecdhSecret();
+    const salt = generateSalt();
+    const base = await deriveAnswerConfirmation(secret, salt, transcript);
+
+    expect(
+      await deriveAnswerConfirmation(secret, salt, 'b'.repeat(64)),
+    ).not.toEqual(base);
+    expect(
+      await deriveAnswerConfirmation(secret, generateSalt(), transcript),
+    ).not.toEqual(base);
+    expect(
+      await deriveAnswerConfirmation(await ecdhSecret(), salt, transcript),
+    ).not.toEqual(base);
+  });
+
+  it('rejects a salt below the minimum width', async () => {
+    await expect(
+      deriveAnswerConfirmation(
+        await ecdhSecret(),
+        new Uint8Array(8),
+        transcript,
+      ),
     ).rejects.toThrow(/Salt too short/);
   });
 });

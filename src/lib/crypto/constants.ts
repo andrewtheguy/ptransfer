@@ -98,6 +98,27 @@ export const MAX_CLAIM_ATTEMPTS = 16;
 export const CONFIRMATION_CODE_BYTES = 5;
 export const CONFIRMATION_CODE_LENGTH = 8;
 
+// Code Exchange answer confirmation tag: the key-confirmation value the
+// receiver folds into its answer code (see deriveAnswerConfirmation). It is
+// derived from the ECDH shared secret and bound to a digest of the exact
+// offer container the receiver acted on, so the sender can check that the
+// answer in its hand was produced by a peer that read *this* offer and
+// completed the same key agreement.
+//
+// This is machine-checked, never read by a human: nothing is displayed and
+// nothing is typed. It is not the PIN Exchange confirmation code and does not
+// do that job — the offer is still the only secret gating a Code Exchange
+// transfer, so whoever captures the offer can still produce a valid tag. What
+// it closes is the gap below it: an answer from another transfer, a replayed
+// or hand-edited answer, and any answer whose author never held the offer are
+// now rejected outright instead of silently derailing into a dead connection
+// or a garbage decrypt.
+//
+// 16 bytes = 128 bits, base64 in the payload (24 characters). Forging one
+// without the shared secret is a 2^-128 shot, and the width costs a couple of
+// dozen bytes in a single answer QR.
+export const ANSWER_CONFIRMATION_BYTES = 16;
+
 // AES-GCM parameters
 export const AES_KEY_LENGTH = 256; // bits
 export const AES_NONCE_LENGTH = 12; // bytes (96 bits)

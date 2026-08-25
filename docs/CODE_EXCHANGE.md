@@ -60,7 +60,9 @@ appears once it knows which relays to name.
 > Because the relay fallback is keyed from the Code Exchange secret, treat the offer as
 > the secret for the whole transfer: anyone who obtains it before it expires can answer it
 > and derive the transfer keys — but their answer still only counts if the sender scans or
-> pastes it.
+> pastes it. The response check described in
+> [Responses are checked against your code](#responses-are-checked-against-your-code)
+> does not change this.
 
 - **As QR codes:** The sender's offer is larger, so it is split across **multiple QR codes**
   (typically 2-4, each labeled "1 of N"). The receiver's answer is smaller and fits in a
@@ -112,8 +114,30 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 
 1. Under **Scan or paste receiver's response**, take the answer in by **either** method —
    scan the response QR with the in-app scanner, or paste the copied response text
-2. The P2P connection establishes and the file transfers directly
-3. Both sides show that the transfer completed when done
+2. The sender checks that the response actually answers the code it is showing (see
+   [Responses are checked against your code](#responses-are-checked-against-your-code)).
+   Nothing to read out or type — a response from a different transfer is simply refused
+3. The P2P connection establishes and the file transfers directly
+4. Both sides show that the transfer completed when done
+
+### Responses are checked against your code
+
+The receiver's response carries a short tag it derives from the shared key and from the
+exact code it read. Before the sender acts on a response — before it connects and before
+any file data moves — it recomputes that tag from the code it is showing and refuses
+anything that does not match, with "Response does not match this transfer."
+
+This is automatic and invisible: no confirmation code appears on either screen and neither
+person has to read anything aloud. It means a response belonging to a **different**
+transfer, an old response pasted again, or a response altered on the way back is rejected
+straight away instead of turning into a connection that never completes — handy if you
+have two transfers open and paste the wrong one.
+
+It is **not** a defense against someone who photographed or copied your offer code: they
+can produce a matching tag as easily as the intended receiver can. The protection there is
+still that nothing enters the sender's page except what the sender scans or pastes. If you
+need a check that survives a leaked code, use [PIN Exchange](../README.md), where the
+receiver displays a confirmation code that the sender's operator must type.
 
 ## Relay Fallback (No Direct Connection)
 
