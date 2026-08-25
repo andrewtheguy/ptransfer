@@ -86,24 +86,47 @@ Snowflake broker, volunteer-proxy and bridge infrastructure, the Tor Project's
 exit-check API, and public Nostr relays; pTransfer does not operate an
 anonymous-signaling proxy.
 
-Immediately after authenticating the Snowflake bridge, webtor downloads the
-current compressed consensus over a one-hop Tor directory stream through that
-bridge. It then downloads current microdescriptors for randomized pools of
-eligible middle and HTTPS-capable exit relays. Current directory data is
-required before it constructs a circuit. There is no bundled snapshot, direct
-browser directory request, or cross-origin bootstrap dependency.
+Current directory data is required before webtor can construct a circuit. It
+accepts that data from one of three places, in order.
 
-After a successful bootstrap, the TypeScript adapter stores the raw consensus
-and microdescriptors as one opaque IndexedDB record. That record is a fallback,
-not a fast path: every start downloads a fresh consensus, and the stored copy is
-touched only when that download fails. When it is reached for, Rust re-parses
-the consensus, checks its current validity window, matches every microdescriptor
+First, the site may serve `/tor-directory.json`: a consensus and the matching
+microdescriptors, fetched by `npm run tor:directory` straight from a directory
+authority over ordinary HTTP and written into `public/`. Downloading the
+directory inside the browser means pulling a multi-megabyte consensus and every
+microdescriptor chunk through one Snowflake circuit, one request at a time,
+which is the least reliable step of a bootstrap; a served snapshot removes it.
+
+Because that fetch is not circuit-bound, the snapshot carries a microdescriptor
+for every relay in the consensus rather than the small per-role sample webtor
+takes for itself, so path selection is weighted across the whole network. It is
+about 39 MiB of text, near 90% of it relay `family` lines, and compresses to
+roughly 3 MiB on the wire. The file is not committed and a microdesc consensus
+is only valid for three hours, so a deployment that wants the fast path has to
+rebuild it at least hourly.
+
+Second, the TypeScript adapter stores the raw consensus and microdescriptors
+from the last successful bootstrap as one opaque IndexedDB record, used when no
+snapshot is served.
+
+Third, if neither is present or usable, webtor downloads the current compressed
+consensus over a one-hop Tor directory stream through the bridge it just
+authenticated, followed by microdescriptors for randomized pools of eligible
+middle and HTTPS-capable exit relays.
+
+Supplied directory data is never trusted on its face. Rust parses the
+consensus, checks its current validity window, matches every microdescriptor
 digest back to that consensus, and requires enough usable middle and HTTPS exit
-relays before accepting it. An expired, corrupt, oversized, incomplete, or
-schema-mismatched entry is rejected — the bootstrap then reports the original
-download failure — and any entry is atomically replaced after the next
-successful download. Snowflake connections, circuits, streams, and TLS state are
-never persisted.
+relays before installing it. An expired, corrupt, oversized, incomplete, or
+schema-mismatched document is rejected and the bootstrap falls through to
+downloading the directory itself. The IndexedDB record is atomically replaced
+after each successful bootstrap. Snowflake connections, circuits, streams, and
+TLS state are never persisted.
+
+The snapshot is not signature-checked, and neither is a downloaded consensus:
+webtor verifies timeliness and internal consistency, not the directory
+authorities' signatures. Serving a snapshot therefore lets the site choose
+which relays a visitor's circuit is built from, which a browser-side download
+leaves to the bridge instead.
 
 ## Source and build
 

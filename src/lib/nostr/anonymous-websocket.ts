@@ -3,6 +3,7 @@ import {
   loadTorDirectoryCache,
   saveTorDirectoryCache,
 } from './tor-directory-cache';
+import { loadTorDirectorySnapshot } from './tor-directory-snapshot';
 
 interface WasmAnonymousSignalingSocket {
   send(text: string): Promise<unknown>;
@@ -17,6 +18,16 @@ interface WasmAnonymousSignalingClient {
 }
 
 const CLIENT_INITIALIZATION_TIMEOUT_MS = 300_000;
+
+/**
+ * Directory data for Rust to bootstrap from. The snapshot the site serves is
+ * preferred because it is refreshed centrally; the copy left by this browser's
+ * last successful bootstrap covers a deployment that serves no snapshot.
+ */
+async function loadDirectorySeed(): Promise<string | undefined> {
+  const snapshot = await loadTorDirectorySnapshot();
+  return snapshot ?? (await loadTorDirectoryCache());
+}
 
 type WasmModule = typeof import('@andrewtheguy/anonymous-signaling-wasm');
 
@@ -101,12 +112,12 @@ export class AnonymousSignalingTransport {
   constructor(options: AnonymousSignalingTransportOptions) {
     const pendingClient = Promise.all([
       loadWasmModule(),
-      loadTorDirectoryCache(),
-    ]).then(async ([module, directoryFallback]) => {
-      // The stored directory is a fallback only: Rust downloads a fresh
-      // consensus on every start and reaches for this copy only if that fails.
+      loadDirectorySeed(),
+    ]).then(async ([module, directorySeed]) => {
+      // Rust starts from this directory data when it is present and still
+      // valid, and downloads a consensus over the bridge otherwise.
       const client = (await module.AnonymousSignalingClient.create(
-        directoryFallback,
+        directorySeed,
         getStunUrls(),
         options.webSocketBridge,
       )) as WasmAnonymousSignalingClient | undefined;

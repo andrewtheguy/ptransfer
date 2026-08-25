@@ -2,17 +2,6 @@ const DATABASE_NAME = 'ptransfer-tor-directory';
 const DATABASE_VERSION = 1;
 const OBJECT_STORE_NAME = 'directory';
 const CACHE_KEY = 'current';
-const MAX_CACHE_BYTES = 34 * 1024 * 1024;
-
-/**
- * The limit is a byte budget, so measure the encoded form. UTF-8 never uses
- * fewer bytes than the string has UTF-16 code units, so an oversized length
- * settles the question without materializing tens of megabytes.
- */
-function exceedsCacheLimit(value: string): boolean {
-  if (value.length > MAX_CACHE_BYTES) return true;
-  return new TextEncoder().encode(value).length > MAX_CACHE_BYTES;
-}
 
 function cacheLog(message: string, error: unknown): void {
   console.info(
@@ -61,8 +50,9 @@ function transactionComplete(transaction: IDBTransaction): Promise<void> {
 }
 
 /**
- * Load the opaque Rust directory cache. It is handed to Rust as a bootstrap
- * fallback, validated and installed only if the live directory download fails.
+ * Load the opaque Rust directory cache left by this browser's last successful
+ * bootstrap. It seeds the next bootstrap when the site serves no directory
+ * snapshot; Rust validates it before installing it.
  */
 export async function loadTorDirectoryCache(): Promise<string | undefined> {
   if (!globalThis.indexedDB) return undefined;
@@ -74,9 +64,7 @@ export async function loadTorDirectoryCache(): Promise<string | undefined> {
     const value = await requestResult<unknown>(
       transaction.objectStore(OBJECT_STORE_NAME).get(CACHE_KEY),
     );
-    if (typeof value !== 'string' || exceedsCacheLimit(value)) {
-      return undefined;
-    }
+    if (typeof value !== 'string') return undefined;
     return value;
   } catch (error) {
     cacheLog('Could not read the Tor directory cache:', error);
@@ -88,7 +76,9 @@ export async function loadTorDirectoryCache(): Promise<string | undefined> {
 
 /** Atomically replace the cache after Rust has completed a valid bootstrap. */
 export async function saveTorDirectoryCache(cache: string): Promise<void> {
-  if (!globalThis.indexedDB || exceedsCacheLimit(cache)) return;
+  // A record too large for the origin's quota fails the write, which is
+  // caught below; nothing here needs a size of its own.
+  if (!globalThis.indexedDB) return;
 
   let database: IDBDatabase | undefined;
   try {

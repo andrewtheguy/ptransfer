@@ -5,6 +5,10 @@ const cacheMocks = vi.hoisted(() => ({
   save: vi.fn(async () => undefined),
 }));
 
+const snapshotMocks = vi.hoisted(() => ({
+  load: vi.fn(async (): Promise<string | undefined> => undefined),
+}));
+
 const wasmMocks = vi.hoisted(() => {
   const sent: string[] = [];
   const closeSocket = vi.fn(async () => undefined);
@@ -45,6 +49,10 @@ const wasmMocks = vi.hoisted(() => {
 vi.mock('./tor-directory-cache', () => ({
   loadTorDirectoryCache: cacheMocks.load,
   saveTorDirectoryCache: cacheMocks.save,
+}));
+
+vi.mock('./tor-directory-snapshot', () => ({
+  loadTorDirectorySnapshot: snapshotMocks.load,
 }));
 
 vi.mock('@andrewtheguy/anonymous-signaling-wasm', () => ({
@@ -105,6 +113,23 @@ describe('AnonymousSignalingTransport', () => {
 
     transport.close();
     await vi.waitFor(() => expect(wasmMocks.closeClient).toHaveBeenCalled());
+  });
+
+  it('seeds webtor with the served snapshot instead of the stored cache', async () => {
+    snapshotMocks.load.mockResolvedValueOnce('served-snapshot');
+
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: false,
+    });
+    await transport.waitUntilReady();
+
+    expect(wasmMocks.create).toHaveBeenCalledWith(
+      'served-snapshot',
+      expect.any(Array),
+      false,
+    );
+    expect(cacheMocks.load).not.toHaveBeenCalled();
+    transport.close();
   });
 
   it('asks webtor for the direct WebSocket bridge when requested', async () => {

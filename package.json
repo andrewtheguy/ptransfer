@@ -1,13 +1,14 @@
 {
   "name": "ptransfer",
   "private": true,
-  "version": "0.0.45",
+  "version": "0.0.46",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
+    "tor:directory": "tsx scripts/fetch-tor-directory.ts",
     "test": "npm run test:unit",
     "test:all": "npm run test:unit && npm run test:integration:nostr-file",
     "test:unit": "vitest run --project unit",

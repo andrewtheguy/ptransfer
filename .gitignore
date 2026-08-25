@@ -15,6 +15,9 @@ dist-ssr
 # WASM files (copied from node_modules via postinstall)
 public/*.wasm
 
+# Tor directory snapshot (npm run tor:directory); expires within three hours
+public/tor-directory.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
