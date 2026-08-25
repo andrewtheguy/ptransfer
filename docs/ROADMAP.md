@@ -50,15 +50,6 @@ that today just fails with a suggestion), fall back to the Nostr file relay
 transport automatically, without the user having to find and check the
 experimental **Relay file through Nostr** switch:
 
-- The switch stops being the only way in; it becomes an explicit *prefer
-  relay* choice for users who know they have no direct route.
-- Fallback inherits the relay transport's constraints (currently ≤ 100 MB,
-  1-hour deadline, both pages open) — the UI has to state what it is
-  switching to and why, and the sender must still hold the file bytes.
-- Needs a decision point after the connection attempt that can hand the
-  already-selected files to the relay uploader without a new user action, and
-  a receiver side that can be told to stop waiting on the data channel.
-
 #### Phase 3 — Manual Exchange becomes the default
 
 Once Phase 1 removes the second hop and Phase 2 removes the dead end, Manual
