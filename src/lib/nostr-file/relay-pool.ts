@@ -229,7 +229,7 @@ function rankRelayCache(relays: CachedRelay[], now: number): CachedRelay[] {
 }
 
 /** Canonical, deduped, non-null relay URLs. */
-function canonicalUrls(urls: string[]): string[] {
+export function canonicalUrls(urls: string[]): string[] {
   return [
     ...new Set(
       urls.map(normalizeRelayUrl).filter((url): url is string => url !== null),
@@ -365,11 +365,7 @@ export async function discoverRelayCandidates(
   pool: NostrFilePool,
   seeds: string[] = [...DEFAULT_RELAYS],
 ): Promise<string[]> {
-  const canonicalSeeds = [
-    ...new Set(
-      seeds.map(normalizeRelayUrl).filter((url): url is string => url !== null),
-    ),
-  ];
+  const canonicalSeeds = canonicalUrls(seeds);
   const queries = [
     { kinds: [KIND_RELAY_DISCOVERY], limit: DISCOVERY_CANDIDATE_LIMIT },
     { kinds: [KIND_RELAY_LIST], limit: DISCOVERY_CANDIDATE_LIMIT },
@@ -658,11 +654,7 @@ export async function sweepRelayHealth(
   const transferRelays = canonicalUrls(opts.excludeRelays ?? []);
   // Signaling relays are chosen for small messages and must never carry
   // chunks, so they stay out of the sweep exactly as they stay out of a ring.
-  const excluded = new Set([
-    ...transferRelays,
-    ...canonicalUrls([...DEFAULT_RELAYS]),
-    ...seeds,
-  ]);
+  const excluded = new Set([...transferRelays, ...seeds]);
 
   const aborted = new Promise<void>((resolve) => {
     const signal = opts.signal;
@@ -799,7 +791,12 @@ export async function selectUploadRelays(
 export async function getRelayCandidates(
   pool: NostrFilePool,
   storage: RelayPoolStorage,
-  opts: { capability?: RelayCapability; now?: number } = {},
+  opts: {
+    capability?: RelayCapability;
+    now?: number;
+    /** Signaling seeds to discover from; queried, never returned. */
+    seeds?: string[];
+  } = {},
 ): Promise<string[]> {
   const capability = opts.capability ?? 'storage';
   const now = opts.now ?? Date.now();
@@ -825,7 +822,10 @@ export async function getRelayCandidates(
           .map((url) => normalizeRelayUrl(url))
           .filter((url): url is string => url !== null)
       : [];
-  const discovered = await discoverRelayCandidates(pool);
+  const discovered = await discoverRelayCandidates(
+    pool,
+    opts.seeds ?? [...DEFAULT_RELAYS],
+  );
   for (const url of cachedCandidates) {
     if (!byUrl.has(url)) {
       byUrl.set(url, emptyCachedRelay(url, state?.discoveredAt ?? 0));

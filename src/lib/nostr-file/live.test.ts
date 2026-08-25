@@ -1,7 +1,6 @@
 import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
-import { DEFAULT_RELAYS } from '../nostr/relays';
 import { chunkAad, encodeChunkContent, sha256 } from './codec';
 import { LIVE_BATCH_CHUNKS, NOSTR_FILE_CHUNK_SIZE } from './constants';
 import {
@@ -14,7 +13,7 @@ import {
 import { type LiveReceiveProgress, receiveFileLive } from './download-live';
 import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
-import { createMockPool, type MockPool } from './mock-pool';
+import { createMockPool, type MockPool, SEED_RELAYS } from './mock-pool';
 import type {
   CachedRelay,
   RelayPoolState,
@@ -474,17 +473,18 @@ describe.sequential('live single-copy relay transfer', () => {
     // the candidate cache merged with fresh discovery, no override) and is
     // still resolving when the direct attempt fails: the manifest must not
     // wait for it. The cache still lists a signaling seed — the whole
-    // DEFAULT_RELAYS pool must never be rung.
-    const controlRelays = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
+    // signaling pool must never be rung.
+    const controlRelays = [SEED_RELAYS[0], SEED_RELAYS[1]];
     const storageRing = ['wss://s1.example', 'wss://s2.example'];
     let releaseRing!: () => void;
     const ringGate = new Promise<void>((r) => {
       releaseRing = r;
     });
     const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
       controlRelays,
       storage: memoryStorage({
-        candidates: [DEFAULT_RELAYS[2], ...storageRing],
+        candidates: [SEED_RELAYS[2], ...storageRing],
         discoveredAt: Date.now(),
         cursor: 0,
       }),

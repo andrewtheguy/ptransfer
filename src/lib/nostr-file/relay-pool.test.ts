@@ -1,6 +1,6 @@
 import type { Event as NostrEvent } from 'nostr-tools';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
+import { normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_PROBE_BYTES,
   CONTROL_RELAY_COUNT,
@@ -11,7 +11,7 @@ import {
   RELAY_CACHE_STATE_STORE,
   UPLOAD_RELAY_COUNT,
 } from './constants';
-import { createMockPool } from './mock-pool';
+import { createMockPool, SEED_RELAYS } from './mock-pool';
 import {
   type CachedRelay,
   createIndexedDbRelayPool,
@@ -259,6 +259,7 @@ describe('getRelayCandidates', () => {
       cursor: 0,
     });
     const candidates = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
       now: 2000,
     });
     expect(candidates).toEqual(['wss://good.example']);
@@ -271,6 +272,7 @@ describe('getRelayCandidates', () => {
       cursor: 3,
     });
     const candidates = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
       now: 2000,
     });
     expect(candidates).toEqual([]);
@@ -286,6 +288,7 @@ describe('getRelayCandidates', () => {
       cursor: 0,
     });
     const candidates = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
       now: 2_000,
     });
     expect(candidates).toEqual([]);
@@ -326,6 +329,7 @@ describe('getRelayCandidates', () => {
       ],
     );
     const candidates = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
       now,
     });
     expect(candidates).toEqual([
@@ -343,11 +347,14 @@ describe('getRelayCandidates', () => {
       cursor: 3,
     });
     const pool = createMockPool();
-    pool.store.set(DEFAULT_RELAYS[0], [
+    pool.store.set(SEED_RELAYS[0], [
       makeEvent(30166, [['d', 'wss://new.example']]),
     ]);
 
-    const candidates = await getRelayCandidates(pool, storage, { now });
+    const candidates = await getRelayCandidates(pool, storage, {
+      now,
+      seeds: SEED_RELAYS,
+    });
 
     expect(candidates).toEqual(['wss://new.example', 'wss://cached.example']);
     expect(storage.state).toEqual({
@@ -382,6 +389,7 @@ describe('getRelayCandidates', () => {
     );
 
     const candidates = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
       now,
     });
 
@@ -506,29 +514,30 @@ describe('control relay probe', () => {
   it('probes with a control-sized event and still requires read-back', async () => {
     const probeSizes: number[] = [];
     const pool = createMockPool({
-      blackholeRelays: new Set([DEFAULT_RELAYS[1]]),
+      blackholeRelays: new Set([SEED_RELAYS[1]]),
       beforePublish: (_relay, event) => {
         probeSizes.push(event.content.length);
       },
     });
-    const healthy = await healthCheckRelays(pool, [...DEFAULT_RELAYS], {
+    const healthy = await healthCheckRelays(pool, SEED_RELAYS, {
       probeBytes: CONTROL_PROBE_BYTES,
-      targetCount: DEFAULT_RELAYS.length,
+      targetCount: SEED_RELAYS.length,
     });
     // Small probe on the wire — nowhere near the full-size chunk probe.
     expect(probeSizes.length).toBeGreaterThan(0);
     for (const size of probeSizes) expect(size).toBeLessThan(1000);
     // A relay that accepts writes but serves nothing back fails the probe.
     const urls = healthy.map((r) => r.url);
-    expect(urls).not.toContain(DEFAULT_RELAYS[1]);
-    expect(urls).toHaveLength(DEFAULT_RELAYS.length - 1);
+    expect(urls).not.toContain(SEED_RELAYS[1]);
+    expect(urls).toHaveLength(SEED_RELAYS.length - 1);
     // A failed probe also drops the socket so it stops reconnecting.
-    expect(pool.closedRelays).toEqual([DEFAULT_RELAYS[1]]);
+    expect(pool.closedRelays).toEqual([SEED_RELAYS[1]]);
   });
 });
 
 describe('resolveTransferRelays', () => {
   const opts = () => ({
+    seeds: SEED_RELAYS,
     isCancelled: () => false,
     onControlProgress: () => {},
     onUploadProgress: () => {},
@@ -543,19 +552,19 @@ describe('resolveTransferRelays', () => {
     // One default is a blackhole (accepts writes, serves nothing) so the
     // control probe fails it and a discovered relay must make up the gap.
     const pool = createMockPool({
-      blackholeRelays: new Set([DEFAULT_RELAYS[0]]),
+      blackholeRelays: new Set([SEED_RELAYS[0]]),
     });
     pool.store.set(
-      DEFAULT_RELAYS[1],
+      SEED_RELAYS[1],
       candidates.map((url) => makeEvent(30166, [['d', url]])),
     );
     const o = opts();
     const storage = memoryStorage();
     const selection = await resolveTransferRelays(pool, storage, o);
     const relays = selection.controlRelays;
-    const defaultSet = new Set<string>(DEFAULT_RELAYS);
+    const defaultSet = new Set(SEED_RELAYS);
     expect(relays).toHaveLength(CONTROL_RELAY_COUNT);
-    expect(relays).not.toContain(DEFAULT_RELAYS[0]);
+    expect(relays).not.toContain(SEED_RELAYS[0]);
     // Exactly the one gap is filled, and from a full-size-proven storage
     // relay, not a default.
     const backfilled = relays.filter((url) => !defaultSet.has(url));
@@ -578,7 +587,7 @@ describe('resolveTransferRelays', () => {
     ).toBeLessThanOrEqual(HEALTH_CHECK_CONCURRENCY);
     expect(o.stats.phaseMs.controlProbe).toBeGreaterThanOrEqual(0);
     // Every default is either picked for the channel or its socket is closed.
-    for (const url of DEFAULT_RELAYS) {
+    for (const url of SEED_RELAYS) {
       expect(relays.includes(url) || pool.closedRelays.includes(url)).toBe(
         true,
       );
@@ -597,7 +606,7 @@ describe('resolveTransferRelays', () => {
       cursor: 0,
     });
     const pool = createMockPool({
-      blackholeRelays: new Set(DEFAULT_RELAYS),
+      blackholeRelays: new Set(SEED_RELAYS),
     });
 
     const selection = await resolveTransferRelays(pool, storage, opts());
@@ -621,6 +630,7 @@ describe('resolveTransferRelays', () => {
     // discovery and stays disjoint from the control set.
     const phases: string[] = [];
     const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
       controlRelays: selection.controlRelays,
       storage,
       stats: selection.stats,
@@ -646,7 +656,7 @@ describe('resolveTransferRelays', () => {
     const selection = await resolveTransferRelays(pool, storage, opts());
     expect(selection.controlRelays).toHaveLength(CONTROL_RELAY_COUNT);
     for (const url of selection.controlRelays) {
-      expect(DEFAULT_RELAYS as readonly string[]).toContain(url);
+      expect(SEED_RELAYS).toContain(url);
     }
     expect(selection.discovered).toBeNull();
     // Discovery never ran, so the cache is untouched.
@@ -654,7 +664,7 @@ describe('resolveTransferRelays', () => {
   });
 
   it('throws when neither the defaults nor discovery reach the floor', async () => {
-    const pool = createMockPool({ blackholeRelays: new Set(DEFAULT_RELAYS) });
+    const pool = createMockPool({ blackholeRelays: new Set(SEED_RELAYS) });
     // No candidates anywhere: control probe fails, discovery finds nothing.
     await expect(
       resolveTransferRelays(pool, memoryStorage(), opts()),
@@ -664,6 +674,7 @@ describe('resolveTransferRelays', () => {
 
 describe('resolveUploadRelays', () => {
   const opts = () => ({
+    seeds: SEED_RELAYS,
     isCancelled: () => false,
     onProgress: () => {},
     stats: createTransferStats('sender'),
@@ -674,14 +685,14 @@ describe('resolveUploadRelays', () => {
     const storage = memoryStorage();
     // NIP-66 events served by a seed relay: two real candidates plus a seed
     // that someone listed — the signaling pool must never come back.
-    pool.store.set(DEFAULT_RELAYS[0], [
+    pool.store.set(SEED_RELAYS[0], [
       makeEvent(30166, [['d', 'wss://s1.example']]),
       makeEvent(30166, [['d', 'wss://s2.example']]),
-      makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]),
+      makeEvent(30166, [['d', SEED_RELAYS[2]]]),
     ]);
     const { storageRelays: relays } = await resolveUploadRelays(pool, storage, {
       ...opts(),
-      excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
+      excludeRelays: [SEED_RELAYS[0], SEED_RELAYS[1]],
     });
     expect(relays.sort()).toEqual(['wss://s1.example', 'wss://s2.example']);
     expect(storage.relayHealth.map((relay) => relay.url).sort()).toEqual([
@@ -700,15 +711,15 @@ describe('resolveUploadRelays', () => {
     ).toBe(true);
     // Seeds queried for discovery are closed once it finishes — except the
     // two carrying this transfer's control channel.
-    for (const url of DEFAULT_RELAYS.slice(2)) {
+    for (const url of SEED_RELAYS.slice(2)) {
       expect(pool.closedRelays).toContain(url);
     }
-    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[0]);
-    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[1]);
+    expect(pool.closedRelays).not.toContain(SEED_RELAYS[0]);
+    expect(pool.closedRelays).not.toContain(SEED_RELAYS[1]);
 
     // A candidate cache written before seeds were barred still lists one.
     const stale = memoryStorage({
-      candidates: [DEFAULT_RELAYS[2], 'wss://s3.example', 'wss://s4.example'],
+      candidates: [SEED_RELAYS[2], 'wss://s3.example', 'wss://s4.example'],
       discoveredAt: Date.now(),
       cursor: 0,
     });
@@ -717,7 +728,7 @@ describe('resolveUploadRelays', () => {
       stale,
       {
         ...opts(),
-        excludeRelays: [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]],
+        excludeRelays: [SEED_RELAYS[0], SEED_RELAYS[1]],
       },
     );
     expect(fromCache.sort()).toEqual([
@@ -838,14 +849,14 @@ describe('prepareStorageRelays', () => {
   const settle = () => new Promise((r) => setTimeout(r, 50));
 
   it('resolves a ring outside the control relays and sweeps the rest of the population behind it', async () => {
-    const control = [DEFAULT_RELAYS[0], DEFAULT_RELAYS[1]];
+    const control = [SEED_RELAYS[0], SEED_RELAYS[1]];
     const cached = Array.from(
       { length: 40 },
       (_, i) => `wss://cached-${i}.example`,
     );
     const late = ['wss://late-ok.example', 'wss://late-down.example'];
     const pool = createMockPool({ failRelays: new Set([late[1]]) });
-    for (const seed of DEFAULT_RELAYS) {
+    for (const seed of SEED_RELAYS) {
       pool.store.set(seed, late.map(discoveryEvent));
     }
     const storage = memoryStorage({
@@ -855,6 +866,7 @@ describe('prepareStorageRelays', () => {
     });
     const phases: string[] = [];
     const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
       controlRelays: control,
       storage,
       onProgress: (p) => phases.push(p.phase),
@@ -864,7 +876,7 @@ describe('prepareStorageRelays', () => {
     expect(ring).toHaveLength(UPLOAD_RELAY_COUNT);
     for (const url of ring) {
       expect(control).not.toContain(url);
-      expect(DEFAULT_RELAYS).not.toContain(url);
+      expect(SEED_RELAYS).not.toContain(url);
     }
     expect(phases[0]).toBe('discovering');
     expect(phases).toContain('health_check');
@@ -921,7 +933,8 @@ describe('prepareStorageRelays', () => {
       cursor: 0,
     });
     const prepared = prepareStorageRelays(pool, {
-      controlRelays: [DEFAULT_RELAYS[0]],
+      seeds: SEED_RELAYS,
+      controlRelays: [SEED_RELAYS[0]],
       storage,
       signal: controller.signal,
     });
@@ -937,13 +950,14 @@ describe('prepareStorageRelays', () => {
 
   it('skips discovery and the sweep for a caller-picked ring', async () => {
     const pool = createMockPool();
-    for (const seed of DEFAULT_RELAYS) {
+    for (const seed of SEED_RELAYS) {
       pool.store.set(seed, [discoveryEvent('wss://never-probed.example')]);
     }
     const storage = memoryStorage();
     const override = ['wss://a.example', 'wss://b.example'];
     const prepared = prepareStorageRelays(pool, {
-      controlRelays: [DEFAULT_RELAYS[0]],
+      seeds: SEED_RELAYS,
+      controlRelays: [SEED_RELAYS[0]],
       storage,
       relayOverride: override,
     });
@@ -953,7 +967,7 @@ describe('prepareStorageRelays', () => {
   });
 
   it('rings pre-discovered candidates without rediscovering and sweeps the rest', async () => {
-    const control = [DEFAULT_RELAYS[0]];
+    const control = [SEED_RELAYS[0]];
     const handed = [
       'wss://ring-a.example',
       'wss://ring-b.example',
@@ -961,12 +975,13 @@ describe('prepareStorageRelays', () => {
     ];
     const elsewhere = 'wss://population-only.example';
     const pool = createMockPool({ failRelays: new Set([handed[2]]) });
-    for (const seed of DEFAULT_RELAYS) {
+    for (const seed of SEED_RELAYS) {
       pool.store.set(seed, [discoveryEvent(elsewhere)]);
     }
     const storage = memoryStorage();
     const phases: string[] = [];
     const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
       controlRelays: control,
       storage,
       discovered: { proven: [], unprobed: handed },
@@ -1005,7 +1020,7 @@ describe('discoverAllRelayCandidates', () => {
     const pool = createMockPool();
     // Distinct created_at values, newest first — what a real relay pages over.
     pool.store.set(
-      DEFAULT_RELAYS[0],
+      SEED_RELAYS[0],
       Array.from({ length: total }, (_, i) => ({
         ...makeEvent(30166, [['d', `wss://pop-${i}.example`]]),
         id: `e${i}`,
@@ -1015,12 +1030,12 @@ describe('discoverAllRelayCandidates', () => {
 
     // Foreground: one page, bounded by the per-kind query limit. It only has
     // to fill a ring, so it never sees most of the population.
-    const sampled = await discoverRelayCandidates(pool);
+    const sampled = await discoverRelayCandidates(pool, SEED_RELAYS);
     expect(sampled).toHaveLength(DISCOVERY_CANDIDATE_LIMIT);
     expect(sampled.length).toBeLessThan(total);
 
     // Background: pages back by created_at until exhausted. No cap.
-    const all = await discoverAllRelayCandidates(pool, [...DEFAULT_RELAYS], {
+    const all = await discoverAllRelayCandidates(pool, SEED_RELAYS, {
       pageLimit: 50,
     });
     expect(all).toHaveLength(total);
@@ -1030,15 +1045,15 @@ describe('discoverAllRelayCandidates', () => {
   it('stops paging when the cursor cannot move and never returns a seed', async () => {
     const pool = createMockPool();
     // Every event shares one timestamp, so `until` cannot step past them.
-    pool.store.set(DEFAULT_RELAYS[0], [
+    pool.store.set(SEED_RELAYS[0], [
       { ...makeEvent(30166, [['d', 'wss://same-1.example']]), id: 'a' },
       { ...makeEvent(30166, [['d', 'wss://same-2.example']]), id: 'b' },
-      { ...makeEvent(30166, [['d', DEFAULT_RELAYS[2]]]), id: 'c' },
+      { ...makeEvent(30166, [['d', SEED_RELAYS[2]]]), id: 'c' },
     ]);
-    const found = await discoverAllRelayCandidates(pool, [...DEFAULT_RELAYS], {
+    const found = await discoverAllRelayCandidates(pool, SEED_RELAYS, {
       pageLimit: 1,
     });
-    expect(found).not.toContain(DEFAULT_RELAYS[2]);
+    expect(found).not.toContain(SEED_RELAYS[2]);
     expect(found.length).toBeGreaterThan(0);
   });
 });
@@ -1054,6 +1069,7 @@ describe('sweepRelayHealth', () => {
     const pool = createMockPool({ blackholeRelays: new Set([candidates[1]]) });
     const storage = memoryStorage();
     await sweepRelayHealth(pool, storage, {
+      seeds: SEED_RELAYS,
       // Duplicate and junk entries collapse away before probing.
       unprobed: [
         ...candidates,
@@ -1087,7 +1103,7 @@ describe('sweepRelayHealth', () => {
       },
     });
     pool.store.set(
-      DEFAULT_RELAYS[0],
+      SEED_RELAYS[0],
       found.map((url, i) => ({
         ...makeEvent(30166, [['d', url]]),
         id: `d${i}`,
@@ -1098,7 +1114,8 @@ describe('sweepRelayHealth', () => {
     const controller = new AbortController();
     // Cut the sweep off early, as a finishing transfer would.
     const sweep = sweepRelayHealth(pool, storage, {
-      excludeRelays: [...ring, DEFAULT_RELAYS[0]],
+      seeds: SEED_RELAYS,
+      excludeRelays: [...ring, SEED_RELAYS[0]],
       concurrency: 2,
       saveBatch: 4,
       signal: controller.signal,
@@ -1119,7 +1136,7 @@ describe('sweepRelayHealth', () => {
       expect(cached).not.toContain(url);
       expect(pool.closedRelays).not.toContain(url);
     }
-    expect(pool.closedRelays).not.toContain(DEFAULT_RELAYS[0]);
+    expect(pool.closedRelays).not.toContain(SEED_RELAYS[0]);
   });
 
   it('probes the longest-unchecked relays first so later sessions extend coverage', async () => {
@@ -1140,6 +1157,7 @@ describe('sweepRelayHealth', () => {
       }),
     ]);
     await sweepRelayHealth(pool, storage, {
+      seeds: SEED_RELAYS,
       unprobed: [
         'wss://age-recent.example',
         'wss://age-old.example',
@@ -1167,6 +1185,7 @@ describe('sweepRelayHealth', () => {
     // Small batches: every flush has to merge onto the previous one, not
     // replace it, or only the last batch would survive.
     await sweepRelayHealth(pool, storage, {
+      seeds: SEED_RELAYS,
       unprobed: [...working, ...dead],
       saveBatch: 2,
     });
@@ -1180,7 +1199,9 @@ describe('sweepRelayHealth', () => {
     // The point of sweeping: a later transfer with nothing else to go on —
     // no candidate state, no discovery events — still starts from the relays
     // this sweep proved, and never from the ones it buried.
-    const seeded = await getRelayCandidates(createMockPool(), storage);
+    const seeded = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
+    });
     expect([...seeded].sort()).toEqual([...working].sort());
 
     // And when discovery does return a candidate list, the swept relays lead
@@ -1190,7 +1211,9 @@ describe('sweepRelayHealth', () => {
       discoveredAt: Date.now(),
       cursor: 0,
     };
-    const ranked = await getRelayCandidates(createMockPool(), storage);
+    const ranked = await getRelayCandidates(createMockPool(), storage, {
+      seeds: SEED_RELAYS,
+    });
     expect(ranked.slice(0, working.length).sort()).toEqual([...working].sort());
     expect(ranked).toContain('wss://unproven.example');
   });
@@ -1215,6 +1238,7 @@ describe('sweepRelayHealth', () => {
     const storage = memoryStorage();
 
     await sweepRelayHealth(stalled, storage, {
+      seeds: SEED_RELAYS,
       unprobed: ['wss://stalled.example'],
       signal: controller.signal,
     });
@@ -1238,6 +1262,7 @@ describe('sweepRelayHealth', () => {
     });
     const storage = memoryStorage();
     await sweepRelayHealth(pool, storage, {
+      seeds: SEED_RELAYS,
       unprobed: Array.from(
         { length: 20 },
         (_, i) => `wss://abort-${i}.example`,
