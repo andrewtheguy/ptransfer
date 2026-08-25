@@ -3,7 +3,7 @@ import { bytesToNumberBE, numberToBytesBE } from '@noble/curves/utils.js';
 import { wipeBufferSource } from './memory';
 
 /**
- * SPAKE2 (RFC 9382) over P-256 for the Nostr-mode PIN handshake.
+ * SPAKE2 (RFC 9382) over P-256 for the PIN Exchange handshake.
  *
  * A balanced PAKE is what removes the offline attack surface the old
  * PBKDF2-sealed handshake had to out-muscle: the published SPAKE2 elements are

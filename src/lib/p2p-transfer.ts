@@ -3,7 +3,7 @@
  *
  * This module is the single source of truth for the data payload sent from
  * sender to receiver over an already-open WebRTC data channel. Both signaling
- * modes (manual/QR and auto/nostr) use it, so the wire protocol and every
+ * modes (Code Exchange and PIN Exchange) use it, so the wire protocol and every
  * per-chunk validation live in exactly one place.
  *
  * Wire protocol:

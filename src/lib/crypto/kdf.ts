@@ -6,13 +6,13 @@ import {
 } from './constants';
 
 /**
- * Session keys for PIN Exchange (Nostr) mode, derived from the SPAKE2 root
+ * Session keys for PIN Exchange, derived from the SPAKE2 root
  * key established by the PIN handshake (see spake2.ts). The SPAKE2 output
  * already mixes fresh ephemeral scalars from both sides, so it is the
  * transfer's ephemeral shared secret — there is no separate ECDH exchange in
  * this mode.
  */
-export interface NostrSessionKeys {
+export interface PinSessionKeys {
   /** Encrypts relay-carried WebRTC signaling (offer/answer/candidates). */
   signals: CryptoKey;
   /** Encrypts P2P file content chunks on the data channel. */
@@ -35,7 +35,7 @@ export interface HandshakeSealKeys {
 const SESSION_KEY_LABELS = {
   signals: 'ptransfer:nostr-session:v4:signals',
   content: 'ptransfer:nostr-session:v4:content',
-} as const satisfies Record<keyof NostrSessionKeys, string>;
+} as const satisfies Record<keyof PinSessionKeys, string>;
 
 const HANDSHAKE_KEY_LABELS = {
   claimKey: 'ptransfer:nostr-session:v4:claim',
@@ -74,10 +74,10 @@ async function deriveSessionKey(
  * Distinct HKDF info labels guarantee signaling and content never reuse the
  * same AES-GCM key.
  */
-export async function deriveNostrSessionKeys(
+export async function derivePinSessionKeys(
   sharedSecretKey: CryptoKey,
   salt: Uint8Array,
-): Promise<NostrSessionKeys> {
+): Promise<PinSessionKeys> {
   const [signals, content] = await Promise.all([
     deriveSessionKey(sharedSecretKey, salt, SESSION_KEY_LABELS.signals),
     deriveSessionKey(sharedSecretKey, salt, SESSION_KEY_LABELS.content),

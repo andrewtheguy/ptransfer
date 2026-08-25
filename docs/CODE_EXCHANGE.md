@@ -1,7 +1,7 @@
 # Code Exchange Mode Guide
 
 This guide is intentionally high-level and user-focused.
-For protocol internals, signaling payload format, and implementation details, see `docs/ARCHITECTURE.md`.
+For protocol internals, signaling payload format, and implementation details, see [Architecture](ARCHITECTURE.md).
 
 ## What Code Exchange Is
 

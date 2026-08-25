@@ -5,7 +5,7 @@ import {
   type ConfirmationCodeBinding,
   deriveConfirmationCode,
   deriveHandshakeSealKeys,
-  deriveNostrSessionKeys,
+  derivePinSessionKeys,
   generateSalt,
 } from './kdf';
 import { generatePin } from './pin';
@@ -35,7 +35,7 @@ async function pakeRoots(): Promise<{
 describe('Nostr session KDF', () => {
   it('derives non-extractable session keys that are not interchangeable', async () => {
     const { sender } = await pakeRoots();
-    const keys = await deriveNostrSessionKeys(sender, generateSalt());
+    const keys = await derivePinSessionKeys(sender, generateSalt());
 
     for (const key of [keys.signals, keys.content]) {
       expect(key.extractable).toBe(false);
@@ -54,8 +54,8 @@ describe('Nostr session KDF', () => {
     const { sender, receiver } = await pakeRoots();
     const salt = generateSalt();
 
-    const senderKeys = await deriveNostrSessionKeys(sender, salt);
-    const receiverKeys = await deriveNostrSessionKeys(receiver, salt);
+    const senderKeys = await derivePinSessionKeys(sender, salt);
+    const receiverKeys = await derivePinSessionKeys(receiver, salt);
 
     const plaintext = new TextEncoder().encode('cross-peer check');
     const encrypted = await encrypt(senderKeys.content, plaintext);

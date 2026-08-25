@@ -20,7 +20,7 @@ function deflateDecompress(data: Uint8Array): Uint8Array {
   return inflateSync(data);
 }
 
-// Magic header: "PT01" = pTransfer manual-signaling format version 1
+// Magic header: "PT01" = pTransfer Code Exchange signaling format version 1
 const MAGIC_HEADER_V1 = new Uint8Array([0x50, 0x54, 0x30, 0x31]);
 // Inner magic: "mag!" - inside the obfuscated area to verify the seed
 const INNER_MAGIC_V3 = new Uint8Array([0x6d, 0x61, 0x67, 0x21]);
@@ -125,10 +125,10 @@ function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 /**
- * Encode any manual-exchange payload object into the PT01 container:
+ * Encode any Code Exchange payload object into the PT01 container:
  * [PT01][xorObfuscate([mag!][deflate(JSON)], hourly seed)]
  */
-function encodeManualPayload(payload: object): Uint8Array {
+function encodeCodePayload(payload: object): Uint8Array {
   const jsonBytes = new TextEncoder().encode(JSON.stringify(payload));
   const compressed = deflateCompress(jsonBytes);
 
@@ -152,7 +152,7 @@ function encodeManualPayload(payload: object): Uint8Array {
  * Decode a PT01 container back to the parsed JSON value, trying the current
  * and previous hourly seed buckets. Returns null on any mismatch.
  */
-function decodeManualPayload(binary: Uint8Array): unknown {
+function decodeCodePayload(binary: Uint8Array): unknown {
   if (!isMutualPayload(binary)) {
     return null;
   }
@@ -276,7 +276,7 @@ export function generateMutualOfferBinary(
     ...(metadata.relays ? { relays: metadata.relays } : {}),
   };
 
-  return encodeManualPayload(payload);
+  return encodeCodePayload(payload);
 }
 
 /**
@@ -297,7 +297,7 @@ export function generateMutualAnswerBinary(
     publicKey: Array.from(publicKey),
   };
 
-  return encodeManualPayload(payload);
+  return encodeCodePayload(payload);
 }
 
 /**
@@ -318,7 +318,7 @@ export function parseMutualPayload(
   binary: Uint8Array,
 ): SignalingPayload | null {
   try {
-    const payload = decodeManualPayload(binary);
+    const payload = decodeCodePayload(binary);
     if (isValidSignalingPayload(payload)) {
       return payload;
     }

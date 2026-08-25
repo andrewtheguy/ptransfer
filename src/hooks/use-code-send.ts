@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  generateMutualOfferBinary,
+  parseMutualPayload,
+  type SignalingPayload,
+} from '@/lib/code-signaling';
+import {
   deriveAESKeyFromSecretKey,
   deriveSharedSecretKey,
   generateECDHKeyPair,
@@ -10,11 +15,6 @@ import {
 import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
-import {
-  generateMutualOfferBinary,
-  parseMutualPayload,
-  type SignalingPayload,
-} from '@/lib/manual-signaling';
 import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
 import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
@@ -42,7 +42,7 @@ import { getWebRTCConfig } from '@/lib/webrtc-config';
 import { chunkBytesEstimate, readSourceFully } from './nostr-relay-source';
 
 // Extended transfer status for Code Exchange
-export type ManualTransferStatus =
+export type CodeTransferStatus =
   | 'idle'
   | 'generating_offer'
   | 'showing_offer'
@@ -57,8 +57,8 @@ export type ManualTransferStatus =
   | 'complete'
   | 'error';
 
-// Base properties for manual transfer state
-interface ManualTransferStateBase {
+// Base properties for Code Exchange transfer state
+interface CodeTransferStateBase {
   progress?: {
     current: number;
     total: number;
@@ -81,24 +81,22 @@ interface ManualTransferStateBase {
 }
 
 // Error state has required message
-interface ManualTransferStateError extends ManualTransferStateBase {
+interface CodeTransferStateError extends CodeTransferStateBase {
   status: 'error';
   message: string;
 }
 
 // All other states have optional message
-interface ManualTransferStateOther extends ManualTransferStateBase {
-  status: Exclude<ManualTransferStatus, 'error'>;
+interface CodeTransferStateOther extends CodeTransferStateBase {
+  status: Exclude<CodeTransferStatus, 'error'>;
   message?: string;
 }
 
-// Discriminated union for manual transfer state
-export type ManualTransferState =
-  | ManualTransferStateError
-  | ManualTransferStateOther;
+// Discriminated union for Code Exchange transfer state
+export type CodeTransferState = CodeTransferStateError | CodeTransferStateOther;
 
-export interface UseManualSendReturn {
-  state: ManualTransferState;
+export interface UseCodeSendReturn {
+  state: CodeTransferState;
   send: (content: TransferSource) => Promise<void>;
   submitAnswer: (answerData: Uint8Array) => void;
   cancel: () => void;
@@ -117,7 +115,7 @@ const RELAY_PHASE_MESSAGES: Record<RelayResolvePhase, string> = {
   discovering: 'Looking for more storage relays to back them up...',
   probing_discovered: 'Testing the storage relays we found...',
 };
-const MANUAL_CONNECTION_TIMEOUT_MS = 120000;
+const CODE_CONNECTION_TIMEOUT_MS = 120000;
 // When a relay fallback is available, the direct attempt is capped well below
 // the full timeout: the offerer keeps real candidates to try against the
 // receiver's unreachable ones, so its ICE agent is slow to declare failure,
@@ -128,8 +126,8 @@ const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — relaying the file through Nostr instead';
 
-export function useManualSend(): UseManualSendReturn {
-  const [state, setState] = useState<ManualTransferState>({ status: 'idle' });
+export function useCodeSend(): UseCodeSendReturn {
+  const [state, setState] = useState<CodeTransferState>({ status: 'idle' });
 
   const rtcRef = useRef<WebRTCConnection | null>(null);
   const cancelledRef = useRef(false);
@@ -587,7 +585,7 @@ export function useManualSend(): UseManualSendReturn {
             rtc,
             storageRelays !== null
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
-              : MANUAL_CONNECTION_TIMEOUT_MS,
+              : CODE_CONNECTION_TIMEOUT_MS,
             helloWatch?.hello ?? null,
           );
         } catch (error) {

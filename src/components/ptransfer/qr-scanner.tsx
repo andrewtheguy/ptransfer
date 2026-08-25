@@ -8,7 +8,7 @@ import {
   parseChunk,
   reassembleChunks,
 } from '@/lib/chunk-utils';
-import { isValidBinaryPayload } from '@/lib/manual-signaling';
+import { isValidBinaryPayload } from '@/lib/code-signaling';
 import { classifyReceiveText } from '@/lib/receive-input';
 import { isMobileDevice } from '@/lib/utils';
 

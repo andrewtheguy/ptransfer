@@ -120,7 +120,7 @@ One input accepts both modes; the page works out which one the sender used from 
 ## Documentation
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
-- [Code Exchange](./docs/MANUAL_EXCHANGE.md) - User guide for the Code Exchange
+- [Code Exchange](./docs/CODE_EXCHANGE.md) - User guide for Code Exchange
 - [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Code Exchange
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
 

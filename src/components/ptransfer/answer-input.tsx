@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   isValidBinaryPayload,
   parseClipboardPayload,
-} from '@/lib/manual-signaling';
+} from '@/lib/code-signaling';
 import { isMobileDevice } from '@/lib/utils';
 import { QRScanner, type ScanResult } from './qr-scanner';
 

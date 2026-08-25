@@ -1,14 +1,14 @@
 #!/usr/bin/env npx tsx
 /**
- * Inspect a copied pTransfer manual-exchange payload (PT01 container).
+ * Inspect a copied pTransfer Code Exchange payload (PT01 container).
  *
  * The container is [PT01][xorObfuscate([mag!][deflate(JSON)], hourly seed)]
- * (see src/lib/manual-signaling.ts). The app only tries the current and
+ * (see src/lib/code-signaling.ts). The app only tries the current and
  * previous hourly seed buckets; this tool scans back much further so old
  * copies can still be inspected, and reports which bucket matched.
  *
- * Usage: npx tsx scripts/inspect-manual-payload.ts [base64-data]
- *    or: echo '<base64-data>' | npx tsx scripts/inspect-manual-payload.ts
+ * Usage: npx tsx scripts/inspect-code-payload.ts [base64-data]
+ *    or: echo '<base64-data>' | npx tsx scripts/inspect-code-payload.ts
  */
 
 import { createInterface } from 'node:readline';
@@ -60,9 +60,9 @@ function payloadKind(payload: unknown): string {
     const type = (payload as { type: unknown }).type;
     switch (type) {
       case 'offer':
-        return 'signaling offer (WebRTC Manual Exchange)';
+        return 'signaling offer (WebRTC Code Exchange)';
       case 'answer':
-        return 'signaling answer (WebRTC Manual Exchange)';
+        return 'signaling answer (WebRTC Code Exchange)';
       case 'nostr-file':
         return 'nostr-file (Nostr file relay manifest + decryption key)';
       default:
@@ -78,8 +78,8 @@ async function main(): Promise<void> {
 
   if (!base64Data.trim()) {
     console.error(
-      'Usage: npx tsx scripts/inspect-manual-payload.ts [base64-data]\n' +
-        "   or: echo '<base64-data>' | npx tsx scripts/inspect-manual-payload.ts",
+      'Usage: npx tsx scripts/inspect-code-payload.ts [base64-data]\n' +
+        "   or: echo '<base64-data>' | npx tsx scripts/inspect-code-payload.ts",
     );
     process.exit(1);
   }

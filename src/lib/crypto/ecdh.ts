@@ -6,7 +6,7 @@ import { AES_KEY_LENGTH } from './constants';
  * SECURITY: Keys are generated as non-extractable to prevent exfiltration.
  * Public keys can still be exported even when non-extractable.
  *
- * ECDH by itself does not authenticate the peer. Manual mode relies on the
+ * ECDH by itself does not authenticate the peer. Code Exchange relies on the
  * user-controlled QR/clipboard exchange path for authenticity.
  */
 
@@ -136,9 +136,8 @@ export async function importECDHPublicKey(
  * The raw shared secret bytes are never exposed to JavaScript - they remain
  * inside the crypto module.
  *
- * The returned key can be used with deriveAESKeyFromSecretKey(),
- * deriveNostrSessionKeys(), and deriveConfirmationCode() (kdf.ts) to derive
- * further values.
+ * The returned key can be used with deriveAESKeyFromSecretKey() to derive the
+ * Code Exchange content key.
  *
  * SECURITY: The shared secret never leaves the Web Crypto module as raw bytes,
  * preventing exfiltration via XSS or memory inspection.

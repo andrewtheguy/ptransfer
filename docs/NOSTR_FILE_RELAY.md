@@ -17,7 +17,7 @@ also fail later if too few storage relays work or the selected relays do not del
 pieces.
 
 This document is the architecture reference. For the user-facing guide see
-[MANUAL_EXCHANGE.md](MANUAL_EXCHANGE.md); for how this mode fits into the rest of the app
+[CODE_EXCHANGE.md](CODE_EXCHANGE.md); for how this mode fits into the rest of the app
 see [ARCHITECTURE.md](ARCHITECTURE.md). All code lives in
 [`src/lib/nostr-file/`](../src/lib/nostr-file/) (see the [code map](#code-map) at the end).
 
@@ -70,7 +70,7 @@ to the background ring preparation so it does not discover or probe twice. Passi
 defaults are proven for control-sized messages; only their discovered replacements are
 also proven at full chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
 names no relays at all — and then there is no relay fallback. See the offer-relays section in
-[ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibmanual-signalingts).
+[ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibcode-signalingts).
 
 ### Storage relay discovery and health check (`relay-pool.ts`)
 
@@ -387,11 +387,11 @@ sequenceDiagram
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel (manifest is the first control message) |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
 | `src/lib/nostr-file/sync.ts` | `Deferred`/`Signal` async helpers |
-| `src/hooks/use-manual-send.ts`, `use-manual-receive.ts` | Code Exchange hooks; each starts the relay engine when its direct WebRTC connection fails |
+| `src/hooks/use-code-send.ts`, `use-code-receive.ts` | Code Exchange hooks; each starts the relay engine when its direct WebRTC connection fails |
 | `src/hooks/nostr-relay-source.ts` | Source materialization / progress estimation |
 
 The relay engine is started from the Code Exchange hooks the moment a direct connection
-fails (see `use-manual-send.ts` / `use-manual-receive.ts`). Tests are colocated
+fails (see `use-code-send.ts` / `use-code-receive.ts`). Tests are colocated
 (`src/lib/nostr-file/*.test.ts`) and run against the injectable in-memory relay network in
 `mock-pool.ts`. `npm test` runs the fast unit files first, then runs `live.test.ts` as a
 separate sequential integration phase so its real-time transfer deadlines do not compete
