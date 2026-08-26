@@ -31,6 +31,14 @@ Compatibility between different app versions is not guaranteed. Sender and recei
 the same app version for transfers. `v0.0.22` renamed the project and all name-bearing protocol
 identifiers to pTransfer and is incompatible with earlier releases.
 
+Transfers with a **non-web implementation** — today [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) —
+are governed by a separate, deliberately narrower contract: the **interop protocol version**, declared in
+[`src/lib/protocol.ts`](./src/lib/protocol.ts) and specified in [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md).
+It covers PIN Exchange and the shared WebRTC data-channel transfer layer only, and moves only when one of those
+changes — Code Exchange and the Nostr relay fallback are web-only and stay outside it while they are still
+taking shape. Two implementations interoperate when they declare the same interop protocol version, whatever
+their app versions.
+
 ## How It Works
 
 ### Sending Files or Folders
@@ -120,6 +128,7 @@ One input accepts both modes; the page works out which one the sender used from 
 ## Documentation
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
+- [Interop Protocol](./docs/INTEROP_PROTOCOL.md) - Normative wire contract for non-web implementations (PIN Exchange + the shared data path)
 - [Code Exchange](./docs/CODE_EXCHANGE.md) - User guide for Code Exchange
 - [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Code Exchange
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features

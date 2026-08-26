@@ -3,6 +3,11 @@
 This guide is intentionally high-level and user-focused.
 For protocol internals, signaling payload format, and implementation details, see [Architecture](ARCHITECTURE.md).
 
+Code Exchange is **web-only**. It is deliberately outside the cross-implementation
+contract in [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md) while its shape is still
+settling, so a non-web implementation is not expected to speak it and changes to
+it do not move the interop protocol version.
+
 ## What Code Exchange Is
 
 Both pTransfer modes are hand-carried — in PIN Exchange you carry a short PIN, and relays

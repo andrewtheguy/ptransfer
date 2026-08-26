@@ -16,6 +16,13 @@ pTransfer is a browser-based encrypted file and folder transfer application. It 
 
 ## Signaling Methods
 
+> [!NOTE]
+> Only PIN Exchange and the shared data-channel transfer layer are part of the
+> cross-implementation contract. [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md)
+> specifies that subset normatively and carries the interop protocol version;
+> Code Exchange and the Nostr relay fallback are web-only until they stabilize.
+> This document is the design rationale for all of it.
+
 By default, Nostr is used for signaling. Code Exchange is available as an alternative under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
 
 | Feature | Nostr / PIN Exchange (Default) | Code Exchange (Hand-Carried Offer) |
