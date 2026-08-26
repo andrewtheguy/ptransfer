@@ -96,6 +96,13 @@ bun run dev
 bun run build
 ```
 
+### Cloudflare Pages
+
+Use `bun run build` as the build command and `dist` as the output directory.
+The `prebuild` hook installs dependencies from the frozen Bun lockfile so Pages
+builds remain reproducible even when its build image does not auto-detect
+the text `bun.lock` format.
+
 ### Routing (Required)
 
 The app uses `BrowserRouter` only. Configure hosting to rewrite unknown paths to `index.html`.

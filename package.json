@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "bun install --frozen-lockfile",
     "build": "tsc -b && vite build",
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
