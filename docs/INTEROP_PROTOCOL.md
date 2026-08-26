@@ -40,7 +40,7 @@ what rules that out.
 
 | Version | Change |
 |---|---|
-| `2` | Rendezvous freshness became a bucket test instead of a maximum age (§4.3), so a future-dated `created_at` no longer passes. Senders are unaffected; a v1 receiver is simply more permissive than this document allows. |
+| `2` | Rendezvous freshness became a bucket test instead of a maximum age (§4.3), so a future-dated `created_at` no longer passes. Senders are unaffected; a v1 receiver is simply more permissive than this document allows. The data channel's ordered/reliable configuration became explicit (§7), which v1 relied on without stating. |
 | `1` | Initial specification. |
 
 ## Scope
@@ -520,6 +520,17 @@ it, as a decompression-bomb guard.
 
 Once the WebRTC data channel is open, both peers hold the `content` key and run
 this protocol. It is the same protocol for every signaling method.
+
+Whichever peer creates the channel MUST create it **ordered and reliable** —
+the WebRTC default, i.e. `ordered: true` with neither `maxRetransmits` nor
+`maxPacketLifeTime` set. This is stated rather than assumed because §7.3's
+receive discipline has no way to recover otherwise: an unordered channel still
+delivers every message, but SCTP hands each one up as soon as it reassembles,
+so a single retransmit lets a later chunk overtake an earlier one and the peer
+rejects the index. Nothing on the wire announces the setting, and a loopback or
+lossless path never reveals it, so an implementation whose WebRTC binding
+defaults differently can pass every local test and corrupt every real
+transfer.
 
 ### 7.1 Chunk framing
 
