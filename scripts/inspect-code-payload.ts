@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Inspect a copied pTransfer Code Exchange payload (PT01 container).
  *
@@ -7,8 +7,8 @@
  * previous hourly seed buckets; this tool scans back much further so old
  * copies can still be inspected, and reports which bucket matched.
  *
- * Usage: npx tsx scripts/inspect-code-payload.ts [base64-data]
- *    or: echo '<base64-data>' | npx tsx scripts/inspect-code-payload.ts
+ * Usage: bun scripts/inspect-code-payload.ts [base64-data]
+ *    or: echo '<base64-data>' | bun scripts/inspect-code-payload.ts
  */
 
 import { createInterface } from 'node:readline';
@@ -78,8 +78,8 @@ async function main(): Promise<void> {
 
   if (!base64Data.trim()) {
     console.error(
-      'Usage: npx tsx scripts/inspect-code-payload.ts [base64-data]\n' +
-        "   or: echo '<base64-data>' | npx tsx scripts/inspect-code-payload.ts",
+      'Usage: bun scripts/inspect-code-payload.ts [base64-data]\n' +
+        "   or: echo '<base64-data>' | bun scripts/inspect-code-payload.ts",
     );
     process.exit(1);
   }

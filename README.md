@@ -83,15 +83,17 @@ There is one input for both modes — no mode to choose. The page works out whic
 
 ## Development
 
+Requires [Bun](https://bun.com/) 1.4.0.
+
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Start development server
-npm run dev
+bun run dev
 
 # Build for production
-npm run build
+bun run build
 ```
 
 ### Routing (Required)
