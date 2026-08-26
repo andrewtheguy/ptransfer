@@ -15,10 +15,12 @@ function getGitCommitHash(): string {
   return cfSha ? cfSha.slice(0, 7) : 'local';
 }
 
-// The Tor WASM client is a `file:` dependency, so npm links it into
-// node_modules as a symlink to a sibling checkout. Vite serves it through its
-// real path, which lies outside the project root and would otherwise be
-// refused by the dev server's filesystem allow list.
+// The Tor WASM client installs from a released tarball, but `npm run
+// wasm:local` swaps that for a symlink into a sibling webtor-rs checkout.
+// Vite serves a symlinked package through its real path, which then lies
+// outside the project root and would otherwise be refused by the dev server's
+// filesystem allow list. Resolving the real path covers the local override and
+// is a harmless no-op for the released install.
 function anonymousSignalingWasmDir(): string {
   const require = createRequire(path.join(__dirname, 'package.json'));
   return fs.realpathSync(

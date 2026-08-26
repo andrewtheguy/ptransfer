@@ -5,6 +5,33 @@ device's Nostr relay connections through Tor inside the browser. It does not
 route file data through Tor and it does not claim to make the complete transfer
 anonymous.
 
+## Current status: proof of concept
+
+Anonymous signaling works end to end, but it is a proof of concept, and it is
+labelled experimental wherever it is offered. Two properties of the current
+build are artifacts of that stage rather than settled design, and both are
+expected to change before it is presented as a finished feature.
+
+**The relay pool is two relays picked off a public list.** `DEFAULT_RELAYS` in
+`src/lib/nostr/relays.ts` is `wss://relay.pocketnostr.com` and
+`wss://nostrelay.circum.space`, chosen because the popular relays (damus,
+nos.lol, primal, snort) sit behind Cloudflare or otherwise refuse traffic from
+Tor exits. Neither has been vetted for uptime, capacity, or how long it will
+keep accepting exit-node connections, and nothing monitors whether they still
+do. That list is also the pool for ordinary PIN Exchange — one constant serves
+both modes — so Tor reachability currently narrows the relay set for transfers
+that never touch Tor. Going live means a vetted pool, and probably a
+Tor-specific list instead of one shared one.
+
+**Each device chooses on its own, and one side is enough.** Nothing requires
+the sender and the receiver to both enable it. A transfer where only one side
+does completes normally: that device's IP address is hidden from the relays and
+the other device's is not, and neither device is told what the other chose.
+Whether the two sides should have to agree before the transfer proceeds is
+open.
+
+Everything below describes the current build.
+
 ## Connection path
 
 ```text
@@ -130,15 +157,22 @@ leaves to the bridge instead.
 
 ## Source and build
 
-The source-minimized fork and generated WASM package are in the sibling
-`../webtor-rs` repository. Its upstream provenance and retained crates are
-documented there in `UPSTREAM.md`. pTransfer consumes the generated package
-through the local `@andrewtheguy/anonymous-signaling-wasm` file dependency. The
-fork adds a raw exit stream to webtor-rs and a dedicated WASM binding. All Web
-Crypto keys created or imported by the fork are non-extractable.
+The source-minimized fork that generates the WASM package lives in the
+[`webtor-rs`](https://github.com/andrewtheguy/webtor-rs) repository; its
+upstream provenance and retained crates are documented there in `UPSTREAM.md`.
+The fork adds a raw exit stream to webtor-rs and a dedicated WASM binding, and
+all Web Crypto keys it creates or imports are non-extractable.
 
-With both repositories checked out under the same parent directory, normal
-pTransfer validation and builds use the checked-in sibling package directly:
+pTransfer installs the generated package as a `.tgz` asset published on a
+webtor-rs GitHub release, the same way it installs the QR WASM packages:
+
+```json
+"@andrewtheguy/anonymous-signaling-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.1/andrewtheguy-anonymous-signaling-wasm-0.0.1-alpha.1.tgz"
+```
+
+The `0.0.1-alpha` line is deliberate: the package is versioned as the proof of
+concept it is, and it is a GitHub pre-release. `npm install` therefore needs no
+sibling checkout, and normal validation and builds are the usual:
 
 ```bash
 npm run lint
@@ -146,6 +180,18 @@ npx tsc -b
 npm run build
 ```
 
-Rust changes are made and validated in `../webtor-rs`; its `npm run build`
-regenerates the checked-in `anonymous-signaling-wasm/pkg/` package before it is
-consumed here.
+### Developing against a local webtor-rs build
+
+To run against an unreleased build, check `webtor-rs` out next to this
+repository, run its `npm run build`, and swap the installed package for the
+generated `anonymous-signaling-wasm/pkg/` directory:
+
+```bash
+npm run wasm:local      # install the sibling build into node_modules
+npm run wasm:released   # restore the released .tgz
+```
+
+`wasm:local` writes neither `package.json` nor `package-lock.json`, so the
+override lives only in `node_modules` and cannot be committed by accident;
+`wasm:released` is a plain `npm ci`. Rust changes are made and validated in
+`webtor-rs`, and reach pTransfer for real only through a new release.

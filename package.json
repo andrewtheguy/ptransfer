@@ -9,6 +9,8 @@
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
     "tor:directory": "tsx scripts/fetch-tor-directory.ts",
+    "wasm:local": "tsx scripts/link-local-wasm.ts",
+    "wasm:released": "npm ci",
     "test": "npm run test:unit",
     "test:all": "npm run test:unit && npm run test:integration:nostr-file",
     "test:unit": "vitest run --project unit",
@@ -18,7 +20,7 @@
     "test:live:web": "tsx tests/live_web_to_web_e2e.ts"
   },
   "dependencies": {
-    "@andrewtheguy/anonymous-signaling-wasm": "file:../webtor-rs/anonymous-signaling-wasm/pkg",
+    "@andrewtheguy/anonymous-signaling-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.1/andrewtheguy-anonymous-signaling-wasm-0.0.1-alpha.1.tgz",
     "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
     "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
     "@noble/curves": "^2.0.1",

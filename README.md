@@ -9,7 +9,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 - **100% Static - No Backend Required**: The entire app is a static site that can be hosted on any static hosting service (GitHub Pages, Netlify, Vercel, S3, etc.). No server-side code, no database, no backend infrastructure needed.
 - **Works offline**: No internet required after page load when using Code Exchange on same local network
 - **Flexible signaling**: Nostr (default) or Code Exchange — you hand over the offer (QR/copy-paste) and the receiver hands the response back the same way; the response only enters the sender's page when the sender scans or pastes it. With internet, Code Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
-- **Optional anonymous signaling**: PIN Exchange can route its Nostr WebSocket connections through Tor in a browser WASM client. This experimental option is slower and less reliable, and it anonymizes signaling from Nostr relays—not the later direct WebRTC connection.
+- **Optional anonymous signaling**: PIN Exchange can route its Nostr WebSocket connections through Tor in a browser WASM client. This experimental option is slower and less reliable, and it anonymizes signaling from Nostr relays—not the later direct WebRTC connection. It is still a proof of concept: the relay pool is a pair of unvetted Tor-reachable relays, and each device chooses the option for itself, so one side can have it on while the other does not. See [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md).
 - **Rotating PIN pairing (Nostr)**: A case-sensitive 12-character PIN (letters and digits only) that rotates every 2 minutes locates the sender and drives a SPAKE2 password-authenticated key exchange; nothing published to relays can be used to guess the PIN offline
 - **Confirmation code (Nostr)**: After entering the PIN, the receiver is shown an 8-character code the sender must type in before anything is sent — so someone who spots the PIN over your shoulder cannot quietly take the file
 - **File or folder transfer**: Send a file, or a ZIP archive created from multiple files/a folder. Everything is compressed behind the scenes: a single file is deflated during the transfer and restored on receipt, while multi-file/folder ZIP output (whose entries are already deflated) is never recompressed. The 2 GiB limit is checked against the total size of the selected input files before compression — a selection over 2 GiB cannot be sent, even if it would compress smaller. On the direct P2P path, the sender reads selected files lazily without scratch storage and receivers keep payloads up to 100 MiB in memory before spilling to OPFS. The Code Exchange relay fallback instead materializes payloads in memory and is capped at 100 MiB. See [Browser Requirements](#browser-requirements)
@@ -82,7 +82,7 @@ There is one input for both modes — no mode to choose. The page works out whic
 - Vite
 - Tailwind CSS + shadcn/ui
 - nostr-tools for Nostr protocol
-- A local sibling webtor-rs/Arti WASM package for experimental anonymous signaling
+- A prerelease webtor-rs/Arti WASM package for experimental anonymous signaling
 - Web Crypto API for cryptographic operations, plus @noble/curves for the SPAKE2 group math Web Crypto cannot express
 
 ## Development

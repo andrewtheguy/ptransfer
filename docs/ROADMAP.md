@@ -21,6 +21,23 @@ initial mode while keeping its fully hand-carried signaling path:
   currently describe Nostr signaling as the default; both need rewriting, plus
   a version bump for the behavior change.
 
+### Take Anonymous Signaling Out of Proof-of-Concept
+
+Anonymous signaling works, but two parts of it are placeholders (see
+`docs/ANONYMOUS_SIGNALING.md`) that have to be settled before it stops being
+labelled experimental:
+
+- **A vetted relay pool.** `DEFAULT_RELAYS` is currently two relays picked off
+  a public list because they accept Tor exit traffic, with no uptime, capacity
+  or longevity evidence behind either. The same constant also serves ordinary
+  PIN Exchange, so Tor reachability narrows the pool for transfers that never
+  use Tor — a Tor-specific list, or a per-mode pool, is probably the answer.
+- **Whether both sides must opt in.** Today each device chooses for itself and
+  a transfer completes with the option on at one end only, which hides one
+  IP address from the relays and not the other, with neither side told what
+  the other picked. Requiring agreement (or at least surfacing the mismatch)
+  is the open question.
+
 ### More Efficient Use of the Relay Cache in Code Exchange
 Make Code Exchange lean harder on the IndexedDB relay cache
 (`src/lib/nostr-file/relay-pool.ts`) so that relays already proven in a
