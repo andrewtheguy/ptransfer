@@ -3,26 +3,18 @@ import {
   computeRendezvousTranscriptHash,
   computeTransferMetadataHash,
 } from './transcript';
+import {
+  METADATA_VECTOR,
+  RENDEZVOUS_VECTOR,
+  VECTOR_SALT,
+} from './transcript-vectors';
 import type { RendezvousPayload, TransferMetadata } from './types';
 
-const SALT = new Uint8Array(32).fill(7);
-
-const payload: RendezvousPayload = {
-  type: 'rendezvous',
-  transferId: 'a1b2c3d4e5f60718',
-  senderPubkey: 'a'.repeat(64),
-  pakeMessage: 'ApAkEeLeMeNtBase64==',
-  nonce: 'c2VuZGVyLW5vbmNlLTAwMDAwMDA=',
-  relays: ['wss://relay.one', 'wss://relay.two'],
-};
-
-const metadata: TransferMetadata = {
-  contentType: 'file',
-  fileName: 'quarterly-report.pdf',
-  fileSize: 1048576,
-  contentEncoding: 'deflate-raw',
-  mimeType: 'application/pdf',
-};
+// The frozen vectors live in transcript-vectors.ts because the interop spec
+// publishes them too; see the note there.
+const SALT = VECTOR_SALT;
+const payload: RendezvousPayload = RENDEZVOUS_VECTOR.payload;
+const metadata: TransferMetadata = METADATA_VECTOR.metadata;
 
 describe('Rendezvous transcript hash', () => {
   it('is a deterministic SHA-256 hex digest', async () => {
@@ -31,13 +23,9 @@ describe('Rendezvous transcript hash', () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeRendezvousTranscriptHash(payload, SALT)).toBe(hash);
 
-    // Frozen pTransfer v4 vector. Every other test here is relative — reordering the
-    // canonical array, dropping a field, or editing the version label would
-    // leave them all green. This pins the wire format itself, so any such
-    // change has to be a deliberate protocol bump rather than an accident.
-    expect(hash).toBe(
-      'edf3c4ce9b70adf0cb6e316e247f2f840e18af094d20466dfd55c00e694be675',
-    );
+    // Frozen pTransfer v4 vector; see transcript-vectors.ts for why it is
+    // pinned and why it lives outside this file.
+    expect(hash).toBe(RENDEZVOUS_VECTOR.digest);
   });
 
   it('changes when any covered field changes', async () => {
@@ -91,9 +79,7 @@ describe('Transfer metadata hash', () => {
     expect(await computeTransferMetadataHash(metadata)).toBe(hash);
 
     // Frozen pTransfer v2 vector, for the same reason as the rendezvous vector above.
-    expect(hash).toBe(
-      'd71c5d4c12479dfb7e1e4f7c9fd169cddd73206e8c369d49a98f7b726a025f84',
-    );
+    expect(hash).toBe(METADATA_VECTOR.digest);
   });
 
   it('changes when any covered field changes', async () => {

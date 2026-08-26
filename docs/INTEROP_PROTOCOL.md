@@ -20,13 +20,21 @@ moved on every release would say nothing about interoperability.
 - Leave it alone otherwise, however large the app release.
 
 The version never travels on the wire. There is no negotiation, no capability
-exchange, and no compatibility shim: pTransfer has no backward compatibility by
-policy, and a version mismatch already fails closed on its own — mismatched
-domain separators, field lists, or event kinds make the PAKE seals fail to open
-or the confirmation codes disagree. The declared version exists so the two
-repositories can state their agreement in one place, and so the CLI's
-interoperability test can check that they still agree before spending a
+exchange, and no compatibility shim: it is a **build-time coordination value**,
+not a runtime check. Two implementations agree by declaring the same number, and
+the CLI's interoperability test compares the two declarations before spending a
 transfer proving it.
+
+Do not rely on a mismatch announcing itself. Some are self-detecting: a changed
+domain separator or transcript field list lands the two sides on different keys
+or digests, so the PAKE seals refuse to open and the confirmation codes
+disagree, and a changed event kind means the receiver simply never finds the
+rendezvous. Others are not detected at all. Rotation windows, bucket counts,
+guessing budgets, timeouts, size limits, and the NIP-40 expiration formula are
+agreed *only* by both sides implementing this document; nothing in the handshake
+covers them, and a peer that quietly widened `PIN_ACTIVE_BUCKETS` would weaken
+every transfer without a single seal noticing. Matching the declared version is
+what rules that out.
 
 ## Scope
 

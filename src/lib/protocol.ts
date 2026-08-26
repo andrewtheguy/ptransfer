@@ -15,9 +15,12 @@
  * anything specified in `docs/INTEROP_PROTOCOL.md` changes, and leave it alone
  * otherwise.
  *
- * Nothing reads it at runtime — it is never sent, echoed, or negotiated. A
- * mismatch already fails closed at the PAKE seal or the metadata digest; this
- * constant exists so the two repositories can state their agreement in one
- * place, and so the CLI's interop test can check that they still agree.
+ * Nothing reads it at runtime — it is never sent, echoed, or negotiated. This
+ * is a build-time coordination value: the two repositories state their
+ * agreement in one place, and the CLI's interop test checks they still agree.
+ * Some mismatches would surface on their own (a changed KDF label or transcript
+ * field list breaks the PAKE seals), but many would not — rotation windows,
+ * budgets, timeouts, and size limits are agreed only by both sides implementing
+ * the same spec. Do not treat a completed transfer as evidence of a match.
  */
 export const INTEROP_PROTOCOL_VERSION = '1';
