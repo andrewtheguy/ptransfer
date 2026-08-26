@@ -8,10 +8,9 @@ usable for that, and — more usefully — which are not and why, so the same de
 ends are not surveyed twice.
 
 **Outcome: rejected.** Measured over Tor on 2026-08-26, every candidate below
-failed. The idea is closed in `docs/ROADMAP.md` under *Public HTTP Drops as a
-Relay Fallback: Closed*; the direction to pursue instead is a Tor hidden service
-transport, where the rendezvous is the Tor network itself and there is no host
-operator who can refuse the connection.
+failed. The direction pursued instead is **Tor Hidden Service Transport** in
+`docs/ROADMAP.md`, where the rendezvous is the Tor network itself and there is
+no host operator who can refuse the connection.
 
 The survey is kept because host policies change and because the reasoning
 generalises: anything reached over a Tor exit inherits that exit's reputation.

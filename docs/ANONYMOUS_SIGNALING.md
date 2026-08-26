@@ -20,8 +20,9 @@ Tor exits. Neither has been vetted for uptime, capacity, or how long it will
 keep accepting exit-node connections, and nothing monitors whether they still
 do. That list is also the pool for ordinary PIN Exchange — one constant serves
 both modes — so Tor reachability currently narrows the relay set for transfers
-that never touch Tor. Going live means a vetted pool, and probably a
-Tor-specific list instead of one shared one.
+that never touch Tor. Going live means a vetted pool and a per-mode split;
+`docs/ROADMAP.md` plans to draw the Tor-side pool from relays exposed as onion
+services, which removes the exit that makes the pool this narrow.
 
 **Each device chooses on its own, and one side is enough.** Nothing requires
 the sender and the receiver to both enable it. A transfer where only one side

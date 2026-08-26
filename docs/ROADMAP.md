@@ -31,12 +31,91 @@ labelled experimental:
   a public list because they accept Tor exit traffic, with no uptime, capacity
   or longevity evidence behind either. The same constant also serves ordinary
   PIN Exchange, so Tor reachability narrows the pool for transfers that never
-  use Tor — a Tor-specific list, or a per-mode pool, is probably the answer.
+  use Tor. Splitting it per mode is needed either way; **Anonymous Signaling
+  over Onion-Service Nostr Relays** below is where the Tor-side pool comes
+  from.
 - **Whether both sides must opt in.** Today each device chooses for itself and
   a transfer completes with the option on at one end only, which hides one
   IP address from the relays and not the other, with neither side told what
   the other picked. Requiring agreement (or at least surfacing the mismatch)
   is the open question.
+
+### Anonymous Signaling over Onion-Service Nostr Relays
+
+Anonymous signaling reaches ordinary `wss://` relays through a Tor exit, and the
+exit is the part that limits it. Popular relays sit behind Cloudflare or
+otherwise refuse exit traffic, which is why `DEFAULT_RELAYS` is two obscure
+relays whose only qualification is that they answer. Reaching relays as onion
+services instead takes the exit out of the path, and the reputation problem goes
+with it: [`0xtrr/onion-service-nostr-relays`](https://github.com/0xtrr/onion-service-nostr-relays)
+lists around twenty-five relays exposed as v3 onion services, including onion
+mirrors of relays — `nostr.oxtr.dev`, `relay.snort.social` — that will not talk
+to an exit on clearnet. One move answers both the pool question and the
+reachability question.
+
+Two constraints fall away with it:
+
+- **No exit check.** `check.torproject.org` is consulted today because an exit
+  can lie about being one. An onion circuit terminates at the key its address
+  commits to, so there is nothing to confirm with a third party.
+- **No clearnet TLS.** `subtle-tls` exists to verify a relay certificate inside
+  WASM, and its ChaCha20-only, 1.3-only ClientHello follows from SubtleCrypto
+  being async. The onion protocol carries its own end-to-end encryption and
+  authentication, so `ws://` over an onion circuit needs no TLS layer and the
+  constraint lifts for signaling.
+
+The blocker is that no onion client exists in WASM. The vendored Arti crates
+carry the primitives — `hs-client` in `tor-proto`, `tor-netdoc` and `tor-cell`,
+`hsv3-client` in `tor-llcrypto`, all currently off — but `tor-hsclient` is not
+vendored, so the layer it provides has to be written on `tor-proto`: HSDir ring
+selection, descriptor fetch and decryption, and the introduce/rendezvous circuit
+dance. It is a real protocol project, though a far smaller one than hosting a
+service, and **Tor Hidden Service Transport** below needs the same client, so it
+is written once.
+
+The relay list is community-maintained by pull request, tracks no uptime, and
+makes the onion address its only mandatory column. It is a source of candidates,
+not a vetted pool — whatever ships still has to be probed and monitored the way
+the current pool should have been.
+
+### Tor Hidden Service Transport
+
+One side hosts a v3 onion service and the other connects to it through Tor. The
+bytes still travel between the two peers — Tor carries them, and no third party
+stores or forwards them at the application layer — so this is a route around a
+hostile NAT rather than a relay someone has to operate and trust.
+
+It covers the cases the Nostr file relay (`docs/NOSTR_FILE_RELAY.md`) does not:
+that fallback is Code Exchange only and capped at 100 MiB, which leaves PIN
+Exchange, anything over the cap, and every transfer involving the CLI with
+nothing but a direct WebRTC connection.
+
+It also collapses signaling for that mode. Because the Tor network is the
+rendezvous, the connecting side sends nothing back out-of-band: Code Exchange
+needs one payload instead of two, a single one-way code carrying the `.onion`
+address and a symmetric key (the pattern beam-rs uses with `generate_tor_code`).
+
+Where it can work:
+
+- **CLI ↔ CLI** works with native Arti today — `arti-client` plus
+  `tor-hsservice`, as beam-rs does. `ptransfer-cli` is at v0.0.2 with no Arti
+  dependency yet, and it is the natural place to start.
+- **CLI ↔ web app** works with the CLI hosting and the web app connecting, once
+  the WASM onion client above exists. If the CLI speaks WebSocket on the onion
+  address, the browser side is the adapter that already carries signaling, over
+  an onion stream instead of an exit stream.
+- **Web ↔ web has no hosting side.** `tor-hsservice` is native-only — tokio,
+  SQLite, a filesystem — and a browser has no business holding a long-lived
+  service identity key across sessions regardless. Web ↔ web keeps WebRTC plus
+  the Nostr file relay, and a browser pair that can reach neither stays a
+  failed transfer.
+- **CLI ↔ an ordinary browser** cannot work at all; browsers do not reach
+  `.onion`.
+
+Caveats to design around: the code is shareable only after descriptor upload,
+seconds to tens of seconds after launch; a v3 address makes the single code 56+
+characters, still fine for QR and copy-paste; and the address alone lets anyone
+connect, so the embedded key has to gate authentication and decryption.
 
 ### More Efficient Use of the Relay Cache in Code Exchange
 Make Code Exchange lean harder on the IndexedDB relay cache
@@ -55,112 +134,12 @@ Allow users to specify their own preferred Nostr relays for signaling.
 
 ## Backlog (Future Considerations)
 
-### Tor Hidden Service Transport (Single-Exchange Code Mode)
-A transfer mode where one side hosts a Tor onion service and the other connects
-to it through Tor, replacing the WebRTC offer/answer round trip with a single
-one-way code: the `.onion` address plus a symmetric key (the pattern beam-rs
-uses with `generate_tor_code`). Because the Tor network itself is the
-rendezvous, the connecting side sends nothing back out-of-band, so Code
-Exchange needs only one payload instead of two.
-
-Findings from research (August 2026):
-- **Not implementable in the browser today.** webtor-rs proves Arti's
-  `tor-proto` runs in WASM over Snowflake, but neither upstream webtor-rs nor
-  the pTransfer fork has any onion service support (client or hosting), and
-  upstream exposes only HTTP fetch, no raw streams. (The pTransfer fork does
-  add raw exit streams — `TorClient::open_stream`, what the anonymous
-  signaling WebSocket rides on — but those are exit streams, not the
-  onion-service circuits this feature needs.) Arti's
-  `arti-client`/`tor-hsservice` stack is native-only (tokio, SQLite,
-  filesystem). A browser-hosted onion service is architecturally
-  possible (hosting uses only outbound circuits) but would mean reimplementing
-  `tor-hsservice`/`tor-hsclient` on top of `tor-proto` in WASM — a major
-  security-sensitive protocol project no one has done.
-- **Requires ptransfer-cli on the hosting side** (native Rust can use
-  `arti-client` + `tor-hsservice` like beam-rs). CLI ↔ CLI works directly.
-- **CLI ↔ regular browser does not work** — browsers cannot reach `.onion`.
-- **CLI ↔ web app in Tor Browser is possible** but requires a new
-  WebSocket-over-onion transport in the web app, since Tor Browser disables
-  WebRTC (Tor carries TCP streams, not ICE/UDP; `.onion` origins are treated
-  as secure contexts so `ws://<addr>.onion` works from the page).
-- Caveats: the code is only shareable after descriptor upload (seconds to tens
-  of seconds after launch), and a v3 onion address makes the single code ~56+
-  characters — still fine for QR/copy-paste. The onion address alone lets
-  anyone connect, so the embedded key must gate decryption/authentication.
-
-### Relay Fallback for Data Transfer via ppng.io (piping-server)
-A fallback path for when WebRTC finds no direct route: stream the encrypted
-payload through a public HTTP relay instead of failing. piping-server
-(https://ppng.io) is a blind streaming relay — the sender `POST`s to a path,
-the receiver `GET`s the same path, and bytes stream through without being
-stored.
-
-Findings from research (August 2026):
-- **CORS is fully open** (verified live against ppng.io): preflight returns
-  `access-control-allow-origin: *` with `GET, HEAD, POST, PUT, OPTIONS` and
-  headers `Content-Type, Content-Disposition, X-Piping`, so browser `fetch()`
-  works from any origin with no proxy. Works browser ↔ browser and
-  browser ↔ CLI (plain HTTP on both sides).
-- **Rendezvous fits the existing PAKE**: derive a high-entropy path from the
-  SPAKE2 shared secret (HKDF); the path is the only thing gating the stream,
-  and the payload is E2E-encrypted before it touches the relay, so the relay
-  sees only ciphertext and both parties' IPs — the same trust position the
-  Nostr signaling relays already occupy.
-- **Zero infrastructure**: unlike adapting Magic Wormhole's transit relay
-  (whose public instances are donated app-specific infra — the default
-  `transit.magic-wormhole.io` is raw TCP a browser can't reach, and Least
-  Authority's WebSocket relay is for Winden), ppng.io is explicitly offered as
-  general-purpose public piping infrastructure. It is also self-hostable if
-  its goodwill or bandwidth tolerance for multi-GB transfers proves
-  insufficient — there is no SLA.
-- **Design tension**: the CLI's transport is deliberately direct-only ("fails
-  rather than route file bytes through a relay server"). A relay fallback
-  reverses that stance and should be opt-in, ideally with a user-configurable
-  relay URL.
-- **Update (August 2026): CORS was not the constraint, and the answer is no.**
-  The findings above ranked relays by whether a browser `fetch` could read
-  them, which ruled out nearly every public file host. It does not have to be a
-  browser request: `AnonymousSignalingClient.httpRequest()` sends HTTP over a
-  Tor stream from inside WASM, so no origin policy applies. That reframed the
-  question as whether these hosts answer a Tor exit at all — and measured over
-  a real circuit, none of them do. See **Public HTTP drops: closed** below.
-- Alternatives considered: a self-hosted Magic Wormhole transit relay
-  (WebSocket-capable upstream, blind token-matching pipe, but requires running
-  a server); a TURN server (least protocol work since transport is already
-  WebRTC, same trust profile); iroh's relay network (browser support in alpha
-  as of iroh 0.32, always-relayed via WebSocket in browsers, would also give
-  CLI interop since beam-rs uses iroh natively).
-
-### Public HTTP Drops as a Relay Fallback: Closed
-
-Measured and rejected on 2026-08-26. `docs/HTTP_DROP_CANDIDATES.md` holds the
-full survey; this is the outcome.
-
-Five public file hosts survived a clear-net survey — x0.at,
-transfer.archivete.am, uguu.se, filebin.net and catbox.moe — and every one of
-them failed an upload/download round trip over Tor. The run is trustworthy
-because a control ran first on the same circuit: a POST of random bytes to
-`https://httpbingo.org/post` came back byte-identical in 874 ms, so the request
-path worked and the failures are the hosts' own answers. Public file hosts have
-much stronger abuse incentives to refuse Tor than Nostr relays do, and they act
-on them.
-
-What survives from the attempt is `AnonymousSignalingClient.httpRequest()` in
-webtor-rs, which is generally useful: it makes arbitrary HTTP requests over the
-circuit with no CORS involved, and is what the exit check would use if it were
-written today. The probe page that drove the measurement was thrown away with
-the idea; `docs/HTTP_DROP_CANDIDATES.md` records how it worked, so re-running
-the survey means rebuilding a page rather than repeating the research.
-
-The direction to pursue instead is **Tor Hidden Service Transport** above,
-where the rendezvous is the Tor network itself rather than someone's file host,
-so there is no operator to refuse the connection. That work is gated on
-reviving `ptransfer-cli`, since hosting an onion service needs native Arti —
-which makes the CLI the natural place to start rather than a detour.
-
 ### TLS 1.2 Fallback for subtle-tls
 Retry a failed TLS 1.3 handshake over TLS 1.2 instead of dropping the
-connection, so a 1.2-only host is still reachable through Tor.
+connection, so a 1.2-only host is still reachable through Tor. Onion-routed
+signaling needs no TLS of its own, which leaves this mattering only to Tor's
+own channel TLS and the Snowflake entry path — both of which negotiate 1.3
+today.
 
 Findings (August 2026):
 - **The code is compiled in but unreachable.** Restoring the full `subtle-tls`
