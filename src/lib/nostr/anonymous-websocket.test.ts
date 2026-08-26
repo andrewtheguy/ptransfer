@@ -115,6 +115,53 @@ describe('AnonymousSignalingTransport', () => {
     await vi.waitFor(() => expect(wasmMocks.closeClient).toHaveBeenCalled());
   });
 
+  it('closes sockets that are still connecting when the transport closes', async () => {
+    // The relay pool only closes OPEN sockets; one mid-rendezvous at session
+    // end is the transport's to cancel, and it must not surface as an error.
+    let rejectConnect: (error: Error) => void = () => {};
+    wasmMocks.client.connect.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    const transport = new AnonymousSignalingTransport({
+      webSocketBridge: true,
+    });
+    await transport.waitUntilReady();
+
+    const socket = new transport.websocketImplementation('ws://relay.onion');
+    const errors: string[] = [];
+    socket.addEventListener('error', (event) =>
+      errors.push((event as ErrorEvent).message),
+    );
+    const closed = new Promise<CloseEvent>((resolve) =>
+      socket.addEventListener(
+        'close',
+        (event) => resolve(event as CloseEvent),
+        {
+          once: true,
+        },
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(wasmMocks.client.connect).toHaveBeenCalledWith('ws://relay.onion'),
+    );
+
+    transport.close();
+    expect(socket.readyState).toBe(WebSocket.CLOSING);
+    // webtor aborts the in-flight connect once the client is closed.
+    rejectConnect(
+      new Error('Anonymous signaling client closed while connecting'),
+    );
+
+    await closed;
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(errors).toEqual([]);
+    expect(wasmMocks.closeSocket).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(wasmMocks.closeClient).toHaveBeenCalled());
+  });
+
   it('seeds webtor with the served snapshot instead of the stored cache', async () => {
     snapshotMocks.load.mockResolvedValueOnce('served-snapshot');
 

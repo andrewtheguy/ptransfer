@@ -112,6 +112,15 @@ export interface AnonymousSignalingTransportOptions {
 export class AnonymousSignalingTransport {
   private readonly clientPromise: Promise<WasmAnonymousSignalingClient>;
   private closed = false;
+  /**
+   * Every socket this transport has created that has not yet emitted
+   * `close`. The relay pool only closes sockets it sees as OPEN, so one
+   * still building its onion circuit when the session ends would otherwise
+   * finish that rendezvous for nobody; `close()` reaches them all.
+   */
+  private readonly sockets = new Set<{
+    close(code?: number, reason?: string): void;
+  }>();
 
   readonly websocketImplementation: typeof WebSocket;
 
@@ -151,6 +160,7 @@ export class AnonymousSignalingTransport {
     );
 
     const clientPromise = this.clientPromise;
+    const sockets = this.sockets;
 
     this.websocketImplementation =
       class AnonymousSignalingWebSocket extends EventTarget {
@@ -193,6 +203,7 @@ export class AnonymousSignalingTransport {
               'NotSupportedError',
             );
           }
+          sockets.add(this);
           void this.open(clientPromise);
         }
 
@@ -305,6 +316,7 @@ export class AnonymousSignalingTransport {
         ): void {
           if (this.closeEmitted) return;
           this.closeEmitted = true;
+          sockets.delete(this);
           this.readyState = AnonymousSignalingWebSocket.CLOSED;
           this.socket = null;
           const event = new CloseEvent('close', { wasClean, code, reason });
@@ -321,6 +333,9 @@ export class AnonymousSignalingTransport {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    for (const socket of [...this.sockets]) {
+      socket.close(1001, 'Anonymous signaling closed');
+    }
     void this.clientPromise
       .then((client) => client.close())
       .catch(() => {
