@@ -7,7 +7,7 @@ import {
   normalizeRelayUrl,
 } from './relays';
 
-const ONION = 'nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion';
+const ONION = 'oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion';
 
 describe('DEFAULT_RELAYS', () => {
   // The signaling pool is compared against canonical URLs everywhere it is

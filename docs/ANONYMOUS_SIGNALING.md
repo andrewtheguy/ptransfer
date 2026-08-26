@@ -15,10 +15,15 @@ never touches `DEFAULT_RELAYS`. It uses `ANONYMOUS_SIGNALING_RELAYS` in
 `src/lib/nostr/relays.ts`: Nostr relays reached as v3 onion services
 (`ws://<address>.onion`), drawn from
 [`0xtrr/onion-service-nostr-relays`](https://github.com/0xtrr/onion-service-nostr-relays)
-and kept to the ones the WASM onion client itself has been shown to reach
-(webtor-rs, `docs/onion-relay-probe-2026-08-25.md`). The list is
-community-maintained and tracks no uptime, so the pool is a set of candidates
-that answered on a given day, not a vetted one; nothing monitors it yet.
+and kept to the ones that accept writes from a throwaway key — the
+sender's kind-4243 rendezvous and both sides' kind-24243 handshakes — and
+serve the rendezvous back, checked in webtor-rs
+(`docs/onion-relay-probe-2026-08-25.md`). That is a stricter bar than
+answering a `REQ`: most onion relays that serve reads refuse anonymous writes
+(paid admission, whitelists), and one acknowledges them and drops them. The
+list is community-maintained and tracks no uptime, so the pool is a set of
+candidates that passed on a given day, not a vetted one; nothing monitors it
+yet.
 Ordinary PIN Exchange keeps its own clearnet `wss://` pool untouched.
 
 **Both sides must enable it.** The two pools are disjoint and a sender and a

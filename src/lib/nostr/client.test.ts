@@ -51,7 +51,7 @@ describe('NostrClient', () => {
 
     try {
       const client = createNostrClient(
-        ['ws://nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion'],
+        ['ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion'],
         {
           anonymousSignaling: { enabled: true, webSocketBridge: false },
         },

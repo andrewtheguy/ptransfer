@@ -116,15 +116,18 @@ export const DEFAULT_RELAYS = canonicalRelayPool(
 // pairs — both sides must enable it, and neither side's IP reaches a relay
 // that the other side's clearnet socket would have exposed.
 //
-// Candidates come from 0xtrr/onion-service-nostr-relays; these are the ones
-// that answered a REQ from the WASM onion client itself (webtor-rs,
-// docs/onion-relay-probe-2026-08-25.md). Each relay costs its own rendezvous,
-// so the pool is kept small.
+// Candidates come from 0xtrr/onion-service-nostr-relays. Answering a REQ is
+// not enough: signaling has to write — the sender's kind-4243 rendezvous and
+// both sides' kind-24243 handshakes — under a throwaway key, and most onion
+// relays that serve reads refuse exactly that (paid admission, whitelists) or
+// answer OK and then silently drop the event. These are the ones that
+// accepted both kinds from a fresh key and served the rendezvous back
+// (webtor-rs, docs/onion-relay-probe-2026-08-25.md). Each relay costs its
+// own rendezvous, so the pool is kept small.
 export const ANONYMOUS_SIGNALING_RELAYS = canonicalRelayPool(
   [
-    'ws://nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion',
     'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion',
-    'ws://nostrwinemdptvqukjttinajfeedhf46hfd5bz2aj2q5uwp7zros3nad.onion',
+    'ws://gnostr2jnapk72mnagq3cuykfon73temzp77hcbncn4silgt77boruid.onion',
   ],
   'ANONYMOUS_SIGNALING_RELAYS',
   normalizeOnionRelayUrl,
