@@ -8,28 +8,29 @@ anonymous.
 ## Current status: proof of concept
 
 Anonymous signaling works end to end, but it is a proof of concept, and it is
-labelled experimental wherever it is offered. Two properties of the current
-build are artifacts of that stage rather than settled design, and both are
-expected to change before it is presented as a finished feature.
+labelled experimental wherever it is offered.
 
-**The relay pool is two relays picked off a public list.** `DEFAULT_RELAYS` in
-`src/lib/nostr/relays.ts` is `wss://relay.pocketnostr.com` and
-`wss://nostrelay.circum.space`, chosen because the popular relays (damus,
-nos.lol, primal, snort) sit behind Cloudflare or otherwise refuse traffic from
-Tor exits. Neither has been vetted for uptime, capacity, or how long it will
-keep accepting exit-node connections, and nothing monitors whether they still
-do. That list is also the pool for ordinary PIN Exchange — one constant serves
-both modes — so Tor reachability currently narrows the relay set for transfers
-that never touch Tor. Going live means a vetted pool and a per-mode split;
-`docs/ROADMAP.md` plans to draw the Tor-side pool from relays exposed as onion
-services, which removes the exit that makes the pool this narrow.
+**The relay pool is separate, and it is onion services.** Anonymous signaling
+never touches `DEFAULT_RELAYS`. It uses `ANONYMOUS_SIGNALING_RELAYS` in
+`src/lib/nostr/relays.ts`: Nostr relays reached as v3 onion services
+(`ws://<address>.onion`), drawn from
+[`0xtrr/onion-service-nostr-relays`](https://github.com/0xtrr/onion-service-nostr-relays)
+and kept to the ones the WASM onion client itself has been shown to reach
+(webtor-rs, `docs/onion-relay-probe-2026-08-25.md`). The list is
+community-maintained and tracks no uptime, so the pool is a set of candidates
+that answered on a given day, not a vetted one; nothing monitors it yet.
+Ordinary PIN Exchange keeps its own clearnet `wss://` pool untouched.
 
-**Each device chooses on its own, and one side is enough.** Nothing requires
-the sender and the receiver to both enable it. A transfer where only one side
-does completes normally: that device's IP address is hidden from the relays and
-the other device's is not, and neither device is told what the other chose.
-Whether the two sides should have to agree before the transfer proceeds is
-open.
+**Both sides must enable it.** The two pools are disjoint and a sender and a
+receiver only find each other on a shared relay, so a transfer with the option
+on at one end never pairs: the sender waits for a receiver, the receiver
+reports that no transfer was found. That is the enforcement — there is no
+flag in the protocol for one side to check, and no way for a clearnet socket
+on one end to expose the IP address that the other end went through Tor to
+hide. The URL validators are the mirror image of each other:
+`normalizeRelayUrl` accepts only clearnet `wss://`, `normalizeOnionRelayUrl`
+only `ws://` to a v3 onion address, and the Nostr client applies whichever
+matches its mode.
 
 Everything below describes the current build.
 
@@ -42,18 +43,17 @@ pTransfer Nostr client
   → Snowflake broker + volunteer Snowflake WebRTC proxy
     (or, when the WebSocket bridge box is checked, a direct
      WebSocket to the Snowflake bridge)
-  → webtor-rs / Arti circuit
-  → Tor exit
-  → Tor Check exit verification
-  → verified TLS 1.3
-  → public Nostr relay WebSocket
+  → webtor-rs / Arti circuits
+  → onion-service rendezvous (HSDir descriptor, introduction point,
+    rendezvous point)
+  → ws:// Nostr relay WebSocket on the onion service
 ```
 
 The existing `nostr-tools` event, subscription, publication, signature, PAKE,
 and encryption logic is unchanged. Its pool receives a custom WebSocket
 implementation for this mode. The implementation exposes browser-style
-`open`, `message`, `error`, and `close` events while its bytes travel over a
-Tor exit stream.
+`open`, `message`, `error`, and `close` events while its bytes travel over an
+onion-service stream.
 
 The default entry transport is standard Snowflake WebRTC: the browser sends an
 SDP offer to the public Snowflake broker, connects to the assigned volunteer
@@ -72,18 +72,22 @@ to block, and no volunteer proxy stands between the client and the bridge. The
 choice is explicit per transfer on each device; neither transport is an
 automatic fallback for the other.
 
-Before the adapter permits any Nostr relay connection, the WASM client makes
-a raw HTTPS request through Tor to `https://check.torproject.org/api/ip` and
-requires an `IsTor: true` response. This is exit-side HTTP inside WASM, not a
-browser `fetch`, so CORS does not apply. Failures before that check completes
-are reported as Tor bootstrap or verification failures; failures afterward are
-reported as Nostr relay failures.
+Before the adapter permits any Nostr relay connection, the WASM client proves
+itself by fetching the Tor Project's own onion site
+(`http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion/`)
+through a full rendezvous. There is no exit and nothing to ask a third party
+about: an onion circuit terminates at the key its address commits to. Failures
+before that fetch completes are reported as Tor bootstrap or verification
+failures; failures afterward are reported as Nostr relay failures.
 
-The WASM layer accepts only `wss://` relay URLs, verifies the relay certificate,
-performs the HTTP WebSocket upgrade inside the Tor stream, masks client frames,
-handles fragmentation and control frames through tungstenite, and limits a
-Nostr message to 1 MiB. Relay streams in one signaling session share the Tor
-circuit that passed exit verification.
+The WASM layer accepts only `ws://<address>.onion` relay URLs — `wss://` and
+clearnet hosts are refused, since the onion protocol already encrypts and
+authenticates the stream end to end — performs the HTTP WebSocket upgrade
+inside the onion stream, masks client frames, handles fragmentation and control
+frames through tungstenite, and limits a Nostr message to 1 MiB. Each relay
+connection is its own rendezvous: a descriptor fetch from an HSDir, a rendezvous
+circuit and an introduction circuit, all three hops from the same Snowflake
+bridge.
 
 ## Privacy boundary
 
@@ -98,9 +102,8 @@ It does not hide the device's IP address from:
 - the other WebRTC peer once the direct connection is negotiated; or
 - the same STUN services used for file-transfer ICE candidate discovery.
 
-Sender and receiver choose the option independently. Enabling it protects only
-that participant's Nostr connections, so both participants should enable it if
-both want their direct IP hidden from the relays.
+Sender and receiver must both enable the option; see *Both sides must enable
+it* above.
 
 Nostr events remain end-to-end protected exactly as in ordinary PIN Exchange.
 Tor adds transport-level network privacy; it does not replace SPAKE2, event
@@ -110,9 +113,9 @@ signatures, encrypted signaling, or content encryption.
 
 pTransfer remains a static site. The application hosts the generated WASM and
 JavaScript glue alongside its other assets. Runtime dependencies are the public
-Snowflake broker, volunteer-proxy and bridge infrastructure, the Tor Project's
-exit-check API, and public Nostr relays; pTransfer does not operate an
-anonymous-signaling proxy.
+Snowflake broker, volunteer-proxy and bridge infrastructure, the Tor directory
+and onion-service infrastructure, and the onion relays; pTransfer does not
+operate an anonymous-signaling proxy.
 
 Current directory data is required before webtor can construct a circuit. It
 accepts that data from one of three places, in order.
@@ -125,10 +128,14 @@ microdescriptor chunk through one Snowflake circuit, one request at a time,
 which is the least reliable step of a bootstrap; a served snapshot removes it.
 
 Because that fetch is not circuit-bound, the snapshot carries a microdescriptor
-for every relay in the consensus rather than the small per-role sample webtor
-takes for itself, so path selection is weighted across the whole network. It is
-about 39 MiB of text, near 90% of it relay `family` lines, and compresses to
-roughly 3 MiB on the wire. The file is not committed and a microdesc consensus
+for every relay in the consensus rather than the sample webtor takes for
+itself, so path selection is weighted across the whole network. The onion
+client needs every relay with the HSDir flag in any case — the HSDir hash ring
+is computed from all of them — which is most of the network, so a browser-side
+download is several thousand microdescriptors over one Snowflake circuit and
+the snapshot matters more than it did for exits. It is about 39 MiB of text,
+near 90% of it relay `family` lines, and compresses to roughly 3 MiB on the
+wire. The file is not committed and a microdesc consensus
 is only valid for three hours, so a deployment that wants the fast path has to
 rebuild it at least hourly.
 
@@ -138,13 +145,13 @@ snapshot is served.
 
 Third, if neither is present or usable, webtor downloads the current compressed
 consensus over a one-hop Tor directory stream through the bridge it just
-authenticated, followed by microdescriptors for randomized pools of eligible
-middle and HTTPS-capable exit relays.
+authenticated, followed by microdescriptors for a randomized pool of middle
+relays and for every HSDir.
 
 Supplied directory data is never trusted on its face. Rust parses the
 consensus, checks its current validity window, matches every microdescriptor
-digest back to that consensus, and requires enough usable middle and HTTPS exit
-relays before installing it. An expired, corrupt, oversized, incomplete, or
+digest back to that consensus, and requires enough usable middle relays and
+HSDirs before installing it. An expired, corrupt, oversized, incomplete, or
 schema-mismatched document is rejected and the bootstrap falls through to
 downloading the directory itself. The IndexedDB record is atomically replaced
 after each successful bootstrap. Snowflake connections, circuits, streams, and
@@ -161,7 +168,8 @@ leaves to the bridge instead.
 The source-minimized fork that generates the WASM package lives in the
 [`webtor-rs`](https://github.com/andrewtheguy/webtor-rs) repository; its
 upstream provenance and retained crates are documented there in `UPSTREAM.md`.
-The fork adds a raw exit stream to webtor-rs and a dedicated WASM binding, and
+The fork adds a v3 onion-service client to webtor-rs and a dedicated WASM
+binding, drops every clearnet path (exits, relay TLS, exit verification), and
 all Web Crypto keys it creates or imports are non-extractable.
 
 pTransfer installs the generated package as a `.tgz` asset published on a

@@ -429,12 +429,14 @@ export function SendTab() {
                   </span>
                 </label>
                 <p className="text-xs text-muted-foreground">
-                  Routes Nostr signaling through Tor inside your browser so the
-                  Nostr relays see a Tor exit instead of your IP address. This
-                  starts much more slowly and is less reliable. It does not
-                  anonymize the direct WebRTC transfer: your recipient and STUN
-                  services may still see network metadata. Each person must
-                  enable this option on their own device to protect both sides.
+                  Routes Nostr signaling through Tor inside your browser to
+                  relays run as onion services, so no relay sees your IP
+                  address. This starts much more slowly and is less reliable. It
+                  does not anonymize the direct WebRTC transfer: your recipient
+                  and STUN services may still see network metadata. The receiver
+                  must enable this option too: the two modes use different
+                  relays, so a PIN sent this way is only found by a receiver who
+                  also turned it on.
                 </p>
               </div>
               <Switch

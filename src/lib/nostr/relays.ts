@@ -39,6 +39,31 @@ export function normalizeRelayUrl(raw: string): string | null {
   return `wss://${host}${url.port ? `:${url.port}` : ''}${path}${url.search}`;
 }
 
+// A v3 onion address: 56 base32 characters (the service key, checksum and
+// version byte) followed by `.onion`. v2 addresses are gone from the network.
+const ONION_V3_HOST = /^[a-z2-7]{56}\.onion$/;
+
+/**
+ * Canonical onion-service relay URL for anonymous signaling: the mirror image
+ * of `normalizeRelayUrl`. Only `ws://<v3 address>.onion` is accepted. The
+ * onion circuit is encrypted and authenticated end to end by the key the
+ * address commits to, so `wss://` adds nothing the WASM client could verify
+ * and is refused along with every clearnet host.
+ */
+export function normalizeOnionRelayUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'ws:') return null;
+  if (!ONION_V3_HOST.test(url.hostname)) return null;
+  if (url.username || url.password) return null;
+  const path = url.pathname.replace(/\/+$/, '');
+  return `ws://${url.hostname}${url.port ? `:${url.port}` : ''}${path}${url.search}`;
+}
+
 /**
  * A hardcoded relay pool, canonicalized and deduplicated at module load.
  *
@@ -56,9 +81,10 @@ export function normalizeRelayUrl(raw: string): string | null {
 export function canonicalRelayPool(
   urls: readonly string[],
   label: string,
+  normalize: (raw: string) => string | null = normalizeRelayUrl,
 ): readonly string[] {
   const canonical = urls.map((url) => {
-    const normalized = normalizeRelayUrl(url);
+    const normalized = normalize(url);
     if (normalized === null) {
       throw new Error(`${label} contains an unusable relay URL: ${url}`);
     }
@@ -71,11 +97,35 @@ export function canonicalRelayPool(
 // list). Write entries in canonical form (no trailing slash, no default port)
 // — `relays.test.ts` enforces that the source reads exactly as it is used, and
 // `canonicalRelayPool` guarantees it at runtime either way.
-//
-// The pool is restricted to relays that stay reachable over Tor: the popular
-// ones (damus, nos.lol, primal, snort) sit behind Cloudflare or otherwise
-// refuse exit-node traffic, which strands the anonymous signaling path.
 export const DEFAULT_RELAYS = canonicalRelayPool(
-  ['wss://relay.pocketnostr.com', 'wss://nostrelay.circum.space'],
+  [
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.primal.net',
+    'wss://nostr.rocks',
+    'wss://relay.nostr.pub',
+    'wss://relay.snort.social',
+  ],
   'DEFAULT_RELAYS',
+);
+
+// Relays used for signaling when Anonymous signaling is enabled, reached as
+// v3 onion services through the browser Tor client. This pool is disjoint
+// from DEFAULT_RELAYS on purpose: a sender and a receiver find each other only
+// on a shared relay, so a transfer with the option on at one end only never
+// pairs — both sides must enable it, and neither side's IP reaches a relay
+// that the other side's clearnet socket would have exposed.
+//
+// Candidates come from 0xtrr/onion-service-nostr-relays; these are the ones
+// that answered a REQ from the WASM onion client itself (webtor-rs,
+// docs/onion-relay-probe-2026-08-25.md). Each relay costs its own rendezvous,
+// so the pool is kept small.
+export const ANONYMOUS_SIGNALING_RELAYS = canonicalRelayPool(
+  [
+    'ws://nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion',
+    'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion',
+    'ws://nostrwinemdptvqukjttinajfeedhf46hfd5bz2aj2q5uwp7zros3nad.onion',
+  ],
+  'ANONYMOUS_SIGNALING_RELAYS',
+  normalizeOnionRelayUrl,
 );

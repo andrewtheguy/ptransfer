@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANONYMOUS_SIGNALING_RELAYS,
   canonicalRelayPool,
   DEFAULT_RELAYS,
+  normalizeOnionRelayUrl,
   normalizeRelayUrl,
 } from './relays';
+
+const ONION = 'nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion';
 
 describe('DEFAULT_RELAYS', () => {
   // The signaling pool is compared against canonical URLs everywhere it is
@@ -23,6 +27,59 @@ describe('DEFAULT_RELAYS', () => {
 
   it('is frozen, so no caller can push a raw URL into the pool', () => {
     expect(Object.isFrozen(DEFAULT_RELAYS)).toBe(true);
+  });
+});
+
+describe('ANONYMOUS_SIGNALING_RELAYS', () => {
+  it('is written in canonical onion form', () => {
+    for (const url of ANONYMOUS_SIGNALING_RELAYS) {
+      expect(normalizeOnionRelayUrl(url)).toBe(url);
+    }
+  });
+
+  it('shares no relay with DEFAULT_RELAYS, so one-sided opt-in never pairs', () => {
+    // The requirement that both sides enable anonymous signaling is enforced
+    // by the pools being disjoint, not by a flag either side could forget.
+    for (const url of ANONYMOUS_SIGNALING_RELAYS) {
+      expect(normalizeRelayUrl(url)).toBeNull();
+      expect(DEFAULT_RELAYS).not.toContain(url);
+    }
+    for (const url of DEFAULT_RELAYS) {
+      expect(normalizeOnionRelayUrl(url)).toBeNull();
+    }
+  });
+
+  it('is frozen and has no duplicates', () => {
+    expect(Object.isFrozen(ANONYMOUS_SIGNALING_RELAYS)).toBe(true);
+    expect(new Set(ANONYMOUS_SIGNALING_RELAYS).size).toBe(
+      ANONYMOUS_SIGNALING_RELAYS.length,
+    );
+  });
+});
+
+describe('normalizeOnionRelayUrl', () => {
+  it('accepts only ws:// to a v3 onion address', () => {
+    expect(normalizeOnionRelayUrl(`ws://${ONION}`)).toBe(`ws://${ONION}`);
+    expect(normalizeOnionRelayUrl(` WS://${ONION.toUpperCase()}/ `)).toBe(
+      `ws://${ONION}`,
+    );
+    expect(normalizeOnionRelayUrl(`ws://${ONION}:8080/nostr/`)).toBe(
+      `ws://${ONION}:8080/nostr`,
+    );
+  });
+
+  it('is the mirror image of normalizeRelayUrl', () => {
+    for (const bad of [
+      `wss://${ONION}`,
+      'ws://relay.example',
+      'wss://relay.damus.io',
+      'ws://abcdefghijklmnop.onion', // v2 length
+      `ws://user:pw@${ONION}`,
+      `http://${ONION}`,
+      'not a url',
+    ]) {
+      expect(normalizeOnionRelayUrl(bad)).toBeNull();
+    }
   });
 });
 
@@ -56,5 +113,18 @@ describe('canonicalRelayPool', () => {
         /DEFAULT_RELAYS contains an unusable relay URL/,
       );
     }
+  });
+
+  it('builds an onion pool with the onion normalizer', () => {
+    expect(
+      canonicalRelayPool([`ws://${ONION}/`], 'onion', normalizeOnionRelayUrl),
+    ).toEqual([`ws://${ONION}`]);
+    expect(() =>
+      canonicalRelayPool(
+        ['wss://relay.damus.io'],
+        'onion',
+        normalizeOnionRelayUrl,
+      ),
+    ).toThrow(/onion contains an unusable relay URL/);
   });
 });

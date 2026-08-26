@@ -27,25 +27,27 @@ Anonymous signaling works, but two parts of it are placeholders (see
 `docs/ANONYMOUS_SIGNALING.md`) that have to be settled before it stops being
 labelled experimental:
 
-- **A vetted relay pool.** `DEFAULT_RELAYS` is currently two relays picked off
-  a public list because they accept Tor exit traffic, with no uptime, capacity
-  or longevity evidence behind either. The same constant also serves ordinary
-  PIN Exchange, so Tor reachability narrows the pool for transfers that never
-  use Tor. Splitting it per mode is needed either way; **Anonymous Signaling
-  over Onion-Service Nostr Relays** below is where the Tor-side pool comes
-  from.
-- **Whether both sides must opt in.** Today each device chooses for itself and
-  a transfer completes with the option on at one end only, which hides one
-  IP address from the relays and not the other, with neither side told what
-  the other picked. Requiring agreement (or at least surfacing the mismatch)
-  is the open question.
+- **A vetted relay pool.** `ANONYMOUS_SIGNALING_RELAYS` is now a separate
+  onion-service pool (see below) and `DEFAULT_RELAYS` is back to the ordinary
+  clearnet list, but the onion pool is still whichever candidates answered on
+  the day they were probed. Nothing monitors it, and the community list it is
+  drawn from tracks no uptime.
+- **Both sides must opt in — settled.** The pools are disjoint, so a transfer
+  with the option on at one end never pairs. What remains open is whether to
+  surface the mismatch instead of letting the sender wait and the receiver
+  find nothing.
 
 ### Anonymous Signaling over Onion-Service Nostr Relays
 
-Anonymous signaling reaches ordinary `wss://` relays through a Tor exit, and the
-exit is the part that limits it. Popular relays sit behind Cloudflare or
-otherwise refuse exit traffic, which is why `DEFAULT_RELAYS` is two obscure
-relays whose only qualification is that they answer. Reaching relays as onion
+**Done in the first cut:** webtor-rs carries a v3 onion client, the clearnet
+paths are gone from it, and anonymous signaling uses `ANONYMOUS_SIGNALING_RELAYS`,
+a `ws://<address>.onion` pool disjoint from `DEFAULT_RELAYS`. The rest of this
+section records why.
+
+Anonymous signaling used to reach ordinary `wss://` relays through a Tor exit,
+and the exit was the part that limited it. Popular relays sit behind Cloudflare
+or otherwise refuse exit traffic, which left the pool as two obscure relays
+whose only qualification was that they answered. Reaching relays as onion
 services instead takes the exit out of the path, and the reputation problem goes
 with it: [`0xtrr/onion-service-nostr-relays`](https://github.com/0xtrr/onion-service-nostr-relays)
 lists around twenty-five relays exposed as v3 onion services, including onion
@@ -64,14 +66,10 @@ Two constraints fall away with it:
   authentication, so `ws://` over an onion circuit needs no TLS layer and the
   constraint lifts for signaling.
 
-The blocker is that no onion client exists in WASM. The vendored Arti crates
-carry the primitives — `hs-client` in `tor-proto`, `tor-netdoc` and `tor-cell`,
-`hsv3-client` in `tor-llcrypto`, all currently off — but `tor-hsclient` is not
-vendored, so the layer it provides has to be written on `tor-proto`: HSDir ring
-selection, descriptor fetch and decryption, and the introduce/rendezvous circuit
-dance. It is a real protocol project, though a far smaller one than hosting a
-service, and **Tor Hidden Service Transport** below needs the same client, so it
-is written once.
+The onion client is `webtor/src/onion.rs` in webtor-rs, written on `tor-proto`
+because `tor-hsclient` does not fit a browser: HSDir ring selection, descriptor
+fetch and decryption, and the introduce/rendezvous circuit dance. **Tor Hidden
+Service Transport** below needs the same client, so it is written once.
 
 The relay list is community-maintained by pull request, tracks no uptime, and
 makes the onion address its only mandatory column. It is a source of candidates,

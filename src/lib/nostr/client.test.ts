@@ -50,9 +50,12 @@ describe('NostrClient', () => {
     nodeProcess.on('unhandledRejection', collect);
 
     try {
-      const client = createNostrClient(['wss://relay.example'], {
-        anonymousSignaling: { enabled: true, webSocketBridge: false },
-      });
+      const client = createNostrClient(
+        ['ws://nerostrrgb5fhj6dnzhjbgmnkpy2berdlczh6tuh2jsqrjok3j4zoxid.onion'],
+        {
+          anonymousSignaling: { enabled: true, webSocketBridge: false },
+        },
+      );
 
       // Let the rejection settle and any unhandledRejection fire before the
       // first awaiter attaches, which is the ordering that produced the noise.

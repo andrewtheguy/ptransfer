@@ -6,7 +6,7 @@ import {
 } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import { AnonymousSignalingTransport } from './anonymous-websocket';
-import { normalizeRelayUrl } from './relays';
+import { normalizeOnionRelayUrl, normalizeRelayUrl } from './relays';
 
 const DIRECT_RELAY_CONNECTION_TIMEOUT_MS = 10_000;
 const ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS = 180_000;
@@ -53,12 +53,20 @@ export class NostrClient {
   private subscriptions: Map<string, { close: () => void }>;
   private connectionReady: Promise<void>;
   private anonymousTransport: AnonymousSignalingTransport | null;
+  /**
+   * The two modes accept disjoint relay URLs: direct signaling only
+   * `wss://` clearnet relays, anonymous signaling only `ws://` onion
+   * services. A URL from the wrong pool is dropped here rather than handed to
+   * a socket that would refuse it.
+   */
+  private readonly normalizeRelay: (raw: string) => string | null;
 
   constructor(relays: string[], options: NostrClientOptions) {
     const { enabled, webSocketBridge } = options.anonymousSignaling;
     this.anonymousTransport = enabled
       ? new AnonymousSignalingTransport({ webSocketBridge })
       : null;
+    this.normalizeRelay = enabled ? normalizeOnionRelayUrl : normalizeRelayUrl;
     this.pool = new SignalingPool(
       this.anonymousTransport?.websocketImplementation,
       enabled
@@ -69,7 +77,7 @@ export class NostrClient {
     this.relays = [
       ...new Set(
         relays
-          .map(normalizeRelayUrl)
+          .map(this.normalizeRelay)
           .filter((url): url is string => url !== null),
       ),
     ];
@@ -93,7 +101,7 @@ export class NostrClient {
     await this.connectionReady;
   }
 
-  /** Wait until the anonymous transport has verified a working Tor exit. */
+  /** Wait until the anonymous transport has bootstrapped Tor and completed its first onion rendezvous. */
   async waitForAnonymousTransport(): Promise<void> {
     await this.anonymousTransport?.waitUntilReady();
   }
@@ -235,7 +243,7 @@ export class NostrClient {
     const normalized = [
       ...new Set(
         newRelays
-          .map(normalizeRelayUrl)
+          .map(this.normalizeRelay)
           .filter((url): url is string => url !== null),
       ),
     ];

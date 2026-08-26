@@ -22,6 +22,7 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
+  ANONYMOUS_SIGNALING_RELAYS,
   type AnonymousSignalingConfig,
   base64ToUint8Array,
   type ClaimPayload,
@@ -224,7 +225,12 @@ export function usePinReceive(): UsePinReceiveReturn {
             ? 'Building a Tor circuit for anonymous signaling...'
             : 'Connecting to relays...',
         });
-        const client = createNostrClient([...DEFAULT_RELAYS], {
+        // The pools are disjoint, so the peer is reachable only if it chose
+        // the same mode; see ANONYMOUS_SIGNALING_RELAYS.
+        const relays = anonymousSignaling.enabled
+          ? ANONYMOUS_SIGNALING_RELAYS
+          : DEFAULT_RELAYS;
+        const client = createNostrClient([...relays], {
           anonymousSignaling,
         });
         clientRef.current = client;
@@ -783,7 +789,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           },
           useWebRTC: false,
           currentRelays: client.getRelays(),
-          totalRelays: DEFAULT_RELAYS.length,
+          totalRelays: relays.length,
         });
 
         // Session keys are HKDF derivations off the same SPAKE2 root — the

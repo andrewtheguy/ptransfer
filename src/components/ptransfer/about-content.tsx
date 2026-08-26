@@ -215,8 +215,9 @@ export function AboutContent() {
                 </li>
                 <li>
                   The experimental Anonymous signaling option routes this
-                  device&apos;s Nostr connections through Tor. It is slower and
-                  less reliable, and does not anonymize the direct WebRTC
+                  device&apos;s Nostr connections through Tor to relays run as
+                  onion services, and both sides must enable it. It is slower
+                  and less reliable, and does not anonymize the direct WebRTC
                   connection from the peer or STUN.
                 </li>
                 <li>

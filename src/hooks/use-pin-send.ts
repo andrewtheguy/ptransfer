@@ -28,6 +28,7 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
+  ANONYMOUS_SIGNALING_RELAYS,
   type AnonymousSignalingConfig,
   type ClaimPayload,
   type ConfirmPayload,
@@ -276,7 +277,12 @@ export function usePinSend(): UsePinSendReturn {
             ? 'Building a Tor circuit for anonymous signaling...'
             : 'Connecting to relays...',
         });
-        const client = createNostrClient([...DEFAULT_RELAYS], {
+        // The pools are disjoint, so the peer is reachable only if it chose
+        // the same mode; see ANONYMOUS_SIGNALING_RELAYS.
+        const relays = anonymous.enabled
+          ? ANONYMOUS_SIGNALING_RELAYS
+          : DEFAULT_RELAYS;
+        const client = createNostrClient([...relays], {
           anonymousSignaling: anonymous,
         });
         clientRef.current = client;
@@ -299,7 +305,7 @@ export function usePinSend(): UsePinSendReturn {
           fileMetadata: { fileName, fileSize, mimeType },
           useWebRTC: true,
           currentRelays: client.getRelays(),
-          totalRelays: DEFAULT_RELAYS.length,
+          totalRelays: relays.length,
         });
 
         // Rotate the PIN until a receiver proves knowledge of one of the
@@ -345,7 +351,7 @@ export function usePinSend(): UsePinSendReturn {
             senderPubkey: publicKey,
             pakeMessage: uint8ArrayToBase64(pakeMessage),
             nonce,
-            relays: [...DEFAULT_RELAYS],
+            relays: [...relays],
           };
           const transcriptHash = await computeRendezvousTranscriptHash(
             payload,

@@ -198,12 +198,13 @@ export function ReceiveTab() {
                   </label>
                   <p className="text-xs text-muted-foreground">
                     Applies to a PIN: routes Nostr signaling through Tor inside
-                    your browser so the Nostr relays see a Tor exit instead of
-                    your IP address. This starts much more slowly and is less
-                    reliable. It does not anonymize the direct WebRTC transfer:
-                    the sender and STUN services may still see network metadata.
-                    Each person must enable this option on their own device to
-                    protect both sides.
+                    your browser to relays run as onion services, so no relay
+                    sees your IP address. This starts much more slowly and is
+                    less reliable. It does not anonymize the direct WebRTC
+                    transfer: the sender and STUN services may still see network
+                    metadata. The sender must have enabled this option too: the
+                    two modes use different relays, so a PIN sent without it is
+                    not found here.
                   </p>
                 </div>
                 <Switch
