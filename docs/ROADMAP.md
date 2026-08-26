@@ -117,12 +117,46 @@ Findings from research (August 2026):
   rather than route file bytes through a relay server"). A relay fallback
   reverses that stance and should be opt-in, ideally with a user-configurable
   relay URL.
+- **Update (August 2026): CORS was not the constraint, and the answer is no.**
+  The findings above ranked relays by whether a browser `fetch` could read
+  them, which ruled out nearly every public file host. It does not have to be a
+  browser request: `AnonymousSignalingClient.httpRequest()` sends HTTP over a
+  Tor stream from inside WASM, so no origin policy applies. That reframed the
+  question as whether these hosts answer a Tor exit at all — and measured over
+  a real circuit, none of them do. See **Public HTTP drops: closed** below.
 - Alternatives considered: a self-hosted Magic Wormhole transit relay
   (WebSocket-capable upstream, blind token-matching pipe, but requires running
   a server); a TURN server (least protocol work since transport is already
   WebRTC, same trust profile); iroh's relay network (browser support in alpha
   as of iroh 0.32, always-relayed via WebSocket in browsers, would also give
   CLI interop since beam-rs uses iroh natively).
+
+### Public HTTP Drops as a Relay Fallback: Closed
+
+Measured and rejected on 2026-08-26. `docs/HTTP_DROP_CANDIDATES.md` holds the
+full survey; this is the outcome.
+
+Five public file hosts survived a clear-net survey — x0.at,
+transfer.archivete.am, uguu.se, filebin.net and catbox.moe — and every one of
+them failed an upload/download round trip over Tor. The run is trustworthy
+because a control ran first on the same circuit: a POST of random bytes to
+`https://httpbingo.org/post` came back byte-identical in 874 ms, so the request
+path worked and the failures are the hosts' own answers. Public file hosts have
+much stronger abuse incentives to refuse Tor than Nostr relays do, and they act
+on them.
+
+What survives from the attempt is `AnonymousSignalingClient.httpRequest()` in
+webtor-rs, which is generally useful: it makes arbitrary HTTP requests over the
+circuit with no CORS involved, and is what the exit check would use if it were
+written today. The probe page that drove the measurement was thrown away with
+the idea; `docs/HTTP_DROP_CANDIDATES.md` records how it worked, so re-running
+the survey means rebuilding a page rather than repeating the research.
+
+The direction to pursue instead is **Tor Hidden Service Transport** above,
+where the rendezvous is the Tor network itself rather than someone's file host,
+so there is no operator to refuse the connection. That work is gated on
+reviving `ptransfer-cli`, since hosting an onion service needs native Arti —
+which makes the CLI the natural place to start rather than a detour.
 
 ### TLS 1.2 Fallback for subtle-tls
 Retry a failed TLS 1.3 handshake over TLS 1.2 instead of dropping the
