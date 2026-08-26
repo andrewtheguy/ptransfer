@@ -1,3 +1,4 @@
+import anonymousSignalingWasmUrl from '@andrewtheguy/anonymous-signaling-wasm/anonymous_signaling_wasm_bg.wasm?url';
 import { getStunUrls } from '../webrtc-config';
 import {
   loadTorDirectoryCache,
@@ -36,7 +37,12 @@ let wasmModulePromise: Promise<WasmModule> | null = null;
 async function loadWasmModule(): Promise<WasmModule> {
   wasmModulePromise ??= import('@andrewtheguy/anonymous-signaling-wasm')
     .then(async (module) => {
-      await module.default();
+      // The generated glue defaults to resolving the binary next to itself.
+      // Vite pre-bundles the package into `.vite/deps/`, where the binary is
+      // not, so that default resolves to a path the dev server answers with
+      // index.html and instantiation fails on the HTML. Handing init an
+      // explicit `?url` import is what the other WASM packages here do.
+      await module.default({ module_or_path: anonymousSignalingWasmUrl });
       return module;
     })
     .catch((error: unknown) => {
