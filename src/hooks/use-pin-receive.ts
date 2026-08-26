@@ -9,12 +9,12 @@ import {
   encrypt,
   finishPake,
   getPinBucket,
+  isRendezvousFresh,
   isValidPakeMessage,
   MAX_CLAIM_ATTEMPTS,
   MAX_CLAIM_CANDIDATES,
   MAX_MESSAGE_SIZE,
   PIN_HINT_LOOKBACK_BUCKETS,
-  PIN_TTL_MS,
   type PinSessionKeys,
   startPake,
   wipeBufferSource,
@@ -270,20 +270,16 @@ export function usePinReceive(): UsePinReceiveReturn {
         }
 
         // Structural validation only — with a plaintext rendezvous there is
-        // nothing to authenticate yet. The payload must be fresh and name the
-        // event's own author and transfer id, so a copied payload republished
-        // under another identity is rejected, and the SPAKE2 element must be
-        // a valid non-identity curve point. Shared between the initial fetch
-        // and replacement events that arrive while waiting for the confirm.
+        // nothing to authenticate yet. The payload must have been published in
+        // a bucket the sender still honors and must name the event's own
+        // author and transfer id, so a copied payload republished under
+        // another identity is rejected, and the SPAKE2 element must be a valid
+        // non-identity curve point. Shared between the initial fetch and
+        // replacement events that arrive while waiting for the confirm.
         const parseClaimableRendezvous = (
           event: Event,
         ): RendezvousCandidate | null => {
-          if (
-            !event.created_at ||
-            Date.now() - event.created_at * 1000 > PIN_TTL_MS
-          ) {
-            return null;
-          }
+          if (!isRendezvousFresh(event.created_at)) return null;
           const parsed = parseRendezvousEvent(event);
           if (!parsed) return null;
           const candidate = parsed.payload as Partial<RendezvousPayload>;
@@ -314,16 +310,23 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         const rendezvousCandidates = new Map<string, RendezvousCandidate>();
 
+        const now = Date.now();
         for (const event of sortedEvents) {
           if (rendezvousCandidates.size >= MAX_CLAIM_CANDIDATES) break;
 
-          // A rendezvous event is only claimable while the sender still honors
-          // its PIN generation.
-          if (
-            !event.created_at ||
-            Date.now() - event.created_at * 1000 > PIN_TTL_MS
-          ) {
-            sawExpiredCandidate = true;
+          // A rendezvous event is only claimable while the sender still
+          // honors the bucket it was published in. Tracked here (not in the
+          // shared helper) so the "PIN expired" message can distinguish a
+          // rotated transfer. Only a bucket in the past means the PIN moved
+          // on: a future-dated event is forged or badly clocked, and telling
+          // the user to retype would send them after the wrong problem.
+          if (!isRendezvousFresh(event.created_at, now)) {
+            if (
+              event.created_at &&
+              getPinBucket(event.created_at * 1000) < getPinBucket(now)
+            ) {
+              sawExpiredCandidate = true;
+            }
             continue;
           }
 

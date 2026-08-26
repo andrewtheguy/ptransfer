@@ -9,3 +9,5 @@ run cargo clippy and cargo test after rust changes
 no cargo fmt
 
 always bump by patch version only for breaking changes, but only one bump per branch
+
+bump INTEROP_PROTOCOL_VERSION in src/lib/protocol.ts whenever anything specified in docs/INTEROP_PROTOCOL.md changes, and leave it alone otherwise; it is not the package version

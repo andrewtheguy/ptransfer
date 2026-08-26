@@ -105,6 +105,30 @@ export function isPinBucketActive(bucket: number, now = Date.now()): boolean {
 }
 
 /**
+ * Whether a rendezvous event stamped `createdAtSeconds` (the Nostr
+ * `created_at`) is still claimable: the bucket it was published in must be one
+ * the sender still honors, which is the same window the receiver derives hints
+ * for.
+ *
+ * Deliberately a bucket test rather than an age test. An age test
+ * (`now - created_at <= PIN_TTL_MS`) is unbounded above: an event stamped a
+ * year from now has a negative age, so it never expires, and because
+ * candidates are considered newest first it also sorts ahead of the real
+ * sender and eats the MAX_CLAIM_CANDIDATES budget. Anchoring to the bucket
+ * bounds the timestamp in both directions and costs honest peers nothing --
+ * the sender stamps `created_at` and derives the `#h` tag from the same clock
+ * reading, so a clock skewed far enough to fail this test already skews the
+ * hint out of the queried set.
+ */
+export function isRendezvousFresh(
+  createdAtSeconds: number | undefined,
+  now = Date.now(),
+): boolean {
+  if (!createdAtSeconds || !Number.isFinite(createdAtSeconds)) return false;
+  return isPinBucketActive(getPinBucket(createdAtSeconds * 1000), now);
+}
+
+/**
  * Compute the PIN hint (PIN_HINT_LENGTH hex chars) for a rotation bucket.
  * Published as the Nostr `#h` tag so the receiver can locate the rendezvous
  * event. Scoping the info label to the rotation bucket means the published tag
