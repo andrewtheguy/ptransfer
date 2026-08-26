@@ -40,12 +40,14 @@ const DIGESTS_PER_REQUEST = 90;
 /** Concurrent microdescriptor requests against one authority. */
 const PARALLEL_REQUESTS = 4;
 /**
- * webtor refuses a directory with fewer than 10 usable relays per role. It is
+ * webtor refuses a directory with fewer than 10 usable middle relays. It is
  * a floor for a sane consensus here, not a target: the snapshot carries every
  * relay in the consensus.
  */
 const MIN_RELAYS_PER_ROLE = 10;
-const CACHE_VERSION = 1;
+/** webtor also needs every HSDir to place onion services on the hash ring. */
+const MIN_HSDIR_RELAYS = 100;
+const CACHE_VERSION = 2;
 
 /** One connection per authority carries hundreds of microdescriptor requests. */
 const keepAliveAgent = new http.Agent({
@@ -175,13 +177,11 @@ function collectDigests(entries: RouterEntry[]): string[] {
       entry.flags.has('Stable'),
   );
   const middle = usable.filter((entry) => entry.flags.has('V2Dir')).length;
-  const exit = usable.filter(
-    (entry) => entry.flags.has('Exit') && !entry.flags.has('BadExit'),
-  ).length;
+  const hsdir = entries.filter((entry) => entry.flags.has('HSDir')).length;
   console.log(
-    `Consensus has ${entries.length} relays; ${middle} usable middle, ${exit} usable exit`,
+    `Consensus has ${entries.length} relays; ${middle} usable middle, ${hsdir} HSDir`,
   );
-  if (middle < MIN_RELAYS_PER_ROLE || exit < MIN_RELAYS_PER_ROLE) {
+  if (middle < MIN_RELAYS_PER_ROLE || hsdir < MIN_HSDIR_RELAYS) {
     throw new Error('Consensus has too few usable relays for a snapshot');
   }
 
