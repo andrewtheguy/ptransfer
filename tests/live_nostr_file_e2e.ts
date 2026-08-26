@@ -1,3 +1,5 @@
+#!/usr/bin/env bun
+
 /**
  * Live end-to-end test of the Nostr file relay — the Code Exchange data
  * path taken when no direct WebRTC connection can be made — against real
@@ -7,12 +9,12 @@
  * byte-compared.
  *
  * Publishes real (expiring, NIP-40) events to public relays — run manually,
- * not part of `npm test`:
+ * not part of `bun run test`:
  *
- *   npm run test:live:nostr-file
+ *   bun run test:live:nostr-file
  *
  * NOSTR_E2E_FILE_MB overrides the file size (default 0.1, max 100), e.g.
- *   NOSTR_E2E_FILE_MB=100 npm run test:live:nostr-file
+ *   NOSTR_E2E_FILE_MB=100 bun run test:live:nostr-file
  *
  * NOSTR_E2E_TIMEOUT_MS overrides the whole-run deadline (default 15 min);
  * past it, both sides cancel and the run fails with a timeout error.

@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 
 // Live web ↔ web smoke test for pTransfer: a browser-tab sender
 // transfers a file to a browser-tab receiver through the real Nostr relays
@@ -6,9 +6,9 @@
 //
 // Mirrors ptransfer-cli's tests/live_interop_e2e.mjs, minus the CLI legs.
 // It deliberately uses the public relays and therefore lives outside the unit
-// test suite; it needs internet access, Node/npm, and a Chrome-family browser.
+// test suite; it needs internet access, Bun, and a Chrome-family browser.
 //
-//   npm run test:live:web
+//   bun run test:live:web
 //
 // Environment:
 //   PTRANSFER_WEB_URL                 reuse a running dev server (default
@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -244,7 +244,7 @@ async function ensureWebServer(expectedPackage: PackageIdentity): Promise<void> 
     );
   }
   await access(join(WEB_ROOT, 'node_modules', '.bin', 'vite'), fsConstants.X_OK).catch(() => {
-    throw new Error(`Missing web dependencies; run npm install in ${WEB_ROOT}`);
+    throw new Error(`Missing web dependencies; run bun install in ${WEB_ROOT}`);
   });
 
   const requestedIsAvailableLoopback = !existing.reachable
@@ -257,7 +257,7 @@ async function ensureWebServer(expectedPackage: PackageIdentity): Promise<void> 
   const port = webUrl.port || '80';
   console.log(`[setup] starting pTransfer ${expectedPackage.version} at ${webUrl.origin}`);
   ownedWebServer = spawn(
-    'npm',
+    'bun',
     [
       'run',
       'dev',
@@ -307,13 +307,12 @@ async function loadChromium(): Promise<PwBrowserType> {
   } catch {
     await mkdir(CACHE_ROOT, { recursive: true });
     await runCommand(
-      'npm',
+      'bun',
       [
         'install',
-        '--prefix',
-        CACHE_ROOT,
         '--no-save',
-        '--no-package-lock',
+        '--cwd',
+        CACHE_ROOT,
         `playwright-core@${PLAYWRIGHT_VERSION}`,
       ],
     );
@@ -325,12 +324,32 @@ async function loadChromium(): Promise<PwBrowserType> {
 }
 
 async function findBrowser(): Promise<string> {
+  const localAppData = process.env.LOCALAPPDATA;
+  const programFiles = process.env.PROGRAMFILES;
+  const programFilesX86 = process.env['PROGRAMFILES(X86)'];
   const candidates = [
     process.env.CHROME_PATH,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    join(homedir(), 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+    localAppData
+      ? join(localAppData, 'Google/Chrome/Application/chrome.exe')
+      : undefined,
+    programFiles
+      ? join(programFiles, 'Google/Chrome/Application/chrome.exe')
+      : undefined,
+    programFilesX86
+      ? join(programFilesX86, 'Google/Chrome/Application/chrome.exe')
+      : undefined,
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
+    '/usr/bin/microsoft-edge',
+    '/usr/bin/brave-browser',
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     try {
@@ -340,7 +359,9 @@ async function findBrowser(): Promise<string> {
       // Try the next known browser path.
     }
   }
-  throw new Error('No Chrome-family browser found; set CHROME_PATH');
+  throw new Error(
+    `No Chrome-family browser found; set CHROME_PATH (checked ${candidates.join(', ')})`,
+  );
 }
 
 function instrumentPage(page: PwPage, label: string): () => void {
@@ -354,6 +375,16 @@ function instrumentPage(page: PwPage, label: string): () => void {
       throw new Error(`${label}: browser page raised ${pageErrors.length} error(s)`);
     }
   };
+}
+
+async function receivePasteInput(page: PwPage): Promise<PwLocator> {
+  await page.getByRole('tab', { name: 'Paste', exact: true }).click();
+  const input = page.getByRole('textbox', {
+    name: 'PIN or sender code',
+    exact: true,
+  });
+  await input.waitFor({ state: 'visible', timeout: 30_000 });
+  return input;
 }
 
 async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
@@ -378,9 +409,7 @@ async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
     await page.goto(new URL('/receive', webUrl).href, {
       waitUntil: 'networkidle',
     });
-    await page
-      .getByRole('textbox', { name: 'PIN', exact: true })
-      .waitFor({ state: 'visible', timeout: 30_000 });
+    await receivePasteInput(page);
 
     await page.goto(new URL('/send', webUrl).href, {
       waitUntil: 'networkidle',
@@ -462,9 +491,8 @@ async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
     await receiverPage.goto(new URL('/receive', webUrl).href, {
       waitUntil: 'domcontentloaded',
     });
-    await receiverPage
-      .getByRole('textbox', { name: 'PIN', exact: true })
-      .fill(pin);
+    const receiverInput = await receivePasteInput(receiverPage);
+    await receiverInput.fill(pin);
     await receiverPage.getByRole('button', { name: 'Receive', exact: true }).click();
 
     const confirmationCode = await readWebConfirmationCode(receiverPage);

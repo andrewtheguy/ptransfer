@@ -11,7 +11,7 @@ unit test keeps this document and the constant in step.
 
 ## Versioning
 
-A single monotonically increasing integer, deliberately **not** the app's npm
+A single monotonically increasing integer, deliberately **not** the app's
 version. The app bumps its patch version for any breaking change, and most of
 those land in parts of the app no other implementation speaks; a version that
 moved on every release would say nothing about interoperability.

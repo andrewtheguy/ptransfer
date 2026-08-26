@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { configDefaults, defineConfig } from 'vitest/config';
+import packageMetadata from './package.json';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
@@ -20,7 +21,7 @@ export default defineConfig({
     // mock relay network and waits out real-time heartbeats, retry clocks and
     // idle deadlines — ~60s against ~6s for every other file combined — so it
     // is a project of its own rather than part of the unit run. Splitting it
-    // here (not just in an npm script) is what keeps `fileParallelism: false`
+    // here (not just in a package script) is what keeps `fileParallelism: false`
     // attached to the file: its real-time deadlines must never compete with
     // parallel unit workers, however the run was started.
     projects: [
@@ -42,7 +43,7 @@ export default defineConfig({
     ],
   },
   define: {
-    __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0'),
+    __APP_VERSION__: JSON.stringify(packageMetadata.version),
     __GIT_COMMIT_HASH__: JSON.stringify(getGitCommitHash()),
   },
   server: {
