@@ -331,7 +331,7 @@ The display component focuses on secure and clear communication:
 - `MAX_MESSAGE_SIZE`: 2 GiB (maximum P2P transferred payload size; every direct-path stage streams, see Streaming Encryption)
 - `ENCRYPTION_CHUNK_SIZE`: 128 KiB (application-level encryption chunk size for both P2P modes; the Nostr fallback uses `NOSTR_FILE_CHUNK_SIZE` = 48 KiB)
 - `PIN_ROTATION_MS`: 2 minutes (fresh PIN + SPAKE2 run + rendezvous event cadence)
-- `PIN_ACTIVE_BUCKETS`: 2 (only the sender's current and immediately previous buckets are honored; `PIN_TTL_MS` = 4 minutes is the maximum possible age)
+- `PIN_ACTIVE_BUCKETS`: 2 (only the sender's current and immediately previous buckets are honored, by both sides; `PIN_TTL_MS` = 4 minutes is the resulting maximum possible age)
 - `PIN_WAIT_TIMEOUT_MS`: 30 minutes (sender rotation/wait backstop — a resource bound, not a security control; rotation already caps each PIN's exposure)
 - `PIN_LOCATOR_LENGTH`: 3 (public prefix characters; the sole input to the `#h` hint)
 - `CLAIM_VERIFY_LIMIT`: 100 (SPAKE2 claim verifications per PIN generation — the online-guessing meter)
@@ -772,7 +772,7 @@ pTransfer enforces hard session TTLs. Expired requests MUST NOT establish a sess
 
 **Enforcement Points (hard fail)**
 - **Receiver-side (pre-session)**:
-  - Reject rendezvous events older than `PIN_TTL_MS` before claiming (Nostr); reject expired/missing TTL before answering (Code Exchange).
+  - Reject rendezvous events published outside the current-or-previous bucket window before claiming (Nostr) — a bucket test, so a future-dated `created_at` is rejected too; reject expired/missing TTL before answering (Code Exchange).
 - **Sender-side (pre-transfer)**:
   - Only verify claims against retained PIN generations whose recorded bucket is the sender's current or immediately previous bucket (and whose `CLAIM_VERIFY_LIMIT` budget remains); consume each published element on the first claim targeting it and never finish its scalar twice; recheck the bucket after opening the claim, and stop publishing and honoring PINs at the first verified claim and at the 30-minute backstop.
   - Publish no WebRTC signaling until the operator enters the receiver's confirmation code, and abandon the locked claim if that does not happen within `CONFIRM_CODE_ENTRY_TIMEOUT_MS`.

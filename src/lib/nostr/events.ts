@@ -54,7 +54,8 @@ export function generateHandshakeNonce(): string {
  *   (NIP-40), matching the sender's current-or-previous acceptance rule
  * - The sender stops publishing (and stops honoring retained PIN generations)
  *   once a claim is verified
- * - The receiver refuses rendezvous events older than PIN_TTL_MS
+ * - The receiver refuses rendezvous events whose created_at did not land in
+ *   one of the buckets it derived hints for (the same acceptance rule)
  */
 export function createRendezvousEvent(
   secretKey: Uint8Array,

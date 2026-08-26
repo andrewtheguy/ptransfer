@@ -5,6 +5,7 @@ import {
   PIN_LENGTH,
   PIN_LOCATOR_LENGTH,
   PIN_ROTATION_MS,
+  PIN_TTL_MS,
 } from './constants';
 import {
   computePinHintFromLocator,
@@ -12,6 +13,7 @@ import {
   getPinBucket,
   getPinLocator,
   isPinBucketActive,
+  isRendezvousFresh,
   isValidPin,
 } from './pin';
 
@@ -109,6 +111,25 @@ describe('PIN Utilities', () => {
     expect(isPinBucketActive(9, now)).toBe(true);
     expect(isPinBucketActive(8, now)).toBe(false);
     expect(isPinBucketActive(11, now)).toBe(false);
+  });
+
+  test('rendezvous freshness follows the publishing bucket', () => {
+    const now = 10 * PIN_ROTATION_MS + 1;
+    const atBucket = (bucket: number) => (bucket * PIN_ROTATION_MS) / 1000;
+
+    // Current and immediately previous bucket: claimable.
+    expect(isRendezvousFresh(atBucket(10), now)).toBe(true);
+    expect(isRendezvousFresh(atBucket(9), now)).toBe(true);
+    // One bucket further back: the sender no longer honors that PIN.
+    expect(isRendezvousFresh(atBucket(8), now)).toBe(false);
+    // The whole point: a future stamp has a negative age, so an age test would
+    // accept it forever and sort it ahead of the real sender.
+    expect(now - atBucket(11) * 1000).toBeLessThan(PIN_TTL_MS);
+    expect(isRendezvousFresh(atBucket(11), now)).toBe(false);
+    expect(isRendezvousFresh(atBucket(1_000_000), now)).toBe(false);
+    expect(isRendezvousFresh(undefined, now)).toBe(false);
+    expect(isRendezvousFresh(0, now)).toBe(false);
+    expect(isRendezvousFresh(Number.NaN, now)).toBe(false);
   });
 });
 

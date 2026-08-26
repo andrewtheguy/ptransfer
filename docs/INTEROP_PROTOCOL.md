@@ -1,6 +1,6 @@
 # pTransfer Interoperable Protocol
 
-**Interop protocol version: `1`**
+**Interop protocol version: `2`**
 
 This document is the normative wire contract between pTransfer implementations.
 The web app is the reference implementation; `ptransfer-cli` is the other
@@ -35,6 +35,13 @@ agreed *only* by both sides implementing this document; nothing in the handshake
 covers them, and a peer that quietly widened `PIN_ACTIVE_BUCKETS` would weaken
 every transfer without a single seal noticing. Matching the declared version is
 what rules that out.
+
+### History
+
+| Version | Change |
+|---|---|
+| `2` | Rendezvous freshness became a bucket test instead of a maximum age (§4.3), so a future-dated `created_at` no longer passes. Senders are unaffected; a v1 receiver is simply more permissive than this document allows. |
+| `1` | Initial specification. |
 
 ## Scope
 
@@ -105,8 +112,9 @@ rationale and the web-only parts.
 - `bucket = floor(now_ms / PIN_ROTATION_MS)`.
 - `PIN_ACTIVE_BUCKETS` = 2: a sender honors only PINs minted in its current or
   immediately previous bucket, so a PIN lives roughly 2–4 minutes.
-- `PIN_TTL_MS` = `PIN_ROTATION_MS * PIN_ACTIVE_BUCKETS` = 240 000 — the maximum
-  age a receiver accepts for a rendezvous event.
+- `PIN_TTL_MS` = `PIN_ROTATION_MS * PIN_ACTIVE_BUCKETS` = 240 000 — the upper
+  bound on an active PIN's age. It is a bound, not the test: acceptance is by
+  bucket (§4.3), which is exact and also bounds the timestamp from above.
 - `PIN_HINT_LOOKBACK_BUCKETS` = `PIN_ACTIVE_BUCKETS - 1` = 1: the receiver
   derives hints for its current and immediately previous bucket.
 
@@ -285,10 +293,33 @@ back:
 sealed inside the confirm.
 
 Receivers MUST reject a rendezvous whose payload does not name the event's own
-author, whose element is not a valid non-identity point, or whose `created_at`
-is more than `PIN_TTL_MS` old. Candidates are considered newest first, at most
-one per `transferId`, and at most `MAX_CLAIM_CANDIDATES` (8) are claimed. The
-`#h` query uses `limit: 50` to leave headroom for hint collisions.
+author, or whose element is not a valid non-identity point.
+
+Receivers MUST also reject one whose `created_at` did not fall in a bucket the
+sender still honors:
+
+```
+floor(created_at * 1000 / PIN_ROTATION_MS) ∈
+    { bucket(now) - PIN_HINT_LOOKBACK_BUCKETS, …, bucket(now) }
+```
+
+This is a **bucket test, not an age test**, and the difference is the point. An
+age test (`now - created_at <= PIN_TTL_MS`) is unbounded above: an event stamped
+a year from now has a negative age, so it passes forever, and because candidates
+are ordered newest first it also sorts ahead of the genuine sender and consumes
+the `MAX_CLAIM_CANDIDATES` budget — a retained kind-`4243` event, so it keeps
+doing so for as long as the relay serves it. Anchoring to the bucket bounds
+`created_at` from both sides and costs an honest sender nothing: it stamps
+`created_at` and derives the `#h` tag from the same clock reading, so a clock
+skewed far enough to fail this test has already skewed the hint out of the set
+the receiver queries. A rendezvous that lands outside the window is not a
+rotated PIN — implementations SHOULD NOT report a future-dated one as expired.
+
+Candidates are considered newest first, at most one per `transferId`, and at
+most `MAX_CLAIM_CANDIDATES` (8) are claimed. The `#h` query uses `limit: 50` to
+leave headroom for hint collisions. Neither this rule nor the candidate cap
+keeps a flood of forged events from filling that page; see *Availability Is a
+Non-Goal* in `ARCHITECTURE.md`.
 
 ### 4.4 Rendezvous transcript hash
 
@@ -562,7 +593,7 @@ progressing transfer of any size never trips it.
 | `PIN_HINT_LENGTH` | 8 hex characters |
 | `PIN_ROTATION_MS` | 120 000 |
 | `PIN_ACTIVE_BUCKETS` | 2 |
-| `PIN_TTL_MS` | 240 000 |
+| `PIN_TTL_MS` | 240 000 (bound only — see §1.1) |
 | `PIN_HINT_LOOKBACK_BUCKETS` | 1 |
 | `CLAIM_VERIFY_LIMIT` | 100 per PIN generation |
 | `MAX_CLAIM_CANDIDATES` | 8 |
