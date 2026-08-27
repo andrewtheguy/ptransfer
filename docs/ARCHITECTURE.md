@@ -331,13 +331,51 @@ The SPAKE2 transcript keys every session to the transfer id, both Nostr identiti
 
 ### User Interface Architecture
 
-#### `PinInput` (Receiver Side)
-The input component is designed for fast, error-proof manual entry:
-- **Single Native Input**: Entry uses one ungrouped text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior. It accepts a PIN of either length; the classification decides the rest.
-- **Exact Entry**: PINs are case-sensitive. During both ordinary entry and paste, characters outside the 55-character alphabet are filtered out and a brief error is shown; supported characters remain in their original order.
-- **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment its final character lands, at either PIN length.
-- **Robust Pasting**: A paste replaces the current entry. Nothing is truncated to a PIN length — the same box also takes onion addresses and Code Exchange offers, so classification decides what was pasted rather than a length rule clipping it first. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
-- **No Plaintext Retention**: Once valid, the PIN is immediately reduced to its SPAKE2 password scalar (`derivePakeSecret`), its public locator segment is captured, the inputs are masked, and the plaintext is cleared. The scalar bytes are wiped once the receive flow has built its claims.
+#### `ReceiveInput` (Receiver Side)
+There is one receive surface for all three modes, and it asks nothing up
+front. The receiver scans or pastes whatever the sender handed them, and
+`classifyReceiveText` (`src/lib/receive-input.ts`) works out what it was — a
+PIN of either kind, an onion address, a Code Exchange offer, or one offer
+chunk. A mode selector would be a question the input can answer itself, and
+one more thing to get wrong.
+
+- **One free-form field, not a PIN keypad**: the Paste tab is a plain
+  `Textarea`, because the same box has to hold a 12-character PIN and a
+  multi-kilobyte offer. Nothing is filtered, masked, or truncated as it is
+  typed: a character outside the PIN alphabet is not necessarily a mistake
+  here, it may be an onion address or an offer. Cursor movement, selection,
+  and replacement are whatever the browser does.
+- **Classification is the feedback**: the box re-classifies on every keystroke
+  and says what it found — "PIN detected", and for the 16-character form "the
+  sender turned on anonymous signaling"; "Onion address detected — the password
+  comes next"; "Sender's code detected". `looksLikePin` and
+  `looksLikeOnionAddress` are what let it separate *mistyped* from
+  *not one of these at all*, so a failed checksum reads as "Invalid PIN — check
+  for typos" rather than a generic rejection. A single offer chunk is
+  recognized and redirected to the Scan tab, which is the only surface that can
+  reassemble one.
+- **The camera is gated**: Scan is the landing tab, but the scanner only starts
+  on an explicit click, so opening `/receive` never prompts for camera
+  permission on its own. A scan bypasses the text box entirely and submits its
+  classified result directly.
+- **PIN-shaped input is wiped after five minutes of inactivity**
+  (`PIN_INACTIVITY_TIMEOUT_MS`), with a visible countdown. Only PIN-shaped
+  input: an offer code is not a secret, and clearing one out from under someone
+  mid-paste would just lose their work. The countdown restarts on every edit —
+  it tracks inactivity, not the PIN's age, which rotation already bounds.
+- **No plaintext retention**: submitting clears the field before the value is
+  handed on, so the PIN leaves the DOM immediately. `ReceiveTab` then reduces
+  it to its SPAKE2 password scalar (`derivePakeSecret`) and its public locator
+  segment and keeps nothing else; the scalar bytes are wiped once the receive
+  flow has built its claims, or on cancel, reset, or unmount if it never got
+  that far. A PIN that arrived by deep link is stripped back out of the URL
+  with `history.replaceState` on mount, so it does not linger in the address
+  bar or browser history.
+- **The two second questions**: an onion address needs its one-time password,
+  and an anonymous PIN needs a Snowflake bridge. Both are asked on their own
+  screen after classification and before anything is bootstrapped — finding out
+  a character was mistyped, or that a bridge is blocked, is worth one screen
+  rather than the minutes a Tor bootstrap costs.
 
 #### `PinDisplay` (Sender Side)
 The display component focuses on secure and clear communication:
