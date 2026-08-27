@@ -15,6 +15,7 @@
     "test:integration:nostr-file": "vitest run --project integration",
     "test:live": "bun run test:live:nostr-file && bun run test:live:web",
     "test:live:tor": "bun tests/live_tor_cli_interop.ts",
+    "test:live:tor:web": "bun tests/live_tor_web_e2e.ts",
     "test:live:nostr-file": "bun tests/live_nostr_file_e2e.ts",
     "test:live:web": "bun tests/live_web_to_web_e2e.ts"
   },

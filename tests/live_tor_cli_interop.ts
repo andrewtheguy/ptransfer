@@ -46,11 +46,13 @@ import {
   findBrowser,
   instrumentPage,
   loadChromium,
+  logPageConsole,
   type PwBrowser,
   type PwPage,
   readPackageIdentity,
   sleep,
   terminate,
+  warmWebApp,
   WEB_ROOT,
 } from './support/live-harness.ts';
 
@@ -161,43 +163,6 @@ async function makePayload(name: string): Promise<string> {
   return path;
 }
 
-/**
- * Load every page the scenarios use once, in a throwaway context.
- *
- * On a cold Vite cache the first visit triggers dependency optimization and a
- * full page reload — which, if it lands mid-transfer, takes the transfer with
- * it. Paying for it up front is what keeps a Tor timeout meaning what it says.
- */
-async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
-  say('warming the browser dependency cache');
-  const context = await activeBrowser.newContext();
-  const page = await context.newPage();
-  try {
-    await page.goto(new URL('/receive', webUrl).href, {
-      waitUntil: 'networkidle',
-    });
-    await page.getByRole('tab', { name: 'Paste', exact: true }).click();
-    await page.goto(new URL('/send', webUrl).href, { waitUntil: 'networkidle' });
-    await page
-      .locator('input[type="file"]')
-      .first()
-      .waitFor({ state: 'attached', timeout: 30_000 });
-    say('browser dependency cache ready');
-  } finally {
-    await context.close();
-  }
-}
-
-/** Surface the page's own log, which is where the Tor client reports progress. */
-function logPageConsole(page: PwPage, label: string): void {
-  page.on('console', (message) => {
-    const text = message.text();
-    if (text.startsWith('[tor]') || message.type() === 'error') {
-      say(`[${label}] ${text}`);
-    }
-  });
-}
-
 async function openReceivePage(page: PwPage): Promise<void> {
   await page.goto(new URL('/receive', webUrl).href, {
     waitUntil: 'domcontentloaded',
@@ -214,7 +179,7 @@ async function cliToWeb(activeBrowser: PwBrowser): Promise<void> {
   const context = await activeBrowser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   const assertNoPageErrors = instrumentPage(page, 'web receiver');
-  logPageConsole(page, 'web receiver');
+  logPageConsole(page, 'web receiver', say);
   try {
     await waitForLine(
       lines,
@@ -275,7 +240,7 @@ async function webToCli(activeBrowser: PwBrowser): Promise<void> {
   const context = await activeBrowser.newContext();
   const page = await context.newPage();
   const assertNoPageErrors = instrumentPage(page, 'web sender');
-  logPageConsole(page, 'web sender');
+  logPageConsole(page, 'web sender', say);
   try {
     await page.goto(new URL('/send', webUrl).href, {
       waitUntil: 'domcontentloaded',
@@ -374,7 +339,7 @@ try {
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
 
-  await warmWebApp(browser);
+  await warmWebApp(browser, webUrl, say);
   if (ONLY !== 'web-to-cli') await cliToWeb(browser);
   if (ONLY !== 'cli-to-web') await webToCli(browser);
   console.log(`\nTOR INTEROP LIVE TEST PASSED\nArtifacts: ${ARTIFACTS}`);

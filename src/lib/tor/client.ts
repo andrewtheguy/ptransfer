@@ -1,5 +1,10 @@
 import { getStunUrls } from '@/lib/webrtc-config';
-import { loadDirectorySeed, saveDirectoryCache } from './directory-cache';
+import {
+  describeDirectory,
+  judgeDirectorySeed,
+  loadDirectorySeed,
+  saveDirectoryCache,
+} from './directory-cache';
 import { loadWebtor, type WebtorClient } from './webtor';
 
 /**
@@ -99,14 +104,50 @@ export async function bootstrapTorClient(
     logPrefix: '[tor]',
   });
 
-  // Keep the verified directory for the next transfer. Best effort: a failure
-  // here only costs the next bootstrap a download.
+  // Keep the verified directory for the next transfer, and report which one
+  // this client ended up with. Best effort: a failure here only costs the next
+  // bootstrap a download.
   void client
     .directoryCache()
-    .then((cache) => saveDirectoryCache(cache))
+    .then(async (cache) => {
+      logDirectory(cache);
+      await saveDirectoryCache(cache);
+    })
     .catch(() => undefined);
 
   return client;
+}
+
+/**
+ * Say which directory this client is working from.
+ *
+ * The time period is the number that has to match on both sides: it places the
+ * HSDir ring, so a service and a client that disagree about it fail as a flat
+ * 404 from every HSDir tried, with nothing in either log naming the cause.
+ * Printing it on both peers turns that into a comparison anyone can make.
+ */
+function logDirectory(cache: string): void {
+  const directory = describeDirectory(cache);
+  if (!directory) return;
+  console.info(
+    `[tor] Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
+      `${directory.validUntil.toISOString()}, onion time period ` +
+      `${directory.timePeriod} (both peers must be in the same period)`,
+  );
+
+  // A stored directory in that state is refused before it is ever installed,
+  // so reaching here means the network itself served a consensus from the
+  // previous period — a bridge or relay an hour behind. Nothing this side can
+  // fix, but it is the whole explanation for a transfer that is about to fail
+  // with a 404 from every HSDir, so it is worth saying plainly.
+  const verdict = judgeDirectorySeed(cache);
+  if (!verdict.usable) {
+    console.warn(
+      `[tor] This directory is not current: ${verdict.reason}. A peer whose ` +
+        'directory is current will not find this service, and this client ' +
+        'will not find theirs.',
+    );
+  }
 }
 
 /** Close a client, swallowing the failure — teardown has nothing to report. */

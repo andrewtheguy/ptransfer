@@ -408,6 +408,56 @@ export function instrumentPage(page: PwPage, label: string): () => void {
   };
 }
 
+/**
+ * Surface a page's own log, which is where the Tor client reports progress:
+ * bootstrap, descriptor publication, HSDir answers. Errors come through
+ * whatever their prefix, since a Tor failure is often first visible as one.
+ */
+export function logPageConsole(
+  page: PwPage,
+  label: string,
+  say: (line: string) => void = console.log,
+): void {
+  page.on('console', (message) => {
+    const text = message.text();
+    if (text.startsWith('[tor]') || message.type() === 'error') {
+      say(`[${label}] ${text}`);
+    }
+  });
+}
+
+/**
+ * Load every page the Tor scenarios use once, in a throwaway context.
+ *
+ * On a cold Vite cache the first visit triggers dependency optimization and a
+ * full page reload — which, if it lands mid-transfer, takes the transfer with
+ * it. Paying for it up front is what keeps a Tor timeout meaning what it says.
+ * Each browser needs its own warming: the cache being warmed is the browser's.
+ */
+export async function warmWebApp(
+  activeBrowser: PwBrowser,
+  webUrl: URL,
+  say: (line: string) => void = console.log,
+): Promise<void> {
+  say('warming the browser dependency cache');
+  const context = await activeBrowser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(new URL('/receive', webUrl).href, {
+      waitUntil: 'networkidle',
+    });
+    await page.getByRole('tab', { name: 'Paste', exact: true }).click();
+    await page.goto(new URL('/send', webUrl).href, { waitUntil: 'networkidle' });
+    await page
+      .locator('input[type="file"]')
+      .first()
+      .waitFor({ state: 'attached', timeout: 30_000 });
+    say('browser dependency cache ready');
+  } finally {
+    await context.close();
+  }
+}
+
 export async function assertSameBytes(
   expectedPath: string,
   actualPath: string,

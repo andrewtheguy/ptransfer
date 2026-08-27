@@ -103,24 +103,20 @@ export function useTorReceive(): UseTorReceiveReturn {
           throw new Error('Invalid password — check for typos.');
         }
 
-        setState({
-          status: 'connecting',
-          message: 'Loading the Tor client...',
-        });
+        const onStatus = (message: string) => {
+          if (cancelledRef.current) return;
+          setState({ status: 'connecting', message });
+        };
+
+        onStatus('Loading the Tor client...');
         const client = await bootstrapTorClient({
           bridge: request.bridge,
-          onStatus: (message) => {
-            if (cancelledRef.current) return;
-            setState({ status: 'connecting', message });
-          },
+          onStatus,
         });
         clientRef.current = client;
         if (cancelledRef.current) throw new Error('Cancelled');
 
-        setState({
-          status: 'connecting',
-          message: `Building a circuit to ${parsed.host}...`,
-        });
+        onStatus(`Building a circuit to ${parsed.host}...`);
         const stream = await client.connectStream(parsed.host, parsed.port);
         const framed = new TorFramedStream(stream);
         framedRef.current = framed;
