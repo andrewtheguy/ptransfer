@@ -44,11 +44,12 @@ option. What would take it out of that state:
   were probed. Nothing monitors them, and the mode fails outright when they are
   down. Re-probing, and a larger pool, are the difference between "works" and
   "works when you need it".
-- **CLI support.** `ptransfer-cli` neither mints nor accepts the longer PIN
-  today, so an anonymous transfer is browser-to-browser only. Adding it means
-  bringing anonymous signaling into
-  [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md), which is deliberately postponed
-  until the pool question above is answered.
+- **Bringing it into the contract.** `ptransfer-cli` now mints and accepts the
+  longer PIN, so an anonymous transfer works in every direction, but the mode
+  still lives in [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) rather than
+  [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md). Moving it there is what the pool
+  question above is blocking: a normative contract should not name two relays
+  nobody monitors.
 
 ## Backlog (Future Considerations)
 
