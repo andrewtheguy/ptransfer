@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 interface TorAddressDisplayProps {
-  /** `<address>.onion:<port>` — the exact string the receiver must enter. */
+  /** `<address>.onion` — the exact string the receiver must enter. */
   address: string;
   /** The one-time password, all 12 characters of it secret. */
   password: string;
@@ -45,7 +45,7 @@ export function TorAddressDisplay({
         On the receiving side, paste the address into pTransfer&apos;s receive
         page and the password into the field that appears — or run{' '}
         <code className="rounded bg-muted px-1 py-0.5 font-mono">
-          ptransfer tor receive {address.split(':')[0]}
+          ptransfer tor receive {address}
         </code>{' '}
         and enter the password when prompted.
       </p>

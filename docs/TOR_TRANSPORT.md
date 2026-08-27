@@ -59,6 +59,13 @@ port** — and verify the v3 checksum locally before anything touches the
 network, since a bootstrap costs tens of seconds to minutes and a typo caught
 only afterwards reads as a network failure rather than the input error it is.
 
+That canonical string is what the handshake binds, not what a person is handed.
+The port is not a choice either side offers, so **the address handed over
+leaves the default port implicit** and reads `<host>.onion`; an implementation
+that lets an operator pick another port spells that one out. Both sides accept
+either form and both must resolve a missing port to 9735, so the two round-trip
+to the same binding.
+
 The identity key is ephemeral. It lives only as long as the sending process (or
 tab), and the descriptor it published expires on its own.
 

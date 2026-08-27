@@ -9,7 +9,7 @@ import {
 } from '@/lib/tor/client';
 import { TorFramedStream } from '@/lib/tor/framing';
 import { runTorServiceHandshake } from '@/lib/tor/handshake';
-import { TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
+import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
 import { sendFileOverTor, TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
@@ -60,7 +60,10 @@ const MAX_FAILED_HANDSHAKES = 20;
 
 export interface UseTorSendReturn {
   state: TransferState;
-  /** `<address>.onion:<port>`, once the descriptor is published. */
+  /**
+   * `<address>.onion` as the receiver is given it, once the descriptor is
+   * published. The port is implicit — see `formatOnionAddress`.
+   */
   onionAddress: string | null;
   /** The one-time password the receiver needs alongside the address. */
   password: string | null;
@@ -157,11 +160,14 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
         serviceRef.current = service;
         if (cancelledRef.current) throw new Error('Cancelled');
 
-        // The port is part of the string both sides bind the handshake to, so
-        // it is displayed rather than implied.
+        // Two strings out of one address: `onion` is what the handshake binds
+        // and always carries the port, while what the receiver is handed
+        // leaves the port implicit.
         const onion = `${service.onionAddress}:${TOR_DEFAULT_PORT}`;
         const transferPassword = generatePin();
-        setOnionAddress(onion);
+        setOnionAddress(
+          formatOnionAddress(service.onionAddress, TOR_DEFAULT_PORT),
+        );
         setPassword(transferPassword);
 
         const metadata: TransferMetadata = {

@@ -21,8 +21,10 @@ export type ReceiveInput =
   /** One /r# chunk of an offer. Only the scanner can act on this. */
   | { kind: 'offer-chunk'; param: string }
   /**
-   * A v3 onion address with a valid checksum, `<host>.onion[:<port>]`, in the
-   * canonical spelling both peers bind their handshake to.
+   * A v3 onion address with a valid checksum, in the canonical spelling a
+   * person is handed: `<host>.onion`, and the port only when it is not the
+   * default. The handshake re-parses it into the `<host>:<port>` string it
+   * binds, so nothing downstream depends on which of the two forms was typed.
    */
   | { kind: 'onion'; address: string };
 
@@ -67,7 +69,7 @@ export function classifyReceiveText(text: string): ReceiveInput | null {
   if (isValidPin(trimmed)) return { kind: 'pin', pin: trimmed };
 
   const onion = parseOnionAddress(trimmed);
-  if (onion) return { kind: 'onion', address: onion.onion };
+  if (onion) return { kind: 'onion', address: onion.display };
 
   const param = extractChunkParam(trimmed);
   if (param) return { kind: 'offer-chunk', param };
