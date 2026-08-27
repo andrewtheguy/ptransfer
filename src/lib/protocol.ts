@@ -23,4 +23,4 @@
  * budgets, timeouts, and size limits are agreed only by both sides implementing
  * the same spec. Do not treat a completed transfer as evidence of a match.
  */
-export const INTEROP_PROTOCOL_VERSION = '2';
+export const INTEROP_PROTOCOL_VERSION = '3';

@@ -39,7 +39,11 @@ function buildOfferBinary(): Uint8Array {
 describe('classifyReceiveText', () => {
   test('recognizes a bare PIN', () => {
     const pin = generatePin();
-    expect(classifyReceiveText(pin)).toEqual({ kind: 'pin', pin });
+    expect(classifyReceiveText(pin)).toEqual({
+      kind: 'pin',
+      pin,
+      pinKind: 'standard',
+    });
   });
 
   test('recognizes a PIN link', () => {
@@ -47,12 +51,37 @@ describe('classifyReceiveText', () => {
     expect(classifyReceiveText(buildPinUrl(ORIGIN, pin))).toEqual({
       kind: 'pin',
       pin,
+      pinKind: 'standard',
     });
   });
 
   test('tolerates surrounding whitespace', () => {
     const pin = generatePin();
-    expect(classifyReceiveText(`  ${pin}\n`)).toEqual({ kind: 'pin', pin });
+    expect(classifyReceiveText(`  ${pin}\n`)).toEqual({
+      kind: 'pin',
+      pin,
+      pinKind: 'standard',
+    });
+  });
+
+  // The whole point of the longer form: nobody tells the receiver which mode
+  // the sender chose, so the classification has to carry it.
+  test('reports an anonymous-signaling PIN as its own kind', () => {
+    const pin = generatePin('anonymous');
+    expect(classifyReceiveText(pin)).toEqual({
+      kind: 'pin',
+      pin,
+      pinKind: 'anonymous',
+    });
+  });
+
+  test('recognizes an anonymous PIN carried in a PIN link', () => {
+    const pin = generatePin('anonymous');
+    expect(classifyReceiveText(buildPinUrl(ORIGIN, pin))).toEqual({
+      kind: 'pin',
+      pin,
+      pinKind: 'anonymous',
+    });
   });
 
   test('recognizes a copied offer', () => {

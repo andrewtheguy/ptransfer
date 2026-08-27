@@ -19,10 +19,16 @@ interface SendConfig {
   // Configuration
   transferMode: TransferMode;
   /**
-   * Which Snowflake bridge the Tor mode reaches the network through. Ignored
-   * by the other two modes, which never load a Tor client.
+   * Which Snowflake bridge this tab reaches the Tor network through. Read by
+   * the Tor mode, and by PIN Exchange when `anonymousSignaling` is on;
+   * ignored otherwise, when no Tor client is ever loaded.
    */
   torBridge: TorBridge;
+  /**
+   * PIN Exchange only: carry the handshake through Tor to onion-service
+   * relays, and mint the longer PIN that tells the receiver to do the same.
+   */
+  anonymousSignaling: boolean;
 }
 
 interface SendContextState {

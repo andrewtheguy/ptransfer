@@ -1,6 +1,6 @@
 import { extractChunkParam } from './chunk-utils';
 import { isValidBinaryPayload, parseClipboardPayload } from './code-signaling';
-import { isValidPin, PIN_CHARSET, PIN_LENGTH } from './crypto';
+import { classifyPin, PIN_CHARSET, PIN_LENGTHS, type PinKind } from './crypto';
 import { extractPinFromUrl } from './pin-link';
 import { parseOnionAddress } from './tor/onion-address';
 
@@ -14,8 +14,12 @@ import { parseOnionAddress } from './tor/onion-address';
  * separate secret and is asked for once the address is recognized.
  */
 export type ReceiveInput =
-  /** A PIN, typed, pasted, or scanned off a PIN link. */
-  | { kind: 'pin'; pin: string }
+  /**
+   * A PIN, typed, pasted, or scanned off a PIN link. `pinKind` is read off its
+   * length and decides which relay pool the sender is waiting on — there is
+   * nothing to ask the receiver about it.
+   */
+  | { kind: 'pin'; pin: string; pinKind: PinKind }
   /** A complete PT01 offer container, as produced by Copy Data. */
   | { kind: 'offer'; payload: Uint8Array }
   /** One /r# chunk of an offer. Only the scanner can act on this. */
@@ -37,7 +41,7 @@ export type ReceiveInput =
 export function looksLikePin(text: string): boolean {
   const trimmed = text.trim();
   return (
-    trimmed.length === PIN_LENGTH &&
+    Object.values(PIN_LENGTHS).includes(trimmed.length) &&
     [...trimmed].every((char) => PIN_CHARSET.includes(char))
   );
 }
@@ -64,9 +68,14 @@ export function classifyReceiveText(text: string): ReceiveInput | null {
   if (!trimmed) return null;
 
   const linkedPin = extractPinFromUrl(trimmed);
-  if (linkedPin) return { kind: 'pin', pin: linkedPin };
+  if (linkedPin) {
+    // extractPinFromUrl already validated it, so the kind is decided.
+    const linkedKind = classifyPin(linkedPin);
+    if (linkedKind) return { kind: 'pin', pin: linkedPin, pinKind: linkedKind };
+  }
 
-  if (isValidPin(trimmed)) return { kind: 'pin', pin: trimmed };
+  const pinKind = classifyPin(trimmed);
+  if (pinKind) return { kind: 'pin', pin: trimmed, pinKind };
 
   const onion = parseOnionAddress(trimmed);
   if (onion) return { kind: 'onion', address: onion.display };

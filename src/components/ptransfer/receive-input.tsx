@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { ANONYMOUS_PIN_LENGTH, PIN_LENGTH } from '@/lib/crypto';
 import {
   classifyReceiveText,
   looksLikeOnionAddress,
@@ -151,8 +152,9 @@ export function ReceiveInput({
       setError(null);
       setPinExpired(false);
       setValue('');
-      if (result.kind === 'pin') onSubmit({ kind: 'pin', pin: result.pin });
-      else if (result.kind === 'onion') {
+      if (result.kind === 'pin') {
+        onSubmit({ kind: 'pin', pin: result.pin, pinKind: result.pinKind });
+      } else if (result.kind === 'onion') {
         onSubmit({ kind: 'onion', address: result.address });
       } else onSubmit({ kind: 'offer', payload: result.data });
     },
@@ -243,7 +245,9 @@ export function ReceiveInput({
           {classified?.kind === 'pin' && (
             <p className="text-xs text-green-600 flex items-center">
               <CheckCircle2 className="h-3 w-3 mr-1" />
-              PIN detected
+              {classified.pinKind === 'anonymous'
+                ? 'PIN detected — the sender turned on anonymous signaling'
+                : 'PIN detected'}
             </p>
           )}
           {classified?.kind === 'onion' && (
@@ -335,11 +339,22 @@ export function ReceiveInput({
         <CollapsibleContent className="space-y-2 text-xs text-muted-foreground">
           <p>
             <span className="font-medium text-foreground">
-              A short 12-character PIN
+              A short {PIN_LENGTH}-character PIN
             </span>{' '}
             means the sender chose PIN Exchange. Relays carry the handshake and
             the PIN authenticates it; a confirmation code appears here for you
             to read back to them, and nothing is sent until it matches.
+          </p>
+          <p>
+            <span className="font-medium text-foreground">
+              A longer {ANONYMOUS_PIN_LENGTH}-character PIN
+            </span>{' '}
+            is the same exchange with anonymous signaling turned on at their
+            end. The extra length is the signal: this page recognizes it and
+            routes the handshake through Tor to the relays the sender is waiting
+            on, so no relay sees either side's IP address. It asks you which Tor
+            bridge to use and then takes a while to start. The file itself still
+            arrives over a direct connection, which Tor does not cover.
           </p>
           <p>
             <span className="font-medium text-foreground">

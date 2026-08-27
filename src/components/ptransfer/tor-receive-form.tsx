@@ -2,14 +2,9 @@ import { AlertCircle, Download } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { isValidPin, PIN_LENGTH } from '@/lib/crypto';
-import {
-  DEFAULT_TOR_BRIDGE,
-  TOR_BRIDGE_LABELS,
-  TOR_BRIDGES,
-  type TorBridge,
-} from '@/lib/tor/client';
+import { classifyPin, PIN_LENGTH } from '@/lib/crypto';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
+import { TorBridgeChoice } from './tor-bridge-choice';
 
 interface TorReceiveFormProps {
   /** The address just recognized, shown back so a mis-paste is visible. */
@@ -37,7 +32,10 @@ export function TorReceiveForm({
 
   const submit = useCallback(() => {
     const trimmed = password.trim();
-    if (!isValidPin(trimmed)) {
+    // A Tor password is always a standard-length PIN: nothing about it selects
+    // a relay pool, so the longer anonymous-signaling form has no meaning here
+    // and is rejected as the typo it would be.
+    if (classifyPin(trimmed) !== 'standard') {
       setError(
         trimmed.length === PIN_LENGTH
           ? 'That password is not valid — check for typos.'
@@ -89,33 +87,11 @@ export function TorReceiveForm({
 
       <div className="space-y-2 rounded-md border bg-muted/30 p-3">
         <p className="text-sm font-medium">How this tab reaches Tor</p>
-        <RadioGroup
+        <TorBridgeChoice
           value={bridge}
-          onValueChange={(value) => setBridge(value as TorBridge)}
-          className="gap-2"
-        >
-          {TOR_BRIDGES.map((option) => (
-            <label
-              key={option}
-              htmlFor={`receive-tor-bridge-${option}`}
-              className="flex cursor-pointer items-start gap-3 text-xs"
-            >
-              <RadioGroupItem
-                id={`receive-tor-bridge-${option}`}
-                value={option}
-                className="mt-0.5"
-              />
-              <span>
-                <span className="font-medium">{TOR_BRIDGE_LABELS[option]}</span>{' '}
-                <span className="text-muted-foreground">
-                  {option === 'websocket'
-                    ? '— one fixed bridge endpoint, no broker and no STUN. The faster of the two.'
-                    : '— a volunteer proxy brokered over HTTPS, using STUN. Harder to block.'}
-                </span>
-              </span>
-            </label>
-          ))}
-        </RadioGroup>
+          onChange={setBridge}
+          idPrefix="receive-tor-bridge"
+        />
         <p className="text-xs text-muted-foreground">
           The sender's choice does not have to match yours: the two only meet
           inside the Tor network.

@@ -4,7 +4,11 @@ import { Button } from '@/components/ui/button';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { usePinReceive } from '@/hooks/use-pin-receive';
 import { useTorReceive } from '@/hooks/use-tor-receive';
-import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
+import {
+  derivePakeSecret,
+  getPinLocator,
+  wipeBufferSource,
+} from '@/lib/crypto';
 import {
   downloadFile,
   formatFileSize,
@@ -12,7 +16,9 @@ import {
 } from '@/lib/file-utils';
 import { extractPinFromUrl } from '@/lib/pin-link';
 import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
-import type { TorBridge } from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
+import type { PinKeyMaterial } from '@/lib/types';
+import { AnonymousReceiveForm } from './anonymous-receive-form';
 import { AnswerReturn } from './answer-return';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { ReceiveInput } from './receive-input';
@@ -58,6 +64,14 @@ export function ReceiveTab() {
   const [startError, setStartError] = useState<string | null>(null);
   // Held between startReceive() and the hook arming its offer step.
   const pendingOfferRef = useRef<Uint8Array | null>(null);
+  // An anonymous PIN's key material, held while the bridge question is
+  // answered. The PIN string itself is already gone by then — it is turned
+  // into these two values the moment the box hands it over, so nothing is
+  // parked here that the transfer would not have held anyway.
+  const pendingPinRef = useRef<PinKeyMaterial | null>(null);
+  // Whether that question is on screen. Separate from the ref because the ref
+  // must not drive rendering and the material must not reach the render tree.
+  const [awaitingAnonymousBridge, setAwaitingAnonymousBridge] = useState(false);
   // The onion address recognized in the box, while its password is asked for.
   const [torAddress, setTorAddress] = useState<string | null>(null);
 
@@ -83,6 +97,42 @@ export function ReceiveTab() {
       ? codeContent
       : pinContent;
 
+  // A PIN parked for the bridge question and then abandoned still holds a PAKE
+  // scalar; the hook would have wiped it, so this stands in for the hook.
+  const discardPendingPin = useCallback(() => {
+    const material = pendingPinRef.current;
+    pendingPinRef.current = null;
+    setAwaitingAnonymousBridge(false);
+    if (material) wipeBufferSource(material.pakeSecret);
+  }, []);
+
+  // Leaving the page with the bridge question still on screen abandons that
+  // material too, and nothing else would ever reach it. State is deliberately
+  // untouched here: the component is going away, so only the wipe matters.
+  useEffect(
+    () => () => {
+      const material = pendingPinRef.current;
+      pendingPinRef.current = null;
+      if (material) wipeBufferSource(material.pakeSecret);
+    },
+    [],
+  );
+
+  const startPinReceive = useCallback(
+    async (material: PinKeyMaterial, bridge: TorBridge, anonymous: boolean) => {
+      try {
+        await receive(material, { anonymous, bridge });
+      } catch (err) {
+        // receive() reports its own failures through state; reaching here
+        // means the transfer never started, so hand the box back.
+        console.error('Failed to start PIN receive flow:', err);
+        setRoute('none');
+        setStartError('Could not start the transfer. Please try again.');
+      }
+    },
+    [receive],
+  );
+
   const handleSubmit = useCallback(
     async (input: ReceiveInputValue) => {
       // Spent: a later "Receive Another" must not refill the deep-link PIN.
@@ -91,17 +141,29 @@ export function ReceiveTab() {
 
       if (input.kind === 'pin') {
         setRoute('pin');
+        let material: PinKeyMaterial;
         try {
           // The hook wipes the scalar once its PAKE runs are done.
-          const pakeSecret = await derivePakeSecret(input.pin);
-          await receive({ pakeSecret, locator: getPinLocator(input.pin) });
+          material = {
+            pakeSecret: await derivePakeSecret(input.pin),
+            locator: getPinLocator(input.pin),
+          };
         } catch (err) {
-          // receive() reports its own failures through state; reaching here
-          // means the transfer never started, so hand the box back.
-          console.error('Failed to start PIN receive flow:', err);
+          // Nothing has started yet, so hand the box back rather than route
+          // into a hook that has no failure of its own to report.
+          console.error('Failed to derive the PIN key material:', err);
           setRoute('none');
           setStartError('Could not start the transfer. Please try again.');
+          return;
         }
+        if (input.pinKind === 'anonymous') {
+          // Nothing starts yet: bootstrapping Tor costs minutes, so which
+          // bridge to spend them on is asked first.
+          pendingPinRef.current = material;
+          setAwaitingAnonymousBridge(true);
+          return;
+        }
+        await startPinReceive(material, DEFAULT_TOR_BRIDGE, false);
         return;
       }
 
@@ -121,7 +183,7 @@ export function ReceiveTab() {
       // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
       // the paste box redirects a single chunk link to the Scan tab.
     },
-    [receive, startReceive],
+    [startPinReceive, startReceive],
   );
 
   // submitOffer is a no-op until doReceive has armed its offer step, so hand
@@ -134,6 +196,17 @@ export function ReceiveTab() {
     pendingOfferRef.current = null;
     void submitOffer(payload);
   }, [route, codeState.status, submitOffer]);
+
+  const handleAnonymousBridge = useCallback(
+    (bridge: TorBridge) => {
+      const material = pendingPinRef.current;
+      if (!material) return;
+      pendingPinRef.current = null;
+      setAwaitingAnonymousBridge(false);
+      void startPinReceive(material, bridge, true);
+    },
+    [startPinReceive],
+  );
 
   const handleTorPassword = useCallback(
     (password: string, bridge: TorBridge) => {
@@ -148,20 +221,29 @@ export function ReceiveTab() {
     else if (isCodeExchange) cancelCode();
     else cancelPin();
     pendingOfferRef.current = null;
+    discardPendingPin();
     setTorAddress(null);
     setRoute('none');
     setStartError(null);
-  }, [isTor, isCodeExchange, cancelTor, cancelCode, cancelPin]);
+  }, [
+    isTor,
+    isCodeExchange,
+    cancelTor,
+    cancelCode,
+    cancelPin,
+    discardPendingPin,
+  ]);
 
   const handleReset = useCallback(() => {
     if (isTor) resetTor();
     else if (isCodeExchange) resetCode();
     else resetPin();
     pendingOfferRef.current = null;
+    discardPendingPin();
     setTorAddress(null);
     setRoute('none');
     setStartError(null);
-  }, [isTor, isCodeExchange, resetTor, resetCode, resetPin]);
+  }, [isTor, isCodeExchange, resetTor, resetCode, resetPin, discardPendingPin]);
 
   const handleDownload = useCallback(() => {
     if (receivedContent) {
@@ -183,7 +265,12 @@ export function ReceiveTab() {
 
   return (
     <div className="space-y-4 pt-4">
-      {isTor && torAddress && state.status === 'idle' ? (
+      {awaitingAnonymousBridge && state.status === 'idle' ? (
+        <AnonymousReceiveForm
+          onSubmit={handleAnonymousBridge}
+          onCancel={handleCancel}
+        />
+      ) : isTor && torAddress && state.status === 'idle' ? (
         <TorReceiveForm
           address={torAddress}
           onSubmit={handleTorPassword}

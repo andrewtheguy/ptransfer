@@ -36,6 +36,20 @@ behind it. Concretely:
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
+### Anonymous signaling beyond the proof of concept
+[ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) ships as an experimental
+option. What would take it out of that state:
+- **A relay pool worth relying on.** `ANONYMOUS_SIGNALING_RELAYS` is two
+  community-listed onion relays that accepted anonymous writes on the day they
+  were probed. Nothing monitors them, and the mode fails outright when they are
+  down. Re-probing, and a larger pool, are the difference between "works" and
+  "works when you need it".
+- **CLI support.** `ptransfer-cli` neither mints nor accepts the longer PIN
+  today, so an anonymous transfer is browser-to-browser only. Adding it means
+  bringing anonymous signaling into
+  [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md), which is deliberately postponed
+  until the pool question above is answered.
+
 ## Backlog (Future Considerations)
 
 ### Relay Fallback for Data Transfer via ppng.io (piping-server)

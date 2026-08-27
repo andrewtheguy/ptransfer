@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  ChevronDown,
   ChevronRight,
   FileUp,
   FolderUp,
@@ -13,24 +14,26 @@ import {
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Switch } from '@/components/ui/switch';
 import type { TransferMode } from '@/contexts/send-context';
 import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { supportsFolderSelection } from '@/lib/folder-utils';
-import {
-  DEFAULT_TOR_BRIDGE,
-  TOR_BRIDGE_LABELS,
-  TOR_BRIDGES,
-  type TorBridge,
-} from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import {
   TOR_MAX_TRANSFER_BYTES,
   TOR_MAX_WIRE_BYTES,
   TOR_SUGGESTED_MAX_BYTES,
 } from '@/lib/tor/transfer';
 import { projectedWireBytesFor } from '@/lib/transfer-source';
+import { TorBridgeChoice } from './tor-bridge-choice';
 
 // Extend input element to include webkitdirectory attribute
 declare module 'react' {
@@ -60,6 +63,8 @@ export function SendTab() {
 
   const [transferMode, setTransferMode] = useState<TransferMode>('pin');
   const [torBridge, setTorBridge] = useState<TorBridge>(DEFAULT_TOR_BRIDGE);
+  const [anonymousSignaling, setAnonymousSignaling] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,6 +98,10 @@ export function SendTab() {
     !isOverLimit &&
     projectedWireBytesFor(selectedFiles, willZip) > TOR_MAX_WIRE_BYTES;
   const canSend = selectedFiles.length > 0 && !isOverLimit && !overWireLimit;
+  // The option belongs to PIN Exchange alone, and the switch is only rendered
+  // there — but the mode can be changed after it was turned on, so what the
+  // rest of this component reads is the conjunction, never the switch.
+  const anonymousSignalingActive = transferMode === 'pin' && anonymousSignaling;
 
   // Collapse folder selections into one row per top-level folder; loose files
   // stay individual rows. Order follows first appearance in the selection.
@@ -136,6 +145,8 @@ export function SendTab() {
     'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no pTransfer relay and no direct connection between the two networks, only the Tor bridge and relays it travels through, which see transport metadata and never the file, and nothing published that could be correlated later. Slower, capped at 100 MiB, and best kept small — a circuit is slow and there is no resume.';
   const torModeHowItWorksDescription =
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
+  const anonymousSignalingHowItWorksDescription =
+    'The handshake travels through Tor to onion-service relays, so no relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection, which Tor does not cover.';
   const codeModeHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
@@ -145,6 +156,7 @@ export function SendTab() {
       selectedFiles,
       transferMode,
       torBridge,
+      anonymousSignaling: anonymousSignalingActive,
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -472,38 +484,81 @@ export function SendTab() {
                 the tab reaches the network at all.
               </p>
             </div>
-            <RadioGroup
+            <TorBridgeChoice
               value={torBridge}
-              onValueChange={(value) => setTorBridge(value as TorBridge)}
-              className="gap-2"
-            >
-              {TOR_BRIDGES.map((bridge) => (
-                <label
-                  key={bridge}
-                  htmlFor={`send-tor-bridge-${bridge}`}
-                  className="flex cursor-pointer items-start gap-3 text-xs"
-                >
-                  <RadioGroupItem
-                    id={`send-tor-bridge-${bridge}`}
-                    value={bridge}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    <span className="font-medium">
-                      {TOR_BRIDGE_LABELS[bridge]}
-                    </span>{' '}
-                    <span className="text-muted-foreground">
-                      {bridge === 'websocket'
-                        ? '— one fixed bridge endpoint, no broker and no STUN. The faster of the two, and the one to try first.'
-                        : '— a volunteer proxy brokered over HTTPS, using STUN. Harder to block, and worth switching to if the WebSocket bridge cannot be reached.'}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </RadioGroup>
+              onChange={setTorBridge}
+              idPrefix="send-tor-bridge"
+            />
           </div>
         )}
       </div>
+
+      {/* Advanced options: PIN Exchange only, and closed by default. */}
+      {transferMode === 'pin' && (
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="rounded-lg border bg-muted/30 p-3"
+        >
+          <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+            />
+            Advanced options
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-3 pt-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <label
+                  htmlFor="send-anonymous-signaling"
+                  className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                >
+                  Anonymous signaling
+                  <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                    Experimental
+                  </span>
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Routes the handshake through Tor inside your browser to relays
+                  run as onion services, so no relay sees your IP address. Your
+                  PIN comes out longer, and that length is how the recipient's
+                  page knows to look on the same relays — they do not have to
+                  turn anything on, or even know this exists. It starts much
+                  more slowly and is less reliable. It does not anonymize the
+                  file transfer itself: that is still a direct WebRTC
+                  connection, so your recipient and the STUN services see the
+                  same network metadata as always.
+                </p>
+              </div>
+              <Switch
+                id="send-anonymous-signaling"
+                checked={anonymousSignaling}
+                onCheckedChange={setAnonymousSignaling}
+                className="mt-0.5"
+              />
+            </div>
+            {anonymousSignaling && (
+              <div className="space-y-2 rounded-md border bg-background/60 p-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">
+                    How this tab reaches Tor
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Every circuit starts at a Snowflake bridge. Your recipient
+                    picks this for their own device; the two choices are
+                    independent.
+                  </p>
+                </div>
+                <TorBridgeChoice
+                  value={torBridge}
+                  onChange={setTorBridge}
+                  idPrefix="send-anonymous-bridge"
+                />
+              </div>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* How it works info box */}
       <div className="rounded-lg bg-gradient-to-br from-primary/5 to-accent/5 border border-primary/10 p-4">
@@ -519,7 +574,9 @@ export function SendTab() {
                   Show the recipient your PIN — as a QR code they scan, or read
                   out — so they can connect and decrypt your files.
                   <br />
-                  {pinModeHowItWorksDescription}
+                  {anonymousSignalingActive
+                    ? anonymousSignalingHowItWorksDescription
+                    : pinModeHowItWorksDescription}
                 </>
               )}
               {transferMode === 'code' && (

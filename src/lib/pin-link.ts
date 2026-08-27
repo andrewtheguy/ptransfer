@@ -12,8 +12,8 @@ const PIN_LINK_PATH = '/receive';
  * The `=` is load-bearing: extractChunkParam only accepts fragments matching
  * /^[A-Za-z0-9_-]+$/, so a PIN link can never be mistaken for a Code Exchange
  * offer chunk no matter which parser runs first. PIN_CHARSET is a subset of
- * that class, so without the separator a bare 12-character PIN would decode as
- * a (garbage) chunk.
+ * that class, so without the separator a bare PIN of either length would
+ * decode as a (garbage) chunk.
  */
 const PIN_FRAGMENT_PREFIX = 'p=';
 

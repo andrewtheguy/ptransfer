@@ -33,7 +33,7 @@ const PIN_DETAILS = [
   {
     label: 'PIN format:',
     value:
-      '12 case-sensitive letters and digits: 3 public locator characters, 8 secret characters, and a checksum',
+      '12 case-sensitive letters and digits: 3 public locator characters, 8 secret characters, and a checksum. With anonymous signaling on it is 16, with 12 secret characters',
   },
   {
     label: 'PIN rotation:',
@@ -50,6 +50,11 @@ const PIN_DETAILS = [
     value: '30 minutes before an unclaimed transfer gives up',
   },
   { label: 'Signaling:', value: 'Relay signaling' },
+  {
+    label: 'Anonymous signaling:',
+    value:
+      'Optional and experimental: the sender turns it on, the PIN comes out longer, and both sides carry the handshake through Tor to onion-service relays instead. File data is unaffected',
+  },
 ] as const;
 
 // Specific to Code Exchange.
@@ -212,6 +217,14 @@ export function AboutContent() {
                 <li>
                   Relay servers coordinate signaling only; they do not get
                   plaintext file contents or your decryption key.
+                </li>
+                <li>
+                  The experimental Anonymous signaling option, which the sender
+                  turns on and the recipient&apos;s page detects from the longer
+                  PIN, routes both devices&apos; relay connections through Tor
+                  to relays run as onion services. It is slower and less
+                  reliable, and it does not anonymize the direct WebRTC
+                  connection or STUN.
                 </li>
                 <li>
                   File data is always transferred directly peer-to-peer over

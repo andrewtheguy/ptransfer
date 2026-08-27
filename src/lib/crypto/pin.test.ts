@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  ANONYMOUS_PIN_LENGTH,
   PIN_CHARSET,
   PIN_HINT_LENGTH,
   PIN_LENGTH,
@@ -8,6 +9,7 @@ import {
   PIN_TTL_MS,
 } from './constants';
 import {
+  classifyPin,
   computePinHintFromLocator,
   generatePin,
   getPinBucket,
@@ -23,6 +25,43 @@ describe('PIN Utilities', () => {
     expect(pin).toHaveLength(PIN_LENGTH);
     expect([...pin].every((char) => PIN_CHARSET.includes(char))).toBe(true);
     expect(isValidPin(pin)).toBe(true);
+  });
+
+  test('generatePin mints the anonymous kind at its own length', () => {
+    const pin = generatePin('anonymous');
+    expect(pin).toHaveLength(ANONYMOUS_PIN_LENGTH);
+    expect([...pin].every((char) => PIN_CHARSET.includes(char))).toBe(true);
+    expect(classifyPin(pin)).toBe('anonymous');
+  });
+
+  test('classifyPin reads the kind off the length', () => {
+    expect(classifyPin(generatePin())).toBe('standard');
+    expect(classifyPin(generatePin('anonymous'))).toBe('anonymous');
+  });
+
+  // The receiver picks its relay pool from this and nothing else, so a PIN of
+  // neither length must not be reported as either kind.
+  test('classifyPin rejects a length that is neither kind', () => {
+    const pin = generatePin();
+    expect(classifyPin(pin.slice(0, PIN_LENGTH - 1))).toBeNull();
+    expect(classifyPin(`${pin}A`)).toBeNull();
+  });
+
+  test('the checksum still guards the anonymous kind', () => {
+    const pin = generatePin('anonymous');
+    const replacement =
+      PIN_CHARSET[(PIN_CHARSET.indexOf(pin[0]) + 1) % PIN_CHARSET.length];
+    expect(classifyPin(replacement + pin.slice(1))).toBeNull();
+  });
+
+  // Both kinds share the locator, so the published hint derivation — and
+  // therefore the whole rendezvous lookup — is identical either way.
+  test('the locator segment is the same for both kinds', () => {
+    const anonymous = generatePin('anonymous');
+    expect(getPinLocator(anonymous)).toBe(anonymous.slice(0, 3));
+    expect(getPinLocator(anonymous)).toHaveLength(
+      getPinLocator(generatePin()).length,
+    );
   });
 
   test('the charset carries no symbols or ambiguous characters', () => {
