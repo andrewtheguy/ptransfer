@@ -55,8 +55,10 @@ what rules that out.
 - The shared WebRTC data-channel transfer layer: wire encoding, chunk framing,
   completion, and acknowledgement.
 
-**Out of scope — web-only, and no other implementation should implement it
-against this document:**
+**Out of scope — none of this may be implemented against this document.** Some
+of it is web-internal, and no other implementation should carry it at all; the
+rest are modes that more than one implementation does carry, each governed by a
+specification of its own that an implementation follows instead of this one:
 
 - **Code Exchange** (the hand-carried PT01 offer/answer, its multi-QR chunking,
   its ECDH key agreement, and its answer confirmation tag). It is still
