@@ -119,7 +119,11 @@ export function SendTransferPage() {
         // PIN Exchange uses the fixed signaling set. The Code Exchange
         // Nostr-file route resolves its own cached/discovered fallbacks, so a
         // failed fixed-set preflight must not block it before that can run.
-        if (config.transferMode === 'pin') {
+        // Anonymous signaling uses neither set: its relays are onion services
+        // reached through Tor, so probing the clearnet pool would answer a
+        // question it never asks — and would do it from this tab's own IP
+        // address, which is the one thing the mode exists to avoid.
+        if (config.transferMode === 'pin' && !config.anonymousSignaling) {
           if (cancelled) return;
           setStep('checking');
           const result = await testRelayAvailability();
@@ -180,7 +184,14 @@ export function SendTransferPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: sync step state when starting transfer
     setStep('active');
 
-    void activeHook.hook.send(transferSource);
+    if (activeHook.type === 'pin') {
+      void activeHook.hook.send(transferSource, {
+        anonymous: config.anonymousSignaling,
+        bridge: config.torBridge,
+      });
+    } else {
+      void activeHook.hook.send(transferSource);
+    }
   }, [step, transferSource, config, activeHook]);
 
   // Track completion - sync local step with hook state
@@ -217,7 +228,9 @@ export function SendTransferPage() {
     }
     // Update config to Code Exchange and restart the transfer flow.
     startedRef.current = false;
-    setConfig({ ...config, transferMode: 'code' });
+    // Code Exchange has no anonymous-signaling path, so the switch drops it
+    // rather than carrying a flag no hook downstream would read.
+    setConfig({ ...config, transferMode: 'code', anonymousSignaling: false });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);

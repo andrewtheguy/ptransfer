@@ -2,6 +2,21 @@
 export const PIN_LENGTH = 12;
 export const PIN_CHECKSUM_LENGTH = 1; // Last character is checksum
 
+// The length of the PIN minted when the sender turns on anonymous signaling
+// (docs/ANONYMOUS_SIGNALING.md). The length is the signal: the two modes reach
+// disjoint relay pools, so the receiver has to know which one to connect to
+// before it can look for anything, and the PIN is the only thing it is handed.
+// Encoding the mode in a length rather than a prefix character keeps every
+// other property of a PIN intact — same alphabet, same weighted checksum, same
+// three-character locator — so nothing downstream has to special-case it.
+//
+// The four extra characters are secret data, not locator, so the locator-keyed
+// hint derivation is untouched and the online-guessing space grows from
+// PIN_CHARSET.length ** 8 to ** 12 (about 2^69.5). That is a side effect of the
+// length, not its purpose; the guessing bound that matters is still
+// CLAIM_VERIFY_LIMIT, which is unchanged.
+export const ANONYMOUS_PIN_LENGTH = 16;
+
 // The leading PIN_LOCATOR_LENGTH characters are the PIN's *locator* segment.
 // They are the only input to the published rendezvous hint, which makes them
 // public by construction: a hint has at most PIN_CHARSET.length ** 3 = 166,375

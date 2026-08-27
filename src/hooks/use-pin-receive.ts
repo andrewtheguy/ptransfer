@@ -22,6 +22,7 @@ import {
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
+  ANONYMOUS_SIGNALING_RELAYS,
   base64ToUint8Array,
   type ClaimPayload,
   type ConfirmPayload,
@@ -47,6 +48,7 @@ import {
 } from '@/lib/nostr';
 import { ACK, createTransferReceiver } from '@/lib/p2p-transfer';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import type { TorBridge } from '@/lib/tor/client';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -111,6 +113,18 @@ interface ClaimCandidate {
   claimEvent: Event;
 }
 
+/**
+ * How this receiver reaches the relays, read off the PIN rather than asked
+ * for: an anonymous-length PIN can only have been published on the onion
+ * pool, so the only thing left to choose is which Snowflake bridge this tab
+ * uses to get there.
+ */
+export interface PinReceiveOptions {
+  anonymous: boolean;
+  /** Which Snowflake bridge to reach Tor through. Ignored when not anonymous. */
+  bridge: TorBridge;
+}
+
 export interface UsePinReceiveReturn {
   state: TransferState;
   receivedContent: ReceivedContent | null;
@@ -119,7 +133,10 @@ export interface UsePinReceiveReturn {
    * moment the rendezvous payload opens until the sender's confirm arrives.
    */
   confirmationCode: string | null;
-  receive: (pinMaterial: PinKeyMaterial) => Promise<void>;
+  receive: (
+    pinMaterial: PinKeyMaterial,
+    options: PinReceiveOptions,
+  ) => Promise<void>;
   cancel: () => void;
   reset: () => void;
 }
@@ -165,7 +182,7 @@ export function usePinReceive(): UsePinReceiveReturn {
   }, [cancel, discardSink]);
 
   const receive = useCallback(
-    async (pinMaterial: PinKeyMaterial) => {
+    async (pinMaterial: PinKeyMaterial, options: PinReceiveOptions) => {
       // Guard against concurrent invocations
       if (receivingRef.current) return;
       receivingRef.current = true;
@@ -210,10 +227,43 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         if (cancelledRef.current) return;
 
-        // Connect to relays
-        setState({ status: 'connecting', message: 'Connecting to relays...' });
-        const client = createNostrClient([...DEFAULT_RELAYS]);
+        // Connect to relays. The pools are disjoint, so which one is right was
+        // settled by the PIN's length; see ANONYMOUS_SIGNALING_RELAYS.
+        const relays = options.anonymous
+          ? ANONYMOUS_SIGNALING_RELAYS
+          : DEFAULT_RELAYS;
+        setState({
+          status: 'connecting',
+          message: options.anonymous
+            ? 'Starting the Tor client for anonymous signaling...'
+            : 'Connecting to relays...',
+        });
+        const client = createNostrClient([...relays], {
+          ...(options.anonymous
+            ? {
+                anonymous: {
+                  bridge: options.bridge,
+                  onStatus: (message: string) => {
+                    if (cancelledRef.current) return;
+                    setState({ status: 'connecting', message });
+                  },
+                },
+              }
+            : {}),
+        });
         clientRef.current = client;
+
+        if (cancelledRef.current) return;
+
+        if (options.anonymous) {
+          await client.waitForAnonymousTransport();
+          if (cancelledRef.current) return;
+          setState({
+            status: 'connecting',
+            message: 'Tor is up. Opening onion relay connections...',
+          });
+        }
+        await client.waitForConnection();
 
         if (cancelledRef.current) return;
 
@@ -757,7 +807,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           },
           useWebRTC: false,
           currentRelays: client.getRelays(),
-          totalRelays: DEFAULT_RELAYS.length,
+          totalRelays: relays.length,
         });
 
         // Session keys are HKDF derivations off the same SPAKE2 root — the

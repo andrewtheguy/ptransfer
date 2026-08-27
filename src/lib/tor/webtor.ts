@@ -25,6 +25,28 @@ export interface OnionStream {
   close(): Promise<unknown>;
 }
 
+/**
+ * One inbound WebSocket message. The binding delivers binary frames too;
+ * Nostr has no use for them, so the adapter that reads this treats one as a
+ * protocol error rather than dropping it silently.
+ */
+export type OnionWebSocketMessage =
+  | { type: 'text'; text: string }
+  | { type: 'binary'; bytes: Uint8Array };
+
+/**
+ * A WebSocket spoken inside an onion stream: the HTTP upgrade, masking,
+ * fragmentation, and control frames are all handled in WASM, so this is a
+ * message queue and nothing more.
+ */
+export interface OnionWebSocket {
+  send(text: string): Promise<unknown>;
+  sendBinary(payload: Uint8Array): Promise<unknown>;
+  /** The next message the relay sent, or null once it closes. */
+  receive(): Promise<OnionWebSocketMessage | null>;
+  close(): Promise<unknown>;
+}
+
 /** A v3 onion service published from this tab. */
 export interface OnionService {
   readonly onionAddress: string;
@@ -51,6 +73,11 @@ export interface WebtorClientOptions {
 
 export interface WebtorClient {
   connectStream(address: string, port: number): Promise<OnionStream>;
+  /** Open a WebSocket to `ws://<address>.onion[:port][/path]`. */
+  connectWebSocket(
+    url: string,
+    options?: { maxMessageBytes?: number; timeoutMs?: number },
+  ): Promise<OnionWebSocket>;
   publishOnionService(options?: PublishOptions): Promise<OnionService>;
   /** The verified directory from this bootstrap, to seed the next one. */
   directoryCache(): Promise<string>;

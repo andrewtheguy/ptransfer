@@ -32,7 +32,7 @@ The table below compares the two WebRTC-based modes. The third — **Tor Onion S
 | Signaling path | Decentralized relays | Offer and answer both by QR/copy-paste; the sender scans or pastes the answer |
 | ICE servers | STUN only (Google + Cloudflare); no TURN | STUN only (same WebRTC config); no TURN |
 | File transport | Direct WebRTC only | Direct WebRTC first; automatic Nostr relay fallback up to 100 MiB when available |
-| Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE | Offer and answer are only obfuscated and must be delivered authentically; fallback file pieces are encrypted |
+| Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE. Optional anonymous signaling hides both devices' IP addresses from the relays, but never from the WebRTC peer | Offer and answer are only obfuscated and must be delivered authentically; fallback file pieces are encrypted |
 | Complexity | More complex | Hand-carried code (QR or copy/paste) |
 | Internet Required | Yes | No (if on same local network) |
 | Network Requirement | Internet access to common signaling relays plus a direct ICE route | Same local network without internet; with internet, either a direct ICE route or a usable relay fallback |
@@ -203,7 +203,7 @@ fallback may carry encrypted file pieces after the direct WebRTC attempt fails.
 
 | Component | Description |
 |-----------|-------------|
-| `pin.ts` | Rotating 12-character PIN: generation, weighted checksum, validation, locator extraction, and the locator-keyed rendezvous hint |
+| `pin.ts` | Rotating PIN: generation, weighted checksum, kind classification by length, locator extraction, and the locator-keyed rendezvous hint. 12 characters normally, 16 when the sender turns on anonymous signaling — see [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) |
 | `spake2.ts` | SPAKE2 (RFC 9382) over P-256 via @noble/curves: PIN-to-scalar derivation, blinded element generation, and the transcript-keyed root-key derivation. The PAKE math runs outside Web Crypto (which has no group operations); the root is locked into a non-extractable HKDF CryptoKey immediately and intermediates are wiped |
 | `kdf.ts` | Session-key derivation off the SPAKE2 root (HKDF-SHA256, `signals`/`content`/`claim`/`confirm` labels), the confirmation-code (short authentication string) derivation, and salt generation |
 | `ecdh.ts` | ECDH key agreement for Code Exchange (non-extractable keys); authenticated by the QR/clipboard path |
@@ -237,6 +237,22 @@ What differs is everything below it: the rendezvous is an `.onion` address plus 
 ### PIN Architecture
 
 The PIN Exchange PIN is a short-lived pairing code, not an encryption root. It has exactly two jobs — *locate* the sender's rendezvous event and *authenticate* the key exchange as the password in a SPAKE2 run — and it expires minutes after it is shown. Content confidentiality never rests on it. Since the PIN can be shoulder-surfed off the sender's screen, anyone who saw it can win the first-claim lock and derive a valid session — so neither the PIN nor the session it authenticates identifies *who* receives the file. That gap is closed by the confirmation code *together with an authenticated human channel*: the code proves possession of the locked session, and the sender's operator learning it from the intended receiver — before anything is sent — is what ties that session to the intended person.
+
+#### Anonymous signaling, and why it rides on the length
+
+The PIN has a third, optional job: saying which relay pool the sender is
+waiting on. Turning on anonymous signaling mints a 16-character PIN instead of
+a 12-character one, and the receiver reads the mode straight off the length —
+there is no toggle on the receive side and nothing to agree in advance.
+
+That works because the two pools are disjoint, so the choice enforces itself:
+a PIN of one kind published on the other pool would never be found. It is not a
+flag either side could lie about, and there is no way for a clearnet socket at
+one end to expose the address the other end went through Tor to hide. The four
+extra characters are secret data rather than locator, so the published `#h`
+hint derivation is untouched. [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)
+covers the transport, the relay pool, and the privacy boundary — which stops at
+signaling: file data still travels over the direct WebRTC data channel.
 
 #### Why a PAKE
 The previous protocol sealed the handshake under a PBKDF2 stretch of the PIN, which made every captured rendezvous/claim/confirm an *offline* dictionary target — the PIN had to carry ~49 bits and the KDF 600,000 iterations just to keep grinding uneconomical. SPAKE2 removes the target instead of out-muscling it: both published elements are password-blinded group elements, and the sealed payloads are keyed by a transcript hash that includes the fresh ephemeral shared point. A relay transcript does not provide an efficient offline PIN verifier under SPAKE2's computational security assumptions — each blinded element is consistent with every candidate PIN, and checking a guess against the sealed payloads requires solving the underlying group problem. The only way to test a guess in practice is to run the protocol live against a peer, which the sender meters (see *Online guessing*). That is what pays for the shorter, friendlier PIN.
@@ -317,7 +333,7 @@ The SPAKE2 transcript keys every session to the transfer id, both Nostr identiti
 
 #### `PinInput` (Receiver Side)
 The input component is designed for fast, error-proof manual entry:
-- **Single Native Input**: Entry uses one ungrouped 12-character text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior.
+- **Single Native Input**: Entry uses one ungrouped text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior. It accepts a PIN of either length; the classification decides the rest.
 - **Exact Entry**: PINs are case-sensitive. During both ordinary entry and paste, characters outside the 55-character alphabet are filtered out and a brief error is shown; supported characters remain in their original order.
 - **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment the 12th character lands.
 - **Robust Pasting**: A paste replaces the current entry with up to the first 12 supported characters. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
@@ -366,9 +382,15 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
 **Files:**
 - `types.ts`: Type definitions for payloads and events
 - `events.ts`: Event creation and parsing functions
-- `client.ts`: Nostr relay connection management
-- `relays.ts`: Default relay configuration
-- `availability.ts`: Relay availability probing
+- `client.ts`: Nostr relay connection management, including which relay-URL
+  validator and connection timeout each signaling mode gets
+- `relays.ts`: The clearnet relay pool, the disjoint onion pool anonymous
+  signaling uses, and the two mirror-image URL validators
+- `anonymous-transport.ts`: The browser Tor client dressed as a `WebSocket`, so
+  `nostr-tools` can carry the same handshake to onion-service relays. See
+  [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)
+- `availability.ts`: Relay availability probing (clearnet only; the anonymous
+  path has nothing to preflight from this device's own address)
 
 ### Code Exchange Signaling (`src/lib/code-signaling.ts`)
 

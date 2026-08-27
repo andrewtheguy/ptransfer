@@ -9,6 +9,7 @@ import {
   reassembleChunks,
 } from '@/lib/chunk-utils';
 import { isValidBinaryPayload } from '@/lib/code-signaling';
+import type { PinKind } from '@/lib/crypto';
 import { classifyReceiveText } from '@/lib/receive-input';
 import { isMobileDevice } from '@/lib/utils';
 
@@ -20,7 +21,7 @@ import { isMobileDevice } from '@/lib/utils';
 export type ScannerMode = 'receive' | 'answer';
 
 export type ScanResult =
-  | { kind: 'pin'; pin: string }
+  | { kind: 'pin'; pin: string; pinKind: PinKind }
   | { kind: 'payload'; data: Uint8Array }
   | { kind: 'onion'; address: string };
 
@@ -111,7 +112,7 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
         if (input.kind === 'pin') {
           setError(null);
           setWarning(null);
-          onScan({ kind: 'pin', pin: input.pin });
+          onScan({ kind: 'pin', pin: input.pin, pinKind: input.pinKind });
           return;
         }
         if (input.kind === 'offer') {

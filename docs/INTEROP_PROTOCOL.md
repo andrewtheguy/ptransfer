@@ -1,6 +1,6 @@
 # pTransfer Interoperable Protocol
 
-**Interop protocol version: `2`**
+**Interop protocol version: `3`**
 
 This document is the normative wire contract between pTransfer implementations.
 The web app is the reference implementation; `ptransfer-cli` is the other
@@ -40,6 +40,7 @@ what rules that out.
 
 | Version | Change |
 |---|---|
+| `3` | The PIN is now explicitly the 12-character form and nothing else (§1). The web app additionally mints a longer, web-only variant that selects a signaling transport outside this document, so a conforming implementation must reject any PIN that is not exactly `PIN_LENGTH` characters instead of treating length as incidental. Nothing else moved: same alphabet, same checksum rule, same layout, same relays. |
 | `2` | Rendezvous freshness became a bucket test instead of a maximum age (§4.3), so a future-dated `created_at` no longer passes. Senders are unaffected; a v1 receiver is simply more permissive than this document allows. The data channel's ordered/reliable configuration became explicit (§7), which v1 relied on without stating. |
 | `1` | Initial specification. |
 
@@ -65,6 +66,17 @@ against this document:**
   and [CODE_EXCHANGE.md](CODE_EXCHANGE.md), as web-internal documentation.
 - The **Nostr file-relay data-path fallback** ([NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md)),
   which only Code Exchange can reach.
+- **Anonymous signaling** ([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)):
+  an experimental web-only PIN Exchange option that carries this same handshake
+  to a disjoint pool of onion-service relays through a browser Tor client, and
+  announces itself by minting a longer PIN. The handshake on the wire is
+  identical; the transport and the PIN length are not. It stays out of the
+  contract while the relay pool is unmonitored and the option is experimental.
+  A conforming implementation MUST reject a PIN that is not exactly
+  `PIN_LENGTH` characters (§1) rather than attempt it — the relay pool such a
+  PIN names is not in this document, so a transfer could not succeed anyway.
+- The **Tor onion transfer mode**, which is a transport of its own and is
+  specified separately in [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
 - Storage strategy (in-memory vs OPFS scratch), relay health probing and
   caching, UI, timeouts that are purely local resource bounds, and anything
   else that is not observable by the peer.
@@ -89,7 +101,10 @@ rationale and the web-only parts.
 
 ## 1. PIN
 
-- **Length**: 12 characters, ungrouped, case-sensitive.
+- **Length**: exactly 12 characters, ungrouped, case-sensitive. A PIN of any
+  other length MUST be rejected. (The web app mints a 16-character variant for
+  its web-only anonymous-signaling option; it is out of scope, and rejecting it
+  is the correct behavior here rather than a limitation.)
 - **Alphabet** (`PIN_CHARSET`, 55 characters — letters and digits with the
   ambiguous `0`, `1`, `I`, `O`, `i`, `l`, `o` removed):
 

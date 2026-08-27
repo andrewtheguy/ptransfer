@@ -1,4 +1,5 @@
 import {
+  ANONYMOUS_PIN_LENGTH,
   PIN_CHARSET,
   PIN_CHECKSUM_LENGTH,
   PIN_HINT_HKDF_SALT,
@@ -24,14 +25,34 @@ function computeChecksum(data: string): string {
 }
 
 /**
- * Generate a random PIN with checksum.
+ * Which signaling transport a PIN selects.
  *
- * PIN_LENGTH - 1 data characters are drawn from PIN_CHARSET using rejection
+ * `standard` is the ordinary PIN Exchange PIN: clearnet `wss://` relays.
+ * `anonymous` is the one the sender's Anonymous signaling option mints: the
+ * same handshake, carried to a disjoint pool of onion-service relays through
+ * the browser Tor client.
+ *
+ * The kind is carried by the PIN's length and nothing else, because the PIN is
+ * the only thing the receiver is handed and it has to pick a relay pool before
+ * it can look for a sender. See ANONYMOUS_PIN_LENGTH.
+ */
+export type PinKind = 'standard' | 'anonymous';
+
+/** How long a PIN of each kind is, checksum character included. */
+export const PIN_LENGTHS: Record<PinKind, number> = {
+  standard: PIN_LENGTH,
+  anonymous: ANONYMOUS_PIN_LENGTH,
+};
+
+/**
+ * Generate a random PIN of the given kind, with checksum.
+ *
+ * All but the last character are drawn from PIN_CHARSET using rejection
  * sampling to eliminate modulo bias; the final character is a checksum for
  * typo detection.
  */
-export function generatePin(): string {
-  const dataLength = PIN_LENGTH - PIN_CHECKSUM_LENGTH;
+export function generatePin(kind: PinKind = 'standard'): string {
+  const dataLength = PIN_LENGTHS[kind] - PIN_CHECKSUM_LENGTH;
 
   const n = PIN_CHARSET.length;
   const maxMultiple = Math.floor(256 / n) * n;
@@ -55,17 +76,35 @@ export function generatePin(): string {
 }
 
 /**
- * Validate PIN format and checksum.
+ * Which kind of PIN this is, or null if it is not a valid PIN at all.
+ *
+ * The length decides the kind and the checksum decides validity, so a
+ * mistyped character is rejected rather than silently reinterpreted as the
+ * other kind: the two lengths are four apart, which no single insertion,
+ * deletion, or substitution can bridge.
  */
-export function isValidPin(pin: string): boolean {
-  if (pin.length !== PIN_LENGTH) return false;
-  if (![...pin].every((char) => PIN_CHARSET.includes(char))) return false;
+export function classifyPin(pin: string): PinKind | null {
+  const kind = (Object.keys(PIN_LENGTHS) as PinKind[]).find(
+    (candidate) => PIN_LENGTHS[candidate] === pin.length,
+  );
+  if (!kind) return null;
+  if (![...pin].every((char) => PIN_CHARSET.includes(char))) return null;
 
   // Verify checksum
-  const data = pin.slice(0, PIN_LENGTH - PIN_CHECKSUM_LENGTH);
+  const data = pin.slice(0, pin.length - PIN_CHECKSUM_LENGTH);
   const expectedChecksum = computeChecksum(data);
   const actualChecksum = pin.slice(-PIN_CHECKSUM_LENGTH);
-  return expectedChecksum === actualChecksum;
+  return expectedChecksum === actualChecksum ? kind : null;
+}
+
+/**
+ * Validate PIN format and checksum, of either kind.
+ *
+ * Callers that accept only one kind — the Tor transport's one-time password is
+ * the one today — compare `classifyPin` against it instead.
+ */
+export function isValidPin(pin: string): boolean {
+  return classifyPin(pin) !== null;
 }
 
 /**
