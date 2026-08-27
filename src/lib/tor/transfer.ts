@@ -1,3 +1,4 @@
+import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import {
   ACK,
   ACK_TIMEOUT_MS,
@@ -25,20 +26,36 @@ import type { TorFramedStream } from './framing';
 /**
  * Largest payload a Tor transfer carries, measured on the sender's input.
  *
- * Deliberate rather than incidental, and matched to ptransfer-cli's
- * `MAX_TRANSFER_BYTES`: a Tor circuit is slow enough that a large transfer
- * wants resume support, which this has none of. A CLI receiver refuses a
- * larger offer outright, so raising it here alone would only produce failures.
+ * The same ceiling the Nostr file relay works under, for the same reasons —
+ * see `SLOW_TRANSPORT_MAX_BYTES`. It is a hard limit rather than advice
+ * because it is the *receiver's* rule too: ptransfer-cli refuses a larger
+ * offer outright, so a sender that ignored it would only discover the
+ * disagreement after a bootstrap and a handshake.
  */
-export const TOR_MAX_TRANSFER_BYTES = 1024 * 1024;
+export const TOR_MAX_TRANSFER_BYTES = SLOW_TRANSPORT_MAX_BYTES;
+
+/**
+ * The size past which a Tor transfer is worth a word to the sender.
+ *
+ * Advice, not a rule, and nothing enforces it. A circuit's throughput is the
+ * luck of the relays it was built from: tens of megabytes sometimes arrive in
+ * moments and sometimes crawl, and since this transport cannot resume, a slow
+ * one that drops starts over. That spread is exactly why this is not a limit —
+ * a fixed ceiling would refuse transfers that would have finished fine, and
+ * only the sender knows how much time the file is worth.
+ */
+export const TOR_SUGGESTED_MAX_BYTES = 1024 * 1024;
 
 /**
  * Wire allowance for that payload. A single file is deflated on the wire,
  * which grows incompressible input very slightly, and a generated ZIP adds
  * per-entry headers — neither is known until the bytes are produced, so the
- * wire ceiling carries a margin over the input limit.
+ * wire ceiling carries a margin over the input limit. The margin is a flat
+ * 1 MiB: deflate's worst case is a fraction of a percent, and the rest is
+ * headroom for a selection of many small files, whose ZIP headers are what
+ * actually add up.
  */
-export const TOR_MAX_WIRE_BYTES = TOR_MAX_TRANSFER_BYTES + 64 * 1024;
+export const TOR_MAX_WIRE_BYTES = TOR_MAX_TRANSFER_BYTES + 1024 * 1024;
 
 /**
  * The framed Tor stream as a `TransferTransport`.

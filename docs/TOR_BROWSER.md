@@ -80,7 +80,7 @@ diagnosable failure and a silent one.
 | `src/lib/tor/onion-address.ts` | Parsing, canonicalizing, and checksum-verifying the address |
 | `src/lib/tor/handshake.ts` | The spec's handshake frames and key schedule |
 | `src/lib/tor/framing.ts` | `TorFramedStream` — `[kind][length][payload]` over the stream |
-| `src/lib/tor/transfer.ts` | The 1 MiB caps and the bridge to the shared transfer layer |
+| `src/lib/tor/transfer.ts` | The size caps and the bridge to the shared transfer layer |
 | `src/hooks/use-tor-send.ts`, `use-tor-receive.ts` | The accept loop, its bounds, and the UI state |
 
 Above the framing, `sendFileOverTransport` and `createTransferReceiver` in

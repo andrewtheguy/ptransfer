@@ -1,7 +1,7 @@
+import { SLOW_TRANSPORT_MAX_BYTES } from '../crypto/constants';
 import {
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
-  NOSTR_FILE_MAX_BYTES,
 } from './constants';
 
 /**
@@ -68,7 +68,7 @@ export function isValidNostrFileManifest(
     typeof m.fileSize !== 'number' ||
     !Number.isInteger(m.fileSize) ||
     m.fileSize <= 0 ||
-    m.fileSize > NOSTR_FILE_MAX_BYTES
+    m.fileSize > SLOW_TRANSPORT_MAX_BYTES
   ) {
     return false;
   }

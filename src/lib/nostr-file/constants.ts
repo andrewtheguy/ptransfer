@@ -2,8 +2,10 @@
 // direct WebRTC connection between the two devices cannot be established
 // (a live single-copy transfer through public relays, in place of TURN).
 
-// Hard cap on the plaintext payload relayed through nostr events.
-export const NOSTR_FILE_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
+// The cap on a relayed payload is SLOW_TRANSPORT_MAX_BYTES in
+// lib/crypto/constants.ts, shared with the Tor onion transport: both carry
+// bytes through third parties, at a fraction of a data channel's speed, with
+// no resume if the transfer dies partway.
 
 // Payload chunk size (a single-file payload is always deflated once; an
 // already-compressed generated ZIP archive travels unchanged). Encoded

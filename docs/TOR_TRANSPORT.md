@@ -33,8 +33,13 @@ sees both peers. The two peers meet at a rendezvous point inside the Tor
 network, so neither learns the other's address and nothing published anywhere
 can be correlated with the transfer afterwards.
 
-The price is speed and a **1 MiB cap** per transfer: a Tor circuit is slow
-enough that a large transfer would want resume support, which this has none of.
+The price is a **100 MiB cap** per transfer — the same ceiling the web app's
+relayed data path works under, for the same reasons: both push bytes through
+third parties, at a throughput neither controls, and neither can resume, so a
+transfer that dies two thirds of the way through starts over. How slow a
+circuit actually is varies enormously with the relays it was built from, which
+is why the only hard number is that ceiling; below it an implementation is
+expected to *say* that a large transfer may crawl, not to refuse it.
 
 ### What each layer contributes
 
@@ -173,8 +178,12 @@ Anyone who has the address can open the port, so an accepted connection is not
 yet a receiver and never gets to hold the service against the real one:
 
 - **20** failed connections, then the sender gives up.
-- **5 minutes** per connection for its whole turn; a stall counts as a failed
-  connection like any other and the sender goes back to waiting.
+- **5 minutes** for a connection to *authenticate*; a stall counts as a failed
+  connection like any other and the sender goes back to waiting. The transfer
+  that follows is not on a wall clock — a peer that has proved it knows the
+  password is the receiver, and how long its bytes take is unknowable in
+  advance — but it is still bound by the transfer layer's idle window, so a
+  receiver that stops draining the circuit aborts within a minute.
 - **30 minutes** overall, wrapping the accept loop *including* connections in
   progress, so neither the deadline nor a shutdown is blocked by a peer that
   opens the port and says nothing.
@@ -211,11 +220,19 @@ on the wire and restored on receipt; a generated ZIP travels as-is. See
 
 ## Limits
 
-- **1 MiB** per transfer, enforced on the *input* when the selection is
+- **100 MiB** per transfer, enforced on the *input* when the selection is
   prepared, before anything is published. Both implementations enforce the same
   bound and refuse a larger offer, so raising it on one side alone would only
-  produce failures.
-- The wire ceiling carries a **64 KiB margin** over that cap: deflate grows
+  produce failures. A browser receiver has a second reason to sit here: a
+  payload this size or smaller is taken entirely in memory, so the transfer
+  never depends on OPFS `createWritable`, which not every engine has.
+- Anything above **1 MiB** is a *suggestion*, not a limit. A sender is expected
+  to tell its operator that throughput over a circuit is unpredictable — the
+  same size can arrive in moments or crawl, depending on the relays the circuit
+  was built from — and that a transfer which drops starts over, and then to
+  send it anyway. A fixed ceiling would refuse transfers that would have
+  finished fine; only the operator knows what the file is worth waiting for.
+- The wire ceiling carries a **1 MiB margin** over the cap: deflate grows
   incompressible input slightly and a ZIP adds per-entry headers, neither of
   which is known until the bytes are produced. The receiver caps *inflated*
   output at the same ceiling as a decompression-bomb guard.

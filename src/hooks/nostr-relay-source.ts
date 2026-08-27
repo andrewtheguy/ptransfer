@@ -1,8 +1,6 @@
+import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
-import {
-  NOSTR_FILE_MAX_BYTES,
-  NostrFileCancelledError,
-} from '@/lib/nostr-file';
+import { NostrFileCancelledError } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
 /** Input handling for the Nostr relay fallback in the Code Exchange hooks. */
@@ -21,9 +19,9 @@ export async function readSourceFully(
       if (done) break;
       if (value) {
         total += value.length;
-        if (total > NOSTR_FILE_MAX_BYTES) {
+        if (total > SLOW_TRANSPORT_MAX_BYTES) {
           throw new Error(
-            `File exceeds ${formatFileSize(NOSTR_FILE_MAX_BYTES)} Nostr relay limit`,
+            `File exceeds ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)} Nostr relay limit`,
           );
         }
         parts.push(value);

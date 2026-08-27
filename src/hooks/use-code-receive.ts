@@ -12,12 +12,12 @@ import {
   deriveSharedSecretKey,
   generateECDHKeyPair,
   MAX_MESSAGE_SIZE,
+  SLOW_TRANSPORT_MAX_BYTES,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
-import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
 import { receiveFileLive } from '@/lib/nostr-file/download-live';
 import { deriveRelaySession } from '@/lib/nostr-file/session';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
@@ -512,9 +512,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         ) {
           throw error;
         }
-        if (fileSize > NOSTR_FILE_MAX_BYTES) {
+        if (fileSize > SLOW_TRANSPORT_MAX_BYTES) {
           throw new P2PConnectionError(
-            `${error.message}. The file is over ${formatFileSize(NOSTR_FILE_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+            `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
           );
         }
         // The WebRTC side is done for; the relay transfer assembles the

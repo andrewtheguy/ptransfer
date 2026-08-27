@@ -15,12 +15,12 @@ import {
   generateECDHKeyPair,
   generateSalt,
   MAX_MESSAGE_SIZE,
+  SLOW_TRANSPORT_MAX_BYTES,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
 import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
-import { NOSTR_FILE_MAX_BYTES } from '@/lib/nostr-file/constants';
 import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
 import {
@@ -654,10 +654,10 @@ export function useCodeSend(): UseCodeSendReturn {
             if (relaySession) wipeBufferSource(relaySession.keyBytes);
             throw error;
           }
-          if (content.estimatedSize > NOSTR_FILE_MAX_BYTES) {
+          if (content.estimatedSize > SLOW_TRANSPORT_MAX_BYTES) {
             wipeBufferSource(relaySession.keyBytes);
             throw new P2PConnectionError(
-              `${error.message}. The file is over ${formatFileSize(NOSTR_FILE_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+              `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
             );
           }
           rtc.close();

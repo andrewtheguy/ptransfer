@@ -41,15 +41,19 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 const WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
- * How long one accepted connection may take before it is dropped and the
- * service goes back to waiting.
+ * How long an accepted connection may take to authenticate before it is
+ * dropped and the service goes back to waiting.
  *
  * Anyone who has the address can open the port, so an accepted connection is
  * not yet a receiver and must not be able to hold the service against the real
- * one. The bound covers a whole turn — handshake and a megabyte crawling down
- * a Tor circuit — so it is generous; the point is only that it exists.
+ * one. It covers the handshake only, which is a few frames: once a peer has
+ * proved it knows the password it is the receiver, and the transfer that
+ * follows is bounded by the stall window inside `sendFileOverTor` instead — a
+ * wall clock there would just be a second, worse size limit, since how long a
+ * hundred megabytes takes to crawl down a Tor circuit is not knowable in
+ * advance.
  */
-const CONNECTION_TIMEOUT_MS = 5 * 60 * 1000;
+const HANDSHAKE_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * How many connections may fail to authenticate before the tab gives up. The
@@ -276,11 +280,7 @@ async function serveUntilSent(options: ServeOptions): Promise<void> {
 
     let delivered = false;
     try {
-      delivered = await withTimeout(
-        serveConnection(framed, options),
-        CONNECTION_TIMEOUT_MS,
-        `The peer went quiet for ${CONNECTION_TIMEOUT_MS / 1000}s`,
-      );
+      delivered = await serveConnection(framed, options);
     } catch (error) {
       failures += 1;
       console.warn('[tor] A connection failed:', error);
@@ -322,11 +322,13 @@ async function serveConnection(
   const { onion, password, metadata, content, fileMetadata, setState } =
     options;
 
-  const handshake = await runTorServiceHandshake(
-    framed,
-    password,
-    onion,
-    metadata,
+  // Only the handshake is on a clock. Past it the peer is the receiver, and
+  // the transfer polices itself: a receiver that stops draining the circuit
+  // trips the stall window in sendFileOverTor.
+  const handshake = await withTimeout(
+    runTorServiceHandshake(framed, password, onion, metadata),
+    HANDSHAKE_TIMEOUT_MS,
+    `The peer went quiet for ${HANDSHAKE_TIMEOUT_MS / 1000}s without authenticating`,
   );
   if (handshake.outcome === 'cancelled') return false;
 
