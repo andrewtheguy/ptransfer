@@ -260,10 +260,10 @@ The previous protocol sealed the handshake under a PBKDF2 stretch of the PIN, wh
 The cost is that Web Crypto cannot express the group math, so the SPAKE2 arithmetic runs in @noble/curves and the shared secret transits JavaScript memory briefly before being locked into a non-extractable HKDF `CryptoKey` (intermediate bytes wiped, bigint scalars dropped). That trade is acceptable here because every secret involved is transfer-scoped and dead minutes later — there are no long-lived secrets in this protocol at all.
 
 #### Format
-- **Length**: 12 ungrouped characters.
-- **Charset**: 55 case-sensitive letters and digits, excluding ambiguous `0`, `1`, `I`, `O`, `i`, `l`, and `o`. No symbols — the code types cleanly on any mobile keyboard.
-- **Segments**: the first `PIN_LOCATOR_LENGTH` (3) characters are the **locator**, the next 8 are the **secret** data characters, and the 12th is a checksum over all 11 data characters.
-- **Entropy**: the locator is public by construction (see below), so effective strength is 55⁸ ≈ **46.3 bits** — deliberately sized for a threat model with *no offline attack*, where the only guessing channel is metered online claims.
+- **Length**: 12 ungrouped characters, or 16 for the anonymous-signaling form (above). Only these two lengths are PINs; `classifyPin` returns the kind, or null.
+- **Charset**: 55 case-sensitive letters and digits, excluding ambiguous `0`, `1`, `I`, `O`, `i`, `l`, and `o`. No symbols — the code types cleanly on any mobile keyboard. Both kinds share it.
+- **Segments**: the first `PIN_LOCATOR_LENGTH` (3) characters are the **locator**, the last is a checksum over everything before it, and the 8 (16-character form: 12) in between are the **secret** data characters.
+- **Entropy**: the locator is public by construction (see below), so effective strength is 55⁸ ≈ **46.3 bits**, or 55¹² ≈ **69.5 bits** for the 16-character form — deliberately sized for a threat model with *no offline attack*, where the only guessing channel is metered online claims, which is why the shorter form is sized as it is and why the longer one buys nothing that matters.
 - **Rotation**: the sender mints a fresh PIN (and a fresh SPAKE2 run) and publishes a new rendezvous event every `PIN_ROTATION_MS` (2 minutes). When verifying a claim, it honors only PINs minted in its current or immediately previous bucket (`PIN_ACTIVE_BUCKETS` = 2), so a PIN is usable for roughly 2–4 minutes and is dead at the end of its second bucket.
 
 #### Why the PIN is split
@@ -274,7 +274,7 @@ An attacker enumerates all 55³ = 166,375 locators against a published hint, lea
 #### Typo Detection (Weighted Checksum)
 - **Algorithm**: `sum(char_index * one_based_position) % 55`.
 - **Detection**: catches common substitutions and adjacent transpositions before a network request is made.
-- The input UI rejects a mistyped code the moment the 12th character lands, before anything touches the network.
+- The input UI rejects a mistyped code the moment its final character lands — the 12th, or the 16th for an anonymous PIN — before anything touches the network. The two lengths are four apart, so no single insertion or deletion turns one kind into a valid instance of the other; a dropped character fails the checksum rather than selecting the wrong relay pool.
 
 #### Key Derivation (SPAKE2 root + HKDF fan-out)
 `derivePakeSecret` reduces the PIN to the SPAKE2 password scalar `w` (HKDF-SHA256 widened to 384 bits, reduced mod the P-256 order). There is deliberately no expensive KDF: stretching only helps when something permits offline guessing, and nothing here does. The whole PIN goes in, locator included — it adds no strength (the locator is public) but costs nothing and keeps a wrong locator from producing a working handshake.
@@ -335,8 +335,8 @@ The SPAKE2 transcript keys every session to the transfer id, both Nostr identiti
 The input component is designed for fast, error-proof manual entry:
 - **Single Native Input**: Entry uses one ungrouped text field so cursor movement, selection, insertion, deletion, and replacement retain normal browser behavior. It accepts a PIN of either length; the classification decides the rest.
 - **Exact Entry**: PINs are case-sensitive. During both ordinary entry and paste, characters outside the 55-character alphabet are filtered out and a brief error is shown; supported characters remain in their original order.
-- **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment the 12th character lands.
-- **Robust Pasting**: A paste replaces the current entry with up to the first 12 supported characters. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
+- **Instant Checksum Feedback**: A complete-but-mistyped code is flagged the moment its final character lands, at either PIN length.
+- **Robust Pasting**: A paste replaces the current entry. Nothing is truncated to a PIN length — the same box also takes onion addresses and Code Exchange offers, so classification decides what was pasted rather than a length rule clipping it first. Unsupported characters are filtered out with the same brief error used for ordinary entry; they do not reject the entire paste or remain in the field.
 - **No Plaintext Retention**: Once valid, the PIN is immediately reduced to its SPAKE2 password scalar (`derivePakeSecret`), its public locator segment is captured, the inputs are masked, and the plaintext is cleared. The scalar bytes are wiped once the receive flow has built its claims.
 
 #### `PinDisplay` (Sender Side)

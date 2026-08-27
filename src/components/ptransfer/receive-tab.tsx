@@ -106,6 +106,18 @@ export function ReceiveTab() {
     if (material) wipeBufferSource(material.pakeSecret);
   }, []);
 
+  // Leaving the page with the bridge question still on screen abandons that
+  // material too, and nothing else would ever reach it. State is deliberately
+  // untouched here: the component is going away, so only the wipe matters.
+  useEffect(
+    () => () => {
+      const material = pendingPinRef.current;
+      pendingPinRef.current = null;
+      if (material) wipeBufferSource(material.pakeSecret);
+    },
+    [],
+  );
+
   const startPinReceive = useCallback(
     async (material: PinKeyMaterial, bridge: TorBridge, anonymous: boolean) => {
       try {
