@@ -215,3 +215,27 @@ shortly before testing, since a consensus expires in three hours:
 ```bash
 bun ../webtor-rs/tests/tools/fetch-directory.ts public/tor-directory.json
 ```
+
+### Testing an unreleased Tor client
+
+`@andrewtheguy/webtor-wasm` is installed from a release tarball, which is the
+only form that may be committed: a `file:` dependency resolves on nobody's
+machine but the one it was written on. Testing a change to webtor-rs before it
+is released means pointing at its build directory for a while, which
+`scripts/webtor-source.ts` does in both directions:
+
+```bash
+# build the package webtor-rs publishes
+cd ../webtor-rs && bun run build
+
+cd ../ptransfer
+bun run webtor:local     # -> file:../webtor-rs/webtor-wasm/pkg
+bun run webtor:status    # which of the two is installed now
+bun run webtor:released  # -> the tarball for webtor-rs's current version
+```
+
+Bun links the local package file by file, so rebuilding in webtor-rs is picked
+up here with no reinstall; `webtor:local` only has to be run again if a build
+adds a file the previous one did not have. `webtor:released` takes a version
+(`bun run webtor:released 0.0.1-alpha.13`) and otherwise uses the one in
+webtor-rs's `Cargo.toml`, so switching back after a release lands on it.
