@@ -23,7 +23,9 @@ pTransfer is a browser-based encrypted file and folder transfer application. It 
 > Code Exchange and the Nostr relay fallback are web-only until they stabilize.
 > This document is the design rationale for all of it.
 
-By default, Nostr is used for signaling. Code Exchange is available as an alternative under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
+By default, Nostr is used for signaling. Code Exchange and the Tor onion transport are available as alternatives under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
+
+The table below compares the two WebRTC-based modes. The third — **Tor Onion Service** — is not a signaling method at all: there is no signaling and no WebRTC, because the sending tab publishes a v3 onion service and the file travels inside the Tor circuit. It is specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md) and shares only this document's crypto primitives and the transfer layer below.
 
 | Feature | Nostr / PIN Exchange (Default) | Code Exchange (Hand-Carried Offer) |
 |---------|-----------------|---------------------------------------|
@@ -212,7 +214,7 @@ fallback may carry encrypted file pieces after the direct WebRTC attempt fails.
 
 ### Shared P2P Transfer Layer (`src/lib/p2p-transfer.ts`)
 
-Once signaling establishes an open WebRTC data channel, both Nostr and Code Exchange use one shared file-transfer protocol:
+Once a reliable, ordered, message-oriented transport is open — a WebRTC data channel for Nostr and Code Exchange, a framed onion stream for the Tor transport — every mode uses one shared file-transfer protocol:
 
 1. Sender reads a lazy transfer source in its wire encoding and coalesces the output into `ENCRYPTION_CHUNK_SIZE` (`128 KiB`) chunks. The encoding follows the no-recompress rule: a single-file send is deflated on the fly through the browser's native `CompressionStream('deflate-raw')`, while a multi-file/folder send — a ZIP whose entries are already deflated — travels as-is, its bytes emitted while fflate is still reading and packaging entries. Either way the final wire length is unknown during signaling.
 2. Each slice is encrypted with `encryptChunk`, producing `[chunk_index_be_u16][nonce_12][ciphertext][tag_16]`.
@@ -225,6 +227,12 @@ Once signaling establishes an open WebRTC data channel, both Nostr and Code Exch
 Both sides run an idle/stall watchdog (`STALL_TIMEOUT_MS`, `60s`) over the active transfer instead of any overall wall-clock deadline. On the sender each chunk hand-off (`sendWithBackpressure`) must complete within the window, so a receiver that stops draining the channel aborts the send. On the receiver the window resets on every incoming data-channel message (armed once the channel opens via `start()`), so a sender that goes quiet mid-stream aborts the receive. Either side timing out rejects with `P2PConnectionError`, which the UI treats as a connection failure.
 
 The receiver rejects duplicate indexes, out-of-range indexes, malformed chunk lengths, transfers exceeding the application limit, and malformed final counts.
+
+### Tor Onion Transport (`src/lib/tor/`)
+
+The same transfer layer, over a Tor stream instead of a data channel. `TorFramedStream` restores the discrete binary/text messages the choreography needs (`[kind][length][payload]`), and above that framing `sendFileOverTransport` and `createTransferReceiver` are the identical code the WebRTC path runs — one shared wire protocol with two transports, which is why the `TransferTransport` interface exists.
+
+What differs is everything below it: the rendezvous is an `.onion` address plus a one-time password rather than a relay lookup, the SPAKE2 identities are the address itself (`torPakeIdentities`) rather than two Nostr pubkeys, the session keys derive under `ptransfer:tor-session:v1:*` labels so a Tor root can never produce a PIN Exchange key, and there is no confirmation code because there is no live-guessable PIN on screen. The transport caps a transfer at 1 MiB. See [TOR_TRANSPORT.md](TOR_TRANSPORT.md) for the handshake, the key schedule, and how the browser publishes a service at all.
 
 ### PIN Architecture
 

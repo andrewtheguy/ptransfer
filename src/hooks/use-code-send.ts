@@ -40,7 +40,10 @@ import {
   type TransferRelaySelection,
 } from '@/lib/nostr-file/upload';
 import { sendFileLive } from '@/lib/nostr-file/upload-live';
-import { sendFileOverDataChannel } from '@/lib/p2p-transfer';
+import {
+  createDataChannelTransport,
+  sendFileOverTransport,
+} from '@/lib/p2p-transfer';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -684,17 +687,22 @@ export function useCodeSend(): UseCodeSendReturn {
         });
 
         // Send data in encrypted chunks and wait for the receiver's ACK.
-        await sendFileOverDataChannel(rtc, key, content, {
-          onProgress: (current, total) =>
-            setState({
-              status: 'transferring',
-              message: 'Sending via P2P...',
-              progress: { current, total },
-              contentType: 'file',
-              fileMetadata: { fileName, fileSize, mimeType },
-            }),
-          isCancelled: () => cancelledRef.current,
-        });
+        await sendFileOverTransport(
+          createDataChannelTransport(rtc),
+          key,
+          content,
+          {
+            onProgress: (current, total) =>
+              setState({
+                status: 'transferring',
+                message: 'Sending via P2P...',
+                progress: { current, total },
+                contentType: 'file',
+                fileMetadata: { fileName, fileSize, mimeType },
+              }),
+            isCancelled: () => cancelledRef.current,
+          },
+        );
 
         setState({
           status: 'complete',

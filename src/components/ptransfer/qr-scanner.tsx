@@ -21,7 +21,8 @@ export type ScannerMode = 'receive' | 'answer';
 
 export type ScanResult =
   | { kind: 'pin'; pin: string }
-  | { kind: 'payload'; data: Uint8Array };
+  | { kind: 'payload'; data: Uint8Array }
+  | { kind: 'onion'; address: string };
 
 interface QRScannerProps {
   onScan: (result: ScanResult) => void;
@@ -117,6 +118,14 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
           setError(null);
           setWarning(null);
           onScan({ kind: 'payload', data: input.payload });
+          return;
+        }
+        // A Tor address is complete in one code too; its password is asked for
+        // separately, so scanning one only fills in the address.
+        if (input.kind === 'onion') {
+          setError(null);
+          setWarning(null);
+          onScan({ kind: 'onion', address: input.address });
           return;
         }
 

@@ -6,6 +6,7 @@ import {
   Info,
   KeyRound,
   Send,
+  Shield,
   Upload,
   X,
 } from 'lucide-react';
@@ -18,6 +19,13 @@ import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { supportsFolderSelection } from '@/lib/folder-utils';
+import {
+  DEFAULT_TOR_BRIDGE,
+  TOR_BRIDGE_LABELS,
+  TOR_BRIDGES,
+  type TorBridge,
+} from '@/lib/tor/client';
+import { TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
 
 // Extend input element to include webkitdirectory attribute
 declare module 'react' {
@@ -46,6 +54,7 @@ export function SendTab() {
   const { setConfig } = useSend();
 
   const [transferMode, setTransferMode] = useState<TransferMode>('pin');
+  const [torBridge, setTorBridge] = useState<TorBridge>(DEFAULT_TOR_BRIDGE);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -53,7 +62,12 @@ export function SendTab() {
   const dragCounterRef = useRef(0);
 
   const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
-  const isOverLimit = totalSize > MAX_MESSAGE_SIZE;
+  // The Tor transport's ceiling is far lower than the app's, and it is the
+  // receiver's rule too — a CLI receiver refuses a larger offer outright — so
+  // it is enforced on the selection rather than discovered mid-transfer.
+  const sizeLimit =
+    transferMode === 'tor' ? TOR_MAX_TRANSFER_BYTES : MAX_MESSAGE_SIZE;
+  const isOverLimit = totalSize > sizeLimit;
   const canSend = selectedFiles.length > 0 && !isOverLimit;
   // Anything beyond a single loose file is zipped; folder selections always
   // zip so their structure is preserved.
@@ -99,6 +113,10 @@ export function SendTab() {
     'The handshake travels through relays and is authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Needs internet on both sides, and there is no data-relay fallback if direct WebRTC fails.';
   const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
+  const torModeDescription =
+    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no relay, no STUN, no direct connection between the two networks, and nothing published that could be correlated later. Slower, and capped at 1 MiB.';
+  const torModeHowItWorksDescription =
+    'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const codeModeHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
@@ -107,6 +125,7 @@ export function SendTab() {
     setConfig({
       selectedFiles,
       transferMode,
+      torBridge,
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -289,7 +308,7 @@ export function SendTab() {
                 </p>
                 <p className="text-sm text-muted-foreground">
                   Multiple files will be compressed into a ZIP archive &bull;
-                  Max size: {formatFileSize(MAX_MESSAGE_SIZE)}
+                  Max size: {formatFileSize(sizeLimit)}
                 </p>
               </div>
             </button>
@@ -322,7 +341,8 @@ export function SendTab() {
         />
         {isOverLimit && (
           <p className="text-xs text-destructive">
-            Total size exceeds {formatFileSize(MAX_MESSAGE_SIZE)} limit
+            Total size exceeds the {formatFileSize(sizeLimit)} limit
+            {transferMode === 'tor' ? ' of the Tor transport' : ''}
           </p>
         )}
       </div>
@@ -384,7 +404,68 @@ export function SendTab() {
               </p>
             </div>
           </label>
+
+          <label
+            htmlFor="send-mode-tor"
+            className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${
+              transferMode === 'tor'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:bg-muted/60'
+            }`}
+          >
+            <RadioGroupItem id="send-mode-tor" value="tor" className="mt-0.5" />
+            <div className="space-y-1">
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <Shield className="h-4 w-4" />
+                Tor Onion Service
+              </span>
+              <p className="text-xs text-muted-foreground">
+                {torModeDescription}
+              </p>
+            </div>
+          </label>
         </RadioGroup>
+
+        {transferMode === 'tor' && (
+          <div className="space-y-2 rounded-md border bg-background/60 p-3">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">How this tab reaches Tor</p>
+              <p className="text-xs text-muted-foreground">
+                Every circuit starts at a Snowflake bridge, which is also how
+                the tab reaches the network at all.
+              </p>
+            </div>
+            <RadioGroup
+              value={torBridge}
+              onValueChange={(value) => setTorBridge(value as TorBridge)}
+              className="gap-2"
+            >
+              {TOR_BRIDGES.map((bridge) => (
+                <label
+                  key={bridge}
+                  htmlFor={`send-tor-bridge-${bridge}`}
+                  className="flex cursor-pointer items-start gap-3 text-xs"
+                >
+                  <RadioGroupItem
+                    id={`send-tor-bridge-${bridge}`}
+                    value={bridge}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium">
+                      {TOR_BRIDGE_LABELS[bridge]}
+                    </span>{' '}
+                    <span className="text-muted-foreground">
+                      {bridge === 'websocket'
+                        ? '— one fixed bridge endpoint, no broker and no STUN. The faster of the two, and the one to try first.'
+                        : '— a volunteer proxy brokered over HTTPS, using STUN. Harder to block, and worth switching to if the WebSocket bridge cannot be reached.'}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </RadioGroup>
+          </div>
+        )}
       </div>
 
       {/* How it works info box */}
@@ -396,19 +477,28 @@ export function SendTab() {
           <div className="text-sm">
             <p className="font-medium mb-1">How it works</p>
             <p className="text-muted-foreground">
-              {transferMode === 'pin' ? (
+              {transferMode === 'pin' && (
                 <>
                   Show the recipient your PIN — as a QR code they scan, or read
                   out — so they can connect and decrypt your files.
                   <br />
                   {pinModeHowItWorksDescription}
                 </>
-              ) : (
+              )}
+              {transferMode === 'code' && (
                 <>
                   Hand your recipient the connection code — by QR code or
                   copy/paste — to establish the transfer session.
                   <br />
                   {codeModeHowItWorksDescription}
+                </>
+              )}
+              {transferMode === 'tor' && (
+                <>
+                  Give the recipient the onion address and the one-time password
+                  this tab shows, over any trusted channel.
+                  <br />
+                  {torModeHowItWorksDescription}
                 </>
               )}
             </p>
@@ -418,7 +508,9 @@ export function SendTab() {
 
       <Button onClick={handleSend} disabled={!canSend} className="w-full">
         <Send className="mr-2 h-4 w-4" />
-        {transferMode === 'code' ? 'Start Code Exchange' : 'Start PIN Exchange'}
+        {transferMode === 'code' && 'Start Code Exchange'}
+        {transferMode === 'pin' && 'Start PIN Exchange'}
+        {transferMode === 'tor' && 'Publish Onion Service'}
         <ChevronRight className="ml-1 h-3 w-3" />
       </Button>
     </div>

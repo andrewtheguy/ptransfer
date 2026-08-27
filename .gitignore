@@ -11,6 +11,10 @@ dist-ssr
 # WASM files (copied from node_modules via postinstall)
 public/*.wasm
 
+# Tor directory snapshot for local testing; a consensus expires in three hours,
+# so this is rebuilt rather than committed (see docs/TOR_TRANSPORT.md).
+public/tor-directory.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

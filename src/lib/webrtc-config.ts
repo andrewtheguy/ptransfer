@@ -28,6 +28,18 @@ export function getIceServers(): RTCIceServer[] {
 }
 
 /**
+ * The STUN servers as bare URLs, for consumers that take a plain list rather
+ * than an RTCIceServer — the Snowflake `webrtc` bridge of the browser Tor
+ * client is the one today. Same servers as ICE uses, so a network that allows
+ * one allows the other.
+ */
+export function getStunUrls(): string[] {
+  return STUN_SERVERS.flatMap((server) =>
+    typeof server.urls === 'string' ? [server.urls] : [...server.urls],
+  );
+}
+
+/**
  * Get complete RTCConfiguration with ICE servers.
  * Use this when creating a new RTCPeerConnection.
  */

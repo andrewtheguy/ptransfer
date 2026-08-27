@@ -62,6 +62,10 @@ export default defineConfig({
       workbox: {
         // Cache all static assets including workers and WASM
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,wasm}'],
+        // The browser Tor client is 1.7 MB and only the Tor transfer mode ever
+        // loads it — and that mode needs the network anyway, so precaching it
+        // for offline use would cost every visitor the download for nothing.
+        globIgnores: ['**/webtor_wasm_bg*.wasm'],
         // Increase max file size for WASM files (zxing-wasm can be large)
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
       },
@@ -97,6 +101,13 @@ export default defineConfig({
       },
     }),
   ],
+  optimizeDeps: {
+    // The browser Tor client is loaded lazily, so Vite would only discover it
+    // mid-transfer and re-optimize — which reloads the page and takes the
+    // in-flight transfer with it. It is also a wasm-bindgen package whose glue
+    // resolves its binary relative to itself, which pre-bundling breaks.
+    exclude: ['@andrewtheguy/webtor-wasm'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { usePinReceive } from '@/hooks/use-pin-receive';
+import { useTorReceive } from '@/hooks/use-tor-receive';
 import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
 import {
   downloadFile,
@@ -11,16 +12,18 @@ import {
 } from '@/lib/file-utils';
 import { extractPinFromUrl } from '@/lib/pin-link';
 import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
+import type { TorBridge } from '@/lib/tor/client';
 import { AnswerReturn } from './answer-return';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { ReceiveInput } from './receive-input';
+import { TorReceiveForm } from './tor-receive-form';
 import { TransferStatus } from './transfer-status';
 
 /**
  * Which exchange the receiver's input turned out to belong to. Chosen from what
  * they pasted or scanned rather than asked for up front.
  */
-type ReceiveRoute = 'none' | 'pin' | 'code';
+type ReceiveRoute = 'none' | 'pin' | 'code' | 'tor';
 
 export function ReceiveTab() {
   // Both hooks must be called unconditionally (React rules); the route picks
@@ -41,6 +44,13 @@ export function ReceiveTab() {
     cancel: cancelCode,
     reset: resetCode,
   } = useCodeReceive();
+  const {
+    state: torState,
+    receivedContent: torContent,
+    receive: receiveOverTor,
+    cancel: cancelTor,
+    reset: resetTor,
+  } = useTorReceive();
 
   const [route, setRoute] = useState<ReceiveRoute>('none');
   // Failures before either hook owns the transfer, which therefore have no
@@ -48,6 +58,8 @@ export function ReceiveTab() {
   const [startError, setStartError] = useState<string | null>(null);
   // Held between startReceive() and the hook arming its offer step.
   const pendingOfferRef = useRef<Uint8Array | null>(null);
+  // The onion address recognized in the box, while its password is asked for.
+  const [torAddress, setTorAddress] = useState<string | null>(null);
 
   // A PIN QR deep-links here with the PIN in the fragment. Read it during the
   // first render so the input box can open prefilled.
@@ -63,8 +75,13 @@ export function ReceiveTab() {
   }, [initialPin]);
 
   const isCodeExchange = route === 'code';
-  const state = isCodeExchange ? codeState : pinState;
-  const receivedContent = isCodeExchange ? codeContent : pinContent;
+  const isTor = route === 'tor';
+  const state = isTor ? torState : isCodeExchange ? codeState : pinState;
+  const receivedContent = isTor
+    ? torContent
+    : isCodeExchange
+      ? codeContent
+      : pinContent;
 
   const handleSubmit = useCallback(
     async (input: ReceiveInputValue) => {
@@ -85,6 +102,14 @@ export function ReceiveTab() {
           setRoute('none');
           setStartError('Could not start the transfer. Please try again.');
         }
+        return;
+      }
+
+      if (input.kind === 'onion') {
+        // Nothing starts yet: the password is a second secret, and it is
+        // checked before a bootstrap that costs minutes.
+        setTorAddress(input.address);
+        setRoute('tor');
         return;
       }
 
@@ -110,21 +135,33 @@ export function ReceiveTab() {
     void submitOffer(payload);
   }, [route, codeState.status, submitOffer]);
 
+  const handleTorPassword = useCallback(
+    (password: string, bridge: TorBridge) => {
+      if (!torAddress) return;
+      void receiveOverTor({ address: torAddress, password, bridge });
+    },
+    [receiveOverTor, torAddress],
+  );
+
   const handleCancel = useCallback(() => {
-    if (isCodeExchange) cancelCode();
+    if (isTor) cancelTor();
+    else if (isCodeExchange) cancelCode();
     else cancelPin();
     pendingOfferRef.current = null;
+    setTorAddress(null);
     setRoute('none');
     setStartError(null);
-  }, [isCodeExchange, cancelCode, cancelPin]);
+  }, [isTor, isCodeExchange, cancelTor, cancelCode, cancelPin]);
 
   const handleReset = useCallback(() => {
-    if (isCodeExchange) resetCode();
+    if (isTor) resetTor();
+    else if (isCodeExchange) resetCode();
     else resetPin();
     pendingOfferRef.current = null;
+    setTorAddress(null);
     setRoute('none');
     setStartError(null);
-  }, [isCodeExchange, resetCode, resetPin]);
+  }, [isTor, isCodeExchange, resetTor, resetCode, resetPin]);
 
   const handleDownload = useCallback(() => {
     if (receivedContent) {
@@ -146,7 +183,13 @@ export function ReceiveTab() {
 
   return (
     <div className="space-y-4 pt-4">
-      {state.status === 'idle' ? (
+      {isTor && torAddress && state.status === 'idle' ? (
+        <TorReceiveForm
+          address={torAddress}
+          onSubmit={handleTorPassword}
+          onCancel={handleCancel}
+        />
+      ) : state.status === 'idle' ? (
         <>
           <ReceiveInput
             onSubmit={handleSubmit}

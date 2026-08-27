@@ -167,6 +167,24 @@ export interface PakeIdentities {
   receiverPubkey: string;
 }
 
+/**
+ * Identities for the Tor onion transport, which has no Nostr keys.
+ *
+ * The `<host>.onion:<port>` address the two peers agreed on stands in as the
+ * transfer identity, and fixed role labels keep the two ends apart. Binding
+ * the address is what stops a peer that proxies the handshake through to a
+ * *different* onion service from sharing a root with either side.
+ *
+ * Matches ptransfer-cli's `PakeIdentities::tor`.
+ */
+export function torPakeIdentities(onion: string): PakeIdentities {
+  return {
+    transferId: onion,
+    senderPubkey: 'ptransfer:tor:v1:sender',
+    receiverPubkey: 'ptransfer:tor:v1:receiver',
+  };
+}
+
 function lengthPrefix(data: Uint8Array): Uint8Array[] {
   // 8-byte little-endian length framing per RFC 9382, so no transcript field
   // can shift bytes into a neighbor.

@@ -22,7 +22,7 @@ import { receiveFileLive } from '@/lib/nostr-file/download-live';
 import { deriveRelaySession } from '@/lib/nostr-file/session';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { NostrFileCancelledError } from '@/lib/nostr-file/upload';
-import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
+import { ACK, createTransferReceiver } from '@/lib/p2p-transfer';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ReceivedContent } from '@/lib/types';
@@ -321,7 +321,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // Streaming receiver: decrypts each chunk into the sink as it arrives
       // (inflating deflated payloads in between) and resolves once DONE
       // arrives and all chunks authenticate.
-      const receiver = createDataChannelReceiver(key, contentEncoding, sink, {
+      const receiver = createTransferReceiver(key, contentEncoding, sink, {
         estimatedBytes: fileSize,
         onProgress: (current, total) =>
           setState((s) => ({ ...s, progress: { current, total } })),
@@ -615,7 +615,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // receiver decrypts, authenticates and writes chunks to the sink as they
       // arrive and resolves with the sealed payload. A stalled stream is
       // aborted by the receiver's own idle watchdog (see
-      // createDataChannelReceiver).
+      // createTransferReceiver).
       const receivedData = await new Promise<Blob>((resolve, reject) => {
         const checkInterval = setInterval(() => {
           if (abandoned()) {

@@ -1,9 +1,10 @@
 /**
- * Shared WebRTC data-channel file-transfer protocol.
+ * Shared message-oriented file-transfer protocol.
  *
  * This module is the single source of truth for the data payload sent from
- * sender to receiver over an already-open WebRTC data channel. Both signaling
- * modes (Code Exchange and PIN Exchange) use it, so the wire protocol and every
+ * sender to receiver once a transport is open. Every mode uses it — Code
+ * Exchange and PIN Exchange over a WebRTC data channel, and the Tor onion
+ * transport over a framed onion stream — so the wire protocol and every
  * per-chunk validation live in exactly one place.
  *
  * Wire protocol:
@@ -23,8 +24,15 @@
  * Neither side materializes the whole file: the sender coalesces a lazy
  * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver
  * appends each decrypted (and, for 'deflate-raw', inflated) chunk to scratch
- * storage in the data channel's reliable order, finalizing from the DONE byte
+ * storage in the transport's reliable order, finalizing from the DONE byte
  * count.
+ *
+ * The transport is abstracted behind `TransferTransport` (sending) and the
+ * push-fed receiver below. A WebRTC data channel is message-oriented natively;
+ * a Tor stream is made so by the framing in `lib/tor/framing.ts`. Both must be
+ * reliable and ordered: every payload appends in arrival order and only the
+ * final chunk may be short, so a transport that reorders or drops messages
+ * breaks the transfer rather than degrading it.
  */
 
 import {
@@ -45,8 +53,12 @@ import {
 } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
-/** Control-message tokens exchanged over the data channel. */
-const DONE_PREFIX = 'DONE:';
+/**
+ * Control-message tokens exchanged over the transport. `DONE` is the sender's
+ * last message, which is why a pull-based transport needs it to know when to
+ * stop reading.
+ */
+export const DONE_PREFIX = 'DONE:';
 /** Canonical acknowledgement token; receive hooks send this exact value. */
 export const ACK = 'ACK';
 
@@ -71,6 +83,20 @@ function resolveStallTimeoutMs(value: number | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? value
     : STALL_TIMEOUT_MS;
+}
+
+/**
+ * Coerce a caller-supplied wire ceiling. A transport may lower the protocol
+ * limit but never raise it, and an unusable value falls back to the protocol
+ * limit rather than removing the bound.
+ */
+function resolveMaxWireBytes(value: number | undefined): number {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value < MAX_MESSAGE_SIZE
+    ? value
+    : MAX_MESSAGE_SIZE;
 }
 
 /**
@@ -103,9 +129,35 @@ function paceProgress(
   };
 }
 
+/**
+ * A reliable, ordered, message-oriented transport the sender runs over.
+ *
+ * `sendBinary` is where backpressure belongs: it must not resolve until the
+ * transport has room for more, because that is what the stall window covers.
+ */
+export interface TransferTransport {
+  /** Send one encrypted content chunk, applying backpressure. */
+  sendBinary: (data: Uint8Array) => Promise<void>;
+  /** Send one control string. */
+  sendText: (text: string) => Promise<void>;
+  /**
+   * Resolve when the receiver's `ACK` arrives; reject if the transport closes
+   * first or the peer goes quiet past `ACK_TIMEOUT_MS`.
+   */
+  waitForAck: () => Promise<void>;
+}
+
 export interface SendOptions {
   /** Called after each chunk with cumulative wire bytes sent and the total. */
   onProgress?: (current: number, total: number) => void;
+  /**
+   * Ceiling on the wire bytes this transport allows, defaulting to
+   * MAX_MESSAGE_SIZE. It is the transport's ceiling, not the selection's: the
+   * source was already checked against its input size, but a deflated payload
+   * or a generated ZIP only reveals its wire length as it is produced. The Tor
+   * transport sets a far smaller one.
+   */
+  maxWireBytes?: number;
   /** Return true to abort the transfer between chunks. */
   isCancelled?: () => boolean;
   /**
@@ -122,15 +174,22 @@ export interface ReceiverOptions {
   /** Progress hint; the payload's final wire size is never known up front. */
   estimatedBytes?: number;
   /**
+   * Ceiling on both the wire bytes accepted and the inflated output,
+   * defaulting to MAX_MESSAGE_SIZE. The inflated bound is the
+   * decompression-bomb guard: the in-band DONE byte count only covers the
+   * compressed wire bytes.
+   */
+  maxWireBytes?: number;
+  /**
    * Idle window in ms: once `start()` is called, the transfer aborts if no
-   * data-channel message arrives within this span. Every message resets it.
+   * message arrives within this span. Every message resets it.
    * Defaults to STALL_TIMEOUT_MS.
    */
   stallTimeoutMs?: number;
 }
 
-export interface DataChannelReceiver {
-  /** Feed every data-channel message here. */
+export interface TransferReceiver {
+  /** Feed every message the transport delivers here. */
   onMessage: (data: string | ArrayBuffer) => void;
   /**
    * Resolves with the sealed plaintext payload from the sink (disk-backed
@@ -138,7 +197,7 @@ export interface DataChannelReceiver {
    */
   done: Promise<Blob>;
   /**
-   * Arm the stall watchdog. Call once the data channel is open and data should
+   * Arm the stall watchdog. Call once the transport is open and data should
    * begin flowing; every subsequent message resets the idle window.
    */
   start: () => void;
@@ -155,8 +214,8 @@ export interface DataChannelReceiver {
  * Sources start sending before they have been fully read or compressed.
  * Returns the wire byte count.
  */
-export async function sendFileOverDataChannel(
-  rtc: WebRTCConnection,
+export async function sendFileOverTransport(
+  transport: TransferTransport,
   key: CryptoKey,
   source: TransferSource,
   opts: SendOptions = {},
@@ -164,6 +223,7 @@ export async function sendFileOverDataChannel(
   const { isCancelled } = opts;
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
+  const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
   const progressTotal = source.size ?? source.estimatedSize;
   const encoding = wireEncodingFor(source);
   const reader = (
@@ -188,15 +248,15 @@ export async function sendFileOverDataChannel(
     if (chunkIndex >= MAX_CHUNKS) {
       throw new Error('File too large for the transfer chunk-index range');
     }
-    if (totalBytes + chunk.length > MAX_MESSAGE_SIZE) {
+    if (totalBytes + chunk.length > maxWireBytes) {
       throw new Error('Generated payload exceeds the transfer size limit');
     }
 
     const encryptedChunk = await encryptChunk(key, chunk, chunkIndex);
     // A single chunk that cannot be handed off within the idle window means the
-    // receiver has stopped draining the channel; abort rather than block here.
+    // receiver has stopped draining the transport; abort rather than block here.
     await withStallTimeout(
-      rtc.sendWithBackpressure(encryptedChunk),
+      transport.sendBinary(encryptedChunk),
       stallTimeoutMs,
       `Transfer stalled: receiver stopped accepting data within ${Math.round(stallTimeoutMs / 1000)}s`,
     );
@@ -253,10 +313,17 @@ export async function sendFileOverDataChannel(
 
   // The byte count authenticates the final wire length, which was not known
   // during signaling.
-  rtc.send(`${DONE_PREFIX}${chunkIndex}:${totalBytes}`);
+  // Arm the acknowledgment wait *before* announcing the end of the transfer: a
+  // receiver that answers the instant it sees DONE must not be able to answer
+  // into a gap where nothing is listening yet.
+  const acknowledged = transport.waitForAck();
+  // If the DONE send fails first, nothing ever awaits this one.
+  acknowledged.catch(() => undefined);
+
+  await transport.sendText(`${DONE_PREFIX}${chunkIndex}:${totalBytes}`);
   reportProgress(totalBytes, totalBytes);
 
-  await waitForAckMessage(rtc);
+  await acknowledged;
   return totalBytes;
 }
 
@@ -287,6 +354,17 @@ function withStallTimeout<T>(
       },
     );
   });
+}
+
+/** The WebRTC data channel as a `TransferTransport`. */
+export function createDataChannelTransport(
+  rtc: WebRTCConnection,
+): TransferTransport {
+  return {
+    sendBinary: (data) => rtc.sendWithBackpressure(data),
+    sendText: async (text) => rtc.send(text),
+    waitForAck: () => waitForAckMessage(rtc),
+  };
 }
 
 function waitForAckMessage(rtc: WebRTCConnection): Promise<void> {
@@ -347,25 +425,26 @@ function waitForAckMessage(rtc: WebRTCConnection): Promise<void> {
 
 /**
  * Create a streaming receiver for a payload of unknown wire size. Chunks must
- * arrive in the data channel's reliable order and are appended to `sink` as
+ * arrive in the transport's reliable order and are appended to `sink` as
  * they authenticate; for a 'deflate-raw' wire encoding they are inflated in
  * between, so the sealed Blob is the original file. DONE supplies the final
  * authenticated chunk count and wire byte count before the sink is sealed.
  */
-export function createDataChannelReceiver(
+export function createTransferReceiver(
   key: CryptoKey,
   encoding: WireEncoding,
   sink: AppendSink,
   opts: ReceiverOptions = {},
-): DataChannelReceiver {
+): TransferReceiver {
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
+  const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
   const progressTotal = opts.estimatedBytes ?? 0;
   // The size cap on the inflated output is the decompression-bomb guard: the
   // in-band DONE byte count only covers the compressed wire bytes.
   const target =
     encoding === 'deflate-raw'
-      ? createInflatingAppendSink(sink, MAX_MESSAGE_SIZE)
+      ? createInflatingAppendSink(sink, maxWireBytes)
       : sink;
 
   const pending = new Set<Promise<void>>();
@@ -445,7 +524,7 @@ export function createDataChannelReceiver(
       ) {
         throw new Error('Only the final streamed chunk may be short');
       }
-      if (claimedWireBytes + expectedPlaintextLength > MAX_MESSAGE_SIZE) {
+      if (claimedWireBytes + expectedPlaintextLength > maxWireBytes) {
         throw new Error('Transfer exceeds the supported size limit');
       }
       previousChunkLength = expectedPlaintextLength;
@@ -557,7 +636,7 @@ export function createDataChannelReceiver(
           count > MAX_CHUNKS ||
           !Number.isSafeInteger(finalBytes) ||
           finalBytes < 0 ||
-          finalBytes > MAX_MESSAGE_SIZE
+          finalBytes > maxWireBytes
         ) {
           fail(new Error('Invalid DONE message values'));
           return;
