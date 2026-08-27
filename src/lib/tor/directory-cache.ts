@@ -32,7 +32,7 @@ const CACHE_KEY = 'current';
  * A directory snapshot served with the app, if one was built into this
  * deployment. Absent from the repository on purpose: a consensus is valid for
  * a few hours, so a committed snapshot would be stale for almost all of its
- * life. See docs/TOR_TRANSPORT.md for how to build one while testing.
+ * life. See docs/TOR_BROWSER.md for how to build one while testing.
  */
 const SNAPSHOT_URL = '/tor-directory.json';
 

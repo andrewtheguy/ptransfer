@@ -25,7 +25,7 @@ pTransfer is a browser-based encrypted file and folder transfer application. It 
 
 By default, Nostr is used for signaling. Code Exchange and the Tor onion transport are available as alternatives under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
 
-The table below compares the two WebRTC-based modes. The third — **Tor Onion Service** — is not a signaling method at all: there is no signaling and no WebRTC, because the sending tab publishes a v3 onion service and the file travels inside the Tor circuit. It is specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md) and shares only this document's crypto primitives and the transfer layer below.
+The table below compares the two WebRTC-based modes. The third — **Tor Onion Service** — is not a signaling method at all: there is no signaling and no WebRTC, because the sending tab publishes a v3 onion service and the file travels inside the Tor circuit. It is specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md) — the normative contract shared with ptransfer-cli — and implemented here as described in [TOR_BROWSER.md](TOR_BROWSER.md); it shares only this document's crypto primitives and the transfer layer below.
 
 | Feature | Nostr / PIN Exchange (Default) | Code Exchange (Hand-Carried Offer) |
 |---------|-----------------|---------------------------------------|
@@ -232,7 +232,7 @@ The receiver rejects duplicate indexes, out-of-range indexes, malformed chunk le
 
 The same transfer layer, over a Tor stream instead of a data channel. `TorFramedStream` restores the discrete binary/text messages the choreography needs (`[kind][length][payload]`), and above that framing `sendFileOverTransport` and `createTransferReceiver` are the identical code the WebRTC path runs — one shared wire protocol with two transports, which is why the `TransferTransport` interface exists.
 
-What differs is everything below it: the rendezvous is an `.onion` address plus a one-time password rather than a relay lookup, the SPAKE2 identities are the address itself (`torPakeIdentities`) rather than two Nostr pubkeys, the session keys derive under `ptransfer:tor-session:v1:*` labels so a Tor root can never produce a PIN Exchange key, and there is no confirmation code because there is no live-guessable PIN on screen. The transport caps a transfer at 1 MiB. See [TOR_TRANSPORT.md](TOR_TRANSPORT.md) for the handshake, the key schedule, and how the browser publishes a service at all.
+What differs is everything below it: the rendezvous is an `.onion` address plus a one-time password rather than a relay lookup, the SPAKE2 identities are the address itself (`torPakeIdentities`) rather than two Nostr pubkeys, the session keys derive under `ptransfer:tor-session:v1:*` labels so a Tor root can never produce a PIN Exchange key, and there is no confirmation code because there is no live-guessable PIN on screen. The transport caps a transfer at 1 MiB. See [TOR_TRANSPORT.md](TOR_TRANSPORT.md) for the handshake and the key schedule, and [TOR_BROWSER.md](TOR_BROWSER.md) for how the browser publishes a service at all.
 
 ### PIN Architecture
 

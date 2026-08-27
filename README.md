@@ -143,7 +143,8 @@ One input accepts all three modes; the page works out which one the sender used 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
 - [Interop Protocol](./docs/INTEROP_PROTOCOL.md) - Normative wire contract for non-web implementations (PIN Exchange + the shared data path)
 - [Code Exchange](./docs/CODE_EXCHANGE.md) - User guide for Code Exchange
-- [Tor Transport](./docs/TOR_TRANSPORT.md) - The browser-published onion service transfer mode
+- [Tor Transport](./docs/TOR_TRANSPORT.md) - Normative spec for the onion service transfer mode, shared with ptransfer-cli
+- [Tor in the Browser](./docs/TOR_BROWSER.md) - How this app implements that spec: the WASM Tor client, bridges, and testing
 - [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Code Exchange
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
 
