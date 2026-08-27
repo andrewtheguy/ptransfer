@@ -68,12 +68,14 @@ seconds.
 A consensus stays valid for three hours, but a seed is only reused while it also
 belongs to the *current* onion-service time period. Where a descriptor lives is
 derived from the consensus's own `valid-after`, and the period rotates on a
-fixed daily boundary: a seed from before the rotation is still perfectly valid
-and still describes the ring the network has stopped using, so a service seeded
-with it would publish to one ring while a client asked the other, and every
-HSDir tried would answer 404 with no hint as to why. A seed in that state — or
-one within ten minutes of expiring — is passed over and the directory downloaded
-again, which costs time and never correctness.
+fixed daily boundary, so a seed from before the rotation is still perfectly
+valid and still describes the ring the network has stopped using. A service
+publishes to the period either side of its own as well, which covers one
+period of disagreement between the peers; a stale seed spends that slack for
+nothing, and past it every HSDir a client tries answers 404 with no hint as to
+why. A seed in that state — or one within ten minutes of expiring — is passed
+over and the directory downloaded again, which costs time and never
+correctness.
 
 The same mismatch can arrive from the network rather than the cache, when a
 bridge or relay serves a consensus an hour behind. Nothing on this side can fix
@@ -82,7 +84,7 @@ period that consensus places it in:
 
 ```text
 [tor] Directory: consensus valid 2026-08-27T12:00:00.000Z to 2026-08-27T15:00:00.000Z,
-      onion time period 20692 (both peers must be in the same period)
+      onion time period 20692 (peers more than one period apart cannot reach each other)
 ```
 
 Comparing that one number across the two peers is the difference between a

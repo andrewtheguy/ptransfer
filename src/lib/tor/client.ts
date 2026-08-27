@@ -121,10 +121,12 @@ export async function bootstrapTorClient(
 /**
  * Say which directory this client is working from.
  *
- * The time period is the number that has to match on both sides: it places the
- * HSDir ring, so a service and a client that disagree about it fail as a flat
- * 404 from every HSDir tried, with nothing in either log naming the cause.
- * Printing it on both peers turns that into a comparison anyone can make.
+ * The time period places the HSDir ring. A service publishes to the period its
+ * own consensus is in and to the ones either side, so two peers one period
+ * apart still meet; further apart than that, the client asks HSDirs the
+ * service never uploaded to and every one of them answers 404, with nothing
+ * in either log naming the cause. Printing the period on both peers turns
+ * that into a comparison anyone can make.
  */
 function logDirectory(cache: string): void {
   const directory = describeDirectory(cache);
@@ -132,20 +134,22 @@ function logDirectory(cache: string): void {
   console.info(
     `[tor] Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
       `${directory.validUntil.toISOString()}, onion time period ` +
-      `${directory.timePeriod} (both peers must be in the same period)`,
+      `${directory.timePeriod} (peers more than one period apart cannot ` +
+      'reach each other)',
   );
 
   // A stored directory in that state is refused before it is ever installed,
   // so reaching here means the network itself served a consensus from the
   // previous period — a bridge or relay an hour behind. Nothing this side can
-  // fix, but it is the whole explanation for a transfer that is about to fail
-  // with a 404 from every HSDir, so it is worth saying plainly.
+  // fix, and a peer reading a current consensus is still within the one
+  // period of slack, but anything past that fails as a 404 from every HSDir,
+  // so it is worth saying plainly.
   const verdict = judgeDirectorySeed(cache);
   if (!verdict.usable) {
     console.warn(
-      `[tor] This directory is not current: ${verdict.reason}. A peer whose ` +
-        'directory is current will not find this service, and this client ' +
-        'will not find theirs.',
+      `[tor] This directory is not current: ${verdict.reason}. That spends ` +
+        'the one period of slack either side, so a peer whose own directory ' +
+        'has moved on further will not be reachable.',
     );
   }
 }
