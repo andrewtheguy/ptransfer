@@ -25,7 +25,12 @@ import {
   TOR_BRIDGES,
   type TorBridge,
 } from '@/lib/tor/client';
-import { TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
+import {
+  TOR_MAX_TRANSFER_BYTES,
+  TOR_MAX_WIRE_BYTES,
+  TOR_SUGGESTED_MAX_BYTES,
+} from '@/lib/tor/transfer';
+import { projectedWireBytesFor } from '@/lib/transfer-source';
 
 // Extend input element to include webkitdirectory attribute
 declare module 'react' {
@@ -68,12 +73,26 @@ export function SendTab() {
   const sizeLimit =
     transferMode === 'tor' ? TOR_MAX_TRANSFER_BYTES : MAX_MESSAGE_SIZE;
   const isOverLimit = totalSize > sizeLimit;
-  const canSend = selectedFiles.length > 0 && !isOverLimit;
+  // Well under that ceiling, a Tor transfer is worth a word about — not
+  // because it will be slow, but because it might be. Advice either way: the
+  // send button does not care.
+  const isLargeForTor =
+    transferMode === 'tor' &&
+    !isOverLimit &&
+    totalSize > TOR_SUGGESTED_MAX_BYTES;
   // Anything beyond a single loose file is zipped; folder selections always
   // zip so their structure is preserved.
   const willZip =
     selectedFiles.length > 1 ||
     (selectedFiles.length === 1 && !!selectedFiles[0].webkitRelativePath);
+  // A ZIP's headers and entry paths are wire bytes no file size accounts for,
+  // and the ceiling the two peers enforce is a fixed constant — so a selection
+  // of many tiny files has to be caught here rather than mid-transfer.
+  const overWireLimit =
+    transferMode === 'tor' &&
+    !isOverLimit &&
+    projectedWireBytesFor(selectedFiles, willZip) > TOR_MAX_WIRE_BYTES;
+  const canSend = selectedFiles.length > 0 && !isOverLimit && !overWireLimit;
 
   // Collapse folder selections into one row per top-level folder; loose files
   // stay individual rows. Order follows first appearance in the selection.
@@ -114,7 +133,7 @@ export function SendTab() {
   const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
   const torModeDescription =
-    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no pTransfer relay and no direct connection between the two networks, only the Tor bridge and relays it travels through, which see transport metadata and never the file, and nothing published that could be correlated later. Slower, and capped at 1 MiB.';
+    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no pTransfer relay and no direct connection between the two networks, only the Tor bridge and relays it travels through, which see transport metadata and never the file, and nothing published that could be correlated later. Slower, capped at 100 MiB, and best kept small — a circuit is slow and there is no resume.';
   const torModeHowItWorksDescription =
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const codeModeHowItWorksDescription =
@@ -343,6 +362,21 @@ export function SendTab() {
           <p className="text-xs text-destructive">
             Total size exceeds the {formatFileSize(sizeLimit)} limit
             {transferMode === 'tor' ? ' of the Tor transport' : ''}
+          </p>
+        )}
+        {overWireLimit && (
+          <p className="text-xs text-destructive">
+            These {selectedFiles.length} files need more than{' '}
+            {formatFileSize(TOR_MAX_WIRE_BYTES)} on the wire once archive
+            headers are counted. Send fewer files, or zip them yourself first.
+          </p>
+        )}
+        {isLargeForTor && (
+          <p className="text-xs text-amber-600">
+            Over {formatFileSize(TOR_SUGGESTED_MAX_BYTES)} through a Tor
+            circuit. Speed depends on the relays you get — this may be quick or
+            may crawl, and a transfer that drops starts over. Send it anyway if
+            that trade is fine.
           </p>
         )}
       </div>

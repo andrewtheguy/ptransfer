@@ -146,6 +146,26 @@ export const MAX_MESSAGE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GiB
 // larger payloads require OPFS scratch storage.
 export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
+// Application cap on a transfer that does not run over a direct WebRTC data
+// channel: the Nostr file relay and the Tor onion transport. Two independent
+// reasons put it at exactly the memory-sink threshold, which is why it is
+// derived from it rather than spelled again:
+//
+//   - Both paths push bytes through third parties at a fraction of a data
+//     channel's speed, and neither can resume, so a transfer that dies two
+//     thirds of the way through starts over. MAX_MESSAGE_SIZE stops meaning
+//     anything on them long before it is reached.
+//   - A payload this size or smaller is received entirely in memory, so these
+//     paths never depend on OPFS `createWritable` — which some engines shipped
+//     late (Safari/iOS only in 26) and which a receiver may simply not have.
+//     Above the threshold a receive can fail for a reason the sender has no
+//     way to see coming.
+//
+// It is one constant rather than one per transport because a receiver enforces
+// the sender's ceiling as its own: two numbers that drifted apart would show up
+// as a transfer refused mid-handshake for no reason a user could act on.
+export const SLOW_TRANSPORT_MAX_BYTES = MEMORY_SINK_MAX_BYTES;
+
 // PIN hint length.
 // 8 hex chars of output, but the hint is derived from the locator segment
 // alone, so it carries at most log2(PIN_CHARSET.length ** PIN_LOCATOR_LENGTH)

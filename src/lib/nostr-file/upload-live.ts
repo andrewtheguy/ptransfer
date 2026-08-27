@@ -1,3 +1,4 @@
+import { SLOW_TRANSPORT_MAX_BYTES } from '../crypto/constants';
 import { wipeBufferSource } from '../crypto/memory';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import {
@@ -18,7 +19,6 @@ import {
   NOSTR_FILE_CHUNK_SIZE,
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
-  NOSTR_FILE_MAX_BYTES,
   UPLOAD_CHUNK_CONCURRENCY,
 } from './constants';
 import {
@@ -109,10 +109,10 @@ export async function sendFileLive(
     wipeBufferSource(keyBytes);
     throw new Error('Cannot send an empty file');
   }
-  if (data.length > NOSTR_FILE_MAX_BYTES) {
+  if (data.length > SLOW_TRANSPORT_MAX_BYTES) {
     wipeBufferSource(keyBytes);
     throw new Error(
-      `File too large for Nostr relay transfer (max ${NOSTR_FILE_MAX_BYTES / (1024 * 1024)} MiB)`,
+      `File too large for Nostr relay transfer (max ${SLOW_TRANSPORT_MAX_BYTES / (1024 * 1024)} MiB)`,
     );
   }
 

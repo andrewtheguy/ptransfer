@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatOnionAddress,
   isOnionHost,
   parseOnionAddress,
   TOR_DEFAULT_PORT,
@@ -16,12 +17,36 @@ describe('parseOnionAddress', () => {
       host: ONION,
       port: TOR_DEFAULT_PORT,
       onion: `${ONION}:${TOR_DEFAULT_PORT}`,
+      display: ONION,
     });
   });
 
   it('lets a port in the address win', () => {
     expect(parseOnionAddress(`${ONION}:1234`)?.port).toBe(1234);
     expect(parseOnionAddress(`${ONION}:1234`)?.onion).toBe(`${ONION}:1234`);
+  });
+
+  it('drops only the default port from what a person is shown', () => {
+    // The handshake binding always carries the port; the display never does
+    // unless the port is one the receiver could not have assumed.
+    expect(parseOnionAddress(`${ONION}:${TOR_DEFAULT_PORT}`)?.display).toBe(
+      ONION,
+    );
+    expect(parseOnionAddress(`${ONION}:1234`)?.display).toBe(`${ONION}:1234`);
+  });
+
+  it('round-trips the displayed address back to the same binding', () => {
+    // What the sender copies is re-parsed by the receiver, so the two forms
+    // have to land on one `<host>:<port>` or the SPAKE2 roots diverge.
+    for (const address of [ONION, `${ONION}:1234`, ONION.toUpperCase()]) {
+      const parsed = parseOnionAddress(address);
+      // Asserted rather than optional-chained: if either parse returned null,
+      // `undefined === undefined` would pass and prove nothing.
+      expect(parsed).not.toBeNull();
+      const reparsed = parseOnionAddress(parsed?.display ?? '');
+      expect(reparsed).not.toBeNull();
+      expect(reparsed?.onion).toBe(parsed?.onion);
+    }
   });
 
   it('canonicalizes the case', () => {
@@ -80,5 +105,12 @@ describe('isOnionHost', () => {
     // A port belongs to parseOnionAddress, not here.
     expect(isOnionHost(`${ONION}:9735`)).toBe(false);
     expect(isOnionHost('example.onion')).toBe(false);
+  });
+});
+
+describe('formatOnionAddress', () => {
+  it('leaves the default port implicit and keeps any other', () => {
+    expect(formatOnionAddress(ONION, TOR_DEFAULT_PORT)).toBe(ONION);
+    expect(formatOnionAddress(OTHER, 1234)).toBe(`${OTHER}:1234`);
   });
 });

@@ -105,10 +105,18 @@ export interface OnionAddress {
   host: string;
   port: number;
   /**
-   * `<host>:<port>` — the exact string both peers bind the handshake to, and
-   * the one this app displays and accepts.
+   * `<host>:<port>` — the exact string both peers bind the handshake to. It
+   * always carries the port, because two peers that disagreed about it would
+   * derive different SPAKE2 roots.
    */
   onion: string;
+  /**
+   * The same address as a human copies it: the port is dropped when it is the
+   * default, since that is the only one this app ever publishes on and
+   * ptransfer-cli assumes the same one. A non-default port is kept, so a
+   * `--port` address still round-trips through the box that echoes it back.
+   */
+  display: string;
 }
 
 /**
@@ -139,5 +147,23 @@ export function parseOnionAddress(
   const host = decodeOnionHost(hostPart);
   if (host === null) return null;
 
-  return { host, port, onion: `${host}:${port}` };
+  return {
+    host,
+    port,
+    onion: `${host}:${port}`,
+    display: formatOnionAddress(host, port),
+  };
+}
+
+/**
+ * Spell an address the way it is handed to a person: `<host>.onion`, with the
+ * port left implicit unless it is not the default one.
+ *
+ * The port is not a choice either side offers — it is a constant on both — so
+ * showing it only gives the receiver five more characters to mistype and a `:`
+ * that a chat client may swallow into a link. What the handshake binds is
+ * still `<host>:<port>`; this is presentation only.
+ */
+export function formatOnionAddress(host: string, port: number): string {
+  return port === TOR_DEFAULT_PORT ? host : `${host}:${port}`;
 }

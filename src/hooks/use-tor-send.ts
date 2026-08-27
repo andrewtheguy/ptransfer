@@ -7,10 +7,9 @@ import {
   closeTorClient,
   type TorBridge,
 } from '@/lib/tor/client';
-import { TorFramedStream } from '@/lib/tor/framing';
-import { runTorServiceHandshake } from '@/lib/tor/handshake';
-import { TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
-import { sendFileOverTor, TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
+import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
+import { serveUntilSent } from '@/lib/tor/serve';
+import { TOR_MAX_TRANSFER_BYTES, TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 
@@ -33,34 +32,12 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  * `ptransfer tor receive`; the two speak the same handshake and framing.
  */
 
-/**
- * How long the tab keeps the service up, from publish to a delivered file. A
- * resource backstop, not a security control: the password is single-use by
- * convention and the address dies with the tab either way.
- */
-const WAIT_TIMEOUT_MS = 30 * 60 * 1000;
-
-/**
- * How long one accepted connection may take before it is dropped and the
- * service goes back to waiting.
- *
- * Anyone who has the address can open the port, so an accepted connection is
- * not yet a receiver and must not be able to hold the service against the real
- * one. The bound covers a whole turn — handshake and a megabyte crawling down
- * a Tor circuit — so it is generous; the point is only that it exists.
- */
-const CONNECTION_TIMEOUT_MS = 5 * 60 * 1000;
-
-/**
- * How many connections may fail to authenticate before the tab gives up. The
- * password is far too long to guess — this bounds a stranger who found the
- * address hammering the service, not a realistic search.
- */
-const MAX_FAILED_HANDSHAKES = 20;
-
 export interface UseTorSendReturn {
   state: TransferState;
-  /** `<address>.onion:<port>`, once the descriptor is published. */
+  /**
+   * `<address>.onion` as the receiver is given it, once the descriptor is
+   * published. The port is implicit — see `formatOnionAddress`.
+   */
   onionAddress: string | null;
   /** The one-time password the receiver needs alongside the address. */
   password: string | null;
@@ -123,6 +100,16 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
             `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; this selection is ${formatFileSize(fileSize)}.`,
           );
         }
+        // A ZIP's headers and entry paths are wire bytes that no file size
+        // accounts for, so a selection of many tiny files can pass the check
+        // above and still not fit. Refusing here costs a moment; finding out
+        // while producing bytes costs a bootstrap, a handshake, and — with no
+        // resume — the whole transfer.
+        if (content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
+          throw new Error(
+            `This selection needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows. Archive overhead grows with the number of files; send fewer of them.`,
+          );
+        }
 
         setState({
           status: 'connecting',
@@ -157,11 +144,14 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
         serviceRef.current = service;
         if (cancelledRef.current) throw new Error('Cancelled');
 
-        // The port is part of the string both sides bind the handshake to, so
-        // it is displayed rather than implied.
+        // Two strings out of one address: `onion` is what the handshake binds
+        // and always carries the port, while what the receiver is handed
+        // leaves the port implicit.
         const onion = `${service.onionAddress}:${TOR_DEFAULT_PORT}`;
         const transferPassword = generatePin();
-        setOnionAddress(onion);
+        setOnionAddress(
+          formatOnionAddress(service.onionAddress, TOR_DEFAULT_PORT),
+        );
         setPassword(transferPassword);
 
         const metadata: TransferMetadata = {
@@ -211,149 +201,4 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
   );
 
   return { state, onionAddress, password, send, cancel };
-}
-
-interface ServeOptions {
-  service: OnionService;
-  onion: string;
-  password: string;
-  metadata: TransferMetadata;
-  content: TransferSource;
-  fileMetadata: { fileName: string; fileSize: number; mimeType: string };
-  isCancelled: () => boolean;
-  setState: (state: TransferState) => void;
-}
-
-/**
- * Accept connections until one of them takes the file.
- *
- * A connection that cannot authenticate and one that drops mid-transfer are
- * both just a connection that did not deliver the file: the address and
- * password are untouched either way, so the receiver can come back, and the
- * failure count bounds a stranger who found the address from hammering it.
- */
-async function serveUntilSent(options: ServeOptions): Promise<void> {
-  const { service, fileMetadata, isCancelled, setState } = options;
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  let failures = 0;
-
-  setState({
-    status: 'waiting_for_receiver',
-    message: 'Waiting for a receiver...',
-    contentType: 'file',
-    fileMetadata,
-  });
-
-  for (;;) {
-    if (isCancelled()) throw new Error('Cancelled');
-
-    // The deadline covers waiting for a connection, not only the gaps between
-    // them: a service nobody ever reaches is exactly when this most needs to
-    // stop on its own.
-    const stream = await withTimeout(
-      service.accept(),
-      Math.max(1, deadline - Date.now()),
-      `No transfer finished within ${WAIT_TIMEOUT_MS / 60000} minutes. Start a new transfer.`,
-    );
-    if (stream === null) {
-      if (isCancelled()) throw new Error('Cancelled');
-      throw new Error('The onion service stopped accepting connections');
-    }
-
-    const framed = new TorFramedStream(stream);
-    setState({
-      status: 'connecting',
-      message: 'A receiver connected; authenticating...',
-      contentType: 'file',
-      fileMetadata,
-    });
-
-    let delivered = false;
-    try {
-      delivered = await withTimeout(
-        serveConnection(framed, options),
-        CONNECTION_TIMEOUT_MS,
-        `The peer went quiet for ${CONNECTION_TIMEOUT_MS / 1000}s`,
-      );
-    } catch (error) {
-      failures += 1;
-      console.warn('[tor] A connection failed:', error);
-      if (failures >= MAX_FAILED_HANDSHAKES) {
-        throw new Error(
-          `Giving up after ${failures} failed connections. Start a new transfer.`,
-        );
-      }
-      setState({
-        status: 'waiting_for_receiver',
-        message: `A connection failed (${failures}/${MAX_FAILED_HANDSHAKES}). Still waiting...`,
-        contentType: 'file',
-        fileMetadata,
-      });
-      continue;
-    } finally {
-      await framed.close();
-    }
-
-    if (delivered) return;
-
-    // A receiver that declined after seeing the metadata leaves the password
-    // untouched, and the source is repeatable, so the next one gets the file
-    // from the start.
-    setState({
-      status: 'waiting_for_receiver',
-      message: 'The receiver cancelled. Still waiting...',
-      contentType: 'file',
-      fileMetadata,
-    });
-  }
-}
-
-/** One accepted connection: authenticate the peer, then hand it the file. */
-async function serveConnection(
-  framed: TorFramedStream,
-  options: ServeOptions,
-): Promise<boolean> {
-  const { onion, password, metadata, content, fileMetadata, setState } =
-    options;
-
-  const handshake = await runTorServiceHandshake(
-    framed,
-    password,
-    onion,
-    metadata,
-  );
-  if (handshake.outcome === 'cancelled') return false;
-
-  setState({
-    status: 'transferring',
-    message: 'Receiver authenticated; sending over Tor...',
-    contentType: 'file',
-    fileMetadata,
-    progress: { current: 0, total: fileMetadata.fileSize },
-  });
-
-  await sendFileOverTor(framed, handshake.keys.contentKey, content, {
-    onProgress: (current, total) =>
-      setState({
-        status: 'transferring',
-        message: 'Sending over Tor...',
-        contentType: 'file',
-        fileMetadata,
-        progress: { current, total },
-      }),
-    isCancelled: options.isCancelled,
-  });
-  return true;
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  message: string,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }

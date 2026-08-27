@@ -29,7 +29,10 @@ import type { ReceivedContent } from '@/lib/types';
  */
 
 export interface TorReceiveRequest {
-  /** `<address>.onion` or `<address>.onion:<port>`, as the sender showed it. */
+  /**
+   * `<address>.onion`, as the sender showed it. A `:<port>` is accepted and
+   * wins over the default, so an address from a `--port` CLI still connects.
+   */
   address: string;
   password: string;
   bridge: TorBridge;

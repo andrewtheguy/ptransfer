@@ -1,5 +1,5 @@
 import { type FlateError, Zip, ZipPassThrough } from 'fflate';
-import type { TransferSource } from './transfer-source';
+import { type TransferSource, zipWireUpperBound } from './transfer-source';
 
 /**
  * ZIP entry compressed with the browser's native CompressionStream.
@@ -94,6 +94,9 @@ export function createZipTransferSource(
     // the input total remains useful as a progress/storage hint.
     size: null,
     estimatedSize: totalInputBytes,
+    // Not the input total: every entry carries a header pair and its path, so
+    // a selection of many tiny files occupies far more than its file sizes.
+    projectedWireBytes: zipWireUpperBound(files),
     // The entries are deflated below, so the transfer pipeline must not
     // compress this payload again (the no-recompress rule).
     precompressed: true,
