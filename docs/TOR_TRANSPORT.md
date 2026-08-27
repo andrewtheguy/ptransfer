@@ -184,9 +184,12 @@ yet a receiver and never gets to hold the service against the real one:
   password is the receiver, and how long its bytes take is unknowable in
   advance — but it is still bound by the transfer layer's idle window, so a
   receiver that stops draining the circuit aborts within a minute.
-- **30 minutes** overall, wrapping the accept loop *including* connections in
-  progress, so neither the deadline nor a shutdown is blocked by a peer that
-  opens the port and says nothing.
+- **30 minutes** to find a receiver that authenticates. It bounds the *wait*,
+  and covers waiting for a connection rather than only the gaps between them,
+  so a service nobody ever reaches still stops on its own. It does not bound a
+  transfer: a peer that has proved it knows the password is the receiver, and
+  cutting it off at an arbitrary minute would be a speed-based size limit in
+  disguise. A sender's own shutdown must still work while bytes are moving.
 
 ## Framing
 
@@ -233,9 +236,16 @@ on the wire and restored on receipt; a generated ZIP travels as-is. See
   send it anyway. A fixed ceiling would refuse transfers that would have
   finished fine; only the operator knows what the file is worth waiting for.
 - The wire ceiling carries a **1 MiB margin** over the cap: deflate grows
-  incompressible input slightly and a ZIP adds per-entry headers, neither of
-  which is known until the bytes are produced. The receiver caps *inflated*
-  output at the same ceiling as a decompression-bomb guard.
+  incompressible input slightly and a ZIP adds per-entry headers. The receiver
+  caps *inflated* output at the same ceiling as a decompression-bomb guard.
+- Because that ceiling is a fixed constant on both sides, a sender must bound
+  its own wire size **before publishing**, not discover it while producing
+  bytes. The input size does not answer that question: a ZIP charges a header
+  pair and the entry path for every file it holds, so a selection of many tiny
+  files can sit far under the input cap and still not fit. A sender projects
+  an upper bound — per-entry overhead plus what deflate can add — and refuses
+  the selection up front. Finding out later costs a bootstrap, a handshake,
+  and, on a transport with no resume, the whole transfer.
 - The service answers only while the sending process (or tab) is running.
 - No resume: a dropped transfer starts over.
 - A first bootstrap can take minutes, and in a browser tab usually does.

@@ -10,7 +10,11 @@ import {
 import { TorFramedStream } from '@/lib/tor/framing';
 import { runTorServiceHandshake } from '@/lib/tor/handshake';
 import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
-import { sendFileOverTor, TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
+import {
+  sendFileOverTor,
+  TOR_MAX_TRANSFER_BYTES,
+  TOR_MAX_WIRE_BYTES,
+} from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 
@@ -34,9 +38,14 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  */
 
 /**
- * How long the tab keeps the service up, from publish to a delivered file. A
- * resource backstop, not a security control: the password is single-use by
- * convention and the address dies with the tab either way.
+ * How long the tab waits for a receiver that can authenticate.
+ *
+ * A resource backstop, not a security control: the password is single-use by
+ * convention and the address dies with the tab either way. It bounds the
+ * *wait*, not a transfer — once a peer has proved it knows the password it is
+ * the receiver, and cutting its transfer off at an arbitrary minute would be a
+ * speed-based size limit in disguise, which this transport deliberately does
+ * not have. What polices a transfer is the stall window in `sendFileOverTor`.
  */
 const WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -128,6 +137,16 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
         if (fileSize > TOR_MAX_TRANSFER_BYTES) {
           throw new Error(
             `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; this selection is ${formatFileSize(fileSize)}.`,
+          );
+        }
+        // A ZIP's headers and entry paths are wire bytes that no file size
+        // accounts for, so a selection of many tiny files can pass the check
+        // above and still not fit. Refusing here costs a moment; finding out
+        // while producing bytes costs a bootstrap, a handshake, and — with no
+        // resume — the whole transfer.
+        if (content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
+          throw new Error(
+            `This selection needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows. Archive overhead grows with the number of files; send fewer of them.`,
           );
         }
 
@@ -263,7 +282,7 @@ async function serveUntilSent(options: ServeOptions): Promise<void> {
     const stream = await withTimeout(
       service.accept(),
       Math.max(1, deadline - Date.now()),
-      `No transfer finished within ${WAIT_TIMEOUT_MS / 60000} minutes. Start a new transfer.`,
+      `No receiver authenticated within ${WAIT_TIMEOUT_MS / 60000} minutes. Start a new transfer.`,
     );
     if (stream === null) {
       if (isCancelled()) throw new Error('Cancelled');

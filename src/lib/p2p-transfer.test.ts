@@ -115,6 +115,7 @@ describe('sendFileOverTransport', () => {
       type: 'application/zip',
       size: null,
       estimatedSize: ENCRYPTION_CHUNK_SIZE + 3,
+      projectedWireBytes: ENCRYPTION_CHUNK_SIZE + 3,
       precompressed: true,
       stream: () =>
         new ReadableStream<Uint8Array>({
@@ -189,6 +190,7 @@ describe('sendFileOverTransport', () => {
       type: 'application/zip',
       size: null,
       estimatedSize: data.length,
+      projectedWireBytes: data.length,
       precompressed: true,
       stream: () => new Blob([data as BlobPart]).stream(),
     };

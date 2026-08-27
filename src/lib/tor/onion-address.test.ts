@@ -40,9 +40,12 @@ describe('parseOnionAddress', () => {
     // have to land on one `<host>:<port>` or the SPAKE2 roots diverge.
     for (const address of [ONION, `${ONION}:1234`, ONION.toUpperCase()]) {
       const parsed = parseOnionAddress(address);
-      expect(parseOnionAddress(parsed?.display ?? '')?.onion).toBe(
-        parsed?.onion,
-      );
+      // Asserted rather than optional-chained: if either parse returned null,
+      // `undefined === undefined` would pass and prove nothing.
+      expect(parsed).not.toBeNull();
+      const reparsed = parseOnionAddress(parsed?.display ?? '');
+      expect(reparsed).not.toBeNull();
+      expect(reparsed?.onion).toBe(parsed?.onion);
     }
   });
 

@@ -27,8 +27,10 @@ import {
 } from '@/lib/tor/client';
 import {
   TOR_MAX_TRANSFER_BYTES,
+  TOR_MAX_WIRE_BYTES,
   TOR_SUGGESTED_MAX_BYTES,
 } from '@/lib/tor/transfer';
+import { projectedWireBytesFor } from '@/lib/transfer-source';
 
 // Extend input element to include webkitdirectory attribute
 declare module 'react' {
@@ -78,12 +80,19 @@ export function SendTab() {
     transferMode === 'tor' &&
     !isOverLimit &&
     totalSize > TOR_SUGGESTED_MAX_BYTES;
-  const canSend = selectedFiles.length > 0 && !isOverLimit;
   // Anything beyond a single loose file is zipped; folder selections always
   // zip so their structure is preserved.
   const willZip =
     selectedFiles.length > 1 ||
     (selectedFiles.length === 1 && !!selectedFiles[0].webkitRelativePath);
+  // A ZIP's headers and entry paths are wire bytes no file size accounts for,
+  // and the ceiling the two peers enforce is a fixed constant — so a selection
+  // of many tiny files has to be caught here rather than mid-transfer.
+  const overWireLimit =
+    transferMode === 'tor' &&
+    !isOverLimit &&
+    projectedWireBytesFor(selectedFiles, willZip) > TOR_MAX_WIRE_BYTES;
+  const canSend = selectedFiles.length > 0 && !isOverLimit && !overWireLimit;
 
   // Collapse folder selections into one row per top-level folder; loose files
   // stay individual rows. Order follows first appearance in the selection.
@@ -353,6 +362,13 @@ export function SendTab() {
           <p className="text-xs text-destructive">
             Total size exceeds the {formatFileSize(sizeLimit)} limit
             {transferMode === 'tor' ? ' of the Tor transport' : ''}
+          </p>
+        )}
+        {overWireLimit && (
+          <p className="text-xs text-destructive">
+            These {selectedFiles.length} files need more than{' '}
+            {formatFileSize(TOR_MAX_WIRE_BYTES)} on the wire once archive
+            headers are counted. Send fewer files, or zip them yourself first.
           </p>
         )}
         {isLargeForTor && (
