@@ -53,12 +53,16 @@ export function useTorReceive(): UseTorReceiveReturn {
   const clientRef = useRef<WebtorClient | null>(null);
   const framedRef = useRef<TorFramedStream | null>(null);
 
+  // Everything this owns is taken and cleared before the first await.
+  // `receive` releases its guard before tearing down, so a Receive Another can
+  // be underway while these closes are still in flight; a ref read afterwards
+  // would be the new transfer's stream or client, and closing it would kill it.
   const teardown = useCallback(async () => {
     const framed = framedRef.current;
-    framedRef.current = null;
-    await framed?.close();
     const client = clientRef.current;
+    framedRef.current = null;
     clientRef.current = null;
+    await framed?.close();
     await closeTorClient(client);
   }, []);
 

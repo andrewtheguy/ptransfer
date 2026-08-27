@@ -78,9 +78,15 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
   const clientRef = useRef<WebtorClient | null>(null);
   const serviceRef = useRef<OnionService | null>(null);
 
+  // Everything this owns is taken and cleared before the first await. `send`
+  // releases its guard before tearing down, so a Retry can be underway while
+  // these closes are still in flight; a ref read afterwards would be the new
+  // transfer's service or client, and closing it would kill it.
   const teardown = useCallback(async () => {
     const service = serviceRef.current;
+    const client = clientRef.current;
     serviceRef.current = null;
+    clientRef.current = null;
     if (service) {
       try {
         await service.close();
@@ -88,8 +94,6 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
         console.info('[tor] Failed to withdraw the onion service:', error);
       }
     }
-    const client = clientRef.current;
-    clientRef.current = null;
     await closeTorClient(client);
   }, []);
 
