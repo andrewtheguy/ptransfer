@@ -173,6 +173,8 @@ export function usePinSend(): UsePinSendReturn {
   const clientRef = useRef<NostrClient | null>(null);
   const cancelledRef = useRef(false);
   const sendingRef = useRef(false);
+  // Distinguishes invocations; see the note where a run claims one.
+  const runIdRef = useRef(0);
   // Set while a transfer is waiting for a receiver; null otherwise.
   const refreshPinRef = useRef<(() => Promise<void>) | null>(null);
   // Both set only while the send is parked on the confirmation code: the value
@@ -215,6 +217,22 @@ export function usePinSend(): UsePinSendReturn {
       if (sendingRef.current) return;
       sendingRef.current = true;
       cancelledRef.current = false;
+      // Each invocation owns this hook's shared refs only until the next one
+      // starts. That used to be close to academic — connecting took seconds —
+      // but an anonymous transfer can sit inside a five-minute Tor bootstrap,
+      // which is long enough for the user to cancel and start another one
+      // underneath it. `cancel()` clears the guard the next run checks, so the
+      // superseded run wakes into a hook that is no longer its own: its
+      // `cancelledRef` read comes back false because the new run reset it, and
+      // its cleanup would report state and close a client that now belong to
+      // the replacement. A run id is what tells the two apart.
+      const runId = ++runIdRef.current;
+      const superseded = () => runIdRef.current !== runId;
+      const abandoned = () => cancelledRef.current || superseded();
+      // The client this run created, closed by this run whoever owns the ref
+      // by then. Reading it back out of clientRef would be reading someone
+      // else's.
+      let ownClient: NostrClient | null = null;
 
       const contentType: ContentType = 'file';
       // The PIN's length is what tells the receiver which pool to look on, so
@@ -291,7 +309,7 @@ export function usePinSend(): UsePinSendReturn {
           mimeType,
         };
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Create Nostr client for signaling
         setState({
@@ -306,17 +324,18 @@ export function usePinSend(): UsePinSendReturn {
                 anonymous: {
                   bridge: options.bridge,
                   onStatus: (message: string) => {
-                    if (cancelledRef.current) return;
+                    if (abandoned()) return;
                     setState({ status: 'connecting', message });
                   },
                 },
               }
             : {}),
         });
+        ownClient = client;
         clientRef.current = client;
         if (options.anonymous) {
           await client.waitForAnonymousTransport();
-          if (cancelledRef.current) return;
+          if (abandoned()) return;
           setState({
             status: 'connecting',
             message: 'Tor is up. Opening onion relay connections...',
@@ -324,7 +343,7 @@ export function usePinSend(): UsePinSendReturn {
         }
         await client.waitForConnection();
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         setState({
           status: 'waiting_for_receiver',
@@ -413,7 +432,7 @@ export function usePinSend(): UsePinSendReturn {
           try {
             const { run, event } = await startRun(pakeSecret, hint, bucket);
 
-            if (cancelledRef.current || epoch !== pinEpoch) return;
+            if (abandoned() || epoch !== pinEpoch) return;
 
             // Register the generation before publishing so a fast claim can
             // never race ahead of the retained-keys list.
@@ -431,7 +450,7 @@ export function usePinSend(): UsePinSendReturn {
 
             await client.publish(event);
 
-            if (!cancelledRef.current && epoch === pinEpoch) {
+            if (!abandoned() && epoch === pinEpoch) {
               setPin(newPin);
             }
           } finally {
@@ -459,7 +478,7 @@ export function usePinSend(): UsePinSendReturn {
             generation.bucket,
           );
           if (
-            cancelledRef.current ||
+            abandoned() ||
             epoch !== pinEpoch ||
             !generations.includes(generation)
           ) {
@@ -509,7 +528,7 @@ export function usePinSend(): UsePinSendReturn {
           }, PIN_WAIT_TIMEOUT_MS);
 
           cancelPoll = setInterval(() => {
-            if (cancelledRef.current && !settled) {
+            if (abandoned() && !settled) {
               settled = true;
               cleanup();
               reject(new Error('Cancelled'));
@@ -527,7 +546,7 @@ export function usePinSend(): UsePinSendReturn {
               },
             ],
             (event: Event) => {
-              if (settled || cancelledRef.current) return;
+              if (settled || abandoned()) return;
               if (processedEventIds.has(event.id)) return;
               processedEventIds.add(event.id);
 
@@ -624,7 +643,7 @@ export function usePinSend(): UsePinSendReturn {
                   // Wrong PIN or invalid element: fall through to replacement.
                 }
 
-                if (settled || cancelledRef.current) return;
+                if (settled || abandoned()) return;
                 if (verified) {
                   settled = true;
                   cleanup();
@@ -647,7 +666,7 @@ export function usePinSend(): UsePinSendReturn {
           const scheduleRotation = () => {
             if (rotationInterval) clearInterval(rotationInterval);
             rotationInterval = setInterval(() => {
-              if (settled || cancelledRef.current) return;
+              if (settled || abandoned()) return;
               void publishRendezvous().catch((err) => {
                 console.error('Failed to publish rendezvous rotation:', err);
               });
@@ -660,7 +679,7 @@ export function usePinSend(): UsePinSendReturn {
           // keys, and relay connections.
           let refreshInFlight = false;
           refreshPinRef.current = async () => {
-            if (settled || cancelledRef.current || refreshInFlight) return;
+            if (settled || abandoned() || refreshInFlight) return;
             refreshInFlight = true;
             try {
               pinEpoch += 1;
@@ -684,7 +703,7 @@ export function usePinSend(): UsePinSendReturn {
           scheduleRotation();
         });
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // First-claim lockout: rotation has stopped, the retained generations
         // and their PAKE secrets are wiped, and only this receiver's events are
@@ -727,7 +746,7 @@ export function usePinSend(): UsePinSendReturn {
           metadataHash,
         });
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Mutual proof plus metadata delivery: the confirm is sealed under the
         // session's confirm key, which only the matching PAKE peer holds, so
@@ -755,7 +774,7 @@ export function usePinSend(): UsePinSendReturn {
         );
         await client.publish(confirmEvent);
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         setState((prevState) => ({
           ...prevState,
@@ -791,7 +810,7 @@ export function usePinSend(): UsePinSendReturn {
             }, CONFIRM_CODE_ENTRY_TIMEOUT_MS);
 
             cancelPoll = setInterval(() => {
-              if (cancelledRef.current && !settled) {
+              if (abandoned() && !settled) {
                 settled = true;
                 cleanup();
                 reject(new Error('Cancelled'));
@@ -812,7 +831,7 @@ export function usePinSend(): UsePinSendReturn {
           confirmationCodeAcceptRef.current = null;
         }
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // The typed code matched: the human vouched for the peer we locked
         // onto, so the gate opens and signaling may start.
@@ -883,7 +902,7 @@ export function usePinSend(): UsePinSendReturn {
             const rtc = new WebRTCConnection(
               getWebRTCConfig(),
               async (signal) => {
-                if (cancelledRef.current) return;
+                if (abandoned()) return;
                 const signalPayload = { type: 'signal', signal };
                 const signalJson = JSON.stringify(signalPayload);
                 const encryptedSignal = await encrypt(
@@ -925,7 +944,7 @@ export function usePinSend(): UsePinSendReturn {
                           ...s,
                           progress: { current, total },
                         })),
-                      isCancelled: () => cancelledRef.current,
+                      isCancelled: () => abandoned(),
                     },
                   );
                   webRTCSuccess = true;
@@ -985,7 +1004,7 @@ export function usePinSend(): UsePinSendReturn {
 
             let retryCount = 0;
             offerRetryInterval = setInterval(async () => {
-              if (answerReceived || webRTCSuccess || cancelledRef.current) {
+              if (answerReceived || webRTCSuccess || abandoned()) {
                 if (offerRetryInterval) {
                   clearInterval(offerRetryInterval);
                   offerRetryInterval = null;
@@ -1031,7 +1050,7 @@ export function usePinSend(): UsePinSendReturn {
           useWebRTC: prevState.useWebRTC,
         }));
       } catch (error) {
-        if (!cancelledRef.current) {
+        if (!abandoned()) {
           setPin(null);
           setState((prevState) => ({
             ...prevState,
@@ -1047,13 +1066,16 @@ export function usePinSend(): UsePinSendReturn {
           wipeBufferSource(generation.pakeSecret);
         }
         generations.length = 0;
-        sendingRef.current = false;
-        expectedConfirmationCodeRef.current = null;
-        confirmationCodeAcceptRef.current = null;
-        if (clientRef.current) {
-          clientRef.current.close();
-          clientRef.current = null;
+        // These belong to whichever run is current, so only that run may clear
+        // them: a superseded run doing it would release the replacement's
+        // concurrency guard and drop the code its operator is about to type.
+        if (!superseded()) {
+          sendingRef.current = false;
+          expectedConfirmationCodeRef.current = null;
+          confirmationCodeAcceptRef.current = null;
         }
+        if (clientRef.current === ownClient) clientRef.current = null;
+        ownClient?.close();
       }
     },
     [],

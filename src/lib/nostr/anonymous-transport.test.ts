@@ -16,13 +16,19 @@ const torMocks = vi.hoisted(() => {
       sent.push(text);
     }),
     sendBinary: vi.fn(async () => undefined),
-    receive: vi.fn(async () => {
-      if (!received) {
-        received = true;
-        return { type: 'text', text: '["EOSE","subscription"]' };
-      }
-      return null;
-    }),
+    receive: vi.fn(
+      async (): Promise<
+        | { type: 'text'; text: string }
+        | { type: 'binary'; bytes: Uint8Array }
+        | null
+      > => {
+        if (!received) {
+          received = true;
+          return { type: 'text', text: '["EOSE","subscription"]' };
+        }
+        return null;
+      },
+    ),
     close: closeSocket,
   };
   const client = {
@@ -34,6 +40,7 @@ const torMocks = vi.hoisted(() => {
   };
   return {
     client,
+    socket,
     closeClient,
     closeSocket,
     sent,
@@ -158,6 +165,54 @@ describe('AnonymousSignalingTransport', () => {
       'Nostr signaling only supports text messages',
     );
     transport.close();
+  });
+
+  it('hands the onion socket back when a relay breaks the protocol', async () => {
+    // finishClose forgets the socket and drops the adapter from the
+    // transport's set, so a stream not returned here is unreachable for the
+    // rest of the session: close() cannot find it, and it holds a circuit and
+    // an unread queue for nobody until the whole client goes.
+    torMocks.socket.receive.mockImplementationOnce(async () => ({
+      type: 'binary' as const,
+      bytes: new Uint8Array([1, 2, 3]),
+    }));
+    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    await transport.waitUntilReady();
+
+    const socket = new transport.websocketImplementation(RELAY);
+    const errors: string[] = [];
+    socket.addEventListener('error', (event) =>
+      errors.push((event as ErrorEvent).message),
+    );
+    const closed = await new Promise<CloseEvent>((resolve) =>
+      socket.addEventListener(
+        'close',
+        (event) => resolve(event as CloseEvent),
+        { once: true },
+      ),
+    );
+
+    expect(closed.code).toBe(1003);
+    expect(errors).toEqual(['Relay sent a binary message on a Nostr socket']);
+    await vi.waitFor(() => expect(torMocks.closeSocket).toHaveBeenCalled());
+    transport.close();
+  });
+
+  it('settles its waiters when closed, not when the bootstrap gives up', async () => {
+    // A cancelled transfer must not leave the hook that started it suspended
+    // for the rest of the five-minute budget. By the time a stalled bootstrap
+    // finally woke it, a replacement transfer could own the hook's refs, and
+    // the stale run's cleanup would close that transfer's client.
+    torMocks.bootstrap.mockImplementationOnce(() => new Promise(() => {}));
+    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const failure = expect(transport.waitUntilReady()).rejects.toThrow(
+      'Anonymous signaling was cancelled',
+    );
+
+    transport.close();
+
+    // No timer advanced: this resolves only because close() rejected it.
+    await failure;
   });
 
   it('fails instead of waiting forever when the bootstrap stalls', async () => {

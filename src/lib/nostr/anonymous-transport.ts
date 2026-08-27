@@ -35,6 +35,21 @@ import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor';
  */
 const BOOTSTRAP_TIMEOUT_MS = 300_000;
 
+/**
+ * The `error` event this adapter emits.
+ *
+ * Deliberately not `new ErrorEvent(...)`. That constructor is a browser global
+ * and nothing else defines it — Node does not — so building one here turns a
+ * clean protocol error into a ReferenceError thrown inside the read loop, and
+ * the adapter hangs rather than closing. Everything that reads this event
+ * wants `message` and nothing else: nostr-tools' `onerror` handler takes
+ * `ev.message` as the reason it rejects a connection, and so do this file's
+ * tests. An Event carrying one is the whole contract.
+ */
+function errorEvent(message: string): Event & { message: string } {
+  return Object.assign(new Event('error'), { message });
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return typeof error === 'string' ? error : 'Anonymous signaling failed';
@@ -99,22 +114,45 @@ export class AnonymousSignalingTransport {
   private readonly sockets = new Set<{
     close(code?: number, reason?: string): void;
   }>();
+  /** The bootstrapped client, once there is one for `close()` to close. */
+  private client: WebtorClient | null = null;
+  /** Rejects `clientPromise` on `close()`; see the race below. */
+  private cancelBootstrap: (error: Error) => void = () => {};
 
   readonly websocketImplementation: typeof WebSocket;
 
   constructor(options: AnonymousTransportOptions) {
-    this.clientPromise = withBootstrapDeadline(
+    const cancelled = new Promise<never>((_, reject) => {
+      this.cancelBootstrap = reject;
+    });
+
+    const bootstrap = withBootstrapDeadline(
       bootstrapTorClient({
         bridge: options.bridge,
         onStatus: options.onStatus,
       }),
     ).then(async (client) => {
       if (this.closed) {
+        // Cancelled while this was still in flight: it holds circuits for a
+        // session that has already reported itself finished.
         await closeTorClient(client);
         throw new Error('Anonymous signaling was cancelled');
       }
+      this.client = client;
       return client;
     });
+
+    // Racing the cancellation is what makes `close()` prompt, and that is a
+    // correctness property rather than a nicety. Everything that awaits this
+    // — `waitUntilReady`, and every socket still building its circuit — would
+    // otherwise stay suspended until the bootstrap finishes or the five-minute
+    // deadline fires. For a cancelled transfer that is minutes during which
+    // the hook that started it is still inside its own `try`, believing it
+    // owns a transfer the user has already abandoned.
+    //
+    // Both inputs keep a handler from here for their whole life, so a late
+    // rejection from either is never an unhandled one.
+    this.clientPromise = Promise.race([bootstrap, cancelled]);
 
     const clientPromise = this.clientPromise;
     const sockets = this.sockets;
@@ -188,6 +226,7 @@ export class AnonymousSignalingTransport {
 
           void this.socket.send(data).catch((error: unknown) => {
             this.emitError(errorMessage(error));
+            this.discardSocket();
             this.finishClose(false, 1006, 'Tor WebSocket send failed');
           });
         }
@@ -237,6 +276,7 @@ export class AnonymousSignalingTransport {
             ) {
               this.emitError(errorMessage(error));
             }
+            this.discardSocket();
             this.finishClose(false, 1006, 'Tor WebSocket connection failed');
           }
         }
@@ -245,11 +285,13 @@ export class AnonymousSignalingTransport {
           while (this.readyState === AnonymousSignalingWebSocket.OPEN) {
             const message = await socket.receive();
             if (message == null) {
+              this.discardSocket();
               this.finishClose(true, 1000, 'Relay closed the connection');
               return;
             }
             if (message.type !== 'text') {
               this.emitError('Relay sent a binary message on a Nostr socket');
+              this.discardSocket();
               this.finishClose(false, 1003, 'Unsupported binary message');
               return;
             }
@@ -261,8 +303,29 @@ export class AnonymousSignalingTransport {
           }
         }
 
+        /**
+         * Hand the onion stream back before this adapter forgets it exists.
+         *
+         * `finishClose` drops the reference and removes the adapter from the
+         * transport's set, so a stream still held at that point is
+         * unreachable: the transport's own `close()` cannot get to it either,
+         * and the circuit and unread queue behind it live until the whole Tor
+         * client goes. Every path that finalizes the adapter without having
+         * closed the stream itself comes through here first. `close()` does
+         * not, because it closes the stream and waits for it.
+         */
+        private discardSocket(): void {
+          const socket = this.socket;
+          this.socket = null;
+          if (!socket) return;
+          void Promise.resolve(socket.close()).catch(() => {
+            // Teardown: the adapter has already reported why it is closing,
+            // and a stream the relay dropped refuses this by definition.
+          });
+        }
+
         private emitError(message: string): void {
-          const event = new ErrorEvent('error', { message });
+          const event = errorEvent(message);
           this.dispatchEvent(event);
           this.onerror?.call(this as unknown as WebSocket, event);
         }
@@ -295,11 +358,12 @@ export class AnonymousSignalingTransport {
     for (const socket of [...this.sockets]) {
       socket.close(1001, 'Anonymous signaling closed');
     }
-    void this.clientPromise
-      .then((client) => closeTorClient(client))
-      .catch(() => {
-        // A bootstrap failure is reported to whoever awaited waitUntilReady;
-        // there is no client to close.
-      });
+    // Wake every waiter now rather than whenever the bootstrap gets around to
+    // finishing. A bootstrap still in flight closes the client it eventually
+    // produces on its own, having seen `closed`.
+    this.cancelBootstrap(new Error('Anonymous signaling was cancelled'));
+    const client = this.client;
+    this.client = null;
+    if (client) void closeTorClient(client);
   }
 }

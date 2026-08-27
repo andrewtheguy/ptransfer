@@ -150,6 +150,8 @@ export function usePinReceive(): UsePinReceiveReturn {
   const clientRef = useRef<NostrClient | null>(null);
   const cancelledRef = useRef(false);
   const receivingRef = useRef(false);
+  // Distinguishes invocations; see the note where a run claims one.
+  const runIdRef = useRef(0);
   // Storage backing the in-flight or completed transfer. Discarded whenever
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
@@ -187,6 +189,23 @@ export function usePinReceive(): UsePinReceiveReturn {
       if (receivingRef.current) return;
       receivingRef.current = true;
       cancelledRef.current = false;
+      // Each invocation owns this hook's shared refs only until the next one
+      // starts. That used to be close to academic — connecting took seconds —
+      // but an anonymous transfer can sit inside a five-minute Tor bootstrap,
+      // which is long enough for the user to cancel and start another one
+      // underneath it. `cancel()` clears the guard the next run checks, so the
+      // superseded run wakes into a hook that is no longer its own: its
+      // `cancelledRef` read comes back false because the new run reset it, and
+      // its cleanup would report state and close a client that now belong to
+      // the replacement. A run id is what tells the two apart.
+      const runId = ++runIdRef.current;
+      const superseded = () => runIdRef.current !== runId;
+      const abandoned = () => cancelledRef.current || superseded();
+      // The client this run created, closed by this run whoever owns the ref
+      // by then. Reading it back out of clientRef would be reading someone
+      // else's.
+      let ownClient: NostrClient | null = null;
+
       setReceivedContent(null);
       setConfirmationCode(null);
       // The previous transfer's payload (if any) is gone from the UI now.
@@ -225,7 +244,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           ),
         );
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Connect to relays. The pools are disjoint, so which one is right was
         // settled by the PIN's length; see ANONYMOUS_SIGNALING_RELAYS.
@@ -244,20 +263,21 @@ export function usePinReceive(): UsePinReceiveReturn {
                 anonymous: {
                   bridge: options.bridge,
                   onStatus: (message: string) => {
-                    if (cancelledRef.current) return;
+                    if (abandoned()) return;
                     setState({ status: 'connecting', message });
                   },
                 },
               }
             : {}),
         });
+        ownClient = client;
         clientRef.current = client;
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         if (options.anonymous) {
           await client.waitForAnonymousTransport();
-          if (cancelledRef.current) return;
+          if (abandoned()) return;
           setState({
             status: 'connecting',
             message: 'Tor is up. Opening onion relay connections...',
@@ -265,7 +285,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         }
         await client.waitForConnection();
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Search for the rendezvous event
         setState({ status: 'receiving', message: 'Searching for sender...' });
@@ -293,7 +313,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           },
         ]);
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         if (events.length === 0) {
           setState({
@@ -397,7 +417,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           return;
         }
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Claim every candidate: run our side of the SPAKE2 exchange against
         // each one's element and seal a claim under the resulting session's
@@ -508,7 +528,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           return;
         }
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Subscribe for confirms before publishing the claims so the response
         // cannot slip past us. The first confirm that opens under one of our
@@ -554,7 +574,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           }, CONFIRM_TIMEOUT_MS);
 
           cancelPoll = setInterval(() => {
-            if (cancelledRef.current && !settled) {
+            if (abandoned() && !settled) {
               settled = true;
               cleanup();
               reject(new Error('Cancelled'));
@@ -564,7 +584,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           const processedEventIds = new Set<string>();
 
           const processEvent = (event: Event) => {
-            if (settled || cancelledRef.current) return;
+            if (settled || abandoned()) return;
             if (processedEventIds.has(event.id)) return;
             processedEventIds.add(event.id);
 
@@ -651,7 +671,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           const processedRendezvousIds = new Set<string>();
 
           const processReplacement = (event: Event) => {
-            if (settled || cancelledRef.current) return;
+            if (settled || abandoned()) return;
             if (processedRendezvousIds.has(event.id)) return;
             processedRendezvousIds.add(event.id);
 
@@ -680,14 +700,14 @@ export function usePinReceive(): UsePinReceiveReturn {
                 rc.payload,
                 rc.salt,
               );
-              if (settled || cancelledRef.current) return;
+              if (settled || abandoned()) return;
               if (claimedHashes.has(transcriptHash)) return;
               if (claimAttempts >= MAX_CLAIM_ATTEMPTS) return;
               claimAttempts += 1;
               claimedHashes.add(transcriptHash);
 
               const claim = await buildClaim(rc);
-              if (!claim || settled || cancelledRef.current) return;
+              if (!claim || settled || abandoned()) return;
               // The confirm subscription and poll already cover this claim:
               // its transfer id and author match the original candidate's.
               candidates.push(claim);
@@ -711,11 +731,11 @@ export function usePinReceive(): UsePinReceiveReturn {
             for (const candidate of candidates) {
               await client.publish(candidate.claimEvent);
             }
-            if (settled || cancelledRef.current) return;
+            if (settled || abandoned()) return;
             // Backstop for relays that processed the publish before the
             // subscription: poll for an already-stored confirm.
             queryPoll = setInterval(() => {
-              if (settled || cancelledRef.current) return;
+              if (settled || abandoned()) return;
               void (async () => {
                 try {
                   const existing = await client.query([
@@ -758,7 +778,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           wipeBufferSource(pakeSecret);
         }
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         const { candidate: session, metadata } = winner;
         const transferId = session.transferId;
@@ -822,7 +842,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         // during its creation cannot see it through sinkRef yet, so discard
         // it here instead of leaving its scratch storage orphaned.
         const sink = await createAdaptiveAppendSink(resolvedFileSize);
-        if (cancelledRef.current) {
+        if (abandoned()) {
           void sink.discard();
           return;
         }
@@ -901,7 +921,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           // always settles the wait, even when rtc cannot be closed by cancel().
           // A stalled stream is aborted by the receiver's own idle watchdog.
           cancelPoll = setInterval(() => {
-            if (cancelledRef.current && !settled) {
+            if (abandoned() && !settled) {
               settled = true;
               clearConnectionTimeout();
               receiver.dispose();
@@ -1073,13 +1093,13 @@ export function usePinReceive(): UsePinReceiveReturn {
           })();
         });
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // P2P transfer streamed already-decrypted chunks into the sink; this is
         // the sealed payload.
         const contentData = transferResult;
 
-        if (cancelledRef.current) return;
+        if (abandoned()) return;
 
         // Completion is confirmed to the sender via the data-channel ACK sent when
         // receiver.done resolved; no relay event is published post-transfer.
@@ -1107,27 +1127,33 @@ export function usePinReceive(): UsePinReceiveReturn {
           useWebRTC: prevState.useWebRTC,
         }));
       } catch (error) {
-        // Nothing downloadable survives a failed transfer; drop its storage.
-        discardSink();
-        setConfirmationCode(null);
-        if (!cancelledRef.current) {
-          setState((prevState) => ({
-            ...prevState,
-            status: 'error',
-            message:
-              error instanceof Error ? error.message : 'Failed to receive',
-            connectionFailed: error instanceof P2PConnectionError,
-          }));
+        // A superseded run reports nothing and abandons nothing: the sink and
+        // the code on screen are the replacement's now, and its own storage
+        // was discarded when it was cancelled.
+        if (!superseded()) {
+          // Nothing downloadable survives a failed transfer; drop its storage.
+          discardSink();
+          setConfirmationCode(null);
+          if (!abandoned()) {
+            setState((prevState) => ({
+              ...prevState,
+              status: 'error',
+              message:
+                error instanceof Error ? error.message : 'Failed to receive',
+              connectionFailed: error instanceof P2PConnectionError,
+            }));
+          }
         }
       } finally {
-        receivingRef.current = false;
+        // The guard belongs to whichever run is current, so only that run may
+        // release it — clearing it here would let a third transfer start while
+        // the second is still running.
+        if (!superseded()) receivingRef.current = false;
         // Idempotent backstop for early exits — the happy path already wiped
         // it the moment the claims were built.
         wipeBufferSource(pinMaterial.pakeSecret);
-        if (clientRef.current) {
-          clientRef.current.close();
-          clientRef.current = null;
-        }
+        if (clientRef.current === ownClient) clientRef.current = null;
+        ownClient?.close();
       }
     },
     [discardSink],
