@@ -418,6 +418,9 @@ export function SendTab() {
               <span className="flex items-center gap-2 text-sm font-medium">
                 <Shield className="h-4 w-4" />
                 Tor Onion Service
+                <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                  Experimental
+                </span>
               </span>
               <p className="text-xs text-muted-foreground">
                 {torModeDescription}
