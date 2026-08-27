@@ -219,29 +219,38 @@ export interface WebServer {
 }
 
 /**
- * Reuse a running pTransfer of exactly the expected version, or start one.
+ * Start a pTransfer dev server for the run, or reuse an already-running one
+ * when the operator has explicitly asked for that.
  *
- * The version check is what keeps a stale server from silently deciding the
- * result: a live test that passed against yesterday's build says nothing about
- * today's.
+ * Reuse is opt-in (`PTRANSFER_E2E_REUSE_SERVER=1`) because a served
+ * name/version says nothing about what the server was actually built from: not
+ * the working tree it is serving, and not the `VITE_*` settings it baked into
+ * the page — a run against a bridge-less server would look exactly like a run
+ * against the local bridge it was asked for. Starting one is a few seconds; a
+ * live test that quietly measured the wrong build is worth much more than that.
  */
 export async function ensureWebServer(
   expectedPackage: PackageIdentity,
   requestedUrl: URL,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WebServer> {
+  const reuseAllowed = process.env.PTRANSFER_E2E_REUSE_SERVER === '1';
   const existing = await probeWebServer(requestedUrl, expectedPackage.name);
-  if (existing.version === expectedPackage.version) {
+  if (reuseAllowed && existing.version === expectedPackage.version) {
     console.log(
-      `[setup] using verified pTransfer ${existing.version} at ${requestedUrl.origin}`,
+      `[setup] PTRANSFER_E2E_REUSE_SERVER=1: using pTransfer ${existing.version} ` +
+        `at ${requestedUrl.origin} without checking what it was built with`,
     );
     return { url: requestedUrl, process: undefined };
   }
 
   if (existing.reachable) {
     console.log(
-      `[setup] not reusing ${requestedUrl.origin}: expected pTransfer ` +
-        `${expectedPackage.version}, found ${existing.version ?? 'an unverified response'}`,
+      `[setup] not reusing ${requestedUrl.origin}: ` +
+        (reuseAllowed
+          ? `expected pTransfer ${expectedPackage.version}, found ` +
+            `${existing.version ?? 'an unverified response'}`
+          : 'set PTRANSFER_E2E_REUSE_SERVER=1 to reuse a running server'),
     );
   }
   await access(
@@ -286,20 +295,28 @@ export async function ensureWebServer(
     console.error(`[web] ${error.stack ?? error}`);
   });
 
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (server.exitCode !== null || server.signalCode !== null) {
-      throw new Error('pTransfer exited before becoming ready');
+  // Until it is handed back, this server belongs to nobody: the caller has no
+  // reference to terminate, and it was spawned detached, so anything thrown
+  // from the readiness wait has to take it down first.
+  try {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (server.exitCode !== null || server.signalCode !== null) {
+        throw new Error('pTransfer exited before becoming ready');
+      }
+      const probe = await probeWebServer(url, expectedPackage.name);
+      if (probe.version === expectedPackage.version) {
+        return { url, process: server };
+      }
+      await sleep(250);
     }
-    const probe = await probeWebServer(url, expectedPackage.name);
-    if (probe.version === expectedPackage.version) {
-      return { url, process: server };
-    }
-    await sleep(250);
+    throw new Error(
+      `pTransfer ${expectedPackage.version} did not become ready at ${url.origin}`,
+    );
+  } catch (error) {
+    await terminate(server, true).catch(() => undefined);
+    throw error;
   }
-  throw new Error(
-    `pTransfer ${expectedPackage.version} did not become ready at ${url.origin}`,
-  );
 }
 
 export async function loadChromium(): Promise<PwBrowserType> {

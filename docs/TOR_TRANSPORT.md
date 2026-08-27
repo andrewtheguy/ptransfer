@@ -14,10 +14,15 @@ subcommands, which speak the same handshake and framing behind its non-default
 
 ## What it is for
 
-Nothing about the transfer touches a relay, a STUN server, or a direct
-connection between the two networks. The two peers meet at a rendezvous point
-inside the Tor network, so neither learns the other's address and nothing
-published anywhere can be correlated with the transfer afterwards. The price is
+Nothing about the transfer touches a pTransfer or Nostr relay, and the two
+networks never connect to each other directly. What it does touch is Tor
+itself: a Snowflake bridge to get in (the `webrtc` bridge uses the same STUN
+servers ICE does; the default `websocket` one uses none), the relays the
+circuits are built from, and the HSDirs that carry the descriptor. Those see
+transport metadata — never plaintext, never the content key, and no single one
+of them sees both peers. The two peers meet at a rendezvous point inside the
+Tor network, so neither learns the other's address and nothing published
+anywhere can be correlated with the transfer afterwards. The price is
 speed and a **1 MiB cap** per transfer: a Tor circuit is slow enough that a
 large transfer would want resume support, which this has none of.
 

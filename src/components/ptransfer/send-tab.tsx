@@ -114,7 +114,7 @@ export function SendTab() {
   const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
   const torModeDescription =
-    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no relay, no STUN, no direct connection between the two networks, and nothing published that could be correlated later. Slower, and capped at 1 MiB.';
+    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no pTransfer relay and no direct connection between the two networks, only the Tor bridge and relays it travels through, which see transport metadata and never the file, and nothing published that could be correlated later. Slower, and capped at 1 MiB.';
   const torModeHowItWorksDescription =
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const codeModeHowItWorksDescription =

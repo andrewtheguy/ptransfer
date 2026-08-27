@@ -184,6 +184,11 @@ export function useTorReceive(): UseTorReceiveReturn {
           console.warn('[tor] The sender never acknowledged receipt:', error);
         }
 
+        // Cancelling between the last frame and this point still means the
+        // user asked for nothing: publishing the payload here would hand back
+        // a file — and a 'complete' state — after `cancel()` reset the UI.
+        if (cancelledRef.current) return;
+
         setReceivedContent({
           contentType: 'file',
           data: payload,

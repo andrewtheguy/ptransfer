@@ -54,6 +54,10 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  // Bumped by Retry: the preparation effect keys off it so a retry that leaves
+  // the config untouched still schedules a fresh attempt instead of sitting in
+  // 'checking' forever.
+  const [attempt, setAttempt] = useState(0);
 
   // Hooks for transfer
   const pinHook = usePinSend();
@@ -104,6 +108,7 @@ export function SendTransferPage() {
   }, [config, navigate]);
 
   // Prepare the direct file or lazy ZIP source
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the retry trigger — Retry leaves the config as it is, so nothing else here would change
   useEffect(() => {
     if (!config || startedRef.current) return;
 
@@ -164,7 +169,7 @@ export function SendTransferPage() {
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, attempt]);
 
   // Start transfer when file is ready
   useEffect(() => {
@@ -229,6 +234,7 @@ export function SendTransferPage() {
     startedRef.current = false;
     setStep('checking');
     setError(null);
+    setAttempt((value) => value + 1);
   }, [cancel]);
 
   const handleSendAnother = useCallback(() => {
