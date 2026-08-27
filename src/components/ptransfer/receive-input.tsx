@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
   classifyReceiveText,
+  looksLikeOnionAddress,
   looksLikePin,
   type ReceiveInput as ReceiveInputValue,
 } from '@/lib/receive-input';
@@ -66,6 +67,7 @@ export function ReceiveInput({
   const scanActionVerb = isMobileDevice() ? 'Tap' : 'Click';
   const classified = useMemo(() => classifyReceiveText(value), [value]);
   const pinLike = looksLikePin(value);
+  const onionLike = looksLikeOnionAddress(value);
 
   // Wipe an unattended PIN. Only PINs: an offer code is not a secret, and
   // clearing one out from under someone mid-paste would just lose their work.
@@ -119,11 +121,14 @@ export function ReceiveInput({
     }
 
     if (!classified) {
-      setError(
-        pinLike
-          ? 'Invalid PIN — check for typos.'
-          : 'Not a PIN or sender code. Check that you copied the whole thing.',
-      );
+      if (pinLike) setError('Invalid PIN — check for typos.');
+      else if (onionLike) {
+        setError('That onion address is not valid — check for typos.');
+      } else {
+        setError(
+          'Not a PIN, onion address, or sender code. Check that you copied the whole thing.',
+        );
+      }
       return;
     }
 
@@ -139,18 +144,17 @@ export function ReceiveInput({
     // Drop the PIN out of the DOM the moment it is handed on.
     setValue('');
     onSubmit(classified);
-  }, [classified, onSubmit, pinLike, value]);
+  }, [classified, onionLike, onSubmit, pinLike, value]);
 
   const handleScan = useCallback(
     (result: ScanResult) => {
       setError(null);
       setPinExpired(false);
       setValue('');
-      onSubmit(
-        result.kind === 'pin'
-          ? { kind: 'pin', pin: result.pin }
-          : { kind: 'offer', payload: result.data },
-      );
+      if (result.kind === 'pin') onSubmit({ kind: 'pin', pin: result.pin });
+      else if (result.kind === 'onion') {
+        onSubmit({ kind: 'onion', address: result.address });
+      } else onSubmit({ kind: 'offer', payload: result.data });
     },
     [onSubmit],
   );
@@ -173,7 +177,8 @@ export function ReceiveInput({
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Scan the sender's QR code, or paste the PIN or code they sent you.
+        Scan the sender's QR code, or paste the PIN, onion address, or code they
+        sent you.
       </p>
 
       <Tabs
@@ -226,12 +231,12 @@ export function ReceiveInput({
               setError(null);
               setPinExpired(false);
             }}
-            placeholder="Paste the PIN or the sender's code here..."
+            placeholder="Paste the PIN, onion address, or the sender's code here..."
             className="min-h-[100px] font-mono text-xs"
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            aria-label="PIN or sender code"
+            aria-label="PIN, onion address, or sender code"
             disabled={disabled}
           />
 
@@ -239,6 +244,12 @@ export function ReceiveInput({
             <p className="text-xs text-green-600 flex items-center">
               <CheckCircle2 className="h-3 w-3 mr-1" />
               PIN detected
+            </p>
+          )}
+          {classified?.kind === 'onion' && (
+            <p className="text-xs text-green-600 flex items-center">
+              <CheckCircle2 className="h-3 w-3 mr-1" />
+              Onion address detected — the password comes next
             </p>
           )}
           {classified?.kind === 'offer' && (
@@ -257,6 +268,12 @@ export function ReceiveInput({
             <p className="text-xs text-destructive flex items-center">
               <AlertCircle className="h-3 w-3 mr-1" />
               Invalid PIN — check for typos
+            </p>
+          )}
+          {!classified && onionLike && (
+            <p className="text-xs text-destructive flex items-center">
+              <AlertCircle className="h-3 w-3 mr-1" />
+              Invalid onion address — check for typos
             </p>
           )}
 
@@ -323,6 +340,15 @@ export function ReceiveInput({
             means the sender chose PIN Exchange. Relays carry the handshake and
             the PIN authenticates it; a confirmation code appears here for you
             to read back to them, and nothing is sent until it matches.
+          </p>
+          <p>
+            <span className="font-medium text-foreground">
+              A <code>.onion</code> address
+            </span>{' '}
+            means the sender published a Tor hidden service. Enter the one-time
+            password they gave you on the next screen; the file travels inside
+            the Tor circuit, with no relay and no direct connection between the
+            two networks.
           </p>
           <p>
             <span className="font-medium text-foreground">

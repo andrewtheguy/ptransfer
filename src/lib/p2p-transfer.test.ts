@@ -3,8 +3,9 @@ import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
 import {
   ACK,
-  createDataChannelReceiver,
-  sendFileOverDataChannel,
+  createDataChannelTransport,
+  createTransferReceiver,
+  sendFileOverTransport,
 } from './p2p-transfer';
 import { createAdaptiveAppendSink } from './scratch-sink';
 import {
@@ -64,7 +65,7 @@ async function roundTrip(
 ): Promise<{ wireBytes: number; blob: Blob }> {
   const key = await makeKey();
   const sink = await createAdaptiveAppendSink(source.estimatedSize);
-  const receiver = createDataChannelReceiver(key, encoding, sink, {
+  const receiver = createTransferReceiver(key, encoding, sink, {
     estimatedBytes: source.estimatedSize,
   });
   receiver.start();
@@ -89,12 +90,16 @@ async function roundTrip(
     },
   } as unknown as WebRTCConnection;
 
-  const wireBytes = await sendFileOverDataChannel(rtc, key, source);
+  const wireBytes = await sendFileOverTransport(
+    createDataChannelTransport(rtc),
+    key,
+    source,
+  );
   const blob = await receiver.done;
   return { wireBytes, blob };
 }
 
-describe('sendFileOverDataChannel', () => {
+describe('sendFileOverTransport', () => {
   it('sends a full chunk before an unknown-size precompressed source has finished producing', async () => {
     const key = await makeKey();
     let releaseRemainder!: () => void;
@@ -147,7 +152,11 @@ describe('sendFileOverDataChannel', () => {
       },
     } as unknown as WebRTCConnection;
 
-    const sending = sendFileOverDataChannel(rtc, key, source);
+    const sending = sendFileOverTransport(
+      createDataChannelTransport(rtc),
+      key,
+      source,
+    );
     await firstChunk;
     expect(remainderReleased).toBe(false);
     releaseRemainder();
@@ -191,7 +200,7 @@ describe('sendFileOverDataChannel', () => {
   });
 });
 
-describe('createDataChannelReceiver', () => {
+describe('createTransferReceiver', () => {
   it('appends in-order chunks into the sink and resolves the payload', async () => {
     const key = await makeKey();
     const totalBytes = ENCRYPTION_CHUNK_SIZE + 1234;
@@ -200,7 +209,7 @@ describe('createDataChannelReceiver', () => {
 
     const sink = await createAdaptiveAppendSink(totalBytes);
     const progress: number[] = [];
-    const receiver = createDataChannelReceiver(key, 'identity', sink, {
+    const receiver = createTransferReceiver(key, 'identity', sink, {
       estimatedBytes: totalBytes,
       onProgress: (current) => progress.push(current),
     });
@@ -219,7 +228,7 @@ describe('createDataChannelReceiver', () => {
   it('resolves an empty payload for a zero-byte transfer', async () => {
     const key = await makeKey();
     const sink = await createAdaptiveAppendSink(0);
-    const receiver = createDataChannelReceiver(key, 'identity', sink);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     receiver.start();
     receiver.onMessage('DONE:0:0');
     const blob = await receiver.done;
@@ -232,7 +241,7 @@ describe('createDataChannelReceiver', () => {
     const messages = await encryptAll(key, plaintext);
 
     const sink = await createAdaptiveAppendSink(plaintext.length);
-    const receiver = createDataChannelReceiver(key, 'identity', sink);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     receiver.start();
     receiver.onMessage(messages[1]);
 
@@ -247,7 +256,7 @@ describe('createDataChannelReceiver', () => {
     const [message] = await encryptAll(key, plaintext);
 
     const sink = await createAdaptiveAppendSink(100);
-    const receiver = createDataChannelReceiver(key, 'identity', sink);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     receiver.start();
     receiver.onMessage(message);
     receiver.onMessage(message.slice(0));
@@ -265,7 +274,7 @@ describe('createDataChannelReceiver', () => {
     tampered[tampered.length - 1] ^= 0xff;
 
     const sink = await createAdaptiveAppendSink(100);
-    const receiver = createDataChannelReceiver(key, 'identity', sink);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     receiver.start();
     receiver.onMessage(tampered.buffer as ArrayBuffer);
 
@@ -278,7 +287,7 @@ describe('createDataChannelReceiver', () => {
     const [message] = await encryptAll(key, plaintext);
 
     const sink = await createAdaptiveAppendSink(100);
-    const receiver = createDataChannelReceiver(key, 'identity', sink);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     receiver.start();
     receiver.onMessage(message);
     receiver.onMessage('DONE:2:100');
@@ -292,7 +301,7 @@ describe('createDataChannelReceiver', () => {
     const [message] = await encryptAll(key, makePlaintext(100));
 
     const sink = await createAdaptiveAppendSink(100);
-    const receiver = createDataChannelReceiver(key, 'deflate-raw', sink);
+    const receiver = createTransferReceiver(key, 'deflate-raw', sink);
     receiver.start();
     receiver.onMessage(message);
     receiver.onMessage('DONE:1:100');
@@ -303,7 +312,7 @@ describe('createDataChannelReceiver', () => {
   it('aborts an idle transfer via the stall watchdog', async () => {
     const key = await makeKey();
     const sink = await createAdaptiveAppendSink(100);
-    const receiver = createDataChannelReceiver(key, 'identity', sink, {
+    const receiver = createTransferReceiver(key, 'identity', sink, {
       stallTimeoutMs: 20,
     });
     receiver.start();

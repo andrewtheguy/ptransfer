@@ -51,7 +51,10 @@ import {
   type TransferState,
   uint8ArrayToBase64,
 } from '@/lib/nostr';
-import { sendFileOverDataChannel } from '@/lib/p2p-transfer';
+import {
+  createDataChannelTransport,
+  sendFileOverTransport,
+} from '@/lib/p2p-transfer';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -857,8 +860,8 @@ export function usePinSend(): UsePinSendReturn {
               try {
                 // After the data channel is open, nostr is no longer involved:
                 // completion is the data-channel ACK awaited here.
-                await sendFileOverDataChannel(
-                  rtc,
+                await sendFileOverTransport(
+                  createDataChannelTransport(rtc),
                   sessionKeys.content,
                   content,
                   {
@@ -961,7 +964,7 @@ export function usePinSend(): UsePinSendReturn {
       }
 
       // Completion is confirmed by the data-channel ACK (awaited inside
-      // sendFileOverDataChannel). Nostr is not involved past signaling.
+      // sendFileOverTransport). Nostr is not involved past signaling.
       setState((prevState) => ({
         status: 'complete',
         message: 'File sent via P2P!',

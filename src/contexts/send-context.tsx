@@ -7,8 +7,9 @@ import {
   useMemo,
   useState,
 } from 'react';
+import type { TorBridge } from '@/lib/tor/client';
 
-export type TransferMode = 'pin' | 'code';
+export type TransferMode = 'pin' | 'code' | 'tor';
 
 interface SendConfig {
   // Files (loose files and folder selections mixed; folder entries carry
@@ -17,6 +18,11 @@ interface SendConfig {
 
   // Configuration
   transferMode: TransferMode;
+  /**
+   * Which Snowflake bridge the Tor mode reaches the network through. Ignored
+   * by the other two modes, which never load a Tor client.
+   */
+  torBridge: TorBridge;
 }
 
 interface SendContextState {

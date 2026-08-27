@@ -45,7 +45,7 @@ import {
   type TransferMetadata,
   type TransferState,
 } from '@/lib/nostr';
-import { ACK, createDataChannelReceiver } from '@/lib/p2p-transfer';
+import { ACK, createTransferReceiver } from '@/lib/p2p-transfer';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
@@ -787,7 +787,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           // arrives (inflating deflated payloads in between). Nostr is not
           // involved past signaling; the data-channel ACK below confirms
           // completion.
-          const receiver = createDataChannelReceiver(
+          const receiver = createTransferReceiver(
             sessionKeys.content,
             resolvedContentEncoding,
             sink,

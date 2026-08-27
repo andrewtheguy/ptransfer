@@ -12,17 +12,20 @@ import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
 import { NostrRelayStatsPanel } from '@/components/ptransfer/nostr-relay-stats';
 import { PinDisplay } from '@/components/ptransfer/pin-display';
+import { TorAddressDisplay } from '@/components/ptransfer/tor-address-display';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
 import { useSend } from '@/contexts/send-context';
 import { type UseCodeSendReturn, useCodeSend } from '@/hooks/use-code-send';
 import { type UsePinSendReturn, usePinSend } from '@/hooks/use-pin-send';
+import { type UseTorSendReturn, useTorSend } from '@/hooks/use-tor-send';
 import {
   archiveTimestamp,
   createZipTransferSource,
   getArchiveBaseName,
 } from '@/lib/folder-utils';
 import { testRelayAvailability } from '@/lib/nostr';
+import { DEFAULT_TOR_BRIDGE } from '@/lib/tor/client';
 import {
   createFileTransferSource,
   type TransferSource,
@@ -39,7 +42,8 @@ type TransferStep =
 // Discriminated union for type-safe hook access
 type ActiveHook =
   | { type: 'pin'; hook: UsePinSendReturn }
-  | { type: 'code'; hook: UseCodeSendReturn };
+  | { type: 'code'; hook: UseCodeSendReturn }
+  | { type: 'tor'; hook: UseTorSendReturn };
 
 export function SendTransferPage() {
   const navigate = useNavigate();
@@ -50,22 +54,26 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  // Bumped by Retry: the preparation effect keys off it so a retry that leaves
+  // the config untouched still schedules a fresh attempt instead of sitting in
+  // 'checking' forever.
+  const [attempt, setAttempt] = useState(0);
 
   // Hooks for transfer
   const pinHook = usePinSend();
   const codeHook = useCodeSend();
+  const torHook = useTorSend(config?.torBridge ?? DEFAULT_TOR_BRIDGE);
 
   const startedRef = useRef(false);
 
   // Determine which hook to use based on config with discriminated union
-  const isPinExchange = config?.transferMode === 'pin';
-  const activeHook: ActiveHook = useMemo(
-    () =>
-      isPinExchange
-        ? { type: 'pin', hook: pinHook }
-        : { type: 'code', hook: codeHook },
-    [isPinExchange, pinHook, codeHook],
-  );
+  const transferMode = config?.transferMode ?? 'code';
+  const isPinExchange = transferMode === 'pin';
+  const activeHook: ActiveHook = useMemo(() => {
+    if (transferMode === 'pin') return { type: 'pin', hook: pinHook };
+    if (transferMode === 'tor') return { type: 'tor', hook: torHook };
+    return { type: 'code', hook: codeHook };
+  }, [transferMode, pinHook, codeHook, torHook]);
 
   // Extract common state from active hook
   const state = activeHook.hook.state;
@@ -79,6 +87,12 @@ export function SendTransferPage() {
     activeHook.type === 'pin'
       ? activeHook.hook.submitConfirmationCode
       : undefined;
+
+  // Tor-specific properties: the rendezvous pair this tab is publishing.
+  const onionAddress =
+    activeHook.type === 'tor' ? activeHook.hook.onionAddress : null;
+  const torPassword =
+    activeHook.type === 'tor' ? activeHook.hook.password : null;
 
   // Code Exchange-specific properties (type-safe access via discriminated union)
   const codeState = activeHook.type === 'code' ? activeHook.hook.state : null;
@@ -94,6 +108,7 @@ export function SendTransferPage() {
   }, [config, navigate]);
 
   // Prepare the direct file or lazy ZIP source
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the retry trigger — Retry leaves the config as it is, so nothing else here would change
   useEffect(() => {
     if (!config || startedRef.current) return;
 
@@ -154,7 +169,7 @@ export function SendTransferPage() {
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, attempt]);
 
   // Start transfer when file is ready
   useEffect(() => {
@@ -219,6 +234,7 @@ export function SendTransferPage() {
     startedRef.current = false;
     setStep('checking');
     setError(null);
+    setAttempt((value) => value + 1);
   }, [cancel]);
 
   const handleSendAnother = useCallback(() => {
@@ -338,6 +354,23 @@ export function SendTransferPage() {
           {/* Code Exchange: other states (connecting, transferring, etc.) */}
           {activeHook.type === 'code' && state.status !== 'showing_offer' && (
             <TransferStatus state={state} />
+          )}
+
+          {/* Tor: transfer progress, with the address pair while waiting */}
+          {activeHook.type === 'tor' && (
+            <TransferStatus
+              state={state}
+              betweenProgressAndChunks={
+                onionAddress &&
+                torPassword &&
+                state.status === 'waiting_for_receiver' ? (
+                  <TorAddressDisplay
+                    address={onionAddress}
+                    password={torPassword}
+                  />
+                ) : undefined
+              }
+            />
           )}
 
           {/* PIN Exchange: transfer progress */}

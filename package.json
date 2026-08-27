@@ -1,7 +1,7 @@
 {
   "name": "ptransfer",
   "private": true,
-  "version": "0.0.45",
+  "version": "0.0.46",
   "packageManager": "bun@1.4.0",
   "type": "module",
   "scripts": {
@@ -14,13 +14,20 @@
     "test:unit": "vitest run --project unit",
     "test:integration:nostr-file": "vitest run --project integration",
     "test:live": "bun run test:live:nostr-file && bun run test:live:web",
+    "test:live:tor": "bun tests/live_tor_cli_interop.ts",
+    "test:live:tor:web": "bun tests/live_tor_web_e2e.ts",
+    "webtor:status": "bun scripts/webtor-source.ts status",
+    "webtor:local": "bun scripts/webtor-source.ts local",
+    "webtor:released": "bun scripts/webtor-source.ts released",
     "test:live:nostr-file": "bun tests/live_nostr_file_e2e.ts",
     "test:live:web": "bun tests/live_web_to_web_e2e.ts"
   },
   "dependencies": {
     "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
     "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
+    "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.13/andrewtheguy-webtor-wasm-0.0.1-alpha.13.tgz",
     "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-label": "^2.1.8",

@@ -104,6 +104,54 @@ export async function deriveHandshakeSealKeys(
   return { claimKey, confirmKey };
 }
 
+/**
+ * Keys for one Tor onion transfer, all derived from the same SPAKE2 root.
+ *
+ * The two seal keys carry the mutual key confirmation that transport needs:
+ * the receiver's sealed claim is the only proof the connecting peer knows the
+ * password, and the sender's sealed confirm — which carries the file metadata
+ * — is the only proof the onion service at the other end knows it too.
+ */
+export interface TorSessionKeys {
+  /** Seals the receiver's claim (receiver -> sender). */
+  claimKey: CryptoKey;
+  /** Seals the sender's confirm, metadata included (sender -> receiver). */
+  confirmKey: CryptoKey;
+  /** Encrypts the file content chunks. */
+  contentKey: CryptoKey;
+}
+
+/**
+ * Labels for the Tor onion transport. It is not part of the interop protocol,
+ * so it derives under labels of its own: a root that came out of a Tor
+ * handshake can never produce a key PIN Exchange would also produce, even
+ * though both roots are SPAKE2 transcripts over the same curve.
+ */
+const TOR_KEY_LABELS = {
+  claimKey: 'ptransfer:tor-session:v1:claim',
+  confirmKey: 'ptransfer:tor-session:v1:confirm',
+  contentKey: 'ptransfer:tor-session:v1:content',
+} as const satisfies Record<keyof TorSessionKeys, string>;
+
+/**
+ * Derive every key one Tor onion transfer uses from the SPAKE2 root returned
+ * by finishPake and the salt the onion service generated for this connection.
+ *
+ * Matches ptransfer-cli's `PakeRoot::tor_session_keys`.
+ */
+export async function deriveTorSessionKeys(
+  sharedSecretKey: CryptoKey,
+  salt: Uint8Array,
+): Promise<TorSessionKeys> {
+  const [claimKey, confirmKey, contentKey] = await Promise.all([
+    deriveSessionKey(sharedSecretKey, salt, TOR_KEY_LABELS.claimKey),
+    deriveSessionKey(sharedSecretKey, salt, TOR_KEY_LABELS.confirmKey),
+    deriveSessionKey(sharedSecretKey, salt, TOR_KEY_LABELS.contentKey),
+  ]);
+
+  return { claimKey, confirmKey, contentKey };
+}
+
 const CONFIRMATION_CODE_LABEL = 'ptransfer:nostr-session:v4:confirmation';
 
 /**
