@@ -86,6 +86,12 @@ export interface CodeReceiveState {
   /** Whether the response on screen is the simulated no-direct-route one. */
   simulateNoDirect?: boolean;
   /**
+   * Whether the direct route died for real while the response was still on
+   * screen. The response stays up — the sender needs it either way — but the
+   * file will come through the fallback rather than directly.
+   */
+  directRouteDead?: boolean;
+  /**
    * Whether the fallback this offer asked for runs inside Tor. The sender's
    * switch decides it and the offer carries it, so the response page is told
    * rather than asked — it only changes what the page calls the fallback.
@@ -137,9 +143,6 @@ export interface UseCodeReceiveReturn {
 
 const ICE_GATHER_TIMEOUT_MS = 5000;
 const CODE_CONNECTION_TIMEOUT_MS = 120000;
-// Matches the sender: once a relay fallback is available, cap the direct
-// attempt so neither side rides out the full backstop before relaying.
-const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — receiving the file through Nostr instead';
 const TOR_FALLBACK_MESSAGE =
@@ -149,6 +152,21 @@ const TOR_FALLBACK_MESSAGE =
 // response in, and a progress bar would claim otherwise.
 const SIMULATED_HOLDING_MESSAGE =
   'Simulating no direct connection — waiting for the sender to take in your response';
+// The same, for a direct route that died on its own before the sender ever
+// took the response in. The response is still the only way this transfer
+// starts, so it stays on screen and the fallback waits behind it.
+const HOLDING_SUFFIX = 'Hand your response to the sender to start it';
+
+/**
+ * The response left on screen while a fallback runs behind it, because the
+ * sender has not taken it in yet. Without it there is nothing to hold and the
+ * fallback shows its own progress.
+ */
+interface HeldResponse {
+  answerData: Uint8Array;
+  /** Whether the dead route was simulated rather than real. */
+  simulated: boolean;
+}
 
 /** Ends the stint in progress when the simulation switch is flipped. */
 class SimulationSwitched extends Error {
@@ -721,14 +739,18 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             reject(earlyConnectionFailure);
             return;
           }
-          const timeout = setTimeout(
-            () => {
-              reject(new P2PConnectionError('Connection timeout'));
-            },
-            fallbackRelays
-              ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
-              : CODE_CONNECTION_TIMEOUT_MS,
-          );
+          // The sender caps its own direct attempt at 20s once a fallback is
+          // available, and its clock starts when it takes the response in.
+          // This side has no such clock: the response is still on screen
+          // being handed over by a human, and nothing can connect until that
+          // is done. Capping the wait here would give up on a route that was
+          // never tried, and publishing this side's `hello` would then talk
+          // the sender out of the direct route too. A route that really is
+          // dead reports itself through `connectionState` long before the
+          // backstop below.
+          const timeout = setTimeout(() => {
+            reject(new P2PConnectionError('Connection timeout'));
+          }, CODE_CONNECTION_TIMEOUT_MS);
 
           dataChannelResolver = () => {
             clearTimeout(timeout);
@@ -765,18 +787,47 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       };
 
       /**
-       * The relay data path. `pendingAnswer` is set only for a simulated
-       * stint, where the fetch starts before the sender has even seen the
-       * code: the response then stays on screen with nothing else to report
-       * until the sender turns up on the control channel, rather than
-       * announcing a transfer that has not begun.
+       * The response page as it stays while a fallback runs behind it: the
+       * sender has not taken the code in yet, so the code is still the only
+       * thing this transfer is waiting on and taking it off screen would
+       * strand both sides. Nothing has begun either, so a progress bar would
+       * claim otherwise.
+       */
+      const holdResponse = (
+        held: HeldResponse | null,
+      ): (TransferState & CodeReceiveState) | null =>
+        held
+          ? {
+              status: 'showing_answer',
+              message: held.simulated
+                ? SIMULATED_HOLDING_MESSAGE
+                : `${anonymous ? TOR_FALLBACK_MESSAGE : RELAY_FALLBACK_MESSAGE}. ${HOLDING_SUFFIX}`,
+              answerData: held.answerData,
+              contentType: 'file',
+              fileMetadata,
+              // The switch is only offered while there is still a direct
+              // route to drop; one that died on its own leaves nothing to
+              // simulate.
+              relayFallbackAvailable: held.simulated,
+              simulateNoDirect: held.simulated,
+              directRouteDead: !held.simulated,
+              anonymousFallback: anonymous,
+            }
+          : null;
+
+      /**
+       * The relay data path. `held` is set while the response is still on
+       * screen — a simulated stint, or a route that died before the sender
+       * took the code in. The fetch then waits behind the response until the
+       * sender turns up on the control channel, rather than announcing a
+       * transfer that has not begun.
        *
        * Returns 'switched' when the simulation switch went back off while the
        * fetch was still waiting; the caller rebuilds the direct route.
        */
       const runRelayTransfer = async (
         relays: string[],
-        pendingAnswer: Uint8Array | null,
+        held: HeldResponse | null,
         switchedBack: () => boolean,
       ): Promise<'completed' | 'switched'> => {
         const pool = createTransferPool();
@@ -787,17 +838,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           fileMetadata,
           currentRelays: relays,
         };
-        const holding: (TransferState & CodeReceiveState) | null = pendingAnswer
-          ? {
-              status: 'showing_answer',
-              message: SIMULATED_HOLDING_MESSAGE,
-              answerData: pendingAnswer,
-              contentType: 'file',
-              fileMetadata,
-              relayFallbackAvailable: true,
-              simulateNoDirect: true,
-            }
-          : null;
+        const holding = holdResponse(held);
         setState(
           holding ?? {
             status: 'fetching',
@@ -878,15 +919,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
        * channel on the onion relay pool, and the file over the sender's onion
        * service rather than off storage relays.
        *
-       * `pendingAnswer` holds the response page for the same reason it does
-       * on the clearnet path — on a simulated stint the sender has not even
-       * seen the code yet, so until it announces an address there is nothing
-       * to report but a page that is waiting.
+       * `held` holds the response page for the same reason it does on the
+       * clearnet path — the sender has not taken the code in yet, so until it
+       * announces an address there is nothing to report but a page that is
+       * waiting.
        */
       const runAnonymousTransfer = async (
         transport: AnonymousSignalingTransport,
         relays: string[],
-        pendingAnswer: Uint8Array | null,
+        held: HeldResponse | null,
         switchedBack: () => boolean,
       ): Promise<'completed' | 'switched'> => {
         const pool = createTransferPool({
@@ -899,18 +940,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           fileMetadata,
           currentRelays: relays,
         };
-        const holding: (TransferState & CodeReceiveState) | null = pendingAnswer
-          ? {
-              status: 'showing_answer',
-              message: SIMULATED_HOLDING_MESSAGE,
-              answerData: pendingAnswer,
-              contentType: 'file',
-              fileMetadata,
-              relayFallbackAvailable: true,
-              simulateNoDirect: true,
-              anonymousFallback: true,
-            }
-          : null;
+        const holding = holdResponse(held);
         // Set once the sender has announced its service, which is the first
         // moment anything is happening that the response page could report.
         let senderPresent = holding === null;
@@ -1011,12 +1041,12 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       /** Whichever fallback this offer asked for. */
       const runFallbackTransfer = (
         relays: string[],
-        pendingAnswer: Uint8Array | null,
+        held: HeldResponse | null,
         switchedBack: () => boolean,
       ): Promise<'completed' | 'switched'> =>
         transport
-          ? runAnonymousTransfer(transport, relays, pendingAnswer, switchedBack)
-          : runRelayTransfer(relays, pendingAnswer, switchedBack);
+          ? runAnonymousTransfer(transport, relays, held, switchedBack)
+          : runRelayTransfer(relays, held, switchedBack);
 
       let simulate = false;
       let connected: DirectAttempt | null = null;
@@ -1080,9 +1110,17 @@ export function useCodeReceive(): UseCodeReceiveReturn {
               );
             }
             // The direct route died on its own; there is nothing left for the
-            // switch to simulate.
+            // switch to simulate. The response is still on screen and still
+            // the only way this transfer starts — the sender cannot reach the
+            // fallback without it — so it is held there until the sender
+            // turns up on the control channel rather than being replaced by
+            // the fallback's own progress.
             switchRef.current = null;
-            await runFallbackTransfer(fallbackRelays, null, () => false);
+            await runFallbackTransfer(
+              fallbackRelays,
+              { answerData: attempt.answerBinary, simulated: false },
+              () => false,
+            );
             return;
           }
           switchRef.current = null;
@@ -1108,7 +1146,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         }
         const outcome = await runFallbackTransfer(
           simulationRelays,
-          answerBinary,
+          { answerData: answerBinary, simulated: true },
           () => switchedTo !== null,
         );
         if (outcome === 'switched') {

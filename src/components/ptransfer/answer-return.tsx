@@ -18,6 +18,12 @@ export interface AnswerReturnProps {
   simulateNoDirect?: boolean;
   onSimulateNoDirectChange?: (value: boolean) => void;
   /**
+   * Whether the direct route died for real while this response was on screen.
+   * The response is still what the sender needs — the fallback cannot start
+   * without it — so the page stays put and only its wording changes.
+   */
+  directRouteDead?: boolean;
+  /**
    * What the fallback is, named the way a sentence needs it. The sender's
    * code decides it, so the receiver is told rather than asked.
    */
@@ -39,10 +45,14 @@ export function AnswerReturn({
   relayFallbackAvailable = false,
   simulateNoDirect = false,
   onSimulateNoDirectChange,
+  directRouteDead = false,
   fallbackName = 'the Nostr relays',
   torStatus,
 }: AnswerReturnProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Simulated or real, a dead route says the same thing here: the file is
+  // coming through the fallback, and it still needs this response first.
+  const fallbackOnly = simulateNoDirect || directRouteDead;
 
   return (
     <div className="space-y-4">
@@ -70,7 +80,7 @@ export function AnswerReturn({
           </li>
         </ul>
         <p className="text-sm text-muted-foreground">
-          {simulateNoDirect
+          {fallbackOnly
             ? `Keep this page open — the file comes through ${fallbackName} once the sender has your response.`
             : 'Keep this page open — the transfer connects automatically once the sender has your response.'}
         </p>

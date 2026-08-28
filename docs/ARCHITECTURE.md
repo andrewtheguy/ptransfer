@@ -776,9 +776,9 @@ Handles direct peer-to-peer connections using WebRTC data channels.
 4. Create WebRTC answer with ICE candidates
 5. Obfuscate answer payload: JSON → deflate → obfuscate → single binary QR code
 6. Show the answer as a QR code / copy-paste text for the sender to scan or paste
-7. Attempt the direct WebRTC connection (20 seconds when relay fallback is available, otherwise 120 seconds); an ICE `failed` state ends the attempt immediately
+7. Attempt the direct WebRTC connection (120 seconds, `CODE_CONNECTION_TIMEOUT_MS`); an ICE `failed` state ends the attempt immediately. This side does not take the sender's 20-second window: its clock would start while the response is still on screen waiting to be handed over by a human, so a short window would give up on a route nobody had tried yet
 8. On success, decrypt/authenticate incoming chunks into the adaptive receive sink, validate `DONE:<chunkCount>:<byteCount>`, and send the data-channel `ACK`
-9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive`; otherwise surface the P2P failure
+9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive`. The response stays on screen while that runs — the sender still needs it, and the fallback cannot start without it — until the sender turns up on the control channel with a manifest (or an onion announcement). Without an eligible fallback, surface the P2P failure
 10. Present the received content
 
 **`use-chunk-collector.ts`** - Multi-QR chunk collection (used by `/r` receive page):
@@ -888,8 +888,8 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 | Timeout | Duration | Purpose |
 |---------|----------|---------|
 | Nostr P2P connection | 30 seconds | Time to establish WebRTC connection after relay signaling starts |
-| Code Exchange P2P connection when the offer names relays | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`); a timeout starts the automatic fallback only if the file and prepared storage set are eligible. The sender cuts the window short as soon as the receiver's `hello` shows up on the control relays |
-| Code Exchange P2P connection when the offer names no relays | 120 seconds | Direct-attempt window when there is no control channel (`CODE_CONNECTION_TIMEOUT_MS`) |
+| Code Exchange P2P connection, sender, when the offer names relays | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`), timed from the moment the sender takes the response in; a timeout starts the automatic fallback only if the file and prepared storage set are eligible. The sender cuts the window short as soon as the receiver's `hello` shows up on the control relays |
+| Code Exchange P2P connection, otherwise | 120 seconds | Direct-attempt backstop (`CODE_CONNECTION_TIMEOUT_MS`): the sender when the offer names no relays, and the receiver either way, since its wait starts before the sender has even seen the response. An ICE `failed` state ends either attempt sooner |
 | ICE gathering | 5 seconds | Bounded wait while preparing Code Exchange offer/answer QR payloads |
 | Offer-relay probe | 4 seconds | Per-relay write→read bound when proving the relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means an offer without relays |
 | Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
