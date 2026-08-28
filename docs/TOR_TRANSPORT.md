@@ -12,7 +12,7 @@ the two implementations agree with each other on:
 | Implementation | Where it lives |
 | --- | --- |
 | The browser tab | this repo — see [TOR_BROWSER.md](./TOR_BROWSER.md) |
-| `ptransfer-cli` | [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli)'s `tor` subcommands, behind its non-default `tor` cargo feature — see that repo's `docs/ARCHITECTURE.md` |
+| `ptransfer-cli` | [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli)'s `tor` subcommands — see that repo's `docs/ARCHITECTURE.md` |
 
 Either side of a transfer may be a browser tab or the CLI. Where an
 implementation and this document disagree, this document wins.

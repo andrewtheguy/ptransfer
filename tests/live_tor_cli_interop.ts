@@ -15,9 +15,9 @@
 //
 //   bun run test:live:tor
 //
-// The CLI must be built with the `tor` feature:
+// The CLI must already be built:
 //
-//   cd ../ptransfer-cli && cargo build --release --all-features
+//   cd ../ptransfer-cli && cargo build --release
 //
 // Bootstrapping Tor over the public Snowflake bridge takes minutes per client,
 // because the browser fetches the consensus and every HSDir microdescriptor one
@@ -309,7 +309,7 @@ try {
   await access(CLI, fsConstants.X_OK).catch(() => {
     throw new Error(
       `No ptransfer binary at ${CLI}; build it with ` +
-        '`cargo build --release --all-features` or set PTRANSFER_BIN',
+        '`cargo build --release` or set PTRANSFER_BIN',
     );
   });
 
