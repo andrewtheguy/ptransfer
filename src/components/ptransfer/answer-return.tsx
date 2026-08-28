@@ -86,15 +86,19 @@ export function AnswerReturn({
         </p>
       </div>
 
-      {/* The Tor bootstrap running behind the direct attempt. It costs
-          minutes, so saying nothing would look like a page doing nothing. */}
+      {/* The Tor bootstrap. It costs minutes, so saying nothing would look
+          like a page doing nothing. Which of the two routes it is — the one
+          behind the direct attempt, or the only one left — is what the
+          sentence after it settles. */}
       {torStatus && (
         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">
-            Preparing the Tor fallback:
+            {fallbackOnly ? 'Preparing Tor:' : 'Preparing the Tor fallback:'}
           </span>{' '}
-          {torStatus} The direct connection is being tried at the same time and
-          does not wait for this.
+          {torStatus}{' '}
+          {fallbackOnly
+            ? 'This is the route the file will take; it has to finish before the transfer can start.'
+            : 'The direct connection is being tried at the same time and does not wait for this.'}
         </div>
       )}
 

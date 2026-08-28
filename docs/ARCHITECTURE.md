@@ -778,7 +778,7 @@ Handles direct peer-to-peer connections using WebRTC data channels.
 6. Show the answer as a QR code / copy-paste text for the sender to scan or paste
 7. Attempt the direct WebRTC connection (120 seconds, `CODE_CONNECTION_TIMEOUT_MS`); an ICE `failed` state ends the attempt immediately. This side does not take the sender's 20-second window: its clock would start while the response is still on screen waiting to be handed over by a human, so a short window would give up on a route nobody had tried yet
 8. On success, decrypt/authenticate incoming chunks into the adaptive receive sink, validate `DONE:<chunkCount>:<byteCount>`, and send the data-channel `ACK`
-9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive`. The response stays on screen while that runs — the sender still needs it, and the fallback cannot start without it — until the sender turns up on the control channel with a manifest (or an onion announcement). Without an eligible fallback, surface the P2P failure
+9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive`. The response stays on screen while that runs — the sender still needs it, and the fallback cannot start without it — until the sender turns up on the control channel with a manifest (or an onion announcement). While it is held there the fetch's 3-minute idle watchdog is suspended (`awaitingHandover`), since a sender that has not been handed the response yet is not late; the transfer's own 1-hour expiry still bounds the wait. Without an eligible fallback, surface the P2P failure
 10. Present the received content
 
 **`use-chunk-collector.ts`** - Multi-QR chunk collection (used by `/r` receive page):

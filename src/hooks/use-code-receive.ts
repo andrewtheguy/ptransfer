@@ -857,6 +857,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             expiresAt: Math.floor(
               (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
             ),
+            // While the response is still on screen the sender has nothing
+            // to answer with yet, so its silence must not time the fetch out
+            // from under the code that is being handed over.
+            awaitingHandover: held !== null,
             onProgress: (p) => {
               if (abandoned() || switchedBack()) return;
               lastStats = p.stats;
