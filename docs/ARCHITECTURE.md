@@ -26,13 +26,21 @@ them, this document included, asks nothing of the CLI.
 
 ## Core Principles
 
+1. **Confidentiality and Authenticity, Not Availability**: The system defends what is transferred and who receives it. It does not guarantee completion: signaling and the Code Exchange fallback depend on third-party relays, direct P2P setup is STUN-only, and Tor circuits are also best-effort. Failure — accidental or induced — costs a retry, not confidentiality or integrity. See *Availability Is a Non-Goal*.
+2. **No Application Backend to Operate**: pTransfer is a static client. Running or self-hosting it requires only static file hosting — no pTransfer server, account service, database, signaling service, or other application backend. Transfer modes may use public Nostr relays, STUN services, Snowflake infrastructure, and the Tor network, but none is a pTransfer-operated backend that a user must deploy or trust with plaintext or content keys.
+
+## Current Architecture Invariants
+
+These describe the present implementation rather than permanent product
+principles. They may change as transports evolve without changing the two
+constraints above.
+
 1. **Direct First, One Relay Fallback**: Both WebRTC-based modes try a direct data channel. PIN Exchange stops if that connection fails. Code Exchange can fall back to the Nostr file-relay protocol when its offer named usable relays and the payload is no larger than 100 MiB.
 2. **Single P2P Transfer Path**: `src/lib/p2p-transfer.ts` is the only file-transfer implementation used after signaling opens a WebRTC data channel. Both signaling methods use its 128 KiB AES-GCM chunks, `DONE:<chunkCount>:<byteCount>`, and data-channel `ACK` framing on the direct path.
 3. **Separate Relay Transfer Path**: `src/lib/nostr-file/` implements Code Exchange's fallback: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check.
 4. **Bounded P2P Receive Storage**: Direct receivers append authenticated chunks in reliable data-channel order to an adaptive sink: memory through 100 MiB, then OPFS. The relay fallback is capped at 100 MiB and materializes its payload in memory while hashing, compressing, assembling, and verifying it.
 5. **Method-Specific Setup and Failure Handling**: PIN Exchange uses Nostr for its PAKE handshake and WebRTC signals. Code Exchange hand-carries both the offer and the answer, and may reuse the relays the offer named as the fallback's encrypted control channel.
 6. **PIN Locates and Authenticates via PAKE (PIN Exchange)**: A rotating 12-character, case-sensitive letters-and-digits PIN locates the sender's rendezvous event and drives a SPAKE2 (RFC 9382, P-256) password-authenticated key exchange. Content and signaling keys are HKDF derivations off the SPAKE2 shared secret — which mixes fresh ephemeral scalars from both sides — so nothing published to relays can test a PIN guess offline, and a PIN recovered after the fact decrypts nothing.
-7. **Confidentiality and Authenticity, Not Availability**: The system defends what is transferred and who receives it. It does not guarantee completion: signaling and the Code Exchange fallback depend on third-party relays, and direct P2P setup is STUN-only. Failure — accidental or induced — costs a retry, not confidentiality or integrity. See *Availability Is a Non-Goal*.
 
 ## Signaling Methods
 
