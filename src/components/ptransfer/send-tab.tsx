@@ -63,6 +63,7 @@ export function SendTab() {
   const [transferMode, setTransferMode] = useState<TransferMode>('pin');
   const [torBridge, setTorBridge] = useState<TorBridge>(DEFAULT_TOR_BRIDGE);
   const [anonymousSignaling, setAnonymousSignaling] = useState(false);
+  const [anonymousRelay, setAnonymousRelay] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -101,6 +102,12 @@ export function SendTab() {
   // there — but the mode can be changed after it was turned on, so what the
   // rest of this component reads is the conjunction, never the switch.
   const anonymousSignalingActive = transferMode === 'pin' && anonymousSignaling;
+  // Same rule for the Code Exchange option: rendered only in that mode, read
+  // only as the conjunction, so switching mode never carries it along.
+  const anonymousRelayActive = transferMode === 'code' && anonymousRelay;
+  // Whichever of the two is on, this tab loads a Tor client, so the bridge
+  // question is the same question.
+  const usesTorBridge = anonymousSignalingActive || anonymousRelayActive;
 
   // Collapse folder selections into one row per top-level folder; loose files
   // stay individual rows. Order follows first appearance in the selection.
@@ -146,6 +153,8 @@ export function SendTab() {
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const anonymousSignalingHowItWorksDescription =
     'The handshake travels through Tor to onion-service relays, so no Nostr relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection, which Tor does not cover. The receiver can be this app or ptransfer-cli.';
+  const anonymousRelayHowItWorksDescription =
+    'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange, and the reply only enters your page when you scan or paste it yourself. A direct WebRTC connection is still tried first, exactly as always. If none can be made, both devices reach Tor rather than the clearnet: they coordinate over Nostr relays run as onion services, and this tab publishes a Tor onion service that carries the encrypted file, up to 100 MiB. Both devices need internet for that, and the recipient starts bootstrapping Tor the moment they take your code in — so this is not the offline, same-network case ordinary Code Exchange covers. Bootstrapping Tor in a browser takes a while on a first run, and this fails more often than the ordinary relay fallback.';
   const codeModeHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
@@ -156,6 +165,7 @@ export function SendTab() {
       transferMode,
       torBridge,
       anonymousSignaling: anonymousSignalingActive,
+      anonymousRelay: anonymousRelayActive,
     });
     // Navigate to transfer page
     void navigate('/send/transfer');
@@ -492,8 +502,9 @@ export function SendTab() {
         )}
       </div>
 
-      {/* Advanced options: PIN Exchange only, and closed by default. */}
-      {transferMode === 'pin' && (
+      {/* Advanced options: PIN and Code Exchange have one experimental option
+          each, and the section is closed by default. */}
+      {(transferMode === 'pin' || transferMode === 'code') && (
         <Collapsible
           open={advancedOpen}
           onOpenChange={setAdvancedOpen}
@@ -503,37 +514,79 @@ export function SendTab() {
             Advanced options
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-3 pt-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1">
-                <label
-                  htmlFor="send-anonymous-signaling"
-                  className="flex items-center gap-2 text-sm font-medium cursor-pointer"
-                >
-                  Anonymous signaling
-                  <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                    Experimental
-                  </span>
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  Routes the handshake through Tor inside your browser to relays
-                  run as onion services, so no Nostr relay sees your IP address.
-                  Your PIN comes out longer, and that length is how the
-                  recipient's page knows to look on the same relays — they do
-                  not have to turn anything on, or even know this exists. It
-                  starts much more slowly and is less reliable. It does not
-                  anonymize the file transfer itself: that is still a direct
-                  WebRTC connection, so your recipient and the STUN services see
-                  the same network metadata as always.
-                </p>
+            {transferMode === 'pin' ? (
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <label
+                    htmlFor="send-anonymous-signaling"
+                    className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                  >
+                    Anonymous signaling
+                    <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                      Experimental
+                    </span>
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Routes the handshake through Tor inside your browser to
+                    relays run as onion services, so no Nostr relay sees your IP
+                    address. Your PIN comes out longer, and that length is how
+                    the recipient's page knows to look on the same relays — they
+                    do not have to turn anything on, or even know this exists.
+                    It starts much more slowly and is less reliable. It does not
+                    anonymize the file transfer itself: that is still a direct
+                    WebRTC connection, so your recipient and the STUN services
+                    see the same network metadata as always.
+                  </p>
+                </div>
+                <Switch
+                  id="send-anonymous-signaling"
+                  checked={anonymousSignaling}
+                  onCheckedChange={setAnonymousSignaling}
+                  className="mt-0.5"
+                />
               </div>
-              <Switch
-                id="send-anonymous-signaling"
-                checked={anonymousSignaling}
-                onCheckedChange={setAnonymousSignaling}
-                className="mt-0.5"
-              />
-            </div>
-            {anonymousSignaling && (
+            ) : (
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <label
+                    htmlFor="send-anonymous-relay"
+                    className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+                  >
+                    Anonymous signaling and relay
+                    <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                      Experimental
+                    </span>
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Keeps the fallback off the clearnet. Your code is carried by
+                    hand either way, so the exchange itself is unchanged — what
+                    moves is what happens when no direct connection can be made:
+                    the two pages coordinate over Nostr relays run as onion
+                    services, reached through Tor, and the file travels through
+                    a Tor onion service this tab publishes instead of public
+                    Nostr storage relays. The code says which kind it is, so the
+                    recipient's page follows it without turning anything on, and
+                    starts bootstrapping Tor the moment they take the code in —
+                    that is the slow part. There is no second address or
+                    password for you to pass on: both come out of the code you
+                    already handed over. Both devices need internet to reach Tor
+                    at all, so unlike ordinary Code Exchange this is not
+                    something two devices can do on a network with none. Expect
+                    it to be slower and to fail more often. It does not
+                    anonymize a direct connection: that is still WebRTC, so your
+                    recipient and the STUN services see the same network
+                    metadata as always.
+                  </p>
+                </div>
+                <Switch
+                  id="send-anonymous-relay"
+                  checked={anonymousRelay}
+                  onCheckedChange={setAnonymousRelay}
+                  className="mt-0.5"
+                />
+              </div>
+            )}
+            {usesTorBridge && (
               <div className="space-y-2 rounded-md border bg-background/60 p-3">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">
@@ -580,7 +633,9 @@ export function SendTab() {
                   Hand your recipient the connection code — by QR code or
                   copy/paste — to establish the transfer session.
                   <br />
-                  {codeModeHowItWorksDescription}
+                  {anonymousRelayActive
+                    ? anonymousRelayHowItWorksDescription
+                    : codeModeHowItWorksDescription}
                 </>
               )}
               {transferMode === 'tor' && (

@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type AnswerConfirmationSigner,
   computeOfferTranscriptHash,
   generateMutualAnswerBinary,
+  isAnonymousOffer,
   parseMutualPayload,
   relaysFromOffer,
   type SignalingPayload,
@@ -16,9 +17,15 @@ import {
   SLOW_TRANSPORT_MAX_BYTES,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
+import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
-import type { TransferState } from '@/lib/nostr';
+import type { TransferMetadata, TransferState } from '@/lib/nostr';
+import {
+  ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+  AnonymousSignalingTransport,
+} from '@/lib/nostr/anonymous-transport';
+import { ANONYMOUS_SIGNALING_RELAYS } from '@/lib/nostr/relays';
 import { receiveFileLive } from '@/lib/nostr-file/download-live';
 import { deriveRelaySession } from '@/lib/nostr-file/session';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
@@ -30,6 +37,11 @@ import {
 } from '@/lib/p2p-transfer';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import type { TorBridge } from '@/lib/tor/client';
+import {
+  deriveOnionPassword,
+  receiveOverAnonymousRelay,
+} from '@/lib/tor/code-relay';
 import type { ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -73,6 +85,18 @@ export interface CodeReceiveState {
   relayFallbackAvailable?: boolean;
   /** Whether the response on screen is the simulated no-direct-route one. */
   simulateNoDirect?: boolean;
+  /**
+   * Whether the fallback this offer asked for runs inside Tor. The sender's
+   * switch decides it and the offer carries it, so the response page is told
+   * rather than asked — it only changes what the page calls the fallback.
+   */
+  anonymousFallback?: boolean;
+  /**
+   * Anonymous fallback only: what the Tor client is doing while the response
+   * is on screen. It bootstraps behind the direct attempt, so its progress
+   * belongs beside the response rather than in place of it.
+   */
+  torStatus?: string;
 }
 
 /**
@@ -86,10 +110,21 @@ interface IncomingOffer {
   transcriptHash: string;
 }
 
+/** What the receive flow is told before it is handed an offer. */
+export interface CodeReceiveOptions {
+  /**
+   * Which Snowflake bridge this tab reaches Tor through, for an offer that
+   * asked for the anonymous fallback. Asked for before the offer is handed
+   * over, because taking it in is what starts the bootstrap; an ordinary
+   * offer never loads a Tor client and never reads this.
+   */
+  bridge: TorBridge;
+}
+
 export interface UseCodeReceiveReturn {
   state: TransferState & CodeReceiveState;
   receivedContent: ReceivedContent | null;
-  startReceive: () => void;
+  startReceive: (options: CodeReceiveOptions) => void;
   submitOffer: (offerData: Uint8Array) => void;
   /**
    * Testing aid on the response page: swap between a real direct attempt and
@@ -107,6 +142,8 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — receiving the file through Nostr instead';
+const TOR_FALLBACK_MESSAGE =
+  'No direct connection — receiving the file through Tor instead';
 // What the response page says while the simulation is on: the relay fetch is
 // already running behind it, but nothing has begun until the sender takes the
 // response in, and a progress bar would claim otherwise.
@@ -141,6 +178,11 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   const relayPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
     null,
   );
+  // The Tor client an anonymous offer starts bootstrapping the moment it is
+  // taken in, and the socket adapter its control channel is built on. Null for
+  // an ordinary offer, which never loads one. Closing it takes the bootstrap,
+  // the relay sockets and every circuit with it.
+  const transportRef = useRef<AnonymousSignalingTransport | null>(null);
 
   // The step a receive blocks on until the UI settles it. Cancel rejects it
   // while pending so the flow unwinds immediately.
@@ -174,6 +216,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     const relayPool = relayPoolRef.current;
     relayPoolRef.current = null;
     if (relayPool) relayPool.destroy();
+    const transport = transportRef.current;
+    transportRef.current = null;
+    transport?.close();
     receivingRef.current = false;
     simulateNoDirectRef.current = false;
     switchRef.current = null;
@@ -192,6 +237,12 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     discardSink();
     setReceivedContent(null);
   }, [cancel, discardSink]);
+
+  // Navigating away ends the transfer, as it does in the Tor modes: nothing
+  // reaches this hook once it is gone, and an anonymous fallback left running
+  // would hold a Tor client, its circuits, and an onion service until the
+  // session expired.
+  useEffect(() => () => cancel(), [cancel]);
 
   const setSimulateNoDirect = useCallback((value: boolean) => {
     switchRef.current?.(value);
@@ -223,7 +274,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doReceive is defined below and only invoked at call time; references stable refs/setState
-  const startReceive = useCallback(() => {
+  const startReceive = useCallback((options: CodeReceiveOptions) => {
     // Guard against concurrent invocations
     if (receivingRef.current) return;
     receivingRef.current = true;
@@ -233,10 +284,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     discardSink();
 
     // Start the receive flow
-    void doReceive();
+    void doReceive(options.bridge);
   }, []);
 
-  const doReceive = async () => {
+  const doReceive = async (bridge: TorBridge) => {
     const run = ++runRef.current;
     // Cancelled, or superseded by a receive started after the cancel — in
     // either case this closure must stop and leave the shared refs alone.
@@ -321,6 +372,46 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
       if (abandoned()) return;
 
+      // Which fallback this offer asks for. The sender's switch, and the only
+      // thing that decides it: there is nothing to turn on here, and nothing
+      // to agree in advance. The UI has read the same flag off the same bytes
+      // already — that is what the bridge above was asked for — but this is
+      // the flag the flow acts on, taken from the offer it verified.
+      const anonymous = isAnonymousOffer(offerPayload);
+      // The slow part, started the moment the offer is taken in rather than
+      // once the direct route is known to be dead — a bootstrap is minutes,
+      // and by then the sender is already waiting. It runs behind the direct
+      // attempt and is closed with the transfer, used or not.
+      let torStatus = '';
+      // Installed by the fallback while it waits on the bootstrap: from then
+      // on the client's progress is the transfer's only progress, and a cold
+      // start is minutes — one frozen line for all of them reads as a hang.
+      let reportTorStatus: ((message: string) => void) | null = null;
+      let transport: AnonymousSignalingTransport | null = null;
+      if (anonymous) {
+        transport = new AnonymousSignalingTransport({
+          bridge,
+          onStatus: (message) => {
+            torStatus = message;
+            console.info('[tor] Code Exchange fallback:', message);
+            if (abandoned()) return;
+            if (reportTorStatus) {
+              reportTorStatus(message);
+              return;
+            }
+            // Otherwise only ever an addition to the response page. Every
+            // other state this flow sets is written whole, so a stale line
+            // cannot outlive the step it belonged to.
+            setState((current) =>
+              current.status === 'showing_answer'
+                ? { ...current, torStatus: message }
+                : current,
+            );
+          },
+        });
+        transportRef.current = transport;
+      }
+
       // Generate our ECDH keypair and derive shared secret
       setState({ status: 'generating_answer', message: 'Generating keys...' });
 
@@ -399,13 +490,22 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // itself is always hand-carried back to the sender.
       const offerRelays = relaysFromOffer(offerPayload);
 
+      // Which relays carry the fallback's control channel, or null when this
+      // offer has no fallback at all. An anonymous offer names none because
+      // its pool is a constant both sides hold; everything below reads this
+      // rather than the offer's list, so the two paths differ only in what
+      // the control channel goes on to arrange.
+      const fallbackRelays: string[] | null = anonymous
+        ? [...ANONYMOUS_SIGNALING_RELAYS]
+        : offerRelays;
+
       // The relays the simulation may hand the file to. Named relays are not
       // enough on their own: past the relay size cap the fallback would
       // refuse the file, so simulating a dead route would kill a working
       // direct connection and leave both sides with nowhere to go.
       const simulationRelays =
-        offerRelays && fileSize <= SLOW_TRANSPORT_MAX_BYTES
-          ? offerRelays
+        fallbackRelays && fileSize <= SLOW_TRANSPORT_MAX_BYTES
+          ? fallbackRelays
           : null;
 
       interface DirectAttempt {
@@ -625,7 +725,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             () => {
               reject(new P2PConnectionError('Connection timeout'));
             },
-            offerRelays
+            fallbackRelays
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : CODE_CONNECTION_TIMEOUT_MS,
           );
@@ -773,6 +873,151 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         return 'completed';
       };
 
+      /**
+       * The anonymous relay data path: the same session, an encrypted control
+       * channel on the onion relay pool, and the file over the sender's onion
+       * service rather than off storage relays.
+       *
+       * `pendingAnswer` holds the response page for the same reason it does
+       * on the clearnet path — on a simulated stint the sender has not even
+       * seen the code yet, so until it announces an address there is nothing
+       * to report but a page that is waiting.
+       */
+      const runAnonymousTransfer = async (
+        transport: AnonymousSignalingTransport,
+        relays: string[],
+        pendingAnswer: Uint8Array | null,
+        switchedBack: () => boolean,
+      ): Promise<'completed' | 'switched'> => {
+        const pool = createTransferPool({
+          websocketImplementation: transport.websocketImplementation,
+          connectionTimeoutMs: ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+        });
+        relayPoolRef.current = pool;
+        const relayState = {
+          contentType: 'file' as const,
+          fileMetadata,
+          currentRelays: relays,
+        };
+        const holding: (TransferState & CodeReceiveState) | null = pendingAnswer
+          ? {
+              status: 'showing_answer',
+              message: SIMULATED_HOLDING_MESSAGE,
+              answerData: pendingAnswer,
+              contentType: 'file',
+              fileMetadata,
+              relayFallbackAvailable: true,
+              simulateNoDirect: true,
+              anonymousFallback: true,
+            }
+          : null;
+        // Set once the sender has announced its service, which is the first
+        // moment anything is happening that the response page could report.
+        let senderPresent = holding === null;
+        const report = (message: string) => {
+          if (abandoned() || switchedBack()) return;
+          if (!senderPresent && holding) {
+            setState({ ...holding, torStatus });
+            return;
+          }
+          setState({ status: 'fetching', message, ...relayState });
+        };
+
+        report(
+          `${TOR_FALLBACK_MESSAGE}. ${torStatus || 'Starting the Tor client...'}`,
+        );
+        const session = await deriveRelaySession(keys.sharedSecretKey, salt);
+        let payload: Blob;
+        let received: { fileName: string; fileSize: number; mimeType: string };
+        try {
+          reportTorStatus = (message) =>
+            report(`${TOR_FALLBACK_MESSAGE}. ${message}`);
+          let client: Awaited<ReturnType<typeof transport.torClient>>;
+          try {
+            client = await transport.torClient();
+          } finally {
+            reportTorStatus = null;
+          }
+          if (switchedBack()) return 'switched';
+          if (abandoned()) return 'completed';
+          const receipt = await receiveOverAnonymousRelay({
+            client,
+            pool,
+            relays,
+            session,
+            since: Math.floor(offerPayload.createdAt / 1000),
+            expiresAt: Math.floor(
+              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
+            ),
+            password: await deriveOnionPassword(keys.sharedSecretKey, salt),
+            expected: {
+              contentType: 'file',
+              fileName,
+              fileSize,
+              contentEncoding,
+              mimeType,
+            } satisfies TransferMetadata,
+            isCancelled: () => abandoned() || switchedBack(),
+            onAnnounced: () => {
+              senderPresent = true;
+            },
+            onStatus: (message) =>
+              report(`${TOR_FALLBACK_MESSAGE}. ${message}`),
+            onProgress: (current, total) => {
+              if (abandoned() || switchedBack()) return;
+              setState({
+                status: 'fetching',
+                message: 'Receiving the file over Tor...',
+                progress: { current, total },
+                ...relayState,
+              });
+            },
+          });
+          payload = receipt.payload;
+          received = {
+            fileName: receipt.metadata.fileName,
+            fileSize: payload.size,
+            mimeType: receipt.metadata.mimeType,
+          };
+        } catch (error) {
+          if (switchedBack()) return 'switched';
+          if (abandoned()) return 'completed';
+          throw error;
+        } finally {
+          // Nothing downstream took ownership: the control key was derived
+          // from these, and the content key came out of the handshake.
+          wipeBufferSource(session.keyBytes);
+          if (relayPoolRef.current === pool) relayPoolRef.current = null;
+          pool.destroy();
+        }
+
+        if (abandoned()) return 'completed';
+        setReceivedContent({
+          contentType: 'file',
+          data: payload,
+          fileName: received.fileName,
+          fileSize: received.fileSize,
+          mimeType: received.mimeType,
+        });
+        setState({
+          status: 'complete',
+          message: 'File received through Tor!',
+          contentType: 'file',
+          fileMetadata: received,
+        });
+        return 'completed';
+      };
+
+      /** Whichever fallback this offer asked for. */
+      const runFallbackTransfer = (
+        relays: string[],
+        pendingAnswer: Uint8Array | null,
+        switchedBack: () => boolean,
+      ): Promise<'completed' | 'switched'> =>
+        transport
+          ? runAnonymousTransfer(transport, relays, pendingAnswer, switchedBack)
+          : runRelayTransfer(relays, pendingAnswer, switchedBack);
+
       let simulate = false;
       let connected: DirectAttempt | null = null;
 
@@ -811,6 +1056,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             fileMetadata,
             relayFallbackAvailable: simulationRelays !== null,
             simulateNoDirect: false,
+            anonymousFallback: anonymous,
+            torStatus,
           });
           try {
             await attempt.opened;
@@ -822,20 +1069,20 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             }
             if (
               !(error instanceof P2PConnectionError) ||
-              !offerRelays ||
+              !fallbackRelays ||
               abandoned()
             ) {
               throw error;
             }
             if (fileSize > SLOW_TRANSPORT_MAX_BYTES) {
               throw new P2PConnectionError(
-                `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+                `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through ${anonymous ? 'Tor' : 'Nostr'} either.`,
               );
             }
             // The direct route died on its own; there is nothing left for the
             // switch to simulate.
             switchRef.current = null;
-            await runRelayTransfer(offerRelays, null, () => false);
+            await runFallbackTransfer(fallbackRelays, null, () => false);
             return;
           }
           switchRef.current = null;
@@ -859,7 +1106,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           simulate = switchedTo;
           continue;
         }
-        const outcome = await runRelayTransfer(
+        const outcome = await runFallbackTransfer(
           simulationRelays,
           answerBinary,
           () => switchedTo !== null,
@@ -957,6 +1204,11 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         receivingRef.current = false;
         offerStepRef.current = null;
         switchRef.current = null;
+        // A transfer that connected directly bootstrapped a Tor client it
+        // never used; it goes with the transfer either way.
+        const transport = transportRef.current;
+        transportRef.current = null;
+        transport?.close();
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;

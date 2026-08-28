@@ -98,6 +98,21 @@ export interface SignalingPayload {
    * the answer goes back by QR or copy/paste, never over these relays.
    */
   relays?: string[];
+  /**
+   * Offer-only, and only ever `true`: this transfer's fallback runs inside
+   * Tor rather than on the clearnet — the control channel on the onion relay
+   * pool both sides already hold, and the file over an onion service the
+   * sending tab publishes. It never travels with a `relays` list, because the
+   * pool is a constant on both sides and no clearnet relay takes part.
+   *
+   * It is the sender's switch, carried here because the receiving page has
+   * nothing to turn on: the offer is what tells it which fallback to prepare
+   * for, and which one to spend a Tor bootstrap on. Editing the flag in
+   * transit does not go unnoticed — the answer's confirmation tag is bound to
+   * a digest of the offer container, so the sender refuses a response built
+   * on an offer that is not the one it made.
+   */
+  anon?: true;
 }
 
 /** Offer-side validation of the relay list the receiver is asked to use. */
@@ -121,6 +136,11 @@ export function normalizeOfferRelays(value: unknown): string[] | null {
 export function relaysFromOffer(payload: SignalingPayload): string[] | null {
   if (payload.type !== 'offer' || payload.relays === undefined) return null;
   return normalizeOfferRelays(payload.relays);
+}
+
+/** Whether this offer asks for the Tor fallback rather than the clearnet one. */
+export function isAnonymousOffer(payload: SignalingPayload): boolean {
+  return payload.type === 'offer' && payload.anon === true;
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -305,7 +325,18 @@ export function isValidSignalingPayload(
   if (!Number.isFinite(p.createdAt)) return false;
   if (!isValidPublicKeyArray(p.publicKey)) return false;
   if (!isValidConfirmField(p)) return false;
+  if (!isValidAnonField(p)) return false;
   return isValidRelaysField(p);
+}
+
+/**
+ * The anonymous-fallback flag is offer-only and one-valued: `false` would be
+ * an offer that says which fallback it is not, which nothing writes and
+ * nothing should read, so it is malformed rather than quietly ordinary.
+ */
+function isValidAnonField(p: Record<string, unknown>): boolean {
+  if (p.anon === undefined) return true;
+  return p.type === 'offer' && p.anon === true;
 }
 
 /**
@@ -326,6 +357,9 @@ function isValidConfirmField(p: Record<string, unknown>): boolean {
 function isValidRelaysField(p: Record<string, unknown>): boolean {
   if (p.relays === undefined) return true;
   if (p.type !== 'offer') return false;
+  // The two fallbacks are alternatives, and only the clearnet one names its
+  // relays. An offer carrying both would be asking the receiver to pick.
+  if (p.anon !== undefined) return false;
   return normalizeOfferRelays(p.relays) !== null;
 }
 
@@ -363,6 +397,11 @@ export function generateMutualOfferBinary(
     salt: Uint8Array; // Salt for AES key derivation
     /** Omitted when no relay set was proven for the fallback. */
     relays?: string[];
+    /**
+     * The Tor fallback instead of the clearnet one. Mutually exclusive with
+     * `relays`: its relay pool is a constant both sides hold.
+     */
+    anonymous?: boolean;
   },
 ): Uint8Array {
   const payload: SignalingPayload = {
@@ -376,7 +415,11 @@ export function generateMutualOfferBinary(
     mimeType: metadata.mimeType,
     publicKey: Array.from(metadata.publicKey),
     salt: Array.from(metadata.salt),
-    ...(metadata.relays ? { relays: metadata.relays } : {}),
+    ...(metadata.anonymous
+      ? { anon: true as const }
+      : metadata.relays
+        ? { relays: metadata.relays }
+        : {}),
   };
 
   return encodeCodePayload(payload);

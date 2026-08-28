@@ -6,20 +6,19 @@ import {
 } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { TorBridge } from '@/lib/tor/client';
-import { AnonymousSignalingTransport } from './anonymous-transport';
+import {
+  ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+  AnonymousSignalingTransport,
+} from './anonymous-transport';
 import { normalizeOnionRelayUrl, normalizeRelayUrl } from './relays';
 
 /**
- * How long a relay socket may take to open.
- *
- * A clearnet socket that has not connected in ten seconds is not going to. An
- * onion one is a whole rendezvous — an HSDir descriptor fetch, an introduction
- * circuit, and a rendezvous circuit — which is minutes on a bad day and still
- * the fastest path available, so it gets its own budget rather than being
- * declared dead on the clearnet clock.
+ * How long a clearnet relay socket may take to open. One that has not
+ * connected in ten seconds is not going to; an onion socket gets its own
+ * budget (see ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS) rather than being
+ * declared dead on this clock.
  */
 const DIRECT_RELAY_CONNECTION_TIMEOUT_MS = 10_000;
-const ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS = 180_000;
 
 /**
  * A pool that applies one connection timeout to every relay it opens.

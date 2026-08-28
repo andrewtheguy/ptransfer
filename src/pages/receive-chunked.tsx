@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { AnonymousReceiveForm } from '@/components/ptransfer/anonymous-receive-form';
 import { AnswerReturn } from '@/components/ptransfer/answer-return';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
 import { Button } from '@/components/ui/button';
@@ -17,14 +18,21 @@ import { useChunkCollector } from '@/hooks/use-chunk-collector';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { extractChunkParam } from '@/lib/chunk-utils';
+import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import {
   downloadFile,
   formatFileSize,
   getMimeTypeDescription,
 } from '@/lib/file-utils';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import { isMobileDevice } from '@/lib/utils';
 
-type PageStep = 'collecting' | 'transferring';
+/**
+ * The bridge step only ever appears for an offer that asked for the anonymous
+ * fallback: taking such an offer in starts a Tor bootstrap, so which Snowflake
+ * bridge to spend those minutes on is asked before it rather than after.
+ */
+type PageStep = 'collecting' | 'bridge' | 'transferring';
 
 export function ReceiveChunkedPage() {
   const navigate = useNavigate();
@@ -65,11 +73,27 @@ export function ReceiveChunkedPage() {
       chunkState.assembledPayload &&
       step === 'collecting'
     ) {
+      // A container that will not parse is handed over anyway: rejecting it is
+      // the hook's job, and it has a state to report the failure in.
+      const parsed = parseMutualPayload(chunkState.assembledPayload);
+      if (parsed && isAnonymousOffer(parsed)) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: transition page step when chunk collection completes
+        setStep('bridge');
+        return;
+      }
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: transition page step when chunk collection completes
       setStep('transferring');
-      startReceive();
+      startReceive({ bridge: DEFAULT_TOR_BRIDGE });
     }
   }, [chunkState.isComplete, chunkState.assembledPayload, step, startReceive]);
+
+  const handleBridge = useCallback(
+    (bridge: TorBridge) => {
+      setStep('transferring');
+      startReceive({ bridge });
+    },
+    [startReceive],
+  );
 
   // Submit the assembled offer once the hook is waiting for it
   useEffect(() => {
@@ -134,6 +158,8 @@ export function ReceiveChunkedPage() {
   }, [receivedContent]);
 
   const handleCancel = useCallback(() => {
+    // Harmless before the hook owns anything: cancel() on an idle flow only
+    // puts it back where it already is.
     cancel();
     void navigate('/receive');
   }, [cancel, navigate]);
@@ -290,6 +316,22 @@ export function ReceiveChunkedPage() {
     );
   }
 
+  // --- Which bridge this tab reaches Tor through ---
+  if (step === 'bridge') {
+    return (
+      <div className="flex w-full justify-center">
+        <div className="w-full max-w-md space-y-4 pt-4">
+          <h2 className="text-lg font-semibold text-center">Receiving File</h2>
+          <AnonymousReceiveForm
+            mode="code"
+            onSubmit={handleBridge}
+            onCancel={handleCancel}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // --- Transferring ---
   const answerData = receiveState.answerData;
   // Covers the simulated stint too: the hook holds this step, relay fetch and
@@ -315,6 +357,10 @@ export function ReceiveChunkedPage() {
             relayFallbackAvailable={receiveState.relayFallbackAvailable}
             simulateNoDirect={receiveState.simulateNoDirect}
             onSimulateNoDirectChange={setSimulateNoDirect}
+            fallbackName={
+              receiveState.anonymousFallback ? 'Tor' : 'the Nostr relays'
+            }
+            torStatus={receiveState.torStatus}
           />
         )}
 

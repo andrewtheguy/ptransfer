@@ -20,8 +20,9 @@ interface SendConfig {
   transferMode: TransferMode;
   /**
    * Which Snowflake bridge this tab reaches the Tor network through. Read by
-   * the Tor mode, and by PIN Exchange when `anonymousSignaling` is on;
-   * ignored otherwise, when no Tor client is ever loaded.
+   * the Tor mode, by PIN Exchange when `anonymousSignaling` is on, and by Code
+   * Exchange when `anonymousRelay` is on; ignored otherwise, when no Tor
+   * client is ever loaded.
    */
   torBridge: TorBridge;
   /**
@@ -29,6 +30,15 @@ interface SendConfig {
    * relays, and mint the longer PIN that tells the receiver to do the same.
    */
   anonymousSignaling: boolean;
+  /**
+   * Code Exchange only: keep the fallback off the clearnet. The code is
+   * hand-carried either way, so what this moves is what happens when no direct
+   * connection can be made — the coordination channel goes through Tor to
+   * onion-service relays, and the file itself through a Tor onion service this
+   * tab publishes rather than public Nostr storage relays. The offer says so,
+   * and the receiving page follows it.
+   */
+  anonymousRelay: boolean;
 }
 
 interface SendContextState {
