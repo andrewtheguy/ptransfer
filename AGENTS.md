@@ -12,7 +12,7 @@ no cargo fmt
 
 always bump by patch version only for breaking changes, but only one bump per branch
 
-point the @andrewtheguy/webtor-wasm dependency at a local webtor-rs build with bun run webtor:local, and back at the release with bun run webtor:released, before committing; a file: dependency must never be committed
+point the @andrewtheguy/webtor-wasm dependency at a local webtor-rs build with bun run webtor:local, and back at the release with bun run webtor:released before releasing; a file: dependency must never be committed
 
 bump INTEROP_PROTOCOL_VERSION in src/lib/protocol.ts whenever anything specified in docs/INTEROP_PROTOCOL.md changes, and leave it alone otherwise; it is not the package version
 
