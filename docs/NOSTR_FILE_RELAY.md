@@ -347,7 +347,7 @@ sequenceDiagram
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `NOSTR_FILE_MAX_BYTES` | 100 MiB | Hard cap on the plaintext payload |
+| `SLOW_TRANSPORT_MAX_BYTES` | 100 MiB | Hard cap on the plaintext payload, shared with the Tor onion transport |
 | `NOSTR_FILE_CHUNK_SIZE` | 48 KiB | Compressed-or-identity payload chunk size (~60 KiB encoded) |
 | `EVENT_KIND_FILE_CHUNK` | 30078 | NIP-78 addressable kind for chunks, probes, and control |
 | `NOSTR_FILE_EXPIRATION_SEC` | 3600 | Manifest/chunk window from fallback start; the outer Code Exchange deadline may end the transfer earlier |

@@ -58,8 +58,8 @@ specification of its own that an implementation follows instead of this one:
 
 - **Code Exchange** (the hand-carried PT01 offer/answer, its multi-QR chunking,
   its ECDH key agreement, and its answer confirmation tag). It is still
-  changing shape — the answer-return path was added and then removed, and the
-  answer was recently bound to its offer — so it stays out of the contract
+  changing shape — a relay-based answer-return path was removed, and the
+  hand-carried answer was recently bound to its offer — so it stays out of the contract
   until it stabilizes. It is described in
   [ARCHITECTURE.md](ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts)
   and [CODE_EXCHANGE.md](CODE_EXCHANGE.md), as web-internal documentation.

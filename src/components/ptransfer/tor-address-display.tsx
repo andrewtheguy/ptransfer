@@ -9,7 +9,7 @@ const QR_WIDTH = 220;
 interface TorAddressDisplayProps {
   /** `<address>.onion` — the exact string the receiver must enter. */
   address: string;
-  /** The one-time password, all 12 characters of it secret. */
+  /** The one-time password: 11 secret data characters plus a checksum. */
   password: string;
 }
 

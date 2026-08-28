@@ -325,12 +325,12 @@ export function AboutContent() {
             ptransfer-cli
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            A single standalone binary with no runtime dependencies. Running it
-            with no arguments opens a full-screen wizard that walks through the
-            whole transfer — send or receive, file and folder picking, output
-            directory, and PIN entry. Useful for a server with no browser, for
-            scripting a machine you only reach over SSH, or simply when you
-            would rather stay in a terminal.
+            A single native executable with no language runtime or package
+            manager. Running it with no arguments opens a full-screen wizard
+            that walks through the whole transfer — send or receive, file and
+            folder picking, output directory, and PIN entry. Useful for a server
+            with no browser, for scripting a machine you only reach over SSH, or
+            simply when you would rather stay in a terminal.
           </p>
           <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
             <li>

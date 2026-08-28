@@ -142,11 +142,11 @@ export function SendTab() {
   const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
   const torModeDescription =
-    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside the Tor circuit — no pTransfer relay and no direct connection between the two networks, only the Tor bridge and relays it travels through, which see transport metadata and never the file, and nothing published that could be correlated later. Slower, capped at 100 MiB, and best kept small — a circuit is slow and there is no resume.';
+    'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside Tor — no pTransfer relay and no direct connection between the two networks. Tor infrastructure sees only its slice of transport metadata, not file plaintext or the content key; the descriptor remains retrievable by anyone holding the address until it expires. Slower, capped at 100 MiB, and best kept small — a circuit is slow and there is no resume.';
   const torModeHowItWorksDescription =
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const anonymousSignalingHowItWorksDescription =
-    'The handshake travels through Tor to onion-service relays, so no relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection, which Tor does not cover. The receiver can be this app or ptransfer-cli.';
+    'The handshake travels through Tor to onion-service relays, so no Nostr relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection, which Tor does not cover. The receiver can be this app or ptransfer-cli.';
   const codeModeHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange. The reply only enters your page when you scan or paste it yourself. With internet, STUN helps find a direct route. Without internet, devices can connect on the same LAN. If no direct route exists and the code named usable relays, public Nostr relays can carry an encrypted file up to 100 MiB; this fallback remains best-effort.';
 
@@ -520,14 +520,14 @@ export function SendTab() {
                 </label>
                 <p className="text-xs text-muted-foreground">
                   Routes the handshake through Tor inside your browser to relays
-                  run as onion services, so no relay sees your IP address. Your
-                  PIN comes out longer, and that length is how the recipient's
-                  page knows to look on the same relays — they do not have to
-                  turn anything on, or even know this exists. It starts much
-                  more slowly and is less reliable. It does not anonymize the
-                  file transfer itself: that is still a direct WebRTC
-                  connection, so your recipient and the STUN services see the
-                  same network metadata as always.
+                  run as onion services, so no Nostr relay sees your IP address.
+                  Your PIN comes out longer, and that length is how the
+                  recipient's page knows to look on the same relays — they do
+                  not have to turn anything on, or even know this exists. It
+                  starts much more slowly and is less reliable. It does not
+                  anonymize the file transfer itself: that is still a direct
+                  WebRTC connection, so your recipient and the STUN services see
+                  the same network metadata as always.
                 </p>
               </div>
               <Switch

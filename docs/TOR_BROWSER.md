@@ -12,7 +12,12 @@ a Tor implementation compiled to WASM that builds its own circuits from the
 page. Sending runs it as a *service*: the tab generates the identity keypair,
 derives the address from it, establishes introduction points with
 `ESTABLISH_INTRO`, signs a descriptor naming them, and uploads it to the
-responsible HSDirs. Every `INTRODUCE2` that arrives afterwards is answered by
+responsible HSDirs for the current onion-service time period and whichever of
+its two neighbours the directory's shared-random values support. It refreshes
+the directory and republishes those descriptors every
+60–120 minutes, or shortly after a time-period boundary when that comes first,
+so a tab left open does not silently lose reachability when a descriptor or
+HSDir ring turns over. Every `INTRODUCE2` that arrives afterwards is answered by
 building a circuit to the client's rendezvous point and completing the hs-ntor
 handshake as the responder. Receiving runs the client half: compute the time
 period and shared random value, blind the service key, fetch the descriptor from

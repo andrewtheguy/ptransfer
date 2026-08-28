@@ -10,8 +10,8 @@ it do not move the interop protocol version.
 
 ## What Code Exchange Is
 
-Both pTransfer modes are hand-carried — in PIN Exchange you carry a short PIN, and relays
-use it to coordinate the two devices. Code Exchange is the mode where you carry the *whole*
+Both WebRTC-based exchange methods start with something you hand to the receiver — in PIN Exchange you carry a short PIN, and relays
+use it to coordinate the two devices. Code Exchange is the method where you carry the *whole*
 connection code instead, so no relay coordinates anything: **you** move the sender's
 connection data across by hand — using a **QR code**, **copy/paste**, or a mix of the two.
 The two methods are interchangeable at every step: either side can scan or paste, whichever

@@ -17,9 +17,9 @@ initial mode while keeping its fully hand-carried signaling path:
   camera, screen-reader or motor-accessibility constraints, device pairs where
   moving a QR is impractical). It stays fully supported and one click away. The
   UI copy already offers it in those terms.
-- Documentation reversal: `docs/CODE_EXCHANGE.md` and `docs/ARCHITECTURE.md`
-  currently describe Nostr signaling as the default; both need rewriting, plus
-  a version bump for the behavior change.
+- Documentation reversal: `README.md` and `docs/ARCHITECTURE.md` currently
+  describe Nostr signaling as the default; both need rewriting, plus a version
+  bump for the behavior change.
 
 ### More Efficient Use of the Relay Cache in Code Exchange
 Make Code Exchange lean harder on the IndexedDB relay cache

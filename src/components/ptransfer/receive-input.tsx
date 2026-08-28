@@ -356,9 +356,10 @@ export function ReceiveInput({
             is the same exchange with anonymous signaling turned on at their
             end. The extra length is the signal: this page recognizes it and
             routes the handshake through Tor to the relays the sender is waiting
-            on, so no relay sees either side's IP address. It asks you which Tor
-            bridge to use and then takes a while to start. The file itself still
-            arrives over a direct connection, which Tor does not cover.
+            on, so no Nostr relay sees either side's IP address. It asks you
+            which Tor bridge to use and then takes a while to start. The file
+            itself still arrives over a direct connection, which Tor does not
+            cover.
           </p>
           <p>
             <span className="font-medium text-foreground">
@@ -366,8 +367,8 @@ export function ReceiveInput({
             </span>{' '}
             means the sender published a Tor hidden service. Enter the one-time
             password they gave you on the next screen; the file travels inside
-            the Tor circuit, with no relay and no direct connection between the
-            two networks.
+            Tor, with no Nostr or pTransfer relay and no direct connection
+            between the two networks. Tor relays still carry the circuits.
           </p>
           <p>
             <span className="font-medium text-foreground">

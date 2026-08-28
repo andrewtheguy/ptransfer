@@ -19,14 +19,15 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  * The tab is the server: it generates the service identity, establishes
  * introduction points, uploads a signed descriptor, and answers the streams
  * clients open on the rendezvous circuits. The address and a one-time password
- * are the whole rendezvous — no relay, no lookup hint, no third-party
- * identity, and nothing published that a later observer could correlate.
+ * are the whole rendezvous — no application signaling relay, lookup hint, or
+ * third-party identity. Tor relays carry the circuits, and the descriptor stays
+ * retrievable by anyone holding the onion address until it expires.
  *
- * Unlike a PIN, the password's *entire* 12 characters are secret: there is no
- * public locator segment, because there is nothing public to look anything up
- * in. That is also why there is no confirmation code here — the pair is only
- * ever handed over together, and a wrong password simply fails to open the
- * claim (see lib/tor/handshake.ts).
+ * Unlike a PIN, all 11 password data characters are secret; the twelfth is the
+ * deterministic checksum. There is no public locator segment because there is
+ * no signaling record to look up. That is also why there is no confirmation
+ * code here — the pair is only ever handed over together, and a wrong password
+ * simply fails to open the claim (see lib/tor/handshake.ts).
  *
  * The receiver may be another browser tab or ptransfer-cli's
  * `ptransfer tor receive`; the two speak the same handshake and framing.

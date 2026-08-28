@@ -2,8 +2,9 @@
 
 The transfer mode with no rendezvous server of any kind. The sending side
 publishes an ephemeral **v3 onion service** and mints a one-time password;
-those two strings are the whole rendezvous. The receiving side needs no relay,
-no account, no lookup hint, and nothing the sender did not hand it directly.
+those two strings are the whole rendezvous. The receiving side needs no
+signaling relay, account, lookup hint, or anything the sender did not hand it
+directly; its Tor client still builds circuits through Tor relays.
 
 This document is the **normative specification** for that mode, and it is what
 the two implementations agree with each other on:
@@ -48,11 +49,14 @@ the other, and neither belongs in this file.
 Nothing about the transfer touches a pTransfer or Nostr relay, and the two
 peers' networks never connect to each other directly. What it does touch is Tor
 itself: whatever gets each peer onto the network, the relays the circuits are
-built from, and the HSDirs that carry the descriptor. Those see transport
-metadata — never plaintext, never the content key, and no single one of them
-sees both peers. The two peers meet at a rendezvous point inside the Tor
-network, so neither learns the other's address and nothing published anywhere
-can be correlated with the transfer afterwards.
+built from, and the HSDirs that carry the descriptor. Those see different
+slices of transport metadata — never file plaintext or the content key. An
+entry bridge or guard sees its own peer's network address, HSDirs see descriptor
+publication or lookup, and the rendezvous point sees the two Tor circuits meet
+without learning either endpoint address. The peers therefore do not learn one
+another's network addresses. There is no pTransfer or Nostr rendezvous event,
+but the onion descriptor remains retrievable by anyone holding the address
+until it expires.
 
 The price is a **100 MiB cap** per transfer — the same ceiling the web app's
 relayed data path works under, for the same reasons: both push bytes through
@@ -102,10 +106,11 @@ Minted with the same generator PIN Exchange uses: 12 case-sensitive characters
 letters and digits that excludes the ambiguous `0`, `1`, `I`, `O`, `i`, `l`,
 `o`. There are no symbols.
 
-Unlike a PIN, **all 12 characters are secret**. A PIN reserves its leading three
+Unlike a PIN, **all 11 data characters are secret**. The twelfth character is
+the deterministic checksum. A PIN reserves its leading three data characters
 as a public locator so a receiver can find the sender's rendezvous event on a
-relay; here there is no relay and nothing public to look anything up in, so the
-whole string authenticates.
+relay; here there is no signaling relay and nothing public to look anything up
+in, so every data character contributes to authentication.
 
 ## Handshake
 
@@ -183,10 +188,10 @@ code** for a human to compare — unlike a PIN, which is short enough to be race
 with a live guess while it is on screen, the address and password are only ever
 handed over together as a pair, so there is no race to catch.
 
-A sender that cannot open a claim **hangs up rather than answering**, so a
-guesser learns only that the connection ended, never which of the two inputs
-was wrong. A wrong password and a peer speaking gibberish are deliberately not
-distinguished: the difference is only ever useful to whoever is guessing.
+A sender that cannot open a claim **hangs up rather than answering**. A peer
+that reached the onion service already knows the address was usable, but learns
+no file metadata and gets no finer-grained feedback about a wrong password: a
+bad password and malformed handshake are deliberately not distinguished.
 
 The service keeps waiting afterwards — the address and password are untouched
 by a failed connection, so the real receiver can still come back. A receiver
@@ -235,8 +240,8 @@ verified, and only the sender's knowledge of that is in doubt.
 
 ## Transfer
 
-Above the framing the transfer is *the same code* both implementations run over
-a WebRTC data channel: 128 KiB AES-256-GCM chunks with the chunk index as
+Above the framing each implementation runs the same transfer code path it uses
+over a WebRTC data channel: 128 KiB AES-256-GCM chunks with the chunk index as
 additional authenticated data, a `DONE:<chunks>:<bytes>` trailer, and an `ACK`
 once every chunk has authenticated and been written. A single file is deflated
 on the wire and restored on receipt; a generated ZIP travels as-is. See
