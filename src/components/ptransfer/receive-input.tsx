@@ -2,7 +2,6 @@ import {
   AlertCircle,
   Camera,
   CheckCircle2,
-  ChevronDown,
   ClipboardPaste,
   Download,
 } from 'lucide-react';
@@ -336,8 +335,7 @@ export function ReceiveInput({
       )}
 
       <Collapsible className="space-y-2">
-        <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
-          <ChevronDown className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180" />
+        <CollapsibleTrigger className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
           What am I pasting?
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-2 text-xs text-muted-foreground">

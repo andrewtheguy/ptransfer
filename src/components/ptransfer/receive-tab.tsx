@@ -47,6 +47,7 @@ export function ReceiveTab() {
     receivedContent: codeContent,
     startReceive,
     submitOffer,
+    setSimulateNoDirect,
     cancel: cancelCode,
     reset: resetCode,
   } = useCodeReceive();
@@ -264,6 +265,8 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const answerData = isCodeExchange ? codeState.answerData : undefined;
+  // Covers the simulated stint too: the hook holds this step, relay fetch and
+  // all, until the sender turns up, so the response and its switch stay put.
   const showAnswerReturn =
     isCodeExchange && answerData && codeState.status === 'showing_answer';
 
@@ -311,7 +314,12 @@ export function ReceiveTab() {
 
           {/* The receiver's answer, carried back to the sender by hand */}
           {showAnswerReturn && answerData && (
-            <AnswerReturn answerData={answerData} />
+            <AnswerReturn
+              answerData={answerData}
+              relayFallbackAvailable={codeState.relayFallbackAvailable}
+              simulateNoDirect={codeState.simulateNoDirect}
+              onSimulateNoDirectChange={setSimulateNoDirect}
+            />
           )}
 
           {state.status === 'complete' && receivedContent && (

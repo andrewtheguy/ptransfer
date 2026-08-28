@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import {
+  type AnswerConfirmationSigner,
   computeOfferTranscriptHash,
   generateMutualAnswerBinary,
   parseMutualPayload,
@@ -22,7 +23,11 @@ import { receiveFileLive } from '@/lib/nostr-file/download-live';
 import { deriveRelaySession } from '@/lib/nostr-file/session';
 import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { NostrFileCancelledError } from '@/lib/nostr-file/upload';
-import { ACK, createTransferReceiver } from '@/lib/p2p-transfer';
+import {
+  ACK,
+  createTransferReceiver,
+  type TransferReceiver,
+} from '@/lib/p2p-transfer';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ReceivedContent } from '@/lib/types';
@@ -60,6 +65,14 @@ export interface CodeReceiveState {
   currentRelays?: string[];
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
+  /**
+   * Whether the relay fallback could carry this file — the offer named
+   * relays and the file is within the relay size cap. Without both there is
+   * nothing for the simulation switch to fall back to.
+   */
+  relayFallbackAvailable?: boolean;
+  /** Whether the response on screen is the simulated no-direct-route one. */
+  simulateNoDirect?: boolean;
 }
 
 /**
@@ -78,6 +91,11 @@ export interface UseCodeReceiveReturn {
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
+  /**
+   * Testing aid on the response page: swap between a real direct attempt and
+   * a simulated dead route, either way round. See `simulateNoDirectRef`.
+   */
+  setSimulateNoDirect: (value: boolean) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -89,6 +107,19 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — receiving the file through Nostr instead';
+// What the response page says while the simulation is on: the relay fetch is
+// already running behind it, but nothing has begun until the sender takes the
+// response in, and a progress bar would claim otherwise.
+const SIMULATED_HOLDING_MESSAGE =
+  'Simulating no direct connection — waiting for the sender to take in your response';
+
+/** Ends the stint in progress when the simulation switch is flipped. */
+class SimulationSwitched extends Error {
+  constructor() {
+    super('Simulation switched');
+    this.name = 'SimulationSwitched';
+  }
+}
 
 export function useCodeReceive(): UseCodeReceiveReturn {
   const [state, setState] = useState<TransferState & CodeReceiveState>({
@@ -114,6 +145,16 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   // The step a receive blocks on until the UI settles it. Cancel rejects it
   // while pending so the flow unwinds immediately.
   const offerStepRef = useRef<PendingStep<IncomingOffer> | null>(null);
+  // Which side of the switch on the response page the flow is currently on.
+  // The switch exists only to exercise the relay path without a hostile
+  // network: it hands the sender a response with no ICE candidates in it and
+  // tears down the peer connection behind it, which is the same situation a
+  // receiver with no reachable candidate is in. Nothing about the response
+  // format changes, and the sender is none the wiser.
+  const simulateNoDirectRef = useRef(false);
+  // Applies a flip of that switch to the receive in progress. Set only while
+  // a response is on screen, which is also what gates the switch in the UI.
+  const switchRef = useRef<((simulate: boolean) => void) | null>(null);
   // Identifies the receive currently in charge of the refs. A cancelled run
   // that is still unwinding compares against it before touching shared
   // state, so a restart right after cancel is never clobbered.
@@ -134,6 +175,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     relayPoolRef.current = null;
     if (relayPool) relayPool.destroy();
     receivingRef.current = false;
+    simulateNoDirectRef.current = false;
+    switchRef.current = null;
     const offerStep = offerStepRef.current;
     offerStepRef.current = null;
     offerStep?.reject(new Error('Cancelled'));
@@ -149,6 +192,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     discardSink();
     setReceivedContent(null);
   }, [cancel, discardSink]);
+
+  const setSimulateNoDirect = useCallback((value: boolean) => {
+    switchRef.current?.(value);
+  }, []);
 
   const submitOffer = useCallback(async (offerData: Uint8Array) => {
     const step = offerStepRef.current;
@@ -277,176 +324,68 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // Generate our ECDH keypair and derive shared secret
       setState({ status: 'generating_answer', message: 'Generating keys...' });
 
-      const ecdhKeyPair = await generateECDHKeyPair();
       const senderPublicKey = new Uint8Array(senderPublicKeyArray);
       const salt = new Uint8Array(saltArray);
 
-      // Derive shared secret as non-extractable CryptoKey
-      const sharedSecretKey = await deriveSharedSecretKey(
-        ecdhKeyPair.privateKey,
-        senderPublicKey,
-      );
-      const key = await deriveAESKeyFromSecretKey(sharedSecretKey, salt);
-      // Signs the answer once its fields are settled: proves to the sender
-      // that this answer, unaltered, came from a peer that read its offer and
-      // reached the same shared secret. Travels inside the answer code with
-      // nothing for either operator to read or type.
-      const signAnswer = (answerTranscriptHash: string) =>
-        deriveAnswerConfirmation(sharedSecretKey, salt, {
-          offerTranscriptHash,
-          answerTranscriptHash,
-        });
-
-      if (abandoned()) return;
-
-      // Create WebRTC connection and handle offer
-      setState({
-        status: 'generating_answer',
-        message: 'Creating P2P answer...',
-      });
-
-      const iceCandidates: RTCIceCandidate[] = [];
-      let answerSDP: RTCSessionDescriptionInit | null = null;
-
-      // Decrypted chunks land in the receive sink as they arrive. A cancel
-      // during its creation cannot see it through sinkRef yet, so discard it
-      // here instead of leaving its scratch storage orphaned.
-      const sink = await createAdaptiveAppendSink(fileSize);
-      if (abandoned()) {
-        void sink.discard();
-        return;
-      }
-      sinkRef.current = sink;
-
-      // Streaming receiver: decrypts each chunk into the sink as it arrives
-      // (inflating deflated payloads in between) and resolves once DONE
-      // arrives and all chunks authenticate.
-      const receiver = createTransferReceiver(key, contentEncoding, sink, {
-        estimatedBytes: fileSize,
-        onProgress: (current, total) =>
-          setState((s) => ({ ...s, progress: { current, total } })),
-      });
-      let dataChannelResolver: (() => void) | null = null;
-      let connectionFailedRejecter: ((error: Error) => void) | null = null;
-      let answerSDPResolver: (() => void) | null = null;
-      // A dead route can be known before the wait promise below exists (while
-      // ICE is still gathering, or the answer code is being built). With no rejecter to hand it to yet, the failure is held
-      // here so the wait fails fast instead of riding out the full timeout.
-      let earlyConnectionFailure: Error | null = null;
-
-      const rtc = new WebRTCConnection(
-        getWebRTCConfig(),
-        (signal) => {
-          // Collect signals (answer + candidates)
-          if (signal.type === 'answer') {
-            answerSDP = { type: 'answer', sdp: signal.sdp };
-            if (answerSDPResolver) {
-              answerSDPResolver();
-            }
-          } else if (signal.type === 'candidate' && signal.candidate) {
-            iceCandidates.push(new RTCIceCandidate(signal.candidate));
-          }
-        },
-        () => {
-          // Data channel opened; the idle watchdog covers the receiving stage
-          // from here on.
-          receiver.start();
-          if (dataChannelResolver) {
-            dataChannelResolver();
-          }
-        },
-        (data) => {
-          receiver.onMessage(data);
-        },
-        (connectionState) => {
-          // A dead route is known long before the connection timeout; the
-          // relay fallback (below) starts from it right away. If it fails
-          // before the wait promise is set up, record it so that promise can
-          // reject at once rather than waiting out the timeout.
-          if (
-            connectionState === 'failed' ||
-            connectionState === 'disconnected'
-          ) {
-            const error = new P2PConnectionError('Connection failed');
-            if (connectionFailedRejecter) connectionFailedRejecter(error);
-            else earlyConnectionFailure ??= error;
-          }
-        },
-      );
-
-      if (abandoned()) {
-        rtc.close();
-        return;
-      }
-      rtcRef.current = rtc;
-
-      // Handle offer signal
-      await rtc.handleSignal({ type: 'offer', sdp: offerPayload.sdp });
-
-      // Add ICE candidates from offer
-      for (const candidateStr of offerPayload.candidates) {
-        await rtc.handleSignal({
-          type: 'candidate',
-          candidate: { candidate: candidateStr, sdpMid: '0', sdpMLineIndex: 0 },
-        });
+      /**
+       * Everything one answer's ECDH key pair yields. The relay session is
+       * derived from the same shared secret, so a new key pair here is also a
+       * new relay session — which is how a response is given a control
+       * channel with no history behind it.
+       */
+      interface AnswerKeys {
+        publicKeyBytes: Uint8Array;
+        /** Chunk key for the direct path. */
+        key: CryptoKey;
+        /** Root of the relay session and of the confirmation tag. */
+        sharedSecretKey: CryptoKey;
+        /**
+         * Signs the answer once its fields are settled: proves to the sender
+         * that this answer, unaltered, came from a peer that read its offer
+         * and reached the same shared secret. Travels inside the answer code
+         * with nothing for either operator to read or type.
+         */
+        signAnswer: AnswerConfirmationSigner;
       }
 
-      if (abandoned()) return;
-
-      // Wait for answer SDP to be generated
-      setState({
-        status: 'generating_answer',
-        message: 'Generating answer...',
-      });
-
-      await new Promise<void>((resolve) => {
-        if (answerSDP) {
-          resolve();
-        } else {
-          answerSDPResolver = resolve;
-          // Timeout after 10 seconds
-          setTimeout(resolve, 10000);
-        }
-      });
-
-      if (abandoned()) return;
-
-      // Wait for ICE gathering to complete
-      setState({
-        status: 'generating_answer',
-        message: 'Gathering network info...',
-      });
-      const iceGatheringComplete = await rtc.waitForIceGatheringComplete(
-        ICE_GATHER_TIMEOUT_MS,
-      );
-      if (!iceGatheringComplete) {
-        console.warn(
-          'ICE gathering timed out while generating answer; continuing with available candidates',
+      const deriveAnswerKeys = async (): Promise<AnswerKeys> => {
+        const ecdhKeyPair = await generateECDHKeyPair();
+        // Derive shared secret as non-extractable CryptoKey
+        const sharedSecretKey = await deriveSharedSecretKey(
+          ecdhKeyPair.privateKey,
+          senderPublicKey,
         );
-      }
-      setState({
-        status: 'generating_answer',
-        message: iceGatheringComplete
-          ? 'Preparing response code...'
-          : 'Network probe timed out. Preparing response code with available routes...',
-      });
+        return {
+          publicKeyBytes: ecdhKeyPair.publicKeyBytes,
+          key: await deriveAESKeyFromSecretKey(sharedSecretKey, salt),
+          sharedSecretKey,
+          signAnswer: (answerTranscriptHash: string) =>
+            deriveAnswerConfirmation(sharedSecretKey, salt, {
+              offerTranscriptHash,
+              answerTranscriptHash,
+            }),
+        };
+      };
+
+      let keys = await deriveAnswerKeys();
 
       if (abandoned()) return;
 
-      // Validate answerSDP is available
-      if (!answerSDP) {
-        throw new Error(
-          'Failed to generate answer SDP: Answer was not created by WebRTC connection',
-        );
-      }
-
-      // Generate answer with our public key
-      const answerBinary = await generateMutualAnswerBinary(
-        answerSDP,
-        iceCandidates,
-        ecdhKeyPair.publicKeyBytes,
-        signAnswer,
-      );
+      // ------------------------------------------------------------------
+      // The response page. It alternates between a real direct attempt and a
+      // simulated dead route for as long as the switch is flipped, and ends
+      // when one of the two takes over the transfer.
+      //
+      // A direct attempt owns a peer connection, a streaming receiver and a
+      // receive sink. Simulating a dead route throws all three away and hands
+      // the sender the last answer SDP with an empty candidate list: the
+      // sender then has nothing to connect to, and with the peer connection
+      // gone there is no agent left here to answer a connectivity check
+      // either — which is what makes the simulation hold rather than the two
+      // sides still finding each other peer-reflexively. Switching back
+      // builds a fresh attempt, so the response changes on every flip and the
+      // sender has to be handed the current one.
+      // ------------------------------------------------------------------
 
       const fileMetadata = {
         fileName: fileName!,
@@ -455,24 +394,228 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       };
 
       // The relays the offer named, if any: the control relays of the
-      // file-relay fallback used only after the direct connection fails.
-      // The answer itself is always hand-carried back to the sender.
+      // file-relay fallback used only after the direct connection fails, and
+      // the only reason the simulation switch is offered at all. The answer
+      // itself is always hand-carried back to the sender.
       const offerRelays = relaysFromOffer(offerPayload);
 
-      // Show answer and wait for connection
-      setState({
-        status: 'showing_answer',
-        message: 'Show this to sender and wait for connection',
-        answerData: answerBinary,
-        contentType: 'file',
-        fileMetadata,
-      });
+      // The relays the simulation may hand the file to. Named relays are not
+      // enough on their own: past the relay size cap the fallback would
+      // refuse the file, so simulating a dead route would kill a working
+      // direct connection and leave both sides with nowhere to go.
+      const simulationRelays =
+        offerRelays && fileSize <= SLOW_TRANSPORT_MAX_BYTES
+          ? offerRelays
+          : null;
 
-      // Wait for the data channel to open. When no direct route exists and
-      // the offer named relays, the file comes through them instead;
-      // without relays, or past the relay size cap, the failure stands.
-      try {
-        await new Promise<void>((resolve, reject) => {
+      interface DirectAttempt {
+        rtc: WebRTCConnection;
+        receiver: TransferReceiver;
+        answerBinary: Uint8Array;
+        /** Resolves on an open data channel, rejects on a dead route. */
+        opened: Promise<void>;
+        /** Ends that wait now, with the reason the loop should act on. */
+        stop: (error: Error) => void;
+        /** Peer connection, receiver and sink, discarded together. */
+        dispose: () => void;
+      }
+
+      // The SDP of the most recent attempt, which the simulated response
+      // reuses. Its ICE credentials belong to a closed connection by then,
+      // which does not matter: nothing will ever answer it.
+      let latestAnswerSDP: RTCSessionDescriptionInit | null = null;
+
+      const buildDirectAttempt = async (): Promise<DirectAttempt | null> => {
+        setState({
+          status: 'generating_answer',
+          message: 'Creating P2P answer...',
+        });
+
+        const iceCandidates: RTCIceCandidate[] = [];
+        let answerSDP: RTCSessionDescriptionInit | null = null;
+        let answerSDPResolver: (() => void) | null = null;
+        let dataChannelResolver: (() => void) | null = null;
+        let connectionFailedRejecter: ((error: Error) => void) | null = null;
+        let stopWait: ((error: Error) => void) | null = null;
+        // A dead route can be known before the wait promise below exists
+        // (while ICE is still gathering, or the answer code is being built).
+        // With no rejecter to hand it to yet, the failure is held here so the
+        // wait fails fast instead of riding out the full timeout.
+        let earlyConnectionFailure: Error | null = null;
+
+        // Decrypted chunks land in the receive sink as they arrive. A cancel
+        // during its creation cannot see it through sinkRef yet, so discard it
+        // here instead of leaving its scratch storage orphaned.
+        const sink = await createAdaptiveAppendSink(fileSize);
+        if (abandoned()) {
+          void sink.discard();
+          return null;
+        }
+        sinkRef.current = sink;
+
+        // Streaming receiver: decrypts each chunk into the sink as it arrives
+        // (inflating deflated payloads in between) and resolves once DONE
+        // arrives and all chunks authenticate.
+        const receiver = createTransferReceiver(
+          keys.key,
+          contentEncoding,
+          sink,
+          {
+            estimatedBytes: fileSize,
+            onProgress: (current, total) =>
+              setState((s) => ({ ...s, progress: { current, total } })),
+          },
+        );
+
+        const rtc = new WebRTCConnection(
+          getWebRTCConfig(),
+          (signal) => {
+            // Collect signals (answer + candidates)
+            if (signal.type === 'answer') {
+              answerSDP = { type: 'answer', sdp: signal.sdp };
+              if (answerSDPResolver) {
+                answerSDPResolver();
+              }
+            } else if (signal.type === 'candidate' && signal.candidate) {
+              iceCandidates.push(new RTCIceCandidate(signal.candidate));
+            }
+          },
+          () => {
+            // Data channel opened; the idle watchdog covers the receiving
+            // stage from here on.
+            receiver.start();
+            if (dataChannelResolver) {
+              dataChannelResolver();
+            }
+          },
+          (data) => {
+            receiver.onMessage(data);
+          },
+          (connectionState) => {
+            // A dead route is known long before the connection timeout; the
+            // relay fallback starts from it right away. If it fails before the
+            // wait promise is set up, record it so that promise can reject at
+            // once rather than waiting out the timeout.
+            if (
+              connectionState === 'failed' ||
+              connectionState === 'disconnected'
+            ) {
+              const error = new P2PConnectionError('Connection failed');
+              if (connectionFailedRejecter) connectionFailedRejecter(error);
+              else earlyConnectionFailure ??= error;
+            }
+          },
+        );
+
+        // Everything this attempt owns goes at once, so the next one starts
+        // from nothing. The sink is only reachable through sinkRef while this
+        // attempt is the current one.
+        const dispose = () => {
+          receiver.dispose();
+          rtc.close();
+          if (rtcRef.current === rtc) rtcRef.current = null;
+          if (sinkRef.current === sink) discardSink();
+          else void sink.discard();
+        };
+
+        if (abandoned()) {
+          dispose();
+          return null;
+        }
+        rtcRef.current = rtc;
+
+        // Handle offer signal
+        await rtc.handleSignal({ type: 'offer', sdp: offerPayload.sdp });
+
+        // Add ICE candidates from offer
+        for (const candidateStr of offerPayload.candidates) {
+          await rtc.handleSignal({
+            type: 'candidate',
+            candidate: {
+              candidate: candidateStr,
+              sdpMid: '0',
+              sdpMLineIndex: 0,
+            },
+          });
+        }
+
+        if (abandoned()) {
+          dispose();
+          return null;
+        }
+
+        // Wait for answer SDP to be generated
+        setState({
+          status: 'generating_answer',
+          message: 'Generating answer...',
+        });
+
+        await new Promise<void>((resolve) => {
+          if (answerSDP) {
+            resolve();
+          } else {
+            answerSDPResolver = resolve;
+            // Timeout after 10 seconds
+            setTimeout(resolve, 10000);
+          }
+        });
+
+        if (abandoned()) {
+          dispose();
+          return null;
+        }
+
+        // Wait for ICE gathering to complete
+        setState({
+          status: 'generating_answer',
+          message: 'Gathering network info...',
+        });
+        const iceGatheringComplete = await rtc.waitForIceGatheringComplete(
+          ICE_GATHER_TIMEOUT_MS,
+        );
+        if (!iceGatheringComplete) {
+          console.warn(
+            'ICE gathering timed out while generating answer; continuing with available candidates',
+          );
+        }
+        setState({
+          status: 'generating_answer',
+          message: iceGatheringComplete
+            ? 'Preparing response code...'
+            : 'Network probe timed out. Preparing response code with available routes...',
+        });
+
+        if (abandoned()) {
+          dispose();
+          return null;
+        }
+
+        // Validate answerSDP is available
+        if (!answerSDP) {
+          dispose();
+          throw new Error(
+            'Failed to generate answer SDP: Answer was not created by WebRTC connection',
+          );
+        }
+        latestAnswerSDP = answerSDP;
+
+        // Generate answer with our public key
+        const answerBinary = await generateMutualAnswerBinary(
+          answerSDP,
+          iceCandidates,
+          keys.publicKeyBytes,
+          keys.signAnswer,
+        );
+
+        if (abandoned()) {
+          dispose();
+          return null;
+        }
+
+        // Wait for the data channel to open. When no direct route exists and
+        // the offer named relays, the file comes through them instead;
+        // without relays, or past the relay size cap, the failure stands.
+        const opened = new Promise<void>((resolve, reject) => {
           // A failure that landed before this promise existed is not lost.
           if (earlyConnectionFailure) {
             reject(earlyConnectionFailure);
@@ -495,6 +638,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             clearTimeout(timeout);
             reject(error);
           };
+          stopWait = (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          };
 
           // Check if already open
           const dc = rtc.getDataChannel();
@@ -503,54 +650,82 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             resolve();
           }
         });
-      } catch (error) {
-        connectionFailedRejecter = null;
-        if (
-          !(error instanceof P2PConnectionError) ||
-          !offerRelays ||
-          abandoned()
-        ) {
-          throw error;
-        }
-        if (fileSize > SLOW_TRANSPORT_MAX_BYTES) {
-          throw new P2PConnectionError(
-            `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
-          );
-        }
-        // The WebRTC side is done for; the relay transfer assembles the
-        // file itself, so the streaming receiver and its sink go too.
-        receiver.dispose();
-        rtc.close();
-        rtcRef.current = null;
-        discardSink();
+        // The caller awaits this a tick later; keep a rejection that already
+        // landed from being reported as unhandled in between.
+        void opened.catch(() => {});
 
+        return {
+          rtc,
+          receiver,
+          answerBinary,
+          opened,
+          stop: (error) => stopWait?.(error),
+          dispose,
+        };
+      };
+
+      /**
+       * The relay data path. `pendingAnswer` is set only for a simulated
+       * stint, where the fetch starts before the sender has even seen the
+       * code: the response then stays on screen with nothing else to report
+       * until the sender turns up on the control channel, rather than
+       * announcing a transfer that has not begun.
+       *
+       * Returns 'switched' when the simulation switch went back off while the
+       * fetch was still waiting; the caller rebuilds the direct route.
+       */
+      const runRelayTransfer = async (
+        relays: string[],
+        pendingAnswer: Uint8Array | null,
+        switchedBack: () => boolean,
+      ): Promise<'completed' | 'switched'> => {
         const pool = createTransferPool();
         relayPoolRef.current = pool;
         let lastStats: TransferState['stats'];
         const relayState = {
           contentType: 'file' as const,
           fileMetadata,
-          currentRelays: offerRelays,
+          currentRelays: relays,
         };
-        setState({
-          status: 'fetching',
-          message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
-          progress: { current: 0, total: fileSize },
-          ...relayState,
-        });
+        const holding: (TransferState & CodeReceiveState) | null = pendingAnswer
+          ? {
+              status: 'showing_answer',
+              message: SIMULATED_HOLDING_MESSAGE,
+              answerData: pendingAnswer,
+              contentType: 'file',
+              fileMetadata,
+              relayFallbackAvailable: true,
+              simulateNoDirect: true,
+            }
+          : null;
+        setState(
+          holding ?? {
+            status: 'fetching',
+            message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
+            progress: { current: 0, total: fileSize },
+            ...relayState,
+          },
+        );
         let data: Uint8Array;
         try {
-          const session = await deriveRelaySession(sharedSecretKey, salt);
-          data = await receiveFileLive(session, offerRelays, {
+          const session = await deriveRelaySession(keys.sharedSecretKey, salt);
+          data = await receiveFileLive(session, relays, {
             pool,
-            isCancelled: abandoned,
+            isCancelled: () => abandoned() || switchedBack(),
             since: Math.floor(offerPayload.createdAt / 1000),
             expiresAt: Math.floor(
               (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
             ),
             onProgress: (p) => {
-              if (abandoned()) return;
+              if (abandoned() || switchedBack()) return;
               lastStats = p.stats;
+              // Nothing from the sender yet on a simulated stint: hold the
+              // response page instead of showing a progress bar for a
+              // transfer the sender has not started.
+              if (holding && !p.manifest) {
+                setState(holding);
+                return;
+              }
               const total = p.manifest?.fileSize ?? fileSize;
               const chunkBytes = Math.ceil(total / Math.max(p.chunksTotal, 1));
               setState({
@@ -570,13 +745,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             },
           });
         } catch (relayError) {
-          if (relayError instanceof NostrFileCancelledError) return;
+          if (relayError instanceof NostrFileCancelledError) {
+            return switchedBack() ? 'switched' : 'completed';
+          }
           throw relayError;
         } finally {
           if (relayPoolRef.current === pool) relayPoolRef.current = null;
           pool.destroy();
         }
-        if (abandoned()) return;
+        if (abandoned()) return 'completed';
         setReceivedContent({
           contentType: 'file',
           data: new Blob([data as BlobPart], {
@@ -593,22 +770,125 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           fileMetadata: { fileName, fileSize: data.length, mimeType },
           stats: lastStats,
         });
+        return 'completed';
+      };
+
+      let simulate = false;
+      let connected: DirectAttempt | null = null;
+
+      for (;;) {
+        if (abandoned()) return;
+
+        // The switch, armed for this stint only. Flipping it ends the stint
+        // in progress; the loop then builds the other kind. It is offered at
+        // all only where the relay fallback could carry the file, since
+        // otherwise a dead route just fails the transfer.
+        let switchedTo: boolean | null = null;
+        let endStint: ((error: Error) => void) | null = null;
+        simulateNoDirectRef.current = simulate;
+        switchRef.current = simulationRelays
+          ? (next) => {
+              if (next === simulate || switchedTo !== null) return;
+              switchedTo = next;
+              endStint?.(new SimulationSwitched());
+            }
+          : null;
+
+        if (!simulate) {
+          const attempt = await buildDirectAttempt();
+          if (!attempt) return;
+          if (switchedTo !== null) {
+            attempt.dispose();
+            simulate = switchedTo;
+            continue;
+          }
+          endStint = attempt.stop;
+          setState({
+            status: 'showing_answer',
+            message: 'Show this to sender and wait for connection',
+            answerData: attempt.answerBinary,
+            contentType: 'file',
+            fileMetadata,
+            relayFallbackAvailable: simulationRelays !== null,
+            simulateNoDirect: false,
+          });
+          try {
+            await attempt.opened;
+          } catch (error) {
+            attempt.dispose();
+            if (error instanceof SimulationSwitched) {
+              simulate = true;
+              continue;
+            }
+            if (
+              !(error instanceof P2PConnectionError) ||
+              !offerRelays ||
+              abandoned()
+            ) {
+              throw error;
+            }
+            if (fileSize > SLOW_TRANSPORT_MAX_BYTES) {
+              throw new P2PConnectionError(
+                `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+              );
+            }
+            // The direct route died on its own; there is nothing left for the
+            // switch to simulate.
+            switchRef.current = null;
+            await runRelayTransfer(offerRelays, null, () => false);
+            return;
+          }
+          switchRef.current = null;
+          connected = attempt;
+          break;
+        }
+
+        // Simulated: no peer connection at all. The response reuses the SDP
+        // of the attempt just torn down, with its candidates left out.
+        if (!latestAnswerSDP || !simulationRelays) {
+          throw new Error('Cannot simulate a dead route before an answer');
+        }
+        const answerBinary = await generateMutualAnswerBinary(
+          latestAnswerSDP,
+          [],
+          keys.publicKeyBytes,
+          keys.signAnswer,
+        );
+        if (abandoned()) return;
+        if (switchedTo !== null) {
+          simulate = switchedTo;
+          continue;
+        }
+        const outcome = await runRelayTransfer(
+          simulationRelays,
+          answerBinary,
+          () => switchedTo !== null,
+        );
+        if (outcome === 'switched') {
+          // That stint left this side's `hello` on the control relays, and a
+          // relay keeps it for the rest of the exchange. A sender handed a
+          // response built on the same shared secret would read that stale
+          // hello out of the backlog and give up on the direct route before
+          // it had a chance — so the next attempt starts from new key
+          // material, which puts it in a relay session of its own.
+          keys = await deriveAnswerKeys();
+          simulate = false;
+          continue;
+        }
         return;
       }
 
-      if (abandoned()) return;
+      switchRef.current = null;
+      if (!connected || abandoned()) return;
+      const { rtc, receiver } = connected;
 
       setState({
         status: 'receiving',
         message: 'Receiving file...',
         contentType: 'file',
-        fileMetadata: {
-          fileName: fileName!,
-          fileSize: fileSize!,
-          mimeType: mimeType!,
-        },
+        fileMetadata,
         useWebRTC: true,
-        progress: { current: 0, total: fileSize! },
+        progress: { current: 0, total: fileSize },
       });
 
       // Wait for the streaming receiver to finish, racing cancellation. The
@@ -676,6 +956,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       if (runRef.current === run) {
         receivingRef.current = false;
         offerStepRef.current = null;
+        switchRef.current = null;
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;
@@ -689,6 +970,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     receivedContent,
     startReceive,
     submitOffer,
+    setSimulateNoDirect,
     cancel,
     reset,
   };
