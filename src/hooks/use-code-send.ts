@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   computeAnswerTranscriptHash,
   computeOfferTranscriptHash,
@@ -21,6 +21,12 @@ import {
 import { wipeBufferSource } from '@/lib/crypto/memory';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import type { TransferMetadata } from '@/lib/nostr';
+import {
+  ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+  AnonymousSignalingTransport,
+} from '@/lib/nostr/anonymous-transport';
+import { ANONYMOUS_SIGNALING_RELAYS } from '@/lib/nostr/relays';
 import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
 import {
@@ -44,6 +50,12 @@ import {
   createDataChannelTransport,
   sendFileOverTransport,
 } from '@/lib/p2p-transfer';
+import type { TorBridge } from '@/lib/tor/client';
+import {
+  deriveOnionPassword,
+  serveOverAnonymousRelay,
+} from '@/lib/tor/code-relay';
+import { TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
@@ -62,6 +74,9 @@ export type CodeTransferStatus =
   | 'preparing'
   | 'discovering_relays'
   | 'uploading'
+  // The anonymous fallback holds its onion service open for a receiver that
+  // has to build a rendezvous circuit to reach it.
+  | 'waiting_for_receiver'
   | 'complete'
   | 'error';
 
@@ -103,9 +118,20 @@ interface CodeTransferStateOther extends CodeTransferStateBase {
 // Discriminated union for Code Exchange transfer state
 export type CodeTransferState = CodeTransferStateError | CodeTransferStateOther;
 
+export interface CodeSendOptions {
+  /**
+   * Run the fallback inside Tor rather than on the clearnet: the control
+   * channel on the onion relay pool, the file over an onion service this tab
+   * publishes. The offer records it, so the receiving page follows.
+   */
+  anonymousRelay: boolean;
+  /** Which Snowflake bridge to reach Tor through. Ignored otherwise. */
+  bridge: TorBridge;
+}
+
 export interface UseCodeSendReturn {
   state: CodeTransferState;
-  send: (content: TransferSource) => Promise<void>;
+  send: (content: TransferSource, options: CodeSendOptions) => Promise<void>;
   submitAnswer: (answerData: Uint8Array) => void;
   cancel: () => void;
 }
@@ -133,6 +159,8 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — relaying the file through Nostr instead';
+const TOR_FALLBACK_MESSAGE =
+  'No direct connection — relaying the file through Tor instead';
 
 export function useCodeSend(): UseCodeSendReturn {
   const [state, setState] = useState<CodeTransferState>({ status: 'idle' });
@@ -161,12 +189,20 @@ export function useCodeSend(): UseCodeSendReturn {
   // the exchange; aborted with the pool so a teardown never waits out a
   // probe, and never records its own teardown as relay failures.
   const sweepAbortRef = useRef<AbortController | null>(null);
+  // The Tor client behind an anonymous fallback, and the socket adapter the
+  // pool above is built on. Null for a clearnet transfer, which never loads
+  // one. Closing it takes the bootstrap, every relay socket, and every
+  // circuit with it.
+  const transportRef = useRef<AnonymousSignalingTransport | null>(null);
 
   const teardownRelayPool = useCallback(() => {
     sweepAbortRef.current?.abort();
     sweepAbortRef.current = null;
     poolRef.current?.destroy();
     poolRef.current = null;
+    const transport = transportRef.current;
+    transportRef.current = null;
+    transport?.close();
   }, []);
 
   const clearExpirationTimeout = useCallback(() => {
@@ -191,6 +227,12 @@ export function useCodeSend(): UseCodeSendReturn {
     }
     setState({ status: 'idle' });
   }, [clearExpirationTimeout, teardownRelayPool]);
+
+  // Navigating away ends the transfer, as it does in the Tor modes: nothing
+  // reaches this hook once it is gone, and an anonymous fallback left running
+  // would hold a Tor client, its circuits, and an onion service until the
+  // session expired.
+  useEffect(() => () => cancel(), [cancel]);
 
   // The scanned or pasted answer lands here; the sender's explicit action is
   // the only way an answer ever enters the flow.
@@ -225,11 +267,15 @@ export function useCodeSend(): UseCodeSendReturn {
   }, []);
 
   const send = useCallback(
-    async (content: TransferSource) => {
+    async (content: TransferSource, options: CodeSendOptions) => {
       // Guard against concurrent invocations
       if (sendingRef.current) return;
       sendingRef.current = true;
       cancelledRef.current = false;
+      // Decides both halves of the fallback at once, and nothing else: the
+      // exchange, the direct attempt and the code itself are the same either
+      // way. Read once here so no branch below can disagree with the offer.
+      const anonymous = options.anonymousRelay;
 
       try {
         // Validate and sanitize metadata
@@ -276,6 +322,19 @@ export function useCodeSend(): UseCodeSendReturn {
           return;
         }
 
+        // The Tor transport's wire allowance, checked before a code is made
+        // rather than after a bootstrap and a handshake. A ZIP's headers and
+        // entry paths are wire bytes no file size accounts for, so a selection
+        // of many tiny files can pass the checks above and still not fit.
+        if (anonymous && content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
+          setState({
+            status: 'error',
+            message: `This selection needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows. Archive overhead grows with the number of files; send fewer of them.`,
+          });
+          sendingRef.current = false;
+          return;
+        }
+
         // Generate ECDH keypair and salt
         setState({ status: 'generating_offer', message: 'Generating keys...' });
         const sessionStartTime = Date.now();
@@ -297,12 +356,54 @@ export function useCodeSend(): UseCodeSendReturn {
         // below the floor is caught: the offer simply goes out without
         // relays, and a failed direct connection then has no fallback.
         teardownRelayPool();
-        const pool = createTransferPool();
+        // The anonymous fallback answers both questions this block otherwise
+        // spends the exchange on. Its control relays are a constant both sides
+        // hold, so there is nothing to prove or discover; what it needs
+        // instead is a Tor client, and that is minutes rather than seconds.
+        // Starting the bootstrap here — behind the exchange, exactly where the
+        // clearnet path runs its relay probe — is what keeps the fallback from
+        // beginning one only once the direct route is known to be dead.
+        // Bootstrapping publishes nothing: the onion service is established
+        // after the response is accepted, and not before.
+        let transport: AnonymousSignalingTransport | null = null;
+        // The Tor client's own progress, which has no place on screen while
+        // the code is showing: the sender is looking at a QR, and a transfer
+        // that connects directly never needed the client at all. Once the
+        // fallback is waiting on the bootstrap it is the only progress there
+        // is, so from that point it becomes the transfer's own — a cold start
+        // is minutes, and one frozen line for all of them reads as a hang.
+        let torStatus = '';
+        let torFallbackActive = false;
+        if (anonymous) {
+          transport = new AnonymousSignalingTransport({
+            bridge: options.bridge,
+            onStatus: (message) => {
+              torStatus = message;
+              console.info('[tor] Code Exchange fallback:', message);
+              if (!torFallbackActive || cancelledRef.current) return;
+              setState({
+                status: 'connecting',
+                message: `${TOR_FALLBACK_MESSAGE}. ${message}`,
+                contentType: 'file',
+                fileMetadata: { fileName, fileSize, mimeType },
+              });
+            },
+          });
+          transportRef.current = transport;
+        }
+        const pool = createTransferPool(
+          transport
+            ? {
+                websocketImplementation: transport.websocketImplementation,
+                connectionTimeoutMs: ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+              }
+            : {},
+        );
         poolRef.current = pool;
-        const relayStorage = createIndexedDbRelayPool();
+        const relayStorage = anonymous ? null : createIndexedDbRelayPool();
         const relayStats = createTransferStats('sender');
         let relayPhase: RelayResolvePhase = 'probing_defaults';
-        let relayDone = false;
+        let relayDone = anonymous;
         let awaitingRelays = false;
         const showRelayPhase = () => {
           if (!awaitingRelays || cancelledRef.current) return;
@@ -311,30 +412,31 @@ export function useCodeSend(): UseCodeSendReturn {
             message: RELAY_PHASE_MESSAGES[relayPhase],
           });
         };
-        const relayProbe: Promise<TransferRelaySelection | null> =
-          resolveTransferRelays(pool, relayStorage, {
-            isCancelled: () => cancelledRef.current,
-            stats: relayStats,
-            onControlProgress: () => {
-              relayPhase = 'probing_defaults';
-              showRelayPhase();
-            },
-            onUploadProgress: (p) => {
-              relayPhase =
-                p.phase === 'discovering'
-                  ? 'discovering'
-                  : 'probing_discovered';
-              showRelayPhase();
-            },
-          })
-            .then((selection) => {
-              relayDone = true;
-              return selection;
+        const relayProbe: Promise<TransferRelaySelection | null> = relayStorage
+          ? resolveTransferRelays(pool, relayStorage, {
+              isCancelled: () => cancelledRef.current,
+              stats: relayStats,
+              onControlProgress: () => {
+                relayPhase = 'probing_defaults';
+                showRelayPhase();
+              },
+              onUploadProgress: (p) => {
+                relayPhase =
+                  p.phase === 'discovering'
+                    ? 'discovering'
+                    : 'probing_discovered';
+                showRelayPhase();
+              },
             })
-            .catch(() => {
-              relayDone = true;
-              return null;
-            });
+              .then((selection) => {
+                relayDone = true;
+                return selection;
+              })
+              .catch(() => {
+                relayDone = true;
+                return null;
+              })
+          : Promise.resolve(null);
 
         // Set expiration timeout
         clearExpirationTimeout();
@@ -430,7 +532,7 @@ export function useCodeSend(): UseCodeSendReturn {
         // preparation's progress is the transfer's progress.
         let relayFallbackActive = false;
         let storageRelays: PreparedStorageRelays | null = null;
-        if (selection && offerRelays.length > 0) {
+        if (relayStorage && selection && offerRelays.length > 0) {
           // The control relays are settled; the storage ring is prepared in
           // the background on the same pool and relay cache — the offer's QR
           // does not depend on it. When control resolution already had to
@@ -464,9 +566,19 @@ export function useCodeSend(): UseCodeSendReturn {
               });
             },
           });
-        } else {
+        } else if (!anonymous) {
           teardownRelayPool();
         }
+
+        // Which relays carry the fallback's control channel, or null when
+        // there is no fallback at all. The anonymous pool needs no proving:
+        // it is a constant on both sides, and an offer that asked for it
+        // names no relays precisely because there is nothing to name.
+        const fallbackRelays: string[] | null = anonymous
+          ? [...ANONYMOUS_SIGNALING_RELAYS]
+          : storageRelays !== null
+            ? offerRelays
+            : null;
 
         // Generate binary offer data with ECDH public key
         const offerBinary = await generateMutualOfferBinary(
@@ -480,7 +592,11 @@ export function useCodeSend(): UseCodeSendReturn {
             mimeType,
             publicKey: ecdhKeyPair.publicKeyBytes,
             salt,
-            ...(storageRelays ? { relays: offerRelays } : {}),
+            ...(anonymous
+              ? { anonymous: true }
+              : storageRelays
+                ? { relays: offerRelays }
+                : {}),
           },
         );
 
@@ -619,7 +735,7 @@ export function useCodeSend(): UseCodeSendReturn {
         // word that the file has to go through relays.
         let relaySession: RelaySession | null = null;
         let helloWatch: ReturnType<typeof watchForReceiverHello> | null = null;
-        if (storageRelays !== null) {
+        if (fallbackRelays !== null) {
           relaySession = await deriveRelaySession(
             sharedSecretKey,
             saltRef.current,
@@ -628,18 +744,23 @@ export function useCodeSend(): UseCodeSendReturn {
             wipeBufferSource(relaySession.keyBytes);
             return;
           }
-          helloWatch = watchForReceiverHello(pool, offerRelays, relaySession, {
-            since: Math.floor(sessionStartTime / 1000),
-            expiresAt: Math.floor(
-              (sessionStartTime + TRANSFER_EXPIRATION_MS) / 1000,
-            ),
-            stats: storageRelays.stats,
-          });
+          helloWatch = watchForReceiverHello(
+            pool,
+            fallbackRelays,
+            relaySession,
+            {
+              since: Math.floor(sessionStartTime / 1000),
+              expiresAt: Math.floor(
+                (sessionStartTime + TRANSFER_EXPIRATION_MS) / 1000,
+              ),
+              ...(storageRelays ? { stats: storageRelays.stats } : {}),
+            },
+          );
         }
         try {
           await waitForDataChannel(
             rtc,
-            storageRelays !== null
+            fallbackRelays !== null
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : CODE_CONNECTION_TIMEOUT_MS,
             helloWatch?.hello ?? null,
@@ -647,7 +768,7 @@ export function useCodeSend(): UseCodeSendReturn {
         } catch (error) {
           if (
             !(error instanceof P2PConnectionError) ||
-            storageRelays === null ||
+            fallbackRelays === null ||
             relaySession === null ||
             cancelledRef.current
           ) {
@@ -657,12 +778,16 @@ export function useCodeSend(): UseCodeSendReturn {
           if (content.estimatedSize > SLOW_TRANSPORT_MAX_BYTES) {
             wipeBufferSource(relaySession.keyBytes);
             throw new P2PConnectionError(
-              `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through Nostr either.`,
+              `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through ${anonymous ? 'Tor' : 'Nostr'} either.`,
             );
           }
           rtc.close();
           rtcRef.current = null;
-          await relayFallback(storageRelays, relaySession);
+          if (transport) {
+            await anonymousFallback(fallbackRelays, relaySession, transport);
+          } else if (storageRelays) {
+            await relayFallback(storageRelays, relaySession);
+          }
           return;
         } finally {
           helloWatch?.close();
@@ -709,6 +834,111 @@ export function useCodeSend(): UseCodeSendReturn {
           message: 'File sent via P2P!',
           contentType: 'file',
         });
+
+        /**
+         * The anonymous relay data path: the same session keys an encrypted
+         * control channel on the onion relay pool, and the file goes over a
+         * v3 onion service this tab publishes rather than to storage relays.
+         *
+         * Neither of the two values the Tor transport normally asks a person
+         * for is handed over: the password comes out of the ECDH secret on
+         * both sides, and the address — which cannot be derived — is announced
+         * on that control channel. Both happen here, after the response was
+         * accepted and verified, which is what keeps the service unreachable
+         * until the sender took that response in. See lib/tor/code-relay.ts.
+         */
+        async function anonymousFallback(
+          relays: string[],
+          session: RelaySession,
+          transport: AnonymousSignalingTransport,
+        ): Promise<void> {
+          const fileMetadata = { fileName, fileSize, mimeType };
+          const relayState = {
+            contentType: 'file' as const,
+            fileMetadata,
+            currentRelays: relays,
+          };
+          setState({
+            status: 'connecting',
+            message: `${TOR_FALLBACK_MESSAGE}. ${
+              torStatus || 'Starting the Tor client...'
+            }`,
+            ...relayState,
+          });
+          // The bootstrap has been running behind the exchange; this is only
+          // the wait for whatever is left of it, and its own progress is the
+          // transfer's now that there is nothing else on screen.
+          torFallbackActive = true;
+          let client: Awaited<ReturnType<typeof transport.torClient>>;
+          try {
+            client = await transport.torClient();
+          } catch (error) {
+            // A bootstrap that never finished handed the session on to
+            // nothing, so these bytes die here rather than riding the throw
+            // out to a catch that only reports it.
+            wipeBufferSource(session.keyBytes);
+            throw error;
+          } finally {
+            torFallbackActive = false;
+          }
+          if (cancelledRef.current) {
+            wipeBufferSource(session.keyBytes);
+            return;
+          }
+
+          try {
+            await serveOverAnonymousRelay({
+              client,
+              pool,
+              relays,
+              session,
+              since: Math.floor(sessionStartTime / 1000),
+              expiresAt: Math.floor(
+                (sessionStartTime + TRANSFER_EXPIRATION_MS) / 1000,
+              ),
+              password: await deriveOnionPassword(sharedSecretKey, salt),
+              content,
+              metadata: {
+                contentType: 'file',
+                fileName,
+                fileSize,
+                contentEncoding,
+                mimeType,
+              } satisfies TransferMetadata,
+              fileMetadata,
+              isCancelled: () => cancelledRef.current,
+              onStatus: (message) => {
+                if (cancelledRef.current) return;
+                setState({
+                  status: 'waiting_for_receiver',
+                  message: `${TOR_FALLBACK_MESSAGE}. ${message}`,
+                  ...relayState,
+                });
+              },
+              onProgress: (current, total, message) => {
+                if (cancelledRef.current) return;
+                setState({
+                  status: 'uploading',
+                  message,
+                  progress: { current, total },
+                  ...relayState,
+                });
+              },
+            });
+          } finally {
+            // Nothing downstream took ownership of these: the control key was
+            // derived from them and the file key came from the handshake.
+            wipeBufferSource(session.keyBytes);
+          }
+
+          if (cancelledRef.current) return;
+          setState({
+            status: 'complete',
+            message: 'File sent through Tor!',
+            contentType: 'file',
+            fileMetadata,
+          });
+        }
 
         /**
          * The relay data path: the session both sides derive from the ECDH

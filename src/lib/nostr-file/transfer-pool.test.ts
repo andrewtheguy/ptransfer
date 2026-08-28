@@ -71,6 +71,28 @@ describe('createTransferPool', () => {
     }
   });
 
+  it('opens a supplied implementation instead of the global, and still tracks it', () => {
+    // What Code Exchange's anonymous relay passes: the onion-only adapter,
+    // which is not the platform WebSocket and must not be bypassed for one.
+    class OnionSocket extends FakeWebSocket {
+      static onionInstances = 0;
+      constructor(url: string | URL) {
+        super(url);
+        OnionSocket.onionInstances++;
+      }
+    }
+    const pool = createTransferPool({
+      websocketImplementation: OnionSocket as unknown as typeof WebSocket,
+    });
+    pool.ensureRelay('ws://a.onion').catch(() => {});
+    expect(OnionSocket.onionInstances).toBe(1);
+
+    // Tracking and teardown are the whole point of this pool; a socket still
+    // building its onion circuit is exactly the case it exists for.
+    pool.destroy();
+    expect(socketFor('ws://a.onion')?.closeCalls).toBeGreaterThanOrEqual(1);
+  });
+
   it('refuses to open new sockets after destroy()', async () => {
     const pool = createTransferPool();
     pool.destroy();

@@ -8,6 +8,7 @@ import {
   generateMutualAnswerBinary,
   generateMutualClipboardData,
   generateMutualOfferBinary,
+  isAnonymousOffer,
   isMutualPayload,
   isValidSignalingPayload,
   normalizeOfferRelays,
@@ -272,6 +273,100 @@ describe('offer-borne fallback relays', () => {
       relays,
     });
     expect(withRelays.length - plain.length).toBeLessThan(200);
+  });
+});
+
+describe('the anonymous fallback flag', () => {
+  const mockOffer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
+  const publicKey = new Uint8Array(65).fill(1);
+  publicKey[0] = 4;
+  const relays = ['wss://r1.example', 'wss://r2.example'];
+  const metadata = {
+    createdAt: Date.now(),
+    fileName: 'test.txt',
+    fileSize: 1024,
+    contentEncoding: 'deflate-raw' as const,
+    mimeType: 'text/plain',
+    publicKey,
+    salt: new Uint8Array(16).fill(2),
+  };
+
+  it('round-trips, and names no relays alongside it', () => {
+    const parsed = parseMutualPayload(
+      generateMutualOfferBinary(mockOffer, [], {
+        ...metadata,
+        anonymous: true,
+      }),
+    ) as SignalingPayload;
+    expect(isAnonymousOffer(parsed)).toBe(true);
+    // The onion relay pool is a constant on both sides, so there is nothing
+    // for the offer to name — and a clearnet list would contradict the mode.
+    expect(parsed.relays).toBeUndefined();
+    expect(relaysFromOffer(parsed)).toBeNull();
+  });
+
+  it('is absent from an ordinary offer, relays or not', () => {
+    for (const extra of [{}, { relays }]) {
+      const parsed = parseMutualPayload(
+        generateMutualOfferBinary(mockOffer, [], { ...metadata, ...extra }),
+      ) as SignalingPayload;
+      expect(parsed.anon).toBeUndefined();
+      expect(isAnonymousOffer(parsed)).toBe(false);
+    }
+  });
+
+  it('wins over a relay list the caller passed anyway', () => {
+    const parsed = parseMutualPayload(
+      generateMutualOfferBinary(mockOffer, [], {
+        ...metadata,
+        relays,
+        anonymous: true,
+      }),
+    ) as SignalingPayload;
+    expect(isAnonymousOffer(parsed)).toBe(true);
+    expect(parsed.relays).toBeUndefined();
+  });
+
+  it('rejects a misplaced, false, or relay-bearing flag', () => {
+    const base = {
+      type: 'offer',
+      sdp: 'sdp',
+      candidates: [],
+      createdAt: Date.now(),
+      publicKey: Array.from(publicKey),
+    };
+    expect(isValidSignalingPayload({ ...base, anon: true })).toBe(true);
+    // One-valued: an offer that says which fallback it is not is malformed.
+    expect(isValidSignalingPayload({ ...base, anon: false })).toBe(false);
+    expect(isValidSignalingPayload({ ...base, anon: 1 })).toBe(false);
+    // Offer-only.
+    expect(
+      isValidSignalingPayload({
+        ...base,
+        type: 'answer',
+        confirm: encodeAnswerConfirmation(
+          new Uint8Array(ANSWER_CONFIRMATION_BYTES),
+        ),
+        anon: true,
+      }),
+    ).toBe(false);
+    // The two fallbacks are alternatives; an offer carrying both would be
+    // asking the receiver to pick one.
+    expect(isValidSignalingPayload({ ...base, anon: true, relays })).toBe(
+      false,
+    );
+  });
+
+  it('is not something an answer can be', async () => {
+    const answer = parseMutualPayload(
+      await generateMutualAnswerBinary(
+        { type: 'answer', sdp: 'v=0' },
+        [],
+        publicKey,
+        async () => new Uint8Array(ANSWER_CONFIRMATION_BYTES).fill(3),
+      ),
+    ) as SignalingPayload;
+    expect(isAnonymousOffer(answer)).toBe(false);
   });
 });
 

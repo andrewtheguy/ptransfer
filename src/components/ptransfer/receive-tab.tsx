@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { usePinReceive } from '@/hooks/use-pin-receive';
 import { useTorReceive } from '@/hooks/use-tor-receive';
+import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import {
   derivePakeSecret,
   getPinLocator,
@@ -18,7 +19,10 @@ import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
 import { extractOnionFromUrl, extractPinFromUrl } from '@/lib/receive-link';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import type { PinKeyMaterial } from '@/lib/types';
-import { AnonymousReceiveForm } from './anonymous-receive-form';
+import {
+  AnonymousReceiveForm,
+  type AnonymousReceiveMode,
+} from './anonymous-receive-form';
 import { AnswerReturn } from './answer-return';
 import { ConfirmationCodeDisplay } from './confirmation-code-display';
 import { ReceiveInput } from './receive-input';
@@ -63,16 +67,19 @@ export function ReceiveTab() {
   // Failures before either hook owns the transfer, which therefore have no
   // state of their own to report through.
   const [startError, setStartError] = useState<string | null>(null);
-  // Held between startReceive() and the hook arming its offer step.
+  // Held from the moment the box hands the offer over until the hook arms its
+  // offer step — which, for an anonymous offer, is after the bridge question.
   const pendingOfferRef = useRef<Uint8Array | null>(null);
   // An anonymous PIN's key material, held while the bridge question is
   // answered. The PIN string itself is already gone by then — it is turned
   // into these two values the moment the box hands it over, so nothing is
   // parked here that the transfer would not have held anyway.
   const pendingPinRef = useRef<PinKeyMaterial | null>(null);
-  // Whether that question is on screen. Separate from the ref because the ref
-  // must not drive rendering and the material must not reach the render tree.
-  const [awaitingAnonymousBridge, setAwaitingAnonymousBridge] = useState(false);
+  // Which exchange the bridge question on screen belongs to, or null when it
+  // is not being asked. Separate from the refs above because they must not
+  // drive rendering and PIN material must not reach the render tree.
+  const [anonymousBridgeFor, setAnonymousBridgeFor] =
+    useState<AnonymousReceiveMode | null>(null);
   // The onion address recognized in the box, while its password is asked for.
   const [torAddress, setTorAddress] = useState<string | null>(null);
 
@@ -102,12 +109,13 @@ export function ReceiveTab() {
       ? codeContent
       : pinContent;
 
-  // A PIN parked for the bridge question and then abandoned still holds a PAKE
-  // scalar; the hook would have wiped it, so this stands in for the hook.
-  const discardPendingPin = useCallback(() => {
+  // Takes the bridge question off screen unanswered. A PIN parked for it still
+  // holds a PAKE scalar; the hook would have wiped it, so this stands in for
+  // the hook. A parked offer holds nothing secret, and the callers drop it.
+  const dismissBridgeQuestion = useCallback(() => {
     const material = pendingPinRef.current;
     pendingPinRef.current = null;
-    setAwaitingAnonymousBridge(false);
+    setAnonymousBridgeFor(null);
     if (material) wipeBufferSource(material.pakeSecret);
   }, []);
 
@@ -165,7 +173,7 @@ export function ReceiveTab() {
           // Nothing starts yet: bootstrapping Tor costs minutes, so which
           // bridge to spend them on is asked first.
           pendingPinRef.current = material;
-          setAwaitingAnonymousBridge(true);
+          setAnonymousBridgeFor('pin');
           return;
         }
         await startPinReceive(material, DEFAULT_TOR_BRIDGE, false);
@@ -182,8 +190,18 @@ export function ReceiveTab() {
 
       if (input.kind === 'offer') {
         pendingOfferRef.current = input.payload;
+        // An offer that asks for the anonymous fallback starts bootstrapping
+        // Tor as soon as the hook takes it in, so which bridge to spend those
+        // minutes on is asked first — exactly as an anonymous PIN does. A
+        // container that will not parse is handed over anyway: rejecting it is
+        // the hook's job, and it has a state to report the failure in.
+        const parsed = parseMutualPayload(input.payload);
+        if (parsed && isAnonymousOffer(parsed)) {
+          setAnonymousBridgeFor('code');
+          return;
+        }
         setRoute('code');
-        startReceive();
+        startReceive({ bridge: DEFAULT_TOR_BRIDGE });
       }
       // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
       // the paste box redirects a single chunk link to the Scan tab.
@@ -204,13 +222,21 @@ export function ReceiveTab() {
 
   const handleAnonymousBridge = useCallback(
     (bridge: TorBridge) => {
+      const mode = anonymousBridgeFor;
+      setAnonymousBridgeFor(null);
+      if (mode === 'code') {
+        // The offer is already parked; the effect below hands it over once
+        // the hook has armed its offer step.
+        setRoute('code');
+        startReceive({ bridge });
+        return;
+      }
       const material = pendingPinRef.current;
       if (!material) return;
       pendingPinRef.current = null;
-      setAwaitingAnonymousBridge(false);
       void startPinReceive(material, bridge, true);
     },
-    [startPinReceive],
+    [anonymousBridgeFor, startPinReceive, startReceive],
   );
 
   const handleTorPassword = useCallback(
@@ -226,7 +252,7 @@ export function ReceiveTab() {
     else if (isCodeExchange) cancelCode();
     else cancelPin();
     pendingOfferRef.current = null;
-    discardPendingPin();
+    dismissBridgeQuestion();
     setTorAddress(null);
     setRoute('none');
     setStartError(null);
@@ -236,7 +262,7 @@ export function ReceiveTab() {
     cancelTor,
     cancelCode,
     cancelPin,
-    discardPendingPin,
+    dismissBridgeQuestion,
   ]);
 
   const handleReset = useCallback(() => {
@@ -244,11 +270,18 @@ export function ReceiveTab() {
     else if (isCodeExchange) resetCode();
     else resetPin();
     pendingOfferRef.current = null;
-    discardPendingPin();
+    dismissBridgeQuestion();
     setTorAddress(null);
     setRoute('none');
     setStartError(null);
-  }, [isTor, isCodeExchange, resetTor, resetCode, resetPin, discardPendingPin]);
+  }, [
+    isTor,
+    isCodeExchange,
+    resetTor,
+    resetCode,
+    resetPin,
+    dismissBridgeQuestion,
+  ]);
 
   const handleDownload = useCallback(() => {
     if (receivedContent) {
@@ -272,8 +305,9 @@ export function ReceiveTab() {
 
   return (
     <div className="space-y-4 pt-4">
-      {awaitingAnonymousBridge && state.status === 'idle' ? (
+      {anonymousBridgeFor && state.status === 'idle' ? (
         <AnonymousReceiveForm
+          mode={anonymousBridgeFor}
           onSubmit={handleAnonymousBridge}
           onCancel={handleCancel}
         />
@@ -319,6 +353,10 @@ export function ReceiveTab() {
               relayFallbackAvailable={codeState.relayFallbackAvailable}
               simulateNoDirect={codeState.simulateNoDirect}
               onSimulateNoDirectChange={setSimulateNoDirect}
+              fallbackName={
+                codeState.anonymousFallback ? 'Tor' : 'the Nostr relays'
+              }
+              torStatus={codeState.torStatus}
             />
           )}
 

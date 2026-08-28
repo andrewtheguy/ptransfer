@@ -66,6 +66,15 @@ The table below compares the two WebRTC-based modes. The third — **Tor Onion S
 | Network Requirement | Internet access to common signaling relays plus a direct ICE route | Same local network without internet; with internet, either a direct ICE route or a usable relay fallback |
 | Recommended For | Remote transfers, or when carrying a long code is impractical | Offline/local transfers, or keeping the offer off signaling relays |
 
+Code Exchange carries one advanced option of its own, **Anonymous signaling and
+relay** (experimental), which moves its fallback into Tor: the control channel onto
+onion-service Nostr relays and the file onto an onion service the sending tab
+publishes. It is web-only, it is described for users in
+[CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental), and
+its design is below under the fallback it replaces. The one row above it invalidates
+is *Internet Required*: with the option on, both devices need internet, because Tor is
+reached over the network.
+
 ## Transfer Flow
 
 pTransfer has two method-specific setup paths and prefers one shared P2P transfer path. If WebRTC opens, both modes call `src/lib/p2p-transfer.ts`. If it does not, PIN Exchange fails, while an eligible Code Exchange switches to `src/lib/nostr-file/`.
@@ -670,6 +679,48 @@ The session is derived, not carried. Once the offer/answer exchange has produced
 The pipeline is `whole-file deflate → chunk → AES-256-GCM → Z85` (deflate is skipped — never re-applied — for payloads the multi-file/folder flow already compressed, i.e. ZIPs with deflated entries; single-file payloads always deflate), 48 KiB chunks as kind-30078 events with a 1-hour NIP-40 expiration, over NIP-66/65 relay discovery with full-chunk-size write→read health probes for the storage ring (the control relays were already proven with a control-sized probe while the offer was built). The file key comes from the ECDH secret the two devices already share, so relays see only ciphertext, sizes, timing, and an ephemeral pubkey.
 
 The full architecture — relay discovery and placement ring, chunk event schema, manifest format, the live control-channel protocol (message vocabulary, re-sends, relay demotion), sequence diagrams, security model, and all tunables — is documented in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
+
+#### Anonymous relay variant (experimental, web-only)
+
+The **Anonymous signaling and relay** switch on the send tab replaces both halves of
+the fallback above for one transfer. The rendezvous that makes it possible lives in
+`src/lib/tor/code-relay.ts`; the transport underneath it is used unchanged. The control channel moves to
+`ANONYMOUS_SIGNALING_RELAYS` reached through the browser Tor client — the same pool,
+socket rule and transport as PIN Exchange's anonymous signaling
+([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)) — and the data path moves from
+Nostr storage relays to a v3 onion service the sending tab publishes, carried by the
+handshake and framing of [TOR_TRANSPORT.md](TOR_TRANSPORT.md). The offer records which
+kind it is (`anon` on the offer, which never travels with a relay list because the
+onion pool is a constant on both sides); the receiving page reads that and follows, and
+begins bootstrapping Tor as soon as the offer is accepted, since a bootstrap costs
+minutes and must not start only once the direct route is known to be dead. The sending
+page starts its own where the clearnet path runs its relay probe, and both pages carry
+their control channel on a `createTransferPool` built over the same onion socket
+adapter PIN Exchange uses — connection budget included, since opening one is a whole
+rendezvous. Everything above the transport is
+unchanged: the same hand-carried offer and response, the same answer confirmation tag,
+the same direct WebRTC attempt first.
+
+Two rendezvous values that the Tor transfer mode hands to a person are handled without
+one here, and the ordering is the point:
+
+- The **password** is never transmitted. Both sides derive it from the ECDH shared
+  secret, alongside the control-channel session — derived key material rather than a
+  12-character string, so `CLAIM_VERIFY_LIMIT`-style bounds on online guessing are not
+  what stands between an attacker and the service.
+- The **onion address** cannot be derived, because the service identity is minted
+  ephemerally by the Tor client. It is announced over the sealed control channel, and
+  only after the sender has accepted and verified a response.
+
+Putting either in the offer would have removed the control channel's reason to exist
+and cost the property that distinguishes Code Exchange from the Tor mode: the sender
+cannot derive the shared secret until it holds the receiver's public key, which
+arrives only inside a response the sender itself scanned or pasted, so before that act
+there is nothing published, nothing to connect to, and no password that opens the
+handshake. A captured offer still yields a response an attacker can build on their own
+key, and the sender still publishes only to the response it accepted — the same bound
+the clearnet fallback has, and the same one the answer confirmation tag does not
+raise.
 
 ### WebRTC (`src/lib/webrtc.ts`)
 

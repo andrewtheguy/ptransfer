@@ -18,11 +18,35 @@ import { normalizeRelayUrl } from '../nostr/relays';
  * After `destroy()` it refuses to open sockets at all, which also kills any
  * orphaned reconnect loop for good.
  */
-export function createTransferPool(): AbstractSimplePool {
+export interface TransferPoolOptions {
+  /**
+   * What to open relay connections with. Defaults to the platform's
+   * `WebSocket`; Code Exchange's anonymous relay passes the onion-only
+   * adapter from `AnonymousSignalingTransport`, which is the whole of what
+   * moves that transfer's control channel into Tor. Tracking and teardown are
+   * unchanged either way — the adapter answers to the same interface, and a
+   * socket still building its onion circuit is exactly the mid-handshake case
+   * this pool exists to force-close.
+   */
+  websocketImplementation?: typeof WebSocket;
+  /**
+   * How long a socket may take to connect. `AbstractSimplePool` takes this per
+   * `ensureRelay` call and most of its callers (publish, subscribe) never pass
+   * one, so a pool-wide value can only be applied by wrapping the method.
+   * Left alone by default, which is right for clearnet relays; an onion socket
+   * is a whole rendezvous and needs its own budget.
+   */
+  connectionTimeoutMs?: number;
+}
+
+export function createTransferPool(
+  options: TransferPoolOptions = {},
+): AbstractSimplePool {
   const sockets = new Set<WebSocket>();
   let destroyed = false;
+  const Base = options.websocketImplementation ?? WebSocket;
 
-  class TrackedWebSocket extends WebSocket {
+  class TrackedWebSocket extends Base {
     constructor(url: string | URL, protocols?: string | string[]) {
       if (destroyed) throw new Error('Transfer pool destroyed');
       super(url, protocols);
@@ -41,6 +65,19 @@ export function createTransferPool(): AbstractSimplePool {
 
   const baseClose = pool.close.bind(pool);
   const baseDestroy = pool.destroy.bind(pool);
+  const baseEnsureRelay = pool.ensureRelay.bind(pool);
+
+  const connectionTimeout = options.connectionTimeoutMs;
+  if (connectionTimeout !== undefined) {
+    pool.ensureRelay = (url, params) =>
+      baseEnsureRelay(url, {
+        ...params,
+        connectionTimeout: Math.max(
+          params?.connectionTimeout ?? 0,
+          connectionTimeout,
+        ),
+      });
+  }
 
   pool.close = (relays) => {
     baseClose(relays);

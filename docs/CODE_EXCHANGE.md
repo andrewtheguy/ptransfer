@@ -152,7 +152,10 @@ WebRTC connection — usually a restrictive NAT or firewall on both ends — the
 carry an eligible encrypted file (up to **100 MiB**) through public Nostr relays. This is
 the Code Exchange stand-in for TURN, but it can still fail if storage relays are
 insufficient or do not deliver the pieces. (This page describes the user-facing behavior;
-the technical design is in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).)
+the technical design is in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).) An advanced
+option moves this whole fallback into Tor instead — see
+[Anonymous Signaling and Relay](#anonymous-signaling-and-relay-experimental); the rest
+of this section describes the default.
 
 It is fully automatic — there is no switch, and nothing changes about how you use Code
 Exchange:
@@ -207,6 +210,74 @@ Key points:
 - Relays see only encrypted pieces, sizes, timing, and the small encrypted coordination
   messages — never the file name, contents, or the key. Signaling and storage use
   separate relays.
+
+## Anonymous Signaling and Relay (experimental)
+
+An **Advanced options** switch on the send tab, offered for Code Exchange only. It
+changes nothing about the exchange itself — the offer and the response are carried by
+hand either way, and no relay has ever carried them. What it moves is the
+[relay fallback](#relay-fallback-no-direct-connection), off the clearnet and into Tor:
+
+- The two pages coordinate over Nostr relays run as **onion services**, reached
+  through a Tor client inside the browser, rather than public clearnet relays. Same
+  pool and same rules as PIN Exchange's
+  [anonymous signaling](ANONYMOUS_SIGNALING.md).
+- The file itself travels through a **Tor onion service the sending tab publishes**,
+  over the transport specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md), rather than as
+  encrypted pieces on public Nostr storage relays.
+
+The sender turns it on and the offer says so, so the receiving page has nothing to
+turn on and nothing to agree in advance: it recognizes the flag in the code it was
+handed and asks one question of its own, which Snowflake bridge this device reaches
+Tor through. Answering it is what starts the bootstrap, and that happens as the code
+is taken in rather than once the direct route is known to be dead, because a
+bootstrap is the slow part and by then the sender is already waiting. The sending
+page does the same from the moment it shows the code, in the time the ordinary
+fallback spends probing relays — so **both devices reach the Tor network as soon as
+the exchange starts**, including on a transfer that then connects directly and never
+needs it. Bootstrapping publishes nothing: the onion service is established only
+after a response has been accepted. Each page picks its own bridge — the sender's
+under **Advanced options**, the receiver's as it takes the code in — and the two do
+not have to match, since they only ever meet inside the Tor network.
+
+**Both devices need internet for this option.** Ordinary Code Exchange connects two
+devices on the same network with no internet at all; this cannot, because Tor is
+reached over the network. A direct WebRTC connection is still attempted first,
+exactly as always, and it is still a direct connection — each peer sees the other's
+address, and STUN sees what it always sees. Tor covers only what happens when that
+route does not exist.
+
+Expect it to be slower than the ordinary fallback and to fail more often: it depends
+on a Tor bootstrap on both devices, on a small unmonitored pool of onion relays, and
+on an onion service surviving long enough to hand the file over. The 100 MiB cap is
+the same one the ordinary fallback has.
+
+### Nothing about the onion service is handed over
+
+The [Tor Onion Service](TOR_TRANSPORT.md) transfer mode shows its operator an
+`.onion` address and a one-time password to pass to the receiver. **Here neither is
+ever shown, typed, or carried in a code.**
+
+The password is not transmitted at all — it is derived on both devices from the same
+ECDH secret the offer/answer exchange already established, the secret the ordinary
+relay fallback keys its session from. It is derived key material rather than eleven
+typed characters, so the online-guessing bounds a human-length password needs do not
+apply to it. The onion address is the one thing that cannot be derived — an ephemeral
+service identity is minted by the Tor client — so it is announced to the receiver over
+the **encrypted control channel**, sealed under a key both sides derive from that same
+secret. Relays carry that message; they can neither read it nor act on it.
+
+That is also what preserves the property Code Exchange has and the Tor mode does not
+have to: **the service is unreachable until the sender takes the response in.** The
+sender cannot derive the shared secret before then — it needs the receiver's public
+key, which exists only inside the response — so up to that moment there is no address
+to announce and no password that would open the handshake. Someone who photographed
+the offer can still produce a response of their own, but it is a response built on
+their own key, and the sender only ever publishes to the response it accepted and
+checked (see
+[Responses are checked against your code](#responses-are-checked-against-your-code)).
+As everywhere else in Code Exchange, the offer remains the secret for the whole
+transfer, and the sender's own scan or paste remains the gate.
 
 ## Tips
 

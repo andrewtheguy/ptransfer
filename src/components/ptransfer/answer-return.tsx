@@ -17,6 +17,17 @@ export interface AnswerReturnProps {
   /** Whether the response on screen is the simulated no-direct-route one. */
   simulateNoDirect?: boolean;
   onSimulateNoDirectChange?: (value: boolean) => void;
+  /**
+   * What the fallback is, named the way a sentence needs it. The sender's
+   * code decides it, so the receiver is told rather than asked.
+   */
+  fallbackName?: string;
+  /**
+   * What the Tor client is doing, when the sender's code asked for the
+   * anonymous fallback. It bootstraps behind the direct attempt, so it is the
+   * one thing happening on this page that the page would otherwise not show.
+   */
+  torStatus?: string;
 }
 
 /**
@@ -28,6 +39,8 @@ export function AnswerReturn({
   relayFallbackAvailable = false,
   simulateNoDirect = false,
   onSimulateNoDirectChange,
+  fallbackName = 'the Nostr relays',
+  torStatus,
 }: AnswerReturnProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -58,10 +71,22 @@ export function AnswerReturn({
         </ul>
         <p className="text-sm text-muted-foreground">
           {simulateNoDirect
-            ? 'Keep this page open — the file comes through the relays once the sender has your response.'
+            ? `Keep this page open — the file comes through ${fallbackName} once the sender has your response.`
             : 'Keep this page open — the transfer connects automatically once the sender has your response.'}
         </p>
       </div>
+
+      {/* The Tor bootstrap running behind the direct attempt. It costs
+          minutes, so saying nothing would look like a page doing nothing. */}
+      {torStatus && (
+        <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            Preparing the Tor fallback:
+          </span>{' '}
+          {torStatus} The direct connection is being tried at the same time and
+          does not wait for this.
+        </div>
+      )}
 
       {/* Advanced options: only where a relay path exists to fall back to,
           and closed by default. */}
@@ -79,8 +104,8 @@ export function AnswerReturn({
               <span className="text-sm font-medium">No direct connection</span>
               <p className="text-xs text-muted-foreground">
                 {simulateNoDirect
-                  ? 'A direct connection to this page can no longer be made, and the code below is the one with none of its network routes in it. Nothing has started yet — the file comes through the Nostr relays once the sender takes the response in. Going back builds a working direct route again.'
-                  : "Drops this device's direct connection and builds the response again with none of its network routes in it, so the sender has nothing to connect to and the file comes through the Nostr relays instead. It is the situation a device behind a hostile NAT is in anyway — this only saves you having to arrange one."}
+                  ? `A direct connection to this page can no longer be made, and the code below is the one with none of its network routes in it. Nothing has started yet — the file comes through ${fallbackName} once the sender takes the response in. Going back builds a working direct route again.`
+                  : `Drops this device's direct connection and builds the response again with none of its network routes in it, so the sender has nothing to connect to and the file comes through ${fallbackName} instead. It is the situation a device behind a hostile NAT is in anyway — this only saves you having to arrange one.`}
               </p>
               <p className="text-xs text-muted-foreground">
                 Either way the whole connection is built from scratch, so the

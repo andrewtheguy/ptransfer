@@ -36,6 +36,17 @@ import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor';
 const BOOTSTRAP_TIMEOUT_MS = 300_000;
 
 /**
+ * How long a relay socket opened through this transport may take to connect.
+ *
+ * Opening one is a whole rendezvous — an HSDir descriptor fetch, an
+ * introduction circuit, and a rendezvous circuit — which is minutes on a bad
+ * day and still the fastest path available. Every pool built on this adapter
+ * has to apply it, or its sockets are declared dead on a clearnet clock long
+ * before a working circuit would have finished.
+ */
+export const ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS = 180_000;
+
+/**
  * The `error` event this adapter emits.
  *
  * Deliberately not `new ErrorEvent(...)`. That constructor is a browser global
@@ -153,6 +164,14 @@ export class AnonymousSignalingTransport {
     // Both inputs keep a handler from here for their whole life, so a late
     // rejection from either is never an unhandled one.
     this.clientPromise = Promise.race([bootstrap, cancelled]);
+    // Nothing awaits the result until a socket opens or a fallback asks for
+    // the client, so a bootstrap that fails while the code is still on screen
+    // — or a transfer that connects directly and never asks — would surface
+    // as an unhandled rejection and bury the real error in console noise.
+    // Marking it handled costs a real awaiter nothing: it awaits this same
+    // promise and still sees the error. As NostrClient does with its
+    // connectionReady.
+    void this.clientPromise.catch(() => {});
 
     const clientPromise = this.clientPromise;
     const sockets = this.sockets;
@@ -350,6 +369,21 @@ export class AnonymousSignalingTransport {
   /** Resolves once Tor is bootstrapped; rejects with why it could not be. */
   async waitUntilReady(): Promise<void> {
     await this.clientPromise;
+  }
+
+  /**
+   * The bootstrapped client itself, for a caller that needs Tor for more than
+   * relay sockets.
+   *
+   * Code Exchange's anonymous relay is the one such caller: its control
+   * channel is relay sockets like any other, but its data path is an onion
+   * service published on this same client. Two clients would mean two
+   * bootstraps — minutes each, and the whole reason the receiving page starts
+   * one the moment it takes the offer in. Ownership does not change hands:
+   * `close()` still closes it, so a borrower must not.
+   */
+  torClient(): Promise<WebtorClient> {
+    return this.clientPromise;
   }
 
   close(): void {

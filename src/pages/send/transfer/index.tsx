@@ -189,6 +189,11 @@ export function SendTransferPage() {
         anonymous: config.anonymousSignaling,
         bridge: config.torBridge,
       });
+    } else if (activeHook.type === 'code') {
+      void activeHook.hook.send(transferSource, {
+        anonymousRelay: config.anonymousRelay,
+        bridge: config.torBridge,
+      });
     } else {
       void activeHook.hook.send(transferSource);
     }
@@ -228,9 +233,17 @@ export function SendTransferPage() {
     }
     // Update config to Code Exchange and restart the transfer flow.
     startedRef.current = false;
-    // Code Exchange has no anonymous-signaling path, so the switch drops it
-    // rather than carrying a flag no hook downstream would read.
-    setConfig({ ...config, transferMode: 'code', anonymousSignaling: false });
+    // `anonymousSignaling` is a PIN Exchange flag, so the switch drops it
+    // rather than carrying one no hook downstream would read. Code Exchange's
+    // own Tor option is not turned on in its place: this is a rescue from a
+    // failed PIN transfer, and it should not silently commit the tab to a
+    // bootstrap the user never asked for.
+    setConfig({
+      ...config,
+      transferMode: 'code',
+      anonymousSignaling: false,
+      anonymousRelay: false,
+    });
     setStep('checking');
     setError(null);
   }, [config, setConfig, cancel]);
