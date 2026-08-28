@@ -1,4 +1,3 @@
-import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import {
   Collapsible,
@@ -74,9 +73,6 @@ export function AnswerReturn({
           className="rounded-lg border bg-muted/30 p-3"
         >
           <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-            />
             Advanced options
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-3 pt-3">

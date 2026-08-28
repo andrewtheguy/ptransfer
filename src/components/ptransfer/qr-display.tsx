@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ChevronDown, Copy, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Copy, Loader2 } from 'lucide-react';
 import type * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -162,9 +162,6 @@ export function QRDisplay({
             className="w-full flex flex-col items-center gap-2"
           >
             <CollapsibleTrigger className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
-              <ChevronDown
-                className={`h-3 w-3 transition-transform ${showText ? 'rotate-180' : ''}`}
-              />
               {clipboardWriteSupported
                 ? "Can't copy? Show text to copy manually"
                 : 'Show text to copy manually'}

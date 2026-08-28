@@ -1,6 +1,5 @@
 import {
   ArrowLeftRight,
-  ChevronDown,
   ChevronRight,
   FileUp,
   FolderUp,
@@ -501,9 +500,6 @@ export function SendTab() {
           className="rounded-lg border bg-muted/30 p-3"
         >
           <CollapsibleTrigger className="flex w-full items-center gap-1 text-sm font-medium">
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-            />
             Advanced options
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-3 pt-3">
