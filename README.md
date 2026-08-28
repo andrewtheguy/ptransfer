@@ -2,7 +2,7 @@
 
 pTransfer is a web application for sending encrypted files and folders with PIN-based Nostr signaling. It uses WebRTC for direct P2P connections, or a Tor onion service published from the browser tab.
 
-**Demo:** [Launch pTransfer](https://ptransfer.kuvi.dev/)
+**Demo:** [Launch pTransfer](https://ptransfer.app/)
 
 ## Features
 
