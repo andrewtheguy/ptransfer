@@ -155,6 +155,6 @@ bun run webtor:released  # -> the tarball for webtor-rs's current version
 
 Bun links the local package file by file, so rebuilding in webtor-rs is picked
 up here with no reinstall; `webtor:local` only has to be run again if a build
-adds a file the previous one did not have. `webtor:released` takes a version
-(`bun run webtor:released 0.0.1-alpha.13`) and otherwise uses the one in
-webtor-rs's `Cargo.toml`, so switching back after a release lands on it.
+adds a file the previous one did not have. `webtor:released` takes an optional
+released version (`bun run webtor:released <version>`) and otherwise uses the
+one in webtor-rs's `Cargo.toml`, so switching back after a release lands on it.

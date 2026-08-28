@@ -69,10 +69,8 @@ Findings from research (August 2026):
   relay URL.
 - Alternatives considered: a self-hosted Magic Wormhole transit relay
   (WebSocket-capable upstream, blind token-matching pipe, but requires running
-  a server); a TURN server (least protocol work since transport is already
-  WebRTC, same trust profile); iroh's relay network (browser support in alpha
-  as of iroh 0.32, always-relayed via WebSocket in browsers, would also give
-  CLI interop since beam-rs uses iroh natively).
+  a server); or a TURN server (least protocol work since transport is already
+  WebRTC, same trust profile).
 
 ### Other
 - Better website UI/UX

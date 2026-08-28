@@ -15,17 +15,20 @@ import { generateTextQRCode } from '@/lib/qr-utils';
 
 const VALUE_PROPS = [
   { icon: Lock, label: 'End-to-end encrypted' },
-  { icon: Zap, label: 'Direct peer-to-peer first' },
+  { icon: Zap, label: 'Direct P2P or Tor' },
   { icon: Shield, label: 'No sign-up' },
 ] as const;
 
 // Shared by every transfer, whatever mode you use.
 const COMMON_DETAILS = [
   { label: 'Content encryption:', value: 'AES-256-GCM' },
-  { label: 'Primary transport:', value: 'Direct peer-to-peer over WebRTC' },
+  {
+    label: 'Transport choices:',
+    value: 'Direct WebRTC or a Tor onion circuit',
+  },
   {
     label: 'Size limits:',
-    value: '2 GiB selected input; 100 MiB for the Code Exchange relay fallback',
+    value: '2 GiB over direct WebRTC; 100 MiB for relay and Tor file paths',
   },
 ] as const;
 
@@ -68,12 +71,35 @@ const QR_DETAILS = [
   {
     label: 'Signaling:',
     value:
-      'Offer and answer both by QR/copy-paste; relays carry only the file fallback',
+      'Offer and answer both by QR/copy-paste; relays are used only by a fallback',
   },
   {
     label: 'Response check:',
     value:
       'The response carries a tag derived from the shared key, the code it answers, and its own contents; the sender verifies it automatically, so a response from another transfer or altered in transit is refused. Nothing to read out or type',
+  },
+  {
+    label: 'Anonymous fallback:',
+    value:
+      'Optional and experimental: onion-service relays carry control messages and a temporary onion service carries the file',
+  },
+] as const;
+
+// Specific to Tor Onion Service.
+const TOR_DETAILS = [
+  {
+    label: 'Rendezvous:',
+    value: 'A v3 onion address and one-time password shared with the receiver',
+  },
+  { label: 'Authentication:', value: 'SPAKE2 over the one-time password' },
+  {
+    label: 'Transport:',
+    value:
+      'A Tor onion circuit; no file-transfer WebRTC, Nostr, or direct peer connection',
+  },
+  {
+    label: 'Size limit:',
+    value: '100 MiB; transfers over 1 MiB are allowed but flagged as slow',
   },
 ] as const;
 
@@ -131,9 +157,10 @@ export function AboutContent() {
               pTransfer is a free, open-source tool for sending files and
               folders straight from one device to another with end-to-end
               encryption. Your content is encrypted in your browser and first
-              tries a direct peer-to-peer connection. If that connection cannot
-              be established, eligible Code Exchange files can travel as
-              temporary ciphertext through public Nostr relays.
+              tries a direct peer-to-peer connection in the two WebRTC modes. If
+              that connection cannot be established, eligible Code Exchange
+              files can use the selected encrypted fallback: public Nostr relays
+              ordinarily, or Tor with the experimental anonymous option.
             </p>
             <p>
               There are no accounts and no tracking. Each transfer uses a fresh,
@@ -142,13 +169,17 @@ export function AboutContent() {
               as a Progressive Web App, so it keeps working offline.
             </p>
             <p>
-              You hand something to the recipient either way; the two transfer
-              modes differ in what you carry. A short{' '}
+              You hand something to the recipient in every mode; the three
+              transfer modes differ in what you carry. A short{' '}
               <span className="font-medium text-foreground">PIN</span> lets
               relays set up the handshake for you, while a{' '}
               <span className="font-medium text-foreground">Code Exchange</span>{' '}
               carries the whole connection code (QR code or copy/paste) and can
-              even work offline on the same local network.
+              even work offline on the same local network. A{' '}
+              <span className="font-medium text-foreground">
+                Tor Onion Service
+              </span>{' '}
+              transfer uses an onion address and one-time password instead.
             </p>
           </div>
 
@@ -168,7 +199,7 @@ export function AboutContent() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl">Technical details</h2>
           <p className="mt-3 text-muted-foreground">
-            What's the same for every transfer, whichever mode you pick.
+            Core properties and limits across all transfer modes.
           </p>
         </div>
         <dl className="mt-8 grid gap-x-8 gap-y-3 rounded-2xl bg-muted/40 p-6 sm:grid-cols-3 sm:p-8">
@@ -184,11 +215,10 @@ export function AboutContent() {
       {/* Transfer Modes */}
       <SectionContainer>
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl">Two ways to connect</h2>
+          <h2 className="text-3xl">Three ways to connect</h2>
           <p className="mt-3 text-muted-foreground">
-            Every transfer is end-to-end encrypted. The modes differ in
-            signaling and in whether a failed direct connection has a relay
-            fallback.
+            Every transfer is end-to-end encrypted. The modes differ in how the
+            devices meet and how the file travels.
           </p>
         </div>
         <div className="mt-10 grid gap-6">
@@ -256,7 +286,8 @@ export function AboutContent() {
                 enters the sender's page when the sender scans or pastes it.
                 STUN may help find a direct route when internet is available. If
                 direct WebRTC fails, an eligible encrypted file up to 100 MiB
-                can use temporary public Nostr relays instead.
+                can use the selected fallback: temporary public Nostr relays by
+                default, or Tor when the experimental anonymous option is on.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
@@ -285,16 +316,56 @@ export function AboutContent() {
               <SpecList items={QR_DETAILS} />
             </div>
           </div>
+          <div className="grid gap-5 rounded-2xl border bg-card p-6 shadow-sm sm:grid-cols-[200px_1fr] sm:items-start sm:gap-7">
+            <div className="mx-auto flex aspect-square w-full max-w-[200px] items-center justify-center rounded-2xl bg-muted/50 sm:mx-0">
+              <Shield className="h-20 w-20 text-primary" />
+            </div>
+            <div>
+              <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
+                <Shield className="h-5 w-5 text-primary" />
+                Tor Onion Service
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The sending tab publishes a temporary v3 onion service and shows
+                an onion address plus a one-time password. The recipient
+                connects through Tor, authenticates with SPAKE2, and receives
+                the encrypted file inside the onion circuit. This mode does not
+                use WebRTC or Nostr for the peer transfer and never creates a
+                direct network path between the devices.
+              </p>
+              <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                <li>
+                  Best when avoiding a direct connection matters more than speed
+                  or reliability.
+                </li>
+                <li>
+                  Both devices need internet and independently enter Tor through
+                  a Snowflake bridge before meeting inside the network.
+                </li>
+                <li>
+                  The sender&apos;s tab must remain open while its onion service
+                  is published, and interrupted transfers cannot resume.
+                </li>
+                <li>
+                  Browser tabs and ptransfer-cli can send to or receive from one
+                  another in this mode.
+                </li>
+              </ul>
+              <SpecList items={TOR_DETAILS} />
+            </div>
+          </div>
         </div>
         <div className="mt-6 flex gap-3 rounded-2xl border border-dashed bg-muted/30 p-5 text-sm text-muted-foreground">
           <QrCode className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <p>
-            Both modes try direct WebRTC first, and neither configures a TURN
-            server. PIN Exchange fails if no direct route exists. Code Exchange
-            can instead use its encrypted Nostr fallback for eligible files up
-            to 100 MiB, but that public-relay path is best-effort too. If
-            neither path completes and the devices are together, transfer the
-            file offline with animated QR codes using{' '}
+            Both WebRTC modes try a direct route first, and neither configures a
+            TURN server. PIN Exchange fails if no direct route exists. Code
+            Exchange can instead use its selected encrypted fallback for
+            eligible files up to 100 MiB, but both its public-relay and Tor
+            options are best-effort too. Tor Onion Service is a separate mode
+            and creates no WebRTC connection between the peers. If a transfer
+            cannot complete and the devices are together, transfer the file
+            offline with animated QR codes using{' '}
             <a
               href={OFFLINE_QR_TRANSFER_URL}
               target="_blank"
@@ -354,9 +425,7 @@ export function AboutContent() {
             <li>
               Sender and receiver interoperate when they implement the same
               interop protocol version, whatever their app versions. The
-              released binaries include Tor support; a build from source needs
-              its <code>tor</code> feature turned on for the two Tor-backed
-              modes.
+              released binaries and source builds include Tor support.
             </li>
           </ul>
           <div className="mt-4 space-y-2">

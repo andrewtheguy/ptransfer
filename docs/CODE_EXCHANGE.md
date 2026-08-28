@@ -28,11 +28,14 @@ then a single receiver `ACK` once `DONE` validates the chunk count and final byt
 authenticated and reassembled).
 
 If a direct connection **cannot** be made — for example, a restrictive NAT or firewall on
-either end — an eligible transfer automatically attempts the Nostr relay fallback (see
-[Relay fallback](#relay-fallback-no-direct-connection)). There is no switch to find. The
-attempt needs an offer that named relays (it usually does) and a file at or below 100 MiB.
-Storage-relay delivery remains best-effort. This guide describes the **direct flow** unless it says
-otherwise.
+either end — an eligible transfer automatically attempts its selected fallback. The
+ordinary path uses public Nostr control and storage relays (see
+[Relay fallback](#relay-fallback-no-direct-connection)); the experimental **Anonymous
+signaling and relay** option uses onion-service Nostr relays for control and a temporary
+Tor onion service for the file. The fallback is capped at 100 MiB and remains
+best-effort. Once the sender has selected ordinary or anonymous Code Exchange there is
+no second switch to activate the fallback: it runs automatically after the direct route
+fails. This guide describes the **direct flow** unless it says otherwise.
 
 ## When to Use This
 
@@ -40,8 +43,8 @@ Code Exchange is useful when:
 - You want to transfer files between two devices on the same local network without internet
   (with no internet, nothing but the two devices is involved — the relay step drops out on its own)
 - You prefer not to hand the rendezvous to a signaling server: neither the offer nor the
-  answer ever touches one. If direct WebRTC fails, relays may see encrypted file pieces
-  and encrypted coordination messages
+  answer ever touches one. If direct WebRTC fails, the selected fallback may expose
+  encrypted coordination or file traffic to public Nostr relays or Tor infrastructure
 - The QR/clipboard offer is only obfuscated, while file data is encrypted after the exchange
 
 ## How It Works
@@ -54,13 +57,14 @@ The two devices swap two small pieces of connection data:
 Both can be transferred **either** as QR code(s) **or** as copied text — the other side
 can scan or paste, whichever is easier.
 
-The offer also names a few Nostr relays the sender proved while building it. They are not
-used for signaling: they become the encrypted control channel only if the direct
+An ordinary offer also names a few Nostr relays the sender proved while building it. They
+are not used for signaling: they become the encrypted control channel only if the direct
 connection fails, with separate discovered storage relays carrying the file pieces (the
 [relay fallback](#relay-fallback-no-direct-connection)). The sender checks its default
 relays in the background while the connection data is prepared, so that part costs no
 waiting; if some of them are down it looks for replacements first, and the offer code
-appears once it knows which relays to name.
+appears once it knows which relays to name. An anonymous offer names no clearnet relays;
+it carries an `anon` flag and both pages use the same fixed onion-relay pool instead.
 
 > Because the relay fallback is keyed from the Code Exchange secret, treat the offer as
 > the secret for the whole transfer: anyone who obtains it before it expires can answer it
@@ -82,8 +86,9 @@ The signaling data carries what the two devices need to find and connect to each
 it as shareable only with your intended recipient. When the offer is reassembled from QR codes,
 it is error-checked (a CRC over the offer) before use — this only guards against a misread or
 garbled QR code and is **separate** from the file's cryptographic integrity, which is enforced
-on the direct path by per-chunk AES-GCM authentication. The relay data fallback uses
-per-piece AES-GCM plus a whole-file SHA-256 check instead.
+on the direct path by per-chunk AES-GCM authentication. The ordinary Nostr data fallback
+uses per-piece AES-GCM plus a whole-file SHA-256 check instead; the anonymous fallback
+uses the Tor transport's authenticated 128 KiB chunks and completion checks.
 
 ## Step-by-Step
 
@@ -91,9 +96,11 @@ per-piece AES-GCM plus a whole-file SHA-256 check instead.
 
 1. Open the app and select your file(s)
 2. Under **Transfer mode**, select **Code Exchange**
-3. Click **Start Code Exchange**. If some default relays are unreachable, the page
-   says it is looking for others before the code appears — the offer names whichever
-   relays it settles on for the relay fallback
+3. Click **Start Code Exchange**. In ordinary mode, if some default relays are
+   unreachable, the page says it is looking for others before the code appears — the
+   offer names whichever relays it settles on for the fallback. With **Anonymous
+   signaling and relay** selected under Advanced options, the page starts Tor in the
+   background instead
 4. The sender's offer appears as **a grid of QR codes** (typically 2-4, labeled "1 of N"),
    with a **Copy Data** button beneath them
 5. Give the offer to the receiver by **either** method:
@@ -157,8 +164,8 @@ option moves this whole fallback into Tor instead — see
 [Anonymous Signaling and Relay](#anonymous-signaling-and-relay-experimental); the rest
 of this section describes the default.
 
-It is fully automatic — there is no switch, and nothing changes about how you use Code
-Exchange:
+Once ordinary Code Exchange is selected, fallback activation is fully automatic and
+nothing changes about how you use the exchange:
 
 1. You run the normal offer/answer exchange above. Both sides then try to connect
    directly, as always.
@@ -193,10 +200,10 @@ Key points:
   fails and the app suggests the offline-QR app for side-by-side devices.
 - **Forcing it for a test:** the receiver's response page has an **Advanced options >
   Simulate no direct connection** button, offered only where the relay path could
-  actually carry the file — the sender's code named relays and the file is at or below
-  the 100 MiB cap. It drops the receiver's direct connection and builds the response
+  actually carry the file — the selected fallback is available and the file is at or
+  below the 100 MiB cap. It drops the receiver's direct connection and builds the response
   again with none of its network routes in it, so the sender has nothing to connect to
-  and the file comes through the relays — the situation a device behind a hostile NAT
+  and the file uses the selected fallback — the situation a device behind a hostile NAT
   is in anyway. Nothing starts until the sender takes the response in, and **Go back to
   a direct connection** undoes it. Either way the connection is rebuilt from scratch —
   new key material and all, so that the `hello` the simulation left on the control
@@ -291,9 +298,10 @@ transfer, and the sender's own scan or paste remains the gate.
 - **A direct route is required (direct flow only)**: Without internet, both devices normally need
   to be on the same Wi-Fi or local network. With internet, STUN can help discover direct routes
   across different networks, but restrictive NAT or firewall rules can still prevent a connection.
-  TURN relaying is not supported. When a direct route cannot be found, the file falls back to
-  the [Nostr relay path](#relay-fallback-no-direct-connection) (offer named relays, file at or
-  below 100 MiB), where the devices only need internet access to the relays, not to each other
+  TURN relaying is not supported. When a direct route cannot be found, a file at or below
+  100 MiB can use the selected fallback: the [Nostr relay path](#relay-fallback-no-direct-connection)
+  when the ordinary offer named relays, or the Tor path when the experimental anonymous
+  option is selected. Both devices need internet for either fallback
 - **Deployment path**: Host at domain root (for example `https://example.com`). Subpath
   deployments (for example `https://example.com/my-app`) can break scanned QR links
 
@@ -306,8 +314,8 @@ transfer, and the sender's own scan or paste remains the gate.
 | "Camera access denied" in-app | Allow camera permissions in your browser settings and reload the page. Or switch to the **Paste** tab and use copy/paste instead. |
 | Copy button does nothing | Some browsers block clipboard access. Use **Show text to copy manually** and select the text by hand. |
 | Pasted data is rejected | Make sure you copied the entire blob and pasted the matching piece (offer to the receiver, answer to the sender). |
-| Sender reports a failed connection after the answer arrived | The direct WebRTC route is blocked and the relay fallback was unavailable or also failed. This happens when the offer named no relays, the file exceeds 100 MiB, or too few storage relays work. Start over on a network that allows a direct connection, or use the suggested offline-QR app. |
+| Sender reports a failed connection after the answer arrived | The direct WebRTC route is blocked and the selected fallback was unavailable or also failed. In ordinary mode this can mean the offer named no relays or too few storage relays worked; in anonymous mode Tor or the onion relays may have failed. A file over 100 MiB cannot use either fallback. Start over on a network that allows a direct connection, or use the suggested offline-QR app. |
 | Transfer fails after the offer is collected (direct flow) | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
 | Sender shows expired error | Generate a new offer by retrying the send flow. |
 | Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
-| Relay fallback stalls or times out | Both devices need internet access to the relays, not to each other. Both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must finish within 1 hour of the exchange start; after that, start a new one. |
+| Relay fallback stalls or times out | Both devices need internet access to the selected Nostr or Tor infrastructure, not to each other. Both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must finish within 1 hour of the exchange start; after that, start a new one. |

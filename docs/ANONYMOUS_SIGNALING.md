@@ -12,9 +12,9 @@ Both implementations ship it, and either side of a transfer may be a browser tab
 or `ptransfer-cli`. This document is the shared specification: the PIN lengths,
 the relay pool, and the URLs a socket may be opened to are the same on both
 sides, and are what make them interoperate. How each side *reaches* Tor is not
-shared and does not have to be — the browser goes through a Snowflake bridge to
-a WASM client, the CLI builds circuits from Arti through ordinary guards — and
-the two only ever meet at the relay, inside Tor. It stays outside
+shared and does not have to be — the browser uses its bundled Tor integration,
+while the CLI reaches Tor through its own implementation — and the two only
+ever meet at the relay, inside Tor. It stays outside
 [INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md); see *Interoperability* below.
 
 ## Changing this document
@@ -121,40 +121,22 @@ fragmentation and control frames, and caps a Nostr message at 1 MiB. Binary
 frames are a protocol error rather than a silent drop: Nostr has no use for
 them.
 
-In `ptransfer-cli`, with the `tor` cargo feature:
+The CLI reaches the same onion relay pool through its own Tor client. Its
+internal libraries and layout are deliberately documented in the CLI repository
+rather than in this shared specification. The event, subscription, publication,
+signature, SPAKE2, and encryption behavior remains the same on both sides.
 
-```text
-ptransfer-cli Nostr client (nostr-sdk)
-  → RelayPool with a custom WebSocketTransport
-  → a tokio-tungstenite client handshake over an onion stream
-  → the same Tor client its onion transfer mode uses
-  → Arti, through ordinary guards — no bridge, no pluggable transport
-  → onion-service rendezvous (HSDir descriptor, introduction point,
-    rendezvous point)
-  → ws:// Nostr relay WebSocket on the onion service
-```
+In the browser, one Tor client is shared by every relay socket in a session, but
+each socket is its own rendezvous — a descriptor fetch from an HSDir, an
+introduction circuit, and a rendezvous circuit — which is why the pool is kept
+small.
 
-Both are the same shape, and for the same reason: each Nostr library exposes the
-socket as a seam, so the option replaces the socket and nothing above it. The
-event, subscription, publication, signature, SPAKE2, and encryption logic is
-untouched on both sides.
-
-One Tor client is shared by every relay socket in a session, but each socket is
-its own rendezvous — a descriptor fetch from an HSDir, an introduction circuit,
-and a rendezvous circuit — which is why the pool is kept small.
-
-The CLI does the same through `nostr-sdk`'s `WebSocketTransport` trait, running
-a `tokio-tungstenite` client handshake inside a stream from its own Tor client.
-Same cap, same refusal of binary frames.
-
-Timeouts differ from the clearnet path on both sides: a relay socket gets 180
-seconds to open rather than the clearnet budget, and the wait is for a relay to
-*really* connect — `Promise.any` over `ensureRelay` in the browser, a
-first-relay-connected wait in the CLI — rather than giving sockets a fixed head
-start, because a fixed wait would hand every publish to a pool with nothing
-open. In the browser the bootstrap itself additionally gets 5 minutes; the CLI
-bootstraps before the pool exists, so its bootstrap failure is simply its own
-error.
+Browser timeouts differ from the clearnet path: a relay socket gets 180 seconds
+to open, and the wait is for a relay to *really* connect (`Promise.any` over
+`ensureRelay`) rather than giving sockets a fixed head start, because a fixed
+wait would hand every publish to a pool with nothing open. The browser bootstrap
+itself additionally gets 5 minutes. CLI timing remains an implementation detail
+documented in its own repository.
 
 ## Reusing the browser Tor integration
 
@@ -166,12 +148,11 @@ pTransfer's bridge UI, IndexedDB persistence, stricter directory-seed freshness
 rule, and local development overrides are documented in
 [TOR_BROWSER.md](./TOR_BROWSER.md).
 
-Bridges are a browser concern only. `ptransfer-cli` assembles its client from
-Arti's managers and reaches the network through ordinary guard relays, so it
-asks nothing and has nothing to choose. Both *web* sides expose webtor-rs's two
-Snowflake choices through `src/components/ptransfer/tor-bridge-choice.tsx`,
-independently — every peer meets every other inside Tor, so the choices need
-not match.
+Bridges are a browser concern only; non-browser implementations handle their own
+Tor entry and do not take part in this choice. Both *web* sides expose
+webtor-rs's two Snowflake choices through
+`src/components/ptransfer/tor-bridge-choice.tsx`, independently — every peer
+meets every other inside Tor, so the choices need not match.
 
 The sender picks it in **Advanced options** on the send tab, next to the switch.
 The receiver is asked once its PIN turns out to be an anonymous one, before any
@@ -226,9 +207,8 @@ tells nobody anything they could not have learned by watching the transfer.
 
 The table above is this repository only. `ptransfer-cli` reaches the same three
 normative points — PIN classification, the relay pool, and the onion-only socket
-rule — from a handful of files of its own, and documents them in its
-`docs/ARCHITECTURE.md`. They are not listed here, so that the CLI can move its
-code without this specification going stale.
+rule — through its own implementation, whose internal layout is documented in
+its own repository rather than here.
 
 ## No additional backend
 

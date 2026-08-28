@@ -47,7 +47,7 @@ export function Footer() {
         </div>
         <div className="flex items-center gap-1.5">
           <Zap className="h-3.5 w-3.5 text-secondary" />
-          <FooterLabel shortLabel="P2P" fullLabel="Direct P2P transfer" />
+          <FooterLabel shortLabel="P2P/Tor" fullLabel="Direct P2P or Tor" />
         </div>
         <div className="flex items-center gap-1.5">
           <Shield className="h-3.5 w-3.5 text-primary" />

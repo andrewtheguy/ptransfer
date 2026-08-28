@@ -25,19 +25,19 @@ const STEPS = [
     icon: KeyRound,
     title: 'Choose a mode',
     description:
-      'PIN Exchange carries a short PIN and lets relays set up the handshake. Code Exchange carries the whole connection code by QR or copy/paste, keeps relays out of the handshake, and can relay encrypted files when no direct route exists.',
+      'Use a short PIN, carry the whole connection code by QR or copy/paste, or publish a temporary Tor onion service.',
   },
   {
     icon: Share2,
     title: 'Share pairing info',
     description:
-      'Hand over the PIN, or the connection code — by QR code or copy/paste — to your recipient.',
+      'Hand over the PIN, connection code, or onion address and one-time password to your recipient.',
   },
   {
     icon: Send,
     title: 'Transfer securely',
     description:
-      'Files stay end-to-end encrypted over direct WebRTC or Code Exchange’s relay fallback.',
+      'Files stay end-to-end encrypted over direct WebRTC, a Code Exchange fallback, or a Tor onion circuit.',
   },
 ] as const;
 
@@ -50,9 +50,9 @@ const FEATURES = [
   },
   {
     icon: Zap,
-    title: 'Direct P2P first',
+    title: 'Direct P2P or Tor',
     description:
-      'Files normally travel directly over WebRTC. If that fails, eligible Code Exchange files can use a temporary encrypted Nostr relay path.',
+      'The WebRTC modes try a direct route first. Eligible Code Exchange files can fall back to Nostr or Tor; Tor Onion Service uses Tor from the start.',
   },
   {
     icon: Shield,

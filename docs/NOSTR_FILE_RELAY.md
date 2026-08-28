@@ -1,11 +1,14 @@
 # Nostr File Relay Architecture
 
-The Nostr file relay is the **Code Exchange data-path fallback** — the stand-in for
-TURN. When a direct WebRTC connection between the two devices cannot be established, an
-eligible encrypted file (up to 100 MiB) automatically attempts delivery through public
-Nostr relays. There is no toggle and no separate code, and **nothing is uploaded ahead of
-time** — the file engine runs only once the direct connection has failed, so a transfer
-that would have connected directly never puts a byte of the file on a storage relay. What
+The Nostr file relay is the **ordinary Code Exchange data-path fallback** — the stand-in
+for TURN. The sender can select the experimental Tor-backed fallback instead; that variant
+is documented in [CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental).
+Within ordinary Code Exchange, when a direct WebRTC connection between the two devices
+cannot be established, an eligible encrypted file (up to 100 MiB) automatically attempts
+delivery through public Nostr relays. There is no separate action after connection failure,
+and **nothing is uploaded ahead of time** — the file engine runs only once the direct
+connection has failed, so a transfer that would have connected directly never puts a byte
+of the file on a storage relay. What
 *does* run ahead of time is relay preparation: as soon as the offer's relays
 are known, the sender discovers and health-checks a storage ring and keeps probing the
 relay population behind the exchange (`prepareStorageRelays`), so the shared relay cache
