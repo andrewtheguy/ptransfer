@@ -6,7 +6,7 @@
  *
  * Its scope is deliberately narrower than the app: PIN Exchange signaling and
  * the shared WebRTC data-channel transfer layer, and nothing else. Code
- * Exchange and the Nostr file-relay fallback are web-only and stay outside the
+ * Exchange and its fallbacks are currently browser-only and stay outside the
  * contract while they are still changing shape. `docs/INTEROP_PROTOCOL.md`
  * defines exactly what is in and out.
  *

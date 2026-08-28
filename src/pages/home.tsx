@@ -147,7 +147,7 @@ export function HomePage() {
               The companion command-line app speaks the same protocol, so either
               end of a transfer can be a browser tab or the CLI — handy for a
               server with no browser. PIN Exchange and Tor Onion Service work
-              across both; Code Exchange stays web-only.
+              across both; Code Exchange is not yet supported by the CLI.
             </p>
             <div className="mt-3 flex flex-wrap gap-4 text-sm">
               <a

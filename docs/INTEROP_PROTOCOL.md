@@ -85,7 +85,7 @@ governed by separate specifications and version boundaries:
 
 Where this document and [ARCHITECTURE.md](ARCHITECTURE.md) disagree about the
 interoperable subset, this document wins; ARCHITECTURE.md carries the design
-rationale and the web-only parts.
+rationale and the currently browser-only parts.
 
 ## Changing this document
 

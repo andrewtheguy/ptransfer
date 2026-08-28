@@ -114,11 +114,12 @@ relay; here there is no signaling relay and nothing public to look anything up
 in, so every data character contributes to authentication.
 
 That generator is how *this mode* mints a password. The handshake below does not
-require it: it takes an opaque string and derives its SPAKE2 scalar from that. A
-web-only caller uses the latitude — Code Exchange's anonymous relay option runs this
-same handshake with a password derived from the ECDH secret its own exchange already
-established, never shown to a person and never transmitted, and announces the address
-over its own encrypted control channel rather than handing the pair over by hand (see
+require it: it takes an opaque string and derives its SPAKE2 scalar from that.
+Code Exchange's anonymous relay option, currently implemented only in the
+browser, uses this latitude: it runs the same handshake with a password derived
+from the ECDH secret its own exchange already established, never shown to a
+person and never transmitted, and announces the address over its own encrypted
+control channel rather than handing the pair over by hand (see
 [CODE_EXCHANGE.md](CODE_EXCHANGE.md)). Nothing on the binding list changes for it: no
 frame, no bound, no version. An implementation of this document alone neither
 implements that option nor meets a peer using it.

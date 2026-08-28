@@ -9,13 +9,13 @@ pTransfer is a browser-based encrypted file and folder transfer application. Its
 Two implementations exist. This app is the reference one; the other is
 [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli), the companion
 command-line app for headless machines and terminals, which implements PIN
-Exchange (including anonymous signaling) and the Tor
-onion transport, but not Code Exchange or the Nostr file relay. Either end of a
+Exchange (including anonymous signaling) and the Tor onion transport, but does
+not yet implement Code Exchange or its fallbacks. Either end of a
 transfer may be a browser tab or the CLI. What the two must agree on is
 specified in [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md),
 [TOR_TRANSPORT.md](TOR_TRANSPORT.md), and
 [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md); everything else in this
-document is web-only design rationale.
+document describes browser-app behavior outside the shared contract.
 
 Those three are the source of truth, and they live only here — the CLI
 implements against them instead of keeping a copy, and documents its own
@@ -48,7 +48,8 @@ constraints above.
 > Only PIN Exchange and the shared data-channel transfer layer are part of the
 > cross-implementation contract. [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md)
 > specifies that subset normatively and carries the interop protocol version;
-> Code Exchange and the Nostr relay fallback are web-only until they stabilize.
+> Code Exchange and its fallbacks are currently browser-only and are not yet
+> implemented by the CLI.
 > This document is the design rationale for all of it.
 
 By default, Nostr is used for signaling. Code Exchange and the Tor onion transport are available as alternatives under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
@@ -69,7 +70,7 @@ The table below compares the two WebRTC-based modes. The third — **Tor Onion S
 Code Exchange carries one advanced option of its own, **Anonymous signaling and
 relay** (experimental), which moves its fallback into Tor: the control channel onto
 onion-service Nostr relays and the file onto an onion service the sending tab
-publishes. It is web-only, it is described for users in
+publishes. It is currently browser-only, it is described for users in
 [CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental), and
 its design is below under the fallback it replaces. With the option on, both devices
 need internet because Tor is reached over the network.
@@ -685,7 +686,7 @@ The pipeline is `whole-file deflate → chunk → AES-256-GCM → Z85` (deflate 
 
 The full architecture — relay discovery and placement ring, chunk event schema, manifest format, the live control-channel protocol (message vocabulary, re-sends, relay demotion), sequence diagrams, security model, and all tunables — is documented in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
 
-#### Anonymous relay variant (experimental, web-only)
+#### Anonymous relay variant (experimental, currently browser-only)
 
 The **Anonymous signaling and relay** switch on the send tab replaces both halves of
 the fallback above for one transfer. The rendezvous that makes it possible lives in

@@ -389,7 +389,7 @@ export function ReceiveInput({
               ptransfer-cli
             </a>
             , the companion command-line app, is pasted here exactly the same
-            way. Only Code Exchange is web-only.
+            way. Only Code Exchange is not yet supported by the CLI.
           </p>
         </CollapsibleContent>
       </Collapsible>

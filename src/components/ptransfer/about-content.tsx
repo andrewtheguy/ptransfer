@@ -419,8 +419,7 @@ export function AboutContent() {
             </li>
             <li>
               <span className="font-medium text-foreground">Code Exchange</span>{' '}
-              is web-only — it relies on QR codes and clipboard handoff, which
-              the CLI deliberately does not do.
+              is not supported by the CLI yet.
             </li>
             <li>
               Sender and receiver interoperate when they implement the same

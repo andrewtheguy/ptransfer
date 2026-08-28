@@ -5,7 +5,7 @@ export const OFFLINE_QR_TRANSFER_URL = 'https://qrsecure.kuvi.dev/transfer';
  * The companion command-line app. It speaks the same wire formats as this app
  * — PIN Exchange (including anonymous signaling) and the Tor Onion Service
  * mode — so either end of a transfer may be a browser tab or the CLI. Code
- * Exchange is web-only and has no CLI counterpart.
+ * Exchange is not yet implemented by the CLI.
  *
  * See docs/INTEROP_PROTOCOL.md for what the two implementations must agree on.
  */
