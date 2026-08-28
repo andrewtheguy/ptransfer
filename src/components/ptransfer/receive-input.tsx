@@ -31,8 +31,11 @@ const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface ReceiveInputProps {
   onSubmit: (input: ReceiveInputValue) => void;
-  /** Prefills the box from a scanned PIN link, opening on the Paste tab. */
-  initialPin?: string;
+  /**
+   * Prefills the box from a deep-linked PIN or onion address, opening on the
+   * Paste tab so the value is visible before it is acted on.
+   */
+  initialValue?: string;
   /** Surfaced from the parent when starting the transfer itself failed. */
   error?: string | null;
   disabled?: boolean;
@@ -51,14 +54,14 @@ function formatTime(seconds: number): string {
  */
 export function ReceiveInput({
   onSubmit,
-  initialPin,
+  initialValue,
   error: startError,
   disabled,
 }: ReceiveInputProps) {
-  const [value, setValue] = useState(initialPin ?? '');
+  const [value, setValue] = useState(initialValue ?? '');
   const [error, setError] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<'scan' | 'paste'>(
-    initialPin ? 'paste' : 'scan',
+    initialValue ? 'paste' : 'scan',
   );
   // The Scan tab is the landing view, so the camera stays behind a click gate;
   // otherwise merely opening /receive would prompt for camera permission.

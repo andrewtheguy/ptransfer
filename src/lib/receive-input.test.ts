@@ -5,10 +5,12 @@ import {
   generateMutualOfferBinary,
 } from './code-signaling';
 import { generatePin, PIN_CHARSET } from './crypto';
-import { buildPinUrl } from './pin-link';
 import { classifyReceiveText, looksLikePin } from './receive-input';
+import { buildOnionUrl, buildPinUrl } from './receive-link';
 
 const ORIGIN = 'https://ptransfer.example';
+/** A real address printed by ptransfer-cli, so the checksum is genuine. */
+const ONION = 'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion';
 
 const mockOffer: RTCSessionDescriptionInit = {
   type: 'offer',
@@ -81,6 +83,20 @@ describe('classifyReceiveText', () => {
       kind: 'pin',
       pin,
       pinKind: 'anonymous',
+    });
+  });
+
+  test('recognizes a bare onion address', () => {
+    expect(classifyReceiveText(ONION)).toEqual({
+      kind: 'onion',
+      address: ONION,
+    });
+  });
+
+  test('recognizes an onion address carried in a link', () => {
+    expect(classifyReceiveText(buildOnionUrl(ORIGIN, ONION))).toEqual({
+      kind: 'onion',
+      address: ONION,
     });
   });
 

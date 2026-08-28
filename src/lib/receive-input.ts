@@ -1,7 +1,7 @@
 import { extractChunkParam } from './chunk-utils';
 import { isValidBinaryPayload, parseClipboardPayload } from './code-signaling';
 import { classifyPin, PIN_CHARSET, PIN_LENGTHS, type PinKind } from './crypto';
-import { extractPinFromUrl } from './pin-link';
+import { extractOnionFromUrl, extractPinFromUrl } from './receive-link';
 import { parseOnionAddress } from './tor/onion-address';
 
 /**
@@ -60,8 +60,8 @@ export function looksLikeOnionAddress(text: string): boolean {
  * Identify pasted or scanned receiver input, or null if it is none of a PIN, an
  * onion address, or an offer.
  *
- * PIN links are checked before chunk URLs only for readability; the two formats
- * cannot collide (see PIN_FRAGMENT_PREFIX in pin-link.ts).
+ * Deep links are checked before chunk URLs only for readability; the formats
+ * cannot collide (see the fragment prefixes in receive-link.ts).
  */
 export function classifyReceiveText(text: string): ReceiveInput | null {
   const trimmed = text.trim();
@@ -76,6 +76,10 @@ export function classifyReceiveText(text: string): ReceiveInput | null {
 
   const pinKind = classifyPin(trimmed);
   if (pinKind) return { kind: 'pin', pin: trimmed, pinKind };
+
+  // extractOnionFromUrl already validated and canonicalized it.
+  const linkedOnion = extractOnionFromUrl(trimmed);
+  if (linkedOnion) return { kind: 'onion', address: linkedOnion };
 
   const onion = parseOnionAddress(trimmed);
   if (onion) return { kind: 'onion', address: onion.display };

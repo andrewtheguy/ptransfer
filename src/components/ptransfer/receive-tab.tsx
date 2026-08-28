@@ -14,8 +14,8 @@ import {
   formatFileSize,
   getMimeTypeDescription,
 } from '@/lib/file-utils';
-import { extractPinFromUrl } from '@/lib/pin-link';
 import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
+import { extractOnionFromUrl, extractPinFromUrl } from '@/lib/receive-link';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import type { PinKeyMaterial } from '@/lib/types';
 import { AnonymousReceiveForm } from './anonymous-receive-form';
@@ -75,18 +75,22 @@ export function ReceiveTab() {
   // The onion address recognized in the box, while its password is asked for.
   const [torAddress, setTorAddress] = useState<string | null>(null);
 
-  // A PIN QR deep-links here with the PIN in the fragment. Read it during the
+  // Every sender QR deep-links here with its value in the fragment — a PIN, or
+  // a Tor address whose password is asked for separately. Read it during the
   // first render so the input box can open prefilled.
-  const [initialPin, setInitialPin] = useState(
-    () => extractPinFromUrl(window.location.href) ?? undefined,
+  const [initialValue, setInitialValue] = useState(
+    () =>
+      extractPinFromUrl(window.location.href) ??
+      extractOnionFromUrl(window.location.href) ??
+      undefined,
   );
 
-  // Strip the PIN back out of the URL so it does not linger in the address bar
-  // or browser history.
+  // Strip the value back out of the URL so it does not linger in the address
+  // bar or browser history.
   useEffect(() => {
-    if (!initialPin) return;
+    if (!initialValue) return;
     window.history.replaceState(null, '', window.location.pathname);
-  }, [initialPin]);
+  }, [initialValue]);
 
   const isCodeExchange = route === 'code';
   const isTor = route === 'tor';
@@ -135,8 +139,8 @@ export function ReceiveTab() {
 
   const handleSubmit = useCallback(
     async (input: ReceiveInputValue) => {
-      // Spent: a later "Receive Another" must not refill the deep-link PIN.
-      setInitialPin(undefined);
+      // Spent: a later "Receive Another" must not refill the deep-linked value.
+      setInitialValue(undefined);
       setStartError(null);
 
       if (input.kind === 'pin') {
@@ -280,7 +284,7 @@ export function ReceiveTab() {
         <>
           <ReceiveInput
             onSubmit={handleSubmit}
-            initialPin={initialPin}
+            initialValue={initialValue}
             error={startError}
           />
 

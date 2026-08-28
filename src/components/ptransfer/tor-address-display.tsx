@@ -2,6 +2,7 @@ import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { generateTextQRCode } from '@/lib/qr-utils';
+import { buildOnionUrl } from '@/lib/receive-link';
 
 const QR_WIDTH = 220;
 
@@ -18,11 +19,11 @@ interface TorAddressDisplayProps {
  * useful alone.
  *
  * They are deliberately not combined into one string or one QR code. The QR
- * carries the address alone — the bare `<address>.onion` the receive page and
- * ptransfer-cli's `tor receive` both take — so that the password can travel by
- * a different route if the sender wants that. It is the only thing here worth
- * guarding, and a code that carried both would hand the whole transfer to
- * anyone who caught the screen.
+ * links to the receive page with the address filled in and nothing else, the
+ * same way a PIN QR does, so that the password can travel by a different route
+ * if the sender wants that. It is the only thing here worth guarding, and a
+ * code that carried both would hand the whole transfer to anyone who caught
+ * the screen.
  */
 export function TorAddressDisplay({
   address,
@@ -36,7 +37,7 @@ export function TorAddressDisplay({
     setQrUrl(null);
     setQrFailed(false);
 
-    generateTextQRCode(address, {
+    generateTextQRCode(buildOnionUrl(window.location.origin, address), {
       width: QR_WIDTH,
       errorCorrectionLevel: 'M',
     })
@@ -66,7 +67,8 @@ export function TorAddressDisplay({
         </p>
       </div>
 
-      {/* Scannable address. The password is not in it, by design. */}
+      {/* Scannable address link: opens the receive page with the address
+          filled in. The password is not in it, by design. */}
       {!qrFailed && (
         <div className="flex flex-col items-center gap-1.5">
           <div className="p-2 bg-white rounded-lg">
@@ -77,7 +79,7 @@ export function TorAddressDisplay({
               {qrUrl ? (
                 <img
                   src={qrUrl}
-                  alt="QR code containing the onion address"
+                  alt="QR code linking to the receive page with this address"
                   className="block w-full h-auto"
                 />
               ) : (
@@ -86,8 +88,8 @@ export function TorAddressDisplay({
             </div>
           </div>
           <p className="text-xs text-muted-foreground text-center">
-            Scanning this fills in the address only — read them the password
-            separately.
+            Scanning this opens the receive page with the address filled in —
+            read them the password separately.
           </p>
         </div>
       )}
