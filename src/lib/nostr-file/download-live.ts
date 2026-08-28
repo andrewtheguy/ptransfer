@@ -76,6 +76,14 @@ export async function receiveFileLive(
     since: number;
     /** unix seconds: the exchange's deadline, stamped on our own events. */
     expiresAt: number;
+    /**
+     * Whether the sender has yet to be handed what it needs to start — the
+     * receiver's response is still on screen, waiting to be carried over by
+     * a human. Silence from the sender is then not a fault, so until its
+     * first message only the transfer's own expiry ends the wait; the idle
+     * watchdog takes over from there as usual.
+     */
+    awaitingHandover?: boolean;
   },
 ): Promise<Uint8Array> {
   const { onProgress, isCancelled, pool } = opts;
@@ -363,7 +371,8 @@ export async function receiveFileLive(
         return;
       }
       const sinceSender = now - (lastPeerAt > 0 ? lastPeerAt : startedAt);
-      if (sinceSender > LIVE_IDLE_TIMEOUT_MS) {
+      const senderDue = lastPeerAt > 0 || !opts.awaitingHandover;
+      if (senderDue && sinceSender > LIVE_IDLE_TIMEOUT_MS) {
         fail(
           new Error(
             lastPeerAt > 0

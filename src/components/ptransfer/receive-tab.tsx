@@ -298,8 +298,10 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const answerData = isCodeExchange ? codeState.answerData : undefined;
-  // Covers the simulated stint too: the hook holds this step, relay fetch and
-  // all, until the sender turns up, so the response and its switch stay put.
+  // Covers both stints that keep the response up with a fallback already
+  // running behind it — the simulated one, and a direct route that died
+  // before the sender ever took the code in. The hook holds this step until
+  // the sender turns up, so the response stays put either way.
   const showAnswerReturn =
     isCodeExchange && answerData && codeState.status === 'showing_answer';
 
@@ -353,6 +355,7 @@ export function ReceiveTab() {
               relayFallbackAvailable={codeState.relayFallbackAvailable}
               simulateNoDirect={codeState.simulateNoDirect}
               onSimulateNoDirectChange={setSimulateNoDirect}
+              directRouteDead={codeState.directRouteDead}
               fallbackName={
                 codeState.anonymousFallback ? 'Tor' : 'the Nostr relays'
               }

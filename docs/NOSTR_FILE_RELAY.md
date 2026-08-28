@@ -292,7 +292,10 @@ cooled-down placement is fetched again (a timed-out or not-yet-propagated copy r
 without costing a re-send) and the missing list is re-asked, so a lost announcement or
 acknowledgement never strands a piece. When every chunk is present the assembled file
 must match the manifest's SHA-256 before `done` is sent. Expiry, or a sender silent for
-3 minutes, aborts.
+3 minutes, aborts — except while the receiver is still holding its response on screen for
+the sender to take in. A sender that has not been handed the response yet is not silent,
+it is uninvolved, so until its first control message that clock does not run and only the
+transfer's own 1-hour expiry bounds the wait.
 
 ```mermaid
 sequenceDiagram

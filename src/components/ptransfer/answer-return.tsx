@@ -18,6 +18,12 @@ export interface AnswerReturnProps {
   simulateNoDirect?: boolean;
   onSimulateNoDirectChange?: (value: boolean) => void;
   /**
+   * Whether the direct route died for real while this response was on screen.
+   * The response is still what the sender needs — the fallback cannot start
+   * without it — so the page stays put and only its wording changes.
+   */
+  directRouteDead?: boolean;
+  /**
    * What the fallback is, named the way a sentence needs it. The sender's
    * code decides it, so the receiver is told rather than asked.
    */
@@ -39,10 +45,14 @@ export function AnswerReturn({
   relayFallbackAvailable = false,
   simulateNoDirect = false,
   onSimulateNoDirectChange,
+  directRouteDead = false,
   fallbackName = 'the Nostr relays',
   torStatus,
 }: AnswerReturnProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Simulated or real, a dead route says the same thing here: the file is
+  // coming through the fallback, and it still needs this response first.
+  const fallbackOnly = simulateNoDirect || directRouteDead;
 
   return (
     <div className="space-y-4">
@@ -70,21 +80,25 @@ export function AnswerReturn({
           </li>
         </ul>
         <p className="text-sm text-muted-foreground">
-          {simulateNoDirect
+          {fallbackOnly
             ? `Keep this page open — the file comes through ${fallbackName} once the sender has your response.`
             : 'Keep this page open — the transfer connects automatically once the sender has your response.'}
         </p>
       </div>
 
-      {/* The Tor bootstrap running behind the direct attempt. It costs
-          minutes, so saying nothing would look like a page doing nothing. */}
+      {/* The Tor bootstrap. It costs minutes, so saying nothing would look
+          like a page doing nothing. Which of the two routes it is — the one
+          behind the direct attempt, or the only one left — is what the
+          sentence after it settles. */}
       {torStatus && (
         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">
-            Preparing the Tor fallback:
+            {fallbackOnly ? 'Preparing Tor:' : 'Preparing the Tor fallback:'}
           </span>{' '}
-          {torStatus} The direct connection is being tried at the same time and
-          does not wait for this.
+          {torStatus}{' '}
+          {fallbackOnly
+            ? 'This is the route the file will take; it has to finish before the transfer can start.'
+            : 'The direct connection is being tried at the same time and does not wait for this.'}
         </div>
       )}
 
