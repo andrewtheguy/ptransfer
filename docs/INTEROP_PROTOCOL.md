@@ -332,8 +332,8 @@ back:
 }
 ```
 
-`relays` is optional. **File metadata is deliberately absent** — it travels
-sealed inside the confirm.
+`relays` is optional. **File metadata is absent**; it travels sealed inside the
+confirm rather than appearing in the plaintext rendezvous.
 
 Receivers MUST reject a rendezvous whose payload does not name the event's own
 author, or whose element is not a valid non-identity point.

@@ -42,8 +42,8 @@ export function generateHandshakeNonce(): string {
  * The payload is plaintext JSON: with SPAKE2 nothing in it is sensitive (the
  * element is password-blinded, the nonce and relay hints carry no authority),
  * and encrypting it under a PIN-derived key would reintroduce the offline
- * guessing target the PAKE removes. File metadata is deliberately absent — it
- * travels sealed inside the confirm, after the handshake.
+ * guessing target the PAKE removes. File metadata is absent and travels sealed
+ * inside the confirm after the handshake.
  *
  * @param hint - Rotation-bucket-scoped event-filtering tag: an HKDF derivation
  * off the PIN's public locator segment (see computePinHintFromLocator). It is a

@@ -121,10 +121,8 @@ interface VerifiedClaim {
  * Time the sender waits for its operator to type the receiver's confirmation
  * code before giving up on the locked claim.
  *
- * Deliberately shorter than the receiver's confirm timeout: if the human is
- * too slow, the side with a person in front of it should be the one that
- * reports it, rather than publishing a confirm to a receiver that already
- * stopped listening.
+ * Shorter than the receiver's offer wait, so this sender-side deadline
+ * normally expires first when no matching code is entered.
  */
 const CONFIRM_CODE_ENTRY_TIMEOUT_MS = 150000;
 
@@ -375,13 +373,12 @@ export function usePinSend(): UsePinSendReturn {
         };
 
         // Start a fresh single-use SPAKE2 run and build the rendezvous event
-        // that publishes its element. Plaintext by design: the element is
-        // blinded, and nothing here may be PIN-testable offline. File metadata
-        // deliberately stays out — it is delivered inside the sealed confirm,
-        // after the handshake. The transcript hash covers what we are about to
-        // publish, so a claim can be checked against the rendezvous we actually
-        // sent rather than the one the claimant says it saw — fresh per
-        // publication, since the nonce and element are.
+        // that publishes its element. The element is blinded, and nothing here
+        // may be PIN-testable offline. File metadata stays out and is delivered
+        // inside the sealed confirm after the handshake. The transcript hash
+        // covers what we are about to publish, so a claim can be checked against
+        // the rendezvous we actually sent rather than the one the claimant says
+        // it saw — fresh per publication, since the nonce and element are.
         const startRun = async (
           pakeSecret: Uint8Array,
           hint: string,

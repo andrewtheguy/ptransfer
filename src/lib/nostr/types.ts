@@ -86,12 +86,11 @@ export type TransferState = TransferStateError | TransferStateOther;
  * with a fresh PIN, hint, nonce, and SPAKE2 element on every rotation;
  * transferId and senderPubkey stay stable for the transfer's lifetime.
  *
- * Plaintext is deliberate: a SPAKE2 element is password-blinded, so nothing
- * here can confirm a PIN guess offline — encrypting it under a PIN-derived
- * key (as the pre-PAKE protocol did) would reintroduce exactly the offline
- * target the PAKE exists to remove. File metadata is *not* here for the same
- * reason; it travels sealed inside the confirm, after the handshake, under a
- * key only the two PAKE peers hold.
+ * A SPAKE2 element is password-blinded, so nothing here can confirm a PIN
+ * guess offline. Encrypting the payload under a PIN-derived key would add no
+ * meaningful confidentiality and would reintroduce the offline target the
+ * PAKE removes. File metadata travels sealed inside the confirm after the
+ * handshake, under a key only the two PAKE peers hold.
  */
 export interface RendezvousPayload {
   type: 'rendezvous';
@@ -162,7 +161,7 @@ export interface ClaimPayload {
  * Confirm payload (sender -> receiver), sealed with the confirm key from the
  * same SPAKE2 session that verified the claim. Tells the receiver its claim
  * won the transfer, proves the sender knows the PIN in the reverse direction,
- * and delivers the file metadata the rendezvous deliberately omits.
+ * and delivers the file metadata omitted from the rendezvous.
  *
  * Published as soon as the claim verifies — the confirmation-code gate guards
  * the WebRTC offer and file bytes, not this event. A front-runner holding a

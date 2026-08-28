@@ -126,13 +126,14 @@ uses the Tor transport's authenticated 128 KiB chunks and completion checks.
 
 1. Under **Scan or paste receiver's response**, take the answer in by **either** method —
    scan the response QR with the in-app scanner, or paste the copied response text
-2. The sender checks that the response actually answers the code it is showing (see
-   [Responses are checked against your code](#responses-are-checked-against-your-code)).
-   Nothing to read out or type — a response from a different transfer is simply refused
+2. Returning the receiver's response is Code Exchange's confirmation step. The sender
+   checks that it actually answers the code being shown (see
+   [The returned response confirms the receiver and is checked against your code](#the-returned-response-confirms-the-receiver-and-is-checked-against-your-code)).
+   A response from a different transfer is simply refused
 3. The P2P connection establishes and the file transfers directly
 4. Both sides show that the transfer completed when done
 
-### Responses are checked against your code
+### The returned response confirms the receiver and is checked against your code
 
 The receiver's response carries a short tag it derives from three things: the shared key,
 the exact code it read, and the contents of the response itself. Before the sender acts on
@@ -140,11 +141,11 @@ a response — before it connects and before any file data moves — it recomput
 from the code it is showing and the response it was handed, and refuses anything that does
 not match, with "Response does not match this transfer."
 
-This is automatic and invisible: no confirmation code appears on either screen and neither
-person has to read anything aloud. It means a response belonging to a **different**
-transfer, an old response pasted again, or a response altered on the way back is rejected
-straight away instead of turning into a connection that never completes — handy if you
-have two transfers open and paste the wrong one.
+Unlike PIN Exchange, no additional short code appears for someone to read aloud. Scanning
+or pasting the full response back into the sender's page is the confirmation handoff. A
+response belonging to a **different** transfer, an old response pasted again, or a response
+altered on the way back is rejected straight away instead of turning into a connection
+that never completes — handy if you have two transfers open and paste the wrong one.
 
 It is **not** a defense against someone who photographed or copied your offer code: they
 can produce a matching tag as easily as the intended receiver can. The protection there is

@@ -40,9 +40,9 @@ import type { TorFramedStream } from './framing';
  * Neither seal can be opened by anyone who did not run this exact SPAKE2
  * session, so opening one *is* the key confirmation: a wrong password produces
  * two different roots and the claim simply fails to open. There is no
- * confirmation code for a human to compare, because there is nothing for one
- * to catch — unlike a PIN, which is short enough to be raced with a live
- * guess, the address and password are only ever handed over as a pair.
+ * additional confirmation code: the receiver enters the one-time password
+ * separately, and that is the manually entered authentication value for this
+ * mode.
  *
  * Tor already authenticates the *service* to the client (the address is its
  * public key) and encrypts the stream end to end. This layer adds what that

@@ -54,7 +54,8 @@ This repo is the source of truth for everything the two share: PIN Exchange, ano
 signaling, and the Tor onion transport are specified in `docs/` here, and the CLI
 implements against those documents rather than restating them — each one carries a
 *Changing this document* section naming exactly what binds another implementation and what
-is only rationale. The CLI's own repo documents its internals and nothing else.
+is only rationale. This web-first repository also owns documentation for browser-only
+features; the CLI's repository documents CLI-specific behavior and internals.
 
 Two implementations interoperate when they declare the same **interop protocol version**
 (see [Version Compatibility](#version-compatibility) below), whatever their app versions.

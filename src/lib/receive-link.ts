@@ -35,9 +35,8 @@ export function buildPinUrl(baseUrl: string, pin: string): string {
 /**
  * Build the link a Tor address QR encodes: {origin}/receive#o={address}
  *
- * The one-time password is deliberately not in it. The address alone is not a
- * secret, and keeping the two apart is what lets them travel by different
- * routes.
+ * The one-time password is not in the link. The receiver enters it separately
+ * after the address has been filled in.
  */
 export function buildOnionUrl(baseUrl: string, address: string): string {
   return buildReceiveUrl(baseUrl, ONION_FRAGMENT_PREFIX, address);

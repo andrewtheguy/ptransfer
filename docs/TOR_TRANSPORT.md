@@ -196,9 +196,9 @@ out of a Tor handshake can never produce a key PIN Exchange would also produce:
 
 Opening a seal *is* the key confirmation: a wrong password produces two
 different roots, and the claim simply fails to open. There is **no confirmation
-code** for a human to compare — unlike a PIN, which is short enough to be raced
-with a live guess while it is on screen, the address and password are only ever
-handed over together as a pair, so there is no race to catch.
+code** in addition to the password. The receiver enters the one-time password
+separately after receiving or scanning the address; that password is the
+manually entered authentication value for this mode.
 
 A sender that cannot open a claim **hangs up rather than answering**. A peer
 that reached the onion service already knows the address was usable, but learns

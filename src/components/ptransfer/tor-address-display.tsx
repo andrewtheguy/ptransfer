@@ -15,15 +15,12 @@ interface TorAddressDisplayProps {
 
 /**
  * The sender's half of the Tor rendezvous: an onion address and a one-time
- * password, shown together because the receiver needs both and neither is
- * useful alone.
+ * password, shown as separate values because the receiver needs both.
  *
- * They are deliberately not combined into one string or one QR code. The QR
- * links to the receive page with the address filled in and nothing else, the
- * same way a PIN QR does, so that the password can travel by a different route
- * if the sender wants that. It is the only thing here worth guarding, and a
- * code that carried both would hand the whole transfer to anyone who caught
- * the screen.
+ * The QR links to the receive page with the address filled in and nothing
+ * else. The receiver enters the one-time password separately, much like the
+ * manual confirmation step in PIN Exchange, so scanning the address alone
+ * never supplies both credentials.
  */
 export function TorAddressDisplay({
   address,
@@ -68,7 +65,7 @@ export function TorAddressDisplay({
       </div>
 
       {/* Scannable address link: opens the receive page with the address
-          filled in. The password is not in it, by design. */}
+          filled in; the receiver enters the password separately. */}
       {!qrFailed && (
         <div className="flex flex-col items-center gap-1.5">
           <div className="p-2 bg-white rounded-lg">

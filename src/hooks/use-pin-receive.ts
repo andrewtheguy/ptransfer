@@ -77,9 +77,9 @@ const CONFIRM_TIMEOUT_MS = 60000;
  * is displaying. The budget has to cover reading eight characters aloud over
  * a phone call and someone typing them back.
  *
- * The sender's own entry deadline is deliberately shorter than this window, so
- * a slow typist makes the sender report the timeout rather than this side
- * giving up on an offer that is still coming.
+ * The sender's own entry deadline is shorter than this window, so it normally
+ * expires before this side gives up on an offer when no matching code is
+ * entered.
  */
 const OFFER_WAIT_TIMEOUT_MS = 180000;
 

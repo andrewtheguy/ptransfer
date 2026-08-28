@@ -25,9 +25,9 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  *
  * Unlike a PIN, all 11 password data characters are secret; the twelfth is the
  * deterministic checksum. There is no public locator segment because there is
- * no signaling record to look up. That is also why there is no confirmation
- * code here — the pair is only ever handed over together, and a wrong password
- * simply fails to open the claim (see lib/tor/handshake.ts).
+ * no signaling record to look up. There is no additional confirmation code:
+ * the receiver enters the password separately, and a wrong password simply
+ * fails to open the claim (see lib/tor/handshake.ts).
  *
  * The receiver may be another browser tab or ptransfer-cli's
  * `ptransfer tor receive`; the two speak the same handshake and framing.

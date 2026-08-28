@@ -63,10 +63,9 @@ Findings from research (August 2026):
   general-purpose public piping infrastructure. It is also self-hostable if
   its goodwill or bandwidth tolerance for multi-GB transfers proves
   insufficient — there is no SLA.
-- **Design tension**: the CLI's transport is deliberately direct-only ("fails
-  rather than route file bytes through a relay server"). A relay fallback
-  reverses that stance and should be opt-in, ideally with a user-configurable
-  relay URL.
+- **CLI support**: the CLI's current WebRTC transport is direct-only and fails
+  instead of relaying file bytes. A file-relay fallback is not supported there
+  yet.
 - Alternatives considered: a self-hosted Magic Wormhole transit relay
   (WebSocket-capable upstream, blind token-matching pipe, but requires running
   a server); or a TURN server (least protocol work since transport is already
