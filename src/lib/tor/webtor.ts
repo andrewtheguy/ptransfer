@@ -69,6 +69,14 @@ export interface WebtorClientOptions {
   connectionTimeoutMs?: number;
   log?: boolean;
   logPrefix?: string;
+  /**
+   * Handed every directory this client downloads, as a seed a later bootstrap
+   * would take. `directoryCache()` is a pull and this is the push: a client
+   * refreshes its directory while it runs, so exporting once after `create`
+   * only ever stores the one it started with. A supplied `directorySeed` is
+   * never handed back.
+   */
+  onDirectoryChange?: (seed: string) => void;
 }
 
 /**
@@ -96,7 +104,11 @@ export interface WebtorClient {
     options?: { maxMessageBytes?: number; timeoutMs?: number },
   ): Promise<OnionWebSocket>;
   publishOnionService(options?: PublishOptions): Promise<OnionService>;
-  /** The verified directory from this bootstrap, to seed the next one. */
+  /**
+   * The verified directory in force right now, to seed the next bootstrap.
+   * A snapshot at the moment of the call — `onDirectoryChange` is how a
+   * caller hears about a newer one.
+   */
   directoryCache(): Promise<string>;
   close(): Promise<unknown>;
 }
