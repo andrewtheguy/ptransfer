@@ -101,18 +101,20 @@ export async function bootstrapTorClient(
       ? { bridgeUrl: BRIDGE_URL, bridgeFingerprint: BRIDGE_FINGERPRINT }
       : {}),
     ...(seed.value ? { directorySeed: seed.value } : {}),
+    // Keep every directory this client downloads, not only the one it
+    // bootstrapped with: a client refreshes its directory while it runs, and
+    // that download is the slowest part of the next cold start. A seed this
+    // app supplied is never handed back, so nothing here rewrites what it
+    // just read. Best effort — failing to store one costs the next bootstrap
+    // a download and nothing else.
+    onDirectoryChange: (cache) => void saveDirectoryCache(cache),
     logPrefix: '[tor]',
   });
 
-  // Keep the verified directory for the next transfer, and report which one
-  // this client ended up with. Best effort: a failure here only costs the next
-  // bootstrap a download.
+  // Which directory this client actually ended up on, seeded or downloaded.
   void client
     .directoryCache()
-    .then(async (cache) => {
-      await logDirectory(cache);
-      await saveDirectoryCache(cache);
-    })
+    .then((cache) => logDirectory(cache))
     .catch(() => undefined);
 
   return client;

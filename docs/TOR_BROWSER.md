@@ -48,6 +48,13 @@ snapshot from `/tor-directory.json`. Before passing either value back to
 webtor-rs, pTransfer applies a stricter freshness rule that is specific to this
 application.
 
+What gets persisted is whatever webtor-rs downloads, as it downloads it:
+`onDirectoryChange` hands over each new directory, including the refreshes a
+client does while a long transfer runs. `directoryCache()` is the matching
+pull, used here only to report which directory a bootstrap ended up on — a seed
+this application supplied is never handed back, so nothing rewrites what it
+just read.
+
 Reading a seed to apply that rule is webtor-rs's job as well:
 `describeDirectory(seed)` answers with the validity window and the time period,
 derived by the same code that will place the descriptors. pTransfer holds the
