@@ -60,8 +60,10 @@ is only rationale. The CLI's own repo documents its internals and nothing else.
 
 Two implementations interoperate when they declare the same **interop protocol version**
 (see [Version Compatibility](#version-compatibility) below), whatever their app versions.
-`bun run test:live:tor` in this repo runs both directions of the Tor onion mode against a
-local `ptransfer-cli` build; see [docs/TOR_BROWSER.md](./docs/TOR_BROWSER.md).
+Both live interoperability tests run in this repo against a local `ptransfer-cli` build:
+`bun run test:live:webrtc` covers PIN Exchange over the public relays and a real data
+channel, in both directions and CLI to CLI, and `bun run test:live:tor` covers both
+directions of the Tor onion mode; see [docs/TOR_BROWSER.md](./docs/TOR_BROWSER.md).
 
 ## Browser Requirements
 

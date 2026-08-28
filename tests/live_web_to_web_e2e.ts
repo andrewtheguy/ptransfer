@@ -4,7 +4,7 @@
 // transfers a file to a browser-tab receiver through the real Nostr relays
 // and a real WebRTC data channel, driven headlessly via Playwright.
 //
-// Mirrors ptransfer-cli's tests/live_interop_e2e.mjs, minus the CLI legs.
+// Mirrors `live_webrtc_cli_interop.ts`, minus the CLI legs.
 // It deliberately uses the public relays and therefore lives outside the unit
 // test suite; it needs internet access, Bun, and a Chrome-family browser.
 //
