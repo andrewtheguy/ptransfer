@@ -48,6 +48,12 @@ snapshot from `/tor-directory.json`. Before passing either value back to
 webtor-rs, pTransfer applies a stricter freshness rule that is specific to this
 application.
 
+Reading a seed to apply that rule is webtor-rs's job as well:
+`describeDirectory(seed)` answers with the validity window and the time period,
+derived by the same code that will place the descriptors. pTransfer holds the
+rule and not a second copy of the consensus format, which could otherwise
+disagree with the client about where the ring falls.
+
 ### Why a cached seed can still be stale
 
 A consensus stays valid for three hours, but a seed is only reused while it

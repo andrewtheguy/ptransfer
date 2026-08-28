@@ -23,6 +23,8 @@
  * has to be ours, and it applies to publishing and fetching alike.
  */
 
+import { type DirectoryDescription, loadWebtor } from './webtor';
+
 const DATABASE_NAME = 'ptransfer-tor';
 const DATABASE_VERSION = 1;
 const STORE_NAME = 'directory';
@@ -36,116 +38,36 @@ const CACHE_KEY = 'current';
  */
 const SNAPSHOT_URL = '/tor-directory.json';
 
-/**
- * Onion-service time-period placement, mirroring webtor's `HsDirParams`: a
- * period is `hsdir_interval` minutes long and starts twelve voting periods
- * after the epoch, which puts the default boundary at 12:00 UTC.
- */
-const HSDIR_INTERVAL_DEFAULT_MINUTES = 1440;
-const HSDIR_INTERVAL_MIN_MINUTES = 30;
-const HSDIR_INTERVAL_MAX_MINUTES = 14400;
-const VOTING_PERIODS_IN_OFFSET = 12;
-const DEFAULT_VOTING_PERIOD_MS = 60 * 60 * 1000;
-
 /** A seed with less life than this left would expire during the bootstrap. */
 const MIN_REMAINING_MS = 10 * 60 * 1000;
 
-/** The consensus fields both the description and the freshness rule read. */
-interface ParsedDirectory {
-  validAfter: number;
-  validUntil: number;
-  /** How long one onion-service time period lasts, in milliseconds. */
-  periodLength: number;
-  /** How far the first period starts after the epoch, in milliseconds. */
-  periodOffset: number;
-}
-
-/** What a directory says about where onion descriptors live. */
-export interface DirectoryDescription {
-  validAfter: Date;
-  validUntil: Date;
-  /**
-   * The onion-service time period the consensus falls in. Both peers must be
-   * in the same one: a service publishes its descriptor to the HSDirs this
-   * number places it on, and a client with a different number asks HSDirs the
-   * service never uploaded to, which answer 404 without explaining why.
-   */
-  timePeriod: number;
-}
-
-/** `valid-after 2026-08-27 12:00:00`, in UTC as the directory spec defines. */
-function consensusTime(consensus: string, field: string): number | undefined {
-  const match = new RegExp(
-    `^${field} (\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})$`,
-    'm',
-  ).exec(consensus);
-  if (!match) return undefined;
-  const [, year, month, day, hour, minute, second] = match.map(Number);
-  return Date.UTC(year, month - 1, day, hour, minute, second);
-}
-
-function hsdirIntervalMinutes(consensus: string): number {
-  const params = /^params (.*)$/m.exec(consensus)?.[1];
-  const declared = params
-    ? Number(/(?:^| )hsdir_interval=(-?\d+)(?: |$)/.exec(params)?.[1])
-    : Number.NaN;
-  if (!Number.isFinite(declared)) return HSDIR_INTERVAL_DEFAULT_MINUTES;
-  return Math.min(
-    Math.max(Math.abs(declared), HSDIR_INTERVAL_MIN_MINUTES),
-    HSDIR_INTERVAL_MAX_MINUTES,
-  );
-}
-
 /**
  * Read the validity window and time period out of a directory, cached or
- * freshly downloaded.
+ * freshly downloaded, or nothing when it cannot be read at all.
  *
- * Purely descriptive: nothing here decides whether a directory may be used.
- * It exists so that a transfer that fails with nothing but 404s from every
- * HSDir can be diagnosed from the two peers' logs, where a period that does
- * not match is immediately visible.
+ * The reading is the Tor client's: `describeDirectory` parses the consensus
+ * and derives the HSDir placement with the same code that will place the
+ * descriptors, so there is no second implementation here to drift from it.
+ * What this file adds is the judgement below.
+ *
+ * Nothing here decides whether a directory may be used. A description is also
+ * worth logging on its own: a transfer that fails with nothing but 404s from
+ * every HSDir is diagnosable from the two peers' logs, where a time period
+ * that does not match is immediately visible.
  */
-export function describeDirectory(
-  directory: string,
-): DirectoryDescription | undefined {
-  const parsed = parseDirectory(directory);
-  if (!parsed) return undefined;
-  return {
-    validAfter: new Date(parsed.validAfter),
-    validUntil: new Date(parsed.validUntil),
-    timePeriod: timePeriodAt(parsed, parsed.validAfter),
-  };
-}
-
-function parseDirectory(directory: string): ParsedDirectory | undefined {
-  let consensus: unknown;
+export async function describeSeed(
+  seed: string,
+): Promise<DirectoryDescription | undefined> {
   try {
-    consensus = (JSON.parse(directory) as { consensus?: unknown }).consensus;
+    const { describeDirectory } = await loadWebtor();
+    return describeDirectory(seed);
   } catch {
+    // An unreadable seed is the ordinary case — a stored one from an older
+    // cache format, or the SPA fallback where a snapshot was expected. If the
+    // Tor client itself failed to load, the bootstrap this is preparing for
+    // is about to say so much more clearly.
     return undefined;
   }
-  if (typeof consensus !== 'string') return undefined;
-
-  const validAfter = consensusTime(consensus, 'valid-after');
-  const validUntil = consensusTime(consensus, 'valid-until');
-  if (validAfter === undefined || validUntil === undefined) return undefined;
-
-  const freshUntil = consensusTime(consensus, 'fresh-until');
-  const votingPeriod =
-    freshUntil !== undefined && freshUntil > validAfter
-      ? freshUntil - validAfter
-      : DEFAULT_VOTING_PERIOD_MS;
-
-  return {
-    validAfter,
-    validUntil,
-    periodLength: hsdirIntervalMinutes(consensus) * 60_000,
-    periodOffset: votingPeriod * VOTING_PERIODS_IN_OFFSET,
-  };
-}
-
-function timePeriodAt(directory: ParsedDirectory, at: number): number {
-  return Math.floor((at - directory.periodOffset) / directory.periodLength);
 }
 
 export interface SeedVerdict {
@@ -155,9 +77,9 @@ export interface SeedVerdict {
 }
 
 /**
- * Whether a seed still describes the network as it is now — both that its
- * consensus is live, and that it belongs to the onion-service time period in
- * force at `now`.
+ * Whether a directory still describes the network as it is now — both that
+ * its consensus is live, and that it belongs to the onion-service time period
+ * in force at `now`.
  *
  * The second half is the one that is easy to miss. A consensus stays valid for
  * three hours, but the period rotates on its own schedule, so a seed saved at
@@ -165,25 +87,30 @@ export interface SeedVerdict {
  * where it was before noon. Seeding a client with it sends every descriptor
  * lookup to relays the service never uploaded to, and seeding a *service* with
  * it publishes where no current client will look.
+ *
+ * This rule is ours, not webtor's: webtor installs any seed whose consensus is
+ * signed and timely, which is the right bar for a client that will download a
+ * fresh directory anyway. A transfer wants both peers on one ring.
  */
-export function judgeDirectorySeed(
-  seed: string,
+export function judgeDescription(
+  described: DirectoryDescription | undefined,
   now: number = Date.now(),
 ): SeedVerdict {
-  const parsed = parseDirectory(seed);
-  if (!parsed) {
+  if (!described) {
     return { usable: false, reason: 'it carries no readable consensus' };
   }
-  if (now < parsed.validAfter) {
+  const validAfter = described.validAfter.getTime();
+  const validUntil = described.validUntil.getTime();
+  if (now < validAfter) {
     return { usable: false, reason: 'its consensus is not valid yet' };
   }
-  if (now + MIN_REMAINING_MS > parsed.validUntil) {
+  if (now + MIN_REMAINING_MS > validUntil) {
     return {
       usable: false,
-      reason: `its consensus expires at ${new Date(parsed.validUntil).toISOString()}`,
+      reason: `its consensus expires at ${described.validUntil.toISOString()}`,
     };
   }
-  if (timePeriodAt(parsed, parsed.validAfter) !== timePeriodAt(parsed, now)) {
+  if (described.timePeriod !== described.timePeriodAt(now)) {
     return {
       usable: false,
       reason:
@@ -192,6 +119,14 @@ export function judgeDirectorySeed(
     };
   }
   return { usable: true };
+}
+
+/** `judgeDescription` applied to a seed that has to be read first. */
+export async function judgeDirectorySeed(
+  seed: string,
+  now: number = Date.now(),
+): Promise<SeedVerdict> {
+  return judgeDescription(await describeSeed(seed), now);
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -269,14 +204,14 @@ export interface DirectorySeed {
 export async function loadDirectorySeed(): Promise<DirectorySeed> {
   const cached = await loadStoredCache();
   if (cached) {
-    const verdict = judgeDirectorySeed(cached);
+    const verdict = await judgeDirectorySeed(cached);
     if (verdict.usable) return { value: cached, source: 'browser cache' };
     console.info(`[tor] Ignoring the cached directory: ${verdict.reason}`);
   }
 
   const snapshot = await loadSnapshot();
   if (snapshot) {
-    const verdict = judgeDirectorySeed(snapshot);
+    const verdict = await judgeDirectorySeed(snapshot);
     if (verdict.usable) return { value: snapshot, source: 'served snapshot' };
     console.info(
       `[tor] Ignoring the served directory snapshot: ${verdict.reason}`,
