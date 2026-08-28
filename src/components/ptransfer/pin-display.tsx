@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
-import { buildPinUrl } from '@/lib/pin-link';
 import { generateTextQRCode } from '@/lib/qr-utils';
+import { buildPinUrl } from '@/lib/receive-link';
 
 const QR_WIDTH = 220;
 
