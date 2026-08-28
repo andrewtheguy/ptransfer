@@ -1,7 +1,7 @@
 import { getStunUrls } from '@/lib/webrtc-config';
 import {
-  describeDirectory,
-  judgeDirectorySeed,
+  describeSeed,
+  judgeDescription,
   loadDirectorySeed,
   saveDirectoryCache,
 } from './directory-cache';
@@ -110,7 +110,7 @@ export async function bootstrapTorClient(
   void client
     .directoryCache()
     .then(async (cache) => {
-      logDirectory(cache);
+      await logDirectory(cache);
       await saveDirectoryCache(cache);
     })
     .catch(() => undefined);
@@ -128,8 +128,11 @@ export async function bootstrapTorClient(
  * in either log naming the cause. Printing the period on both peers turns
  * that into a comparison anyone can make.
  */
-function logDirectory(cache: string): void {
-  const directory = describeDirectory(cache);
+async function logDirectory(cache: string): Promise<void> {
+  // Read once: the description is what both the line below and the check
+  // after it are made of, and reading it means parsing a multi-megabyte
+  // consensus.
+  const directory = await describeSeed(cache);
   if (!directory) return;
   console.info(
     `[tor] Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
@@ -144,7 +147,7 @@ function logDirectory(cache: string): void {
   // fix, and a peer reading a current consensus is still within the one
   // period of slack, but anything past that fails as a 404 from every HSDir,
   // so it is worth saying plainly.
-  const verdict = judgeDirectorySeed(cache);
+  const verdict = judgeDescription(directory);
   if (!verdict.usable) {
     console.warn(
       `[tor] This directory is not current: ${verdict.reason}. That spends ` +

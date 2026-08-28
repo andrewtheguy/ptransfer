@@ -71,6 +71,23 @@ export interface WebtorClientOptions {
   logPrefix?: string;
 }
 
+/**
+ * What one directory seed says about itself, read by the Tor client rather
+ * than by this app: parsing a consensus is webtor's job, and the two would
+ * have to agree exactly on where the HSDir ring falls if both did it.
+ *
+ * The judgement built on top of it is ours — see `judgeDescription` in
+ * `directory-cache.ts`.
+ */
+export interface DirectoryDescription {
+  readonly validAfter: Date;
+  readonly validUntil: Date;
+  /** The onion-service time period this directory places descriptors in. */
+  readonly timePeriod: number;
+  /** The period covering `at`, in epoch milliseconds. */
+  timePeriodAt(at: number): number;
+}
+
 export interface WebtorClient {
   connectStream(address: string, port: number): Promise<OnionStream>;
   /** Open a WebSocket to `ws://<address>.onion[:port][/path]`. */
@@ -89,6 +106,12 @@ interface WebtorModule {
   WebtorClient: {
     create(options?: WebtorClientOptions): Promise<WebtorClient>;
   };
+  /**
+   * Read a seed's own account of itself. Touches no network and verifies
+   * nothing: `create` revalidates any seed against the pinned directory
+   * authorities whatever this said.
+   */
+  describeDirectory(seed: string): DirectoryDescription;
 }
 
 let modulePromise: Promise<WebtorModule> | undefined;
