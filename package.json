@@ -16,6 +16,7 @@
     "test:live": "bun run test:live:nostr-file && bun run test:live:web",
     "test:live:tor": "bun tests/live_tor_cli_interop.ts",
     "test:live:tor:web": "bun tests/live_tor_web_e2e.ts",
+    "test:live:webrtc": "bun tests/live_webrtc_cli_interop.ts",
     "webtor:status": "bun scripts/webtor-source.ts status",
     "webtor:local": "bun scripts/webtor-source.ts local",
     "webtor:released": "bun scripts/webtor-source.ts released",

@@ -24,7 +24,7 @@ moved on every release would say nothing about interoperability.
 The version never travels on the wire. There is no negotiation, no capability
 exchange, and no compatibility shim: it is a **build-time coordination value**,
 not a runtime check. Two implementations agree by declaring the same number, and
-the CLI's interoperability test compares the two declarations before spending a
+the CLI interoperability test compares the two declarations before spending a
 transfer proving it.
 
 Do not rely on a mismatch announcing itself. Some are self-detecting: a changed
@@ -104,7 +104,7 @@ Exactly one thing is duplicated across the two repositories, and it is that
 integer: `INTEROP_PROTOCOL_VERSION` in [`src/lib/protocol.ts`](../src/lib/protocol.ts)
 here, `package.metadata.ptransfer-protocol-version` in the CLI's `Cargo.toml`
 there. A unit test in this repo keeps the number in this document and the number
-in the constant in step, and the CLI's interoperability test compares the two
+in the constant in step, and the CLI interoperability test compares the two
 declarations before spending a transfer proving them. Nothing else — no prose,
 no table, no section of this document — is expected to exist in a second copy
 anywhere.
