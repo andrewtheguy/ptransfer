@@ -265,12 +265,10 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const answerData = isCodeExchange ? codeState.answerData : undefined;
-  // The response stays up past its own step when the relay path was simulated
-  // from here: the hook keeps `answerData` set until the sender turns up.
+  // Covers the simulated stint too: the hook holds this step, relay fetch and
+  // all, until the sender turns up, so the response and its switch stay put.
   const showAnswerReturn =
-    isCodeExchange &&
-    answerData &&
-    (codeState.status === 'showing_answer' || codeState.status === 'fetching');
+    isCodeExchange && answerData && codeState.status === 'showing_answer';
 
   return (
     <div className="space-y-4 pt-4">
@@ -320,11 +318,7 @@ export function ReceiveTab() {
               answerData={answerData}
               relayFallbackAvailable={codeState.relayFallbackAvailable}
               simulateNoDirect={codeState.simulateNoDirect}
-              onSimulateNoDirectChange={
-                codeState.status === 'showing_answer'
-                  ? setSimulateNoDirect
-                  : undefined
-              }
+              onSimulateNoDirectChange={setSimulateNoDirect}
             />
           )}
 

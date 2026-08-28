@@ -292,11 +292,10 @@ export function ReceiveChunkedPage() {
 
   // --- Transferring ---
   const answerData = receiveState.answerData;
-  // The response stays up past its own step when the relay path was simulated
-  // from here: the hook keeps `answerData` set until the sender turns up.
+  // Covers the simulated stint too: the hook holds this step, relay fetch and
+  // all, until the sender turns up, so the response and its switch stay put.
   const showQRDisplay =
-    (receiveState.status === 'showing_answer' ||
-      receiveState.status === 'fetching') &&
+    receiveState.status === 'showing_answer' &&
     answerData instanceof Uint8Array;
 
   return (
@@ -315,11 +314,7 @@ export function ReceiveChunkedPage() {
             answerData={answerData}
             relayFallbackAvailable={receiveState.relayFallbackAvailable}
             simulateNoDirect={receiveState.simulateNoDirect}
-            onSimulateNoDirectChange={
-              receiveState.status === 'showing_answer'
-                ? setSimulateNoDirect
-                : undefined
-            }
+            onSimulateNoDirectChange={setSimulateNoDirect}
           />
         )}
 

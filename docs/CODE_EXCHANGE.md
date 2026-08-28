@@ -189,11 +189,13 @@ Key points:
   built), the file is over 100 MiB, or too few storage relays work. Then the transfer
   fails and the app suggests the offline-QR app for side-by-side devices.
 - **Forcing it for a test:** the receiver's response page has an **Advanced options >
-  Simulate no direct connection** switch, offered only when the sender's code named
-  relays. It rebuilds the response with none of the receiver's network routes in it — the
-  same response a device behind a hostile NAT would send — so the sender has nothing to
-  connect to and both sides take the relay path. Hand the sender the *rebuilt* code. It
-  exists to exercise this path without arranging a hostile network.
+  Simulate no direct connection** button, offered only when the sender's code named
+  relays. It drops the receiver's direct connection and builds the response again with
+  none of its network routes in it, so the sender has nothing to connect to and the file
+  comes through the relays — the situation a device behind a hostile NAT is in anyway.
+  Nothing starts until the sender takes the response in, and **Go back to a direct
+  connection** undoes it. Either way the connection is rebuilt from scratch and the code
+  changes, so hand the sender the one on screen.
 - **When it starts:** only a failed attempt to establish the WebRTC data channel triggers
   this path. A P2P transfer that already opened its channel and later stalls fails rather
   than changing transports mid-file.

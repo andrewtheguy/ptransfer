@@ -1,22 +1,21 @@
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { Switch } from '@/components/ui/switch';
 import { QRDisplay } from './qr-display';
 
 export interface AnswerReturnProps {
   answerData: Uint8Array;
   /**
    * Whether the sender's code named relays. Without them there is no relay
-   * path to fall back to, so the simulation switch is not offered.
+   * path to fall back to, so the simulation is not offered.
    */
   relayFallbackAvailable?: boolean;
   /** Whether the response on screen is the simulated no-direct-route one. */
   simulateNoDirect?: boolean;
-  /** Absent once the choice is made and the transfer has moved on. */
   onSimulateNoDirectChange?: (value: boolean) => void;
 }
 
@@ -76,40 +75,29 @@ export function AnswerReturn({
             Advanced options
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-3 pt-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1">
-                <label
-                  htmlFor="answer-simulate-no-direct"
-                  className="flex items-center gap-2 text-sm font-medium cursor-pointer"
-                >
-                  Simulate no direct connection
-                  <span className="rounded-full border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                    Testing
-                  </span>
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  Rebuilds the response below with none of this device's network
-                  routes in it, so the sender has nothing to connect to and both
-                  sides take the Nostr relay path instead. It is the response a
-                  device behind a hostile NAT would send anyway — this only
-                  saves you having to arrange one. Give the sender the rebuilt
-                  code, not the one you may already have shown them.
-                </p>
-              </div>
-              <Switch
-                id="answer-simulate-no-direct"
-                checked={simulateNoDirect}
-                onCheckedChange={onSimulateNoDirectChange}
-                disabled={!onSimulateNoDirectChange}
-                className="mt-0.5"
-              />
-            </div>
-            {simulateNoDirect && (
-              <p className="rounded-md border bg-background/60 p-3 text-xs text-muted-foreground">
-                The code below is the rebuilt one. This page has already given
-                up on a direct connection and is waiting on the relays.
+            <div className="space-y-1">
+              <span className="text-sm font-medium">No direct connection</span>
+              <p className="text-xs text-muted-foreground">
+                {simulateNoDirect
+                  ? 'A direct connection to this page can no longer be made, and the code below is the one with none of its network routes in it. Nothing has started yet — the file comes through the Nostr relays once the sender takes the response in. Going back builds a working direct route again.'
+                  : "Drops this device's direct connection and builds the response again with none of its network routes in it, so the sender has nothing to connect to and the file comes through the Nostr relays instead. It is the situation a device behind a hostile NAT is in anyway — this only saves you having to arrange one."}
               </p>
-            )}
+              <p className="text-xs text-muted-foreground">
+                Either way the whole connection is built from scratch, so the
+                code below changes: hand the sender the one on screen now.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={!onSimulateNoDirectChange}
+              onClick={() => onSimulateNoDirectChange?.(!simulateNoDirect)}
+            >
+              {simulateNoDirect
+                ? 'Go back to a direct connection'
+                : 'Simulate no direct connection'}
+            </Button>
           </CollapsibleContent>
         </Collapsible>
       )}
