@@ -112,8 +112,8 @@ circuits — the CLI publishes a service the page downloads from, then the page
 publishes one the CLI fetches — so a failure names the side that is wrong.
 
 ```bash
-# the CLI, built with the tor feature
-cd ../ptransfer-cli && cargo build --release --all-features
+# the CLI
+cd ../ptransfer-cli && cargo build --release
 
 # a local Snowflake bridge, so the directory download is local
 cd ../webtor-rs && scripts/local-bridge/bridge.sh start

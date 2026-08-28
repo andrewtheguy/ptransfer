@@ -449,7 +449,7 @@ try {
   await assertProtocolVersionMatches();
   const expectedWebPackage = await readPackageIdentity();
   say(`pTransfer ${expectedWebPackage.version}, CLI checkout at ${CLI_ROOT}`);
-  await runCommand('cargo', ['build', '--all-features'], { cwd: CLI_ROOT });
+  await runCommand('cargo', ['build'], { cwd: CLI_ROOT });
 
   const chromium = await loadChromium();
   const executablePath = await findBrowser();

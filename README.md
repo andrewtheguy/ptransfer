@@ -32,13 +32,9 @@ It is not a separate protocol. Either end of a transfer may be a browser tab or 
 | --- | --- | --- | --- |
 | PIN Exchange | yes | yes | The interoperable default, governed by [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md) |
 | Anonymous signaling | yes | yes, behind its `tor` cargo feature | PIN Exchange option, not a mode; specified in [docs/ANONYMOUS_SIGNALING.md](./docs/ANONYMOUS_SIGNALING.md) |
-| Tor Onion Service | yes | yes, behind its `tor` cargo feature | `ptransfer tor send` / `ptransfer tor receive`; specified in [docs/TOR_TRANSPORT.md](./docs/TOR_TRANSPORT.md) |
+| Tor Onion Service | yes | yes | `ptransfer tor send` / `ptransfer tor receive`; specified in [docs/TOR_TRANSPORT.md](./docs/TOR_TRANSPORT.md) |
 | Code Exchange | yes | no | Web-only: it is built on QR scanning and clipboard handoff, which the CLI deliberately does not do |
 | Nostr relay fallback | yes | no | Web-only, and part of Code Exchange |
-
-The `tor` feature is not on by default in a source build (`cargo build --release --all-features`
-turns it on), but the released binaries are built with it, so an installed `ptransfer` has
-every mode above.
 
 Install it with the one-liners that repo publishes:
 
