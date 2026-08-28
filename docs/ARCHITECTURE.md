@@ -4,6 +4,26 @@
 
 pTransfer is a browser-based encrypted file and folder transfer application. It supports rotating-PIN-authenticated Nostr signaling and a Code Exchange method whose offer and whose receiver answer are both handed over by QR or copy/paste. Both modes prefer direct P2P transfer over WebRTC. Code Exchange can instead carry files up to 100 MiB through public Nostr relays when a direct connection cannot be established and the offer named usable relays; PIN Exchange has no data-path fallback. In PIN Exchange the content-encryption key comes from a PIN-driven SPAKE2 password-authenticated key exchange; in Code Exchange it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard offer path.
 
+## Implementations
+
+Two implementations exist. This app is the reference one; the other is
+[ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli), the companion
+command-line app for headless machines and terminals, which implements PIN
+Exchange (with anonymous signaling behind its `tor` cargo feature) and the Tor
+onion transport, but not Code Exchange or the Nostr file relay. Either end of a
+transfer may be a browser tab or the CLI. What the two must agree on is
+specified in [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md),
+[TOR_TRANSPORT.md](TOR_TRANSPORT.md), and
+[ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md); everything else in this
+document is web-only design rationale.
+
+Those three are the source of truth, and they live only here — the CLI
+implements against them instead of keeping a copy, and documents its own
+internals in its own repo. Each carries a *Changing this document* section
+naming the short list that actually binds another implementation, and the
+coordination value that moves when that list does; an edit anywhere else in
+them, this document included, asks nothing of the CLI.
+
 ## Core Principles
 
 1. **Direct First, One Relay Fallback**: Both modes try a direct WebRTC data channel. PIN Exchange stops if that connection fails. Code Exchange can fall back to the Nostr file-relay protocol when its offer named usable relays and the payload is no larger than 100 MiB.

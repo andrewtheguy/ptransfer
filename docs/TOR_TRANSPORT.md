@@ -22,6 +22,27 @@ the shared data-channel layer only, and nothing here moves that document's
 version. What this mode versions instead is its own handshake
 (`TOR_HANDSHAKE_VERSION`, currently `1`).
 
+## Changing this document
+
+This repository is where this specification lives; the CLI implements against
+it rather than restating it, so editing this file is not by itself a change to
+the CLI. What actually binds the two implementations is the short list below —
+the rest of this document is the reasoning around it, and rewording that costs
+the other side nothing.
+
+| What binds both sides | How a divergence surfaces |
+| --- | --- |
+| The handshake frames, their order, and their bodies | `TOR_HANDSHAKE_VERSION`, carried in the `hello` and `offer` frames and **refused rather than negotiated** on a mismatch. Bump it for any change to the frames, in lockstep with the CLI. |
+| Transfer identity, sealed bodies, key schedule | Nothing to bump: a divergence lands the two sides on different keys, and the seals do not open. |
+| The address form and the default port | Nothing to bump: the connection never lands. |
+| The framing, the 100 MiB cap, and the wire ceiling's 1 MiB margin | Nothing to bump: each side enforces the bound on what it accepts, so raising it alone only produces failures. |
+
+Everything outside that list is per-implementation detail and lives with the
+implementation: how a browser tab bootstraps Tor, chooses a bridge, and caches a
+directory is [TOR_BROWSER.md](./TOR_BROWSER.md); how the CLI builds its client
+from Arti is that repo's `docs/ARCHITECTURE.md`. Neither has to be mirrored into
+the other, and neither belongs in this file.
+
 ## What it is for
 
 Nothing about the transfer touches a pTransfer or Nostr relay, and the two

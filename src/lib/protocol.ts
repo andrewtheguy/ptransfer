@@ -1,7 +1,8 @@
 /**
  * Version of the interoperable pTransfer protocol: the wire contract that any
- * non-web implementation — today `ptransfer-cli` — has to match to transfer
- * with this app.
+ * non-web implementation — today `ptransfer-cli`, the companion command-line
+ * app at https://github.com/andrewtheguy/ptransfer-cli — has to match to
+ * transfer with this app.
  *
  * Its scope is deliberately narrower than the app: PIN Exchange signaling and
  * the shared WebRTC data-channel transfer layer, and nothing else. Code

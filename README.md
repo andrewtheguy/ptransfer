@@ -19,6 +19,50 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 - **No accounts required**: Ephemeral keypairs generated per transfer
 - **PWA Support**: Install as a Progressive Web App for offline access
 
+## Companion CLI
+
+[ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) is the command-line
+companion: one standalone binary, no runtime dependencies, and a full-screen TUI wizard
+when run with no arguments. It exists for the places a browser tab does not reach — a
+headless server, an SSH session, a machine where you would rather stay in the terminal.
+
+It is not a separate protocol. Either end of a transfer may be a browser tab or the CLI:
+
+| Mode | Web | CLI | Notes |
+| --- | --- | --- | --- |
+| PIN Exchange | yes | yes | The interoperable default, governed by [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md) |
+| Anonymous signaling | yes | yes, behind its `tor` cargo feature | PIN Exchange option, not a mode; specified in [docs/ANONYMOUS_SIGNALING.md](./docs/ANONYMOUS_SIGNALING.md) |
+| Tor Onion Service | yes | yes, behind its `tor` cargo feature | `ptransfer tor send` / `ptransfer tor receive`; specified in [docs/TOR_TRANSPORT.md](./docs/TOR_TRANSPORT.md) |
+| Code Exchange | yes | no | Web-only: it is built on QR scanning and clipboard handoff, which the CLI deliberately does not do |
+| Nostr relay fallback | yes | no | Web-only, and part of Code Exchange |
+
+The `tor` feature is not on by default in a source build (`cargo build --release --all-features`
+turns it on), but the released binaries are built with it, so an installed `ptransfer` has
+every mode above.
+
+Install it with the one-liners that repo publishes:
+
+```bash
+# Linux and macOS
+curl -sSL https://andrewtheguy.github.io/ptransfer-cli/install.sh | bash
+```
+
+```powershell
+# Windows
+irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex
+```
+
+This repo is the source of truth for everything the two share: PIN Exchange, anonymous
+signaling, and the Tor onion transport are specified in `docs/` here, and the CLI
+implements against those documents rather than restating them — each one carries a
+*Changing this document* section naming exactly what binds another implementation and what
+is only rationale. The CLI's own repo documents its internals and nothing else.
+
+Two implementations interoperate when they declare the same **interop protocol version**
+(see [Version Compatibility](#version-compatibility) below), whatever their app versions.
+`bun run test:live:tor` in this repo runs both directions of the Tor onion mode against a
+local `ptransfer-cli` build; see [docs/TOR_BROWSER.md](./docs/TOR_BROWSER.md).
+
 ## Browser Requirements
 
 Receiving a P2P payload over 100 MiB uses the origin-private file system (OPFS). P2P senders never need OPFS: direct files are read lazily from the picker and deflated on the fly, and multi-file/folder ZIP output is compressed and sent on the fly. OPFS requires:
@@ -151,6 +195,7 @@ One input accepts all three modes; the page works out which one the sender used 
 - [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md) - Normative spec for the experimental PIN Exchange option that carries signaling through Tor to onion-service relays, shared with ptransfer-cli
 - [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Code Exchange
 - [Roadmap](./docs/ROADMAP.md) - Completed and planned features
+- [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) - The companion command-line app, and the other implementation of the specs above
 
 ## License
 

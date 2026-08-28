@@ -17,7 +17,9 @@ those land in parts of the app no other implementation speaks; a version that
 moved on every release would say nothing about interoperability.
 
 - Bump it when **anything specified in this document** changes.
-- Leave it alone otherwise, however large the app release.
+- Leave it alone otherwise, however large the app release — including for an
+  edit to this file that only clarifies what was already specified. *Changing
+  this document* below draws that line.
 
 The version never travels on the wire. There is no negotiation, no capability
 exchange, and no compatibility shim: it is a **build-time coordination value**,
@@ -36,14 +38,8 @@ covers them, and a peer that quietly widened `PIN_ACTIVE_BUCKETS` would weaken
 every transfer without a single seal noticing. Matching the declared version is
 what rules that out.
 
-### History
-
-| Version | Change |
-|---|---|
-| `4` | Anonymous signaling is no longer web-only: `ptransfer-cli` mints and accepts the longer PIN too, so §1's blanket "reject any other length" now applies only to implementations that do not implement it. The mode itself stays out of this document, alongside the Tor onion transfer mode, and nothing on the wire moved — same alphabet, same checksum rule, same layout, same relays, same handshake. An implementation of this document alone behaves exactly as it did under `3`. |
-| `3` | The PIN is now explicitly the 12-character form and nothing else (§1). The web app additionally mints a longer, web-only variant that selects a signaling transport outside this document, so a conforming implementation must reject any PIN that is not exactly `PIN_LENGTH` characters instead of treating length as incidental. Nothing else moved: same alphabet, same checksum rule, same layout, same relays. |
-| `2` | Rendezvous freshness became a bucket test instead of a maximum age (§4.3), so a future-dated `created_at` no longer passes. Senders are unaffected; a v1 receiver is simply more permissive than this document allows. The data channel's ordered/reliable configuration became explicit (§7), which v1 relied on without stating. |
-| `1` | Initial specification. |
+What each earlier version changed is this file's git history, and is not
+restated here.
 
 ## Scope
 
@@ -89,6 +85,28 @@ specification of its own that an implementation follows instead of this one:
 Where this document and [ARCHITECTURE.md](ARCHITECTURE.md) disagree about the
 interoperable subset, this document wins; ARCHITECTURE.md carries the design
 rationale and the web-only parts.
+
+## Changing this document
+
+This repository is where the shared specification lives. Another implementation
+implements *against* this file rather than keeping a copy of it, so editing this
+file is not by itself a change to that implementation. What decides whether the
+other side has work to do is the version at the top, and nothing else:
+
+| An edit that… | The version | What another implementation must do |
+|---|---|---|
+| changes a value, rule, or byte layout in §1–§9 | bump it | implement the change; until it does, the two declare different versions and are not expected to transfer |
+| writes down a rule that was already true and already implemented — a clarification, a worked example, a test vector pinning existing behaviour | leave it | nothing |
+| touches §10, the rationale, the prose, or a link | leave it | nothing |
+
+Exactly one thing is duplicated across the two repositories, and it is that
+integer: `INTEROP_PROTOCOL_VERSION` in [`src/lib/protocol.ts`](../src/lib/protocol.ts)
+here, `package.metadata.ptransfer-protocol-version` in the CLI's `Cargo.toml`
+there. A unit test in this repo keeps the number in this document and the number
+in the constant in step, and the CLI's interoperability test compares the two
+declarations before spending a transfer proving them. Nothing else — no prose,
+no table, no section of this document — is expected to exist in a second copy
+anywhere.
 
 ## Notation
 

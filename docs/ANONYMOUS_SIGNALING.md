@@ -17,6 +17,32 @@ a WASM client, the CLI builds circuits from Arti through ordinary guards — and
 the two only ever meet at the relay, inside Tor. It stays outside
 [INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md); see *Interoperability* below.
 
+## Changing this document
+
+This repository is where this specification lives; the CLI implements against
+it rather than keeping a copy, so editing this file is not by itself a change to
+the CLI. Three things here bind the two implementations — the same three listed
+under *Interoperability* below:
+
+- the two PIN lengths and their layouts,
+- `ANONYMOUS_SIGNALING_RELAYS`: that pool, and nothing else, for an anonymous
+  PIN,
+- and the rule that a socket for one may be opened only to
+  `ws://<v3 address>.onion`.
+
+There is no version to move here, and none is needed. Every way the two sides
+could drift apart on that list fails closed and says so: a length neither side
+mints is refused by the length-and-checksum test rather than guessed at, and a
+pool that drifts apart costs connections rather than secrecy — the two simply
+never meet on a relay. Compare the Tor transfer mode, whose frames do carry a
+version, and PIN Exchange, whose rotation windows and budgets can diverge
+silently and so need one.
+
+Everything else below — how each side reaches Tor, the timeouts, the bridge
+question, the privacy discussion, where the code lives — is implementation
+detail on one side or the other. Rewording it, or following one implementation's
+code as it moves, asks nothing of the other.
+
 ## The PIN carries the mode
 
 The two sides have to agree, because they only find each other on a shared
@@ -100,8 +126,8 @@ In `ptransfer-cli`, with the `tor` cargo feature:
 ```text
 ptransfer-cli Nostr client (nostr-sdk)
   → RelayPool with a custom WebSocketTransport
-  → src/signaling/anonymous.rs (tokio-tungstenite over an onion stream)
-  → src/tor/client.rs (the same Tor client the onion transfer mode uses)
+  → a tokio-tungstenite client handshake over an onion stream
+  → the same Tor client its onion transfer mode uses
   → Arti, through ordinary guards — no bridge, no pluggable transport
   → onion-service rendezvous (HSDir descriptor, introduction point,
     rendezvous point)
@@ -118,8 +144,7 @@ its own rendezvous — a descriptor fetch from an HSDir, an introduction circuit
 and a rendezvous circuit — which is why the pool is kept small.
 
 The CLI does the same through `nostr-sdk`'s `WebSocketTransport` trait, running
-a `tokio-tungstenite` client handshake inside a stream from
-[`src/tor/client.rs`](https://github.com/andrewtheguy/ptransfer-cli/blob/main/src/tor/client.rs).
+a `tokio-tungstenite` client handshake inside a stream from its own Tor client.
 Same cap, same refusal of binary frames.
 
 Timeouts differ from the clearnet path on both sides: a relay socket gets 180
@@ -202,11 +227,11 @@ tells nobody anything they could not have learned by watching the transfer.
 | `src/components/ptransfer/anonymous-receive-form.tsx` | The receiver's bridge question |
 | `src/components/ptransfer/tor-bridge-choice.tsx` | The bridge radio group, shared with the Tor mode |
 
-In `ptransfer-cli`, all of it is two files: `src/crypto/pin.rs` (`PinKind`,
-`classify_pin`, `generate_pin`) and `src/signaling/anonymous.rs` (the relay
-pool, the onion URL validator, and the `WebSocketTransport`), with
-`src/signaling/nostr.rs` choosing the pool. Its `docs/ARCHITECTURE.md` covers
-the CLI-specific parts.
+The table above is this repository only. `ptransfer-cli` reaches the same three
+normative points — PIN classification, the relay pool, and the onion-only socket
+rule — from a handful of files of its own, and documents them in its
+`docs/ARCHITECTURE.md`. They are not listed here, so that the CLI can move its
+code without this specification going stale.
 
 ## No additional backend
 
