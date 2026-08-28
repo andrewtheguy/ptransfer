@@ -1,67 +1,66 @@
-# Tor Onion Transport in the Browser
+# pTransfer Browser Tor Integration
 
 How this app implements [TOR_TRANSPORT.md](./TOR_TRANSPORT.md). The spec is
 shared with [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) and
-either side of a transfer may be a browser tab or the CLI; everything below is
-what the browser half does that the CLI does not.
+either side of a transfer may be a browser tab or the CLI. This document covers
+only pTransfer's browser-side adapter and policy.
 
-## The browser as an onion service
+## Ownership boundary
 
 The Tor client is [`@andrewtheguy/webtor-wasm`](https://github.com/andrewtheguy/webtor-rs),
 a Tor implementation compiled to WASM that builds its own circuits from the
-page. Sending runs it as a *service*: the tab generates the identity keypair,
-derives the address from it, establishes introduction points with
-`ESTABLISH_INTRO`, signs a descriptor naming them, and uploads it to the
-responsible HSDirs for the current onion-service time period and whichever of
-its two neighbours the directory's shared-random values support. It refreshes
-the directory and republishes those descriptors every
-60–120 minutes, or shortly after a time-period boundary when that comes first,
-so a tab left open does not silently lose reachability when a descriptor or
-HSDir ring turns over. Every `INTRODUCE2` that arrives afterwards is answered by
-building a circuit to the client's rendezvous point and completing the hs-ntor
-handshake as the responder. Receiving runs the client half: compute the time
-period and shared random value, blind the service key, fetch the descriptor from
-an HSDir, establish a rendezvous cookie, and send `INTRODUCE1`.
+page. webtor-rs owns Snowflake bridge connections, Tor directory validation,
+onion-service lookup and publication, descriptor lifecycle, introduction and
+rendezvous circuits, and the privacy boundary of those paths. Those details are
+documented with their implementation in webtor-rs's
+[Onion-Service Architecture](https://github.com/andrewtheguy/webtor-rs/blob/main/docs/ONION_SERVICE_ARCHITECTURE.md).
 
-The identity key lives in the tab and dies with it. Closing the page destroys
-the address for good, and the descriptor it published expires on its own.
+pTransfer owns what it does with the resulting raw stream. Sending calls
+`publishOnionService`, accepts one `OnionStream`, and runs the handshake from
+[TOR_TRANSPORT.md](./TOR_TRANSPORT.md). Receiving calls `connectStream` and runs
+the other half. pTransfer adds its password authentication, framing, content
+keys, transfer limits, failure bounds, UI state, and browser cache policy;
+none of those belongs to webtor-rs.
 
 `src/lib/tor/onion-address.ts` parses and canonicalizes the address the spec
-binds into the SPAKE2 transcript, and verifies the v3 checksum locally — before
-a bootstrap that costs minutes.
+binds into the SPAKE2 transcript, and verifies the v3 checksum locally before
+starting a network bootstrap.
 
-## Reaching the Tor network
+## Bridge selection and bootstrap
 
-Every circuit starts at a **Snowflake bridge**, which is also how the tab
-reaches the network at all. Both sides pick one independently — they only meet
-inside Tor, so the choices need not match:
+The UI exposes webtor-rs's `websocket` and `webrtc` Snowflake choices and passes
+the selection to `WebtorClient.create`. The bridge paths and their security and
+availability tradeoffs are defined in webtor-rs, not here. The two transfer
+sides choose independently because they meet only inside Tor.
 
-| Bridge | What it is |
-| --- | --- |
-| `websocket` (default) | A direct WebSocket to one fixed bridge endpoint. No broker, no volunteer proxy, no STUN, and the faster of the two. |
-| `webrtc` | A volunteer proxy brokered over HTTPS, using the same STUN servers ICE uses. Harder to block, and worth switching to when the WebSocket endpoint cannot be reached. |
+`src/lib/tor/webtor.ts` loads the WASM package lazily, so visitors who never use
+a Tor-backed feature do not download it. `src/lib/tor/client.ts` supplies the
+selected bridge, the application's STUN URLs when WebRTC Snowflake needs them,
+an optional authenticated development bridge, and the best directory seed the
+application has.
 
-The slowest part of a cold start is not the rendezvous: the client fetches the
-consensus and *every* HSDir microdescriptor one hop from the bridge, because a
-relay's position on the hash ring comes from the ed25519 identity in its
-microdescriptor. That download is cached in IndexedDB
-(`src/lib/tor/directory-cache.ts`) and re-verified against the pinned directory
-authorities on the next load, so a second transfer in the same browser starts in
-seconds.
+## Directory cache policy
+
+webtor-rs defines the contents, versioning, and cryptographic validation of
+`directoryCache()` and `directorySeed`. pTransfer persists that opaque value in
+IndexedDB through `src/lib/tor/directory-cache.ts`, or loads a deployment-time
+snapshot from `/tor-directory.json`. Before passing either value back to
+webtor-rs, pTransfer applies a stricter freshness rule that is specific to this
+application.
 
 ### Why a cached seed can still be stale
 
-A consensus stays valid for three hours, but a seed is only reused while it also
-belongs to the *current* onion-service time period. Where a descriptor lives is
-derived from the consensus's own `valid-after`, and the period rotates on a
-fixed daily boundary, so a seed from before the rotation is still perfectly
-valid and still describes the ring the network has stopped using. A service
-publishes to the period either side of its own as well, which covers one
-period of disagreement between the peers; a stale seed spends that slack for
-nothing, and past it every HSDir a client tries answers 404 with no hint as to
-why. A seed in that state — or one within ten minutes of expiring — is passed
-over and the directory downloaded again, which costs time and never
-correctness.
+A consensus stays valid for three hours, but a seed is only reused while it
+also belongs to the onion-service time period in force now. Where a descriptor
+lives is derived from the consensus's own `valid-after`, and the period rotates
+on the interval declared by the consensus — daily by default. A seed from
+before the rotation can therefore still be valid while describing a ring the
+network has stopped using. A service also publishes to whichever adjacent
+periods its directory supports, which covers one period of disagreement
+between peers; a stale seed spends that slack for nothing, and past it every
+HSDir a client tries answers 404 with no hint why. A seed in that state — or
+one within ten minutes of expiring — is passed over and the directory
+downloaded again, which costs time and never correctness.
 
 The same mismatch can arrive from the network rather than the cache, when a
 bridge or relay serves a consensus an hour behind. Nothing on this side can fix

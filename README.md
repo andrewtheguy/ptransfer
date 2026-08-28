@@ -191,7 +191,7 @@ One input accepts all three modes; the page works out which one the sender used 
 - [Interop Protocol](./docs/INTEROP_PROTOCOL.md) - Normative wire contract for non-web implementations (PIN Exchange + the shared data path)
 - [Code Exchange](./docs/CODE_EXCHANGE.md) - User guide for Code Exchange
 - [Tor Transport](./docs/TOR_TRANSPORT.md) - Normative spec for the onion service transfer mode, shared with ptransfer-cli
-- [Tor in the Browser](./docs/TOR_BROWSER.md) - How this app implements that spec: the WASM Tor client, bridges, and testing
+- [Tor in the Browser](./docs/TOR_BROWSER.md) - pTransfer's webtor-wasm adapter, directory-cache policy, and testing
 - [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md) - Normative spec for the experimental PIN Exchange option that carries signaling through Tor to onion-service relays, shared with ptransfer-cli
 - [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Architecture of the Nostr relay data-path fallback for Code Exchange
 - [Roadmap](./docs/ROADMAP.md) - Planned features and backlog

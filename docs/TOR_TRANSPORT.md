@@ -38,25 +38,25 @@ the other side nothing.
 | The address form and the default port | Nothing to bump: the connection never lands. |
 | The framing, the 100 MiB cap, and the wire ceiling's 1 MiB margin | Nothing to bump: each side enforces the bound on what it accepts, so raising it alone only produces failures. |
 
-Everything outside that list is per-implementation detail and lives with the
-implementation: how a browser tab bootstraps Tor, chooses a bridge, and caches a
-directory is [TOR_BROWSER.md](./TOR_BROWSER.md); how the CLI builds its client
-from Arti is that repo's `docs/ARCHITECTURE.md`. Neither has to be mirrored into
-the other, and neither belongs in this file.
+Everything outside that list is per-implementation detail and lives with its
+implementation. webtor-rs owns the browser Tor engine's bridges, directory,
+onion lookup and publication, descriptor lifecycle, and circuit behavior; see
+its [Onion-Service Architecture](https://github.com/andrewtheguy/webtor-rs/blob/main/docs/ONION_SERVICE_ARCHITECTURE.md).
+pTransfer's adapter and stricter browser cache policy are in
+[TOR_BROWSER.md](./TOR_BROWSER.md). The CLI documents how it builds its client
+from Arti in its own `docs/ARCHITECTURE.md`. None has to be mirrored into the
+others, and none belongs in this file.
 
 ## What it is for
 
-Nothing about the transfer touches a pTransfer or Nostr relay, and the two
-peers' networks never connect to each other directly. What it does touch is Tor
-itself: whatever gets each peer onto the network, the relays the circuits are
-built from, and the HSDirs that carry the descriptor. Those see different
-slices of transport metadata — never file plaintext or the content key. An
-entry bridge or guard sees its own peer's network address, HSDirs see descriptor
-publication or lookup, and the rendezvous point sees the two Tor circuits meet
-without learning either endpoint address. The peers therefore do not learn one
-another's network addresses. There is no pTransfer or Nostr rendezvous event,
-but the onion descriptor remains retrievable by anyone holding the address
-until it expires.
+Nothing about the transfer touches a pTransfer or Nostr relay, and the peers'
+networks never connect directly. Tor necessarily exposes per-hop transport
+metadata to its own infrastructure, but neither peer learns the other's network
+address and that infrastructure receives neither file plaintext nor the
+content key. There is no pTransfer or Nostr rendezvous event, though the onion
+descriptor remains retrievable by anyone holding the address until it expires.
+How each Tor implementation realizes that property is outside this transfer
+contract and belongs to webtor-rs or the CLI respectively.
 
 The price is a **100 MiB cap** per transfer — the same ceiling the web app's
 relayed data path works under, for the same reasons: both push bytes through
@@ -252,9 +252,7 @@ on the wire and restored on receipt; a generated ZIP travels as-is. See
 - **100 MiB** per transfer, enforced on the *input* when the selection is
   prepared, before anything is published. Both implementations enforce the same
   bound and refuse a larger offer, so raising it on one side alone would only
-  produce failures. A browser receiver has a second reason to sit here: a
-  payload this size or smaller is taken entirely in memory, so the transfer
-  never depends on OPFS `createWritable`, which not every engine has.
+  produce failures.
 - Anything above **1 MiB** is a *suggestion*, not a limit. A sender is expected
   to tell its operator that throughput over a circuit is unpredictable — the
   same size can arrive in moments or crawl, depending on the relays the circuit
@@ -274,4 +272,3 @@ on the wire and restored on receipt; a generated ZIP travels as-is. See
   and, on a transport with no resume, the whole transfer.
 - The service answers only while the sending process (or tab) is running.
 - No resume: a dropped transfer starts over.
-- A first bootstrap can take minutes, and in a browser tab usually does.

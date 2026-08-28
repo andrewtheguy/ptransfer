@@ -156,25 +156,22 @@ open. In the browser the bootstrap itself additionally gets 5 minutes; the CLI
 bootstraps before the pool exists, so its bootstrap failure is simply its own
 error.
 
-## Reaching Tor is the Tor transfer mode's code (in both implementations)
+## Reusing the browser Tor integration
 
-Bootstrapping — the Snowflake bridge choice, the directory seed, the IndexedDB
-directory cache, the local-bridge environment overrides — is
-`src/lib/tor/client.ts`, unchanged and shared with the Tor onion transfer mode.
-[TOR_BROWSER.md](./TOR_BROWSER.md) documents all of it, including why a cached
-directory seed can be stale and what a cold start actually costs.
+The web app uses the same `src/lib/tor/client.ts` bootstrap as the Tor onion
+transfer mode. Snowflake paths, Tor directory validation, onion lookup, and the
+resulting network-observation boundary belong to webtor-rs and are documented
+in its [Onion-Service Architecture](https://github.com/andrewtheguy/webtor-rs/blob/main/docs/ONION_SERVICE_ARCHITECTURE.md).
+pTransfer's bridge UI, IndexedDB persistence, stricter directory-seed freshness
+rule, and local development overrides are documented in
+[TOR_BROWSER.md](./TOR_BROWSER.md).
 
 Bridges are a browser concern only. `ptransfer-cli` assembles its client from
 Arti's managers and reaches the network through ordinary guard relays, so it
-asks nothing and has nothing to choose; the rest of this section is about the
-web app. Both *web* sides are offered the same two bridges
-(`src/components/ptransfer/tor-bridge-choice.tsx`), independently — every peer
-meets every other at the relay, inside Tor, so no choice here has to match:
-
-| Bridge | What it is |
-| --- | --- |
-| Snowflake WebSocket (default) | One fixed bridge endpoint, no broker and no STUN. The faster of the two, and the one to try first. |
-| Snowflake WebRTC | A volunteer proxy brokered over HTTPS, using STUN. Harder to block, and worth switching to if the WebSocket bridge cannot be reached. |
+asks nothing and has nothing to choose. Both *web* sides expose webtor-rs's two
+Snowflake choices through `src/components/ptransfer/tor-bridge-choice.tsx`,
+independently — every peer meets every other inside Tor, so the choices need
+not match.
 
 The sender picks it in **Advanced options** on the send tab, next to the switch.
 The receiver is asked once its PIN turns out to be an anonymous one, before any
