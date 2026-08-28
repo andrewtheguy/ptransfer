@@ -47,6 +47,7 @@ export function ReceiveTab() {
     receivedContent: codeContent,
     startReceive,
     submitOffer,
+    setSimulateNoDirect,
     cancel: cancelCode,
     reset: resetCode,
   } = useCodeReceive();
@@ -264,8 +265,12 @@ export function ReceiveTab() {
     state.status !== 'error' &&
     state.status !== 'complete';
   const answerData = isCodeExchange ? codeState.answerData : undefined;
+  // The response stays up past its own step when the relay path was simulated
+  // from here: the hook keeps `answerData` set until the sender turns up.
   const showAnswerReturn =
-    isCodeExchange && answerData && codeState.status === 'showing_answer';
+    isCodeExchange &&
+    answerData &&
+    (codeState.status === 'showing_answer' || codeState.status === 'fetching');
 
   return (
     <div className="space-y-4 pt-4">
@@ -311,7 +316,16 @@ export function ReceiveTab() {
 
           {/* The receiver's answer, carried back to the sender by hand */}
           {showAnswerReturn && answerData && (
-            <AnswerReturn answerData={answerData} />
+            <AnswerReturn
+              answerData={answerData}
+              relayFallbackAvailable={codeState.relayFallbackAvailable}
+              simulateNoDirect={codeState.simulateNoDirect}
+              onSimulateNoDirectChange={
+                codeState.status === 'showing_answer'
+                  ? setSimulateNoDirect
+                  : undefined
+              }
+            />
           )}
 
           {state.status === 'complete' && receivedContent && (

@@ -60,6 +60,13 @@ export interface CodeReceiveState {
   currentRelays?: string[];
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
+  /**
+   * Whether the offer named relays, so the relay fallback exists at all.
+   * Without it there is nothing for the simulation switch to fall back to.
+   */
+  relayFallbackAvailable?: boolean;
+  /** Whether the response on screen is the simulated no-direct-route one. */
+  simulateNoDirect?: boolean;
 }
 
 /**
@@ -78,6 +85,12 @@ export interface UseCodeReceiveReturn {
   receivedContent: ReceivedContent | null;
   startReceive: () => void;
   submitOffer: (offerData: Uint8Array) => void;
+  /**
+   * Testing aid on the response page: rebuild the response as one no direct
+   * connection can answer, and give up on the direct route here too. See
+   * `simulateNoDirectRef`.
+   */
+  setSimulateNoDirect: (value: boolean) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -89,6 +102,11 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
 const RELAY_FALLBACK_MESSAGE =
   'No direct connection — receiving the file through Nostr instead';
+const SIMULATED_NO_DIRECT_MESSAGE =
+  'Simulating no direct connection — receiving the file through Nostr instead';
+// Not shown on its own: it only ever reaches the UI appended to the size-limit
+// message, when the simulation is switched on for a file too big to relay.
+const SIMULATED_NO_DIRECT_REASON = 'No direct connection (simulated)';
 
 export function useCodeReceive(): UseCodeReceiveReturn {
   const [state, setState] = useState<TransferState & CodeReceiveState>({
@@ -114,6 +132,19 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   // The step a receive blocks on until the UI settles it. Cancel rejects it
   // while pending so the flow unwinds immediately.
   const offerStepRef = useRef<PendingStep<IncomingOffer> | null>(null);
+  // Set by the switch on the response page, which exists only to exercise the
+  // relay path without a hostile network: the response is rebuilt with no ICE
+  // candidates in it, so the sender has no route to try, and this side stops
+  // waiting for one. Nothing about the response format changes — it is the
+  // same response a receiver with no reachable candidates would produce.
+  const simulateNoDirectRef = useRef(false);
+  // Rebuilds and re-signs the response for that switch. Set only while the
+  // response page is up, which is also what gates the switch.
+  const rebuildAnswerRef = useRef<
+    ((simulate: boolean) => Promise<void>) | null
+  >(null);
+  // Abandons this side's direct attempt when the switch goes on mid-wait.
+  const giveUpOnDirectRef = useRef<(() => void) | null>(null);
   // Identifies the receive currently in charge of the refs. A cancelled run
   // that is still unwinding compares against it before touching shared
   // state, so a restart right after cancel is never clobbered.
@@ -134,6 +165,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     relayPoolRef.current = null;
     if (relayPool) relayPool.destroy();
     receivingRef.current = false;
+    simulateNoDirectRef.current = false;
+    rebuildAnswerRef.current = null;
+    giveUpOnDirectRef.current = null;
     const offerStep = offerStepRef.current;
     offerStepRef.current = null;
     offerStep?.reject(new Error('Cancelled'));
@@ -149,6 +183,14 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     discardSink();
     setReceivedContent(null);
   }, [cancel, discardSink]);
+
+  const setSimulateNoDirect = useCallback((value: boolean) => {
+    const rebuild = rebuildAnswerRef.current;
+    if (!rebuild) return;
+    rebuild(value).catch((err) => {
+      console.error('Failed to rebuild the response code:', err);
+    });
+  }, []);
 
   const submitOffer = useCallback(async (offerData: Uint8Array) => {
     const step = offerStepRef.current;
@@ -440,13 +482,23 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         );
       }
 
-      // Generate answer with our public key
-      const answerBinary = await generateMutualAnswerBinary(
-        answerSDP,
-        iceCandidates,
-        ecdhKeyPair.publicKeyBytes,
-        signAnswer,
-      );
+      // Generate answer with our public key. The simulated variant is the
+      // same answer with an empty candidate list: the sender then has nothing
+      // to connect to, exactly as if this device had gathered no usable
+      // candidate, and neither side needs to know the difference.
+      const answerCreatedAt = Date.now();
+      // Pinned so the rebuilt response keeps the timestamp of the one it
+      // replaces, and so the closure below is not re-narrowing `answerSDP`.
+      const answerDescription = answerSDP;
+      const buildAnswer = (simulate: boolean) =>
+        generateMutualAnswerBinary(
+          answerDescription,
+          simulate ? [] : iceCandidates,
+          ecdhKeyPair.publicKeyBytes,
+          signAnswer,
+          answerCreatedAt,
+        );
+      let answerBinary = await buildAnswer(false);
 
       const fileMetadata = {
         fileName: fileName!,
@@ -459,6 +511,28 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // The answer itself is always hand-carried back to the sender.
       const offerRelays = relaysFromOffer(offerPayload);
 
+      // The switch is only offered when there is a relay path to fall back
+      // to; with no relays in the offer, simulating a dead direct route just
+      // fails the transfer.
+      simulateNoDirectRef.current = false;
+      rebuildAnswerRef.current = offerRelays
+        ? async (simulate) => {
+            if (abandoned() || simulateNoDirectRef.current === simulate) return;
+            const binary = await buildAnswer(simulate);
+            if (abandoned()) return;
+            simulateNoDirectRef.current = simulate;
+            answerBinary = binary;
+            setState((s) =>
+              s.status === 'showing_answer'
+                ? { ...s, answerData: binary, simulateNoDirect: simulate }
+                : s,
+            );
+            // The rebuilt code is the one the sender must be handed, so this
+            // side stops waiting for a route that can no longer form.
+            if (simulate) giveUpOnDirectRef.current?.();
+          }
+        : null;
+
       // Show answer and wait for connection
       setState({
         status: 'showing_answer',
@@ -466,6 +540,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         answerData: answerBinary,
         contentType: 'file',
         fileMetadata,
+        relayFallbackAvailable: offerRelays !== null,
+        simulateNoDirect: false,
       });
 
       // Wait for the data channel to open. When no direct route exists and
@@ -495,6 +571,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             clearTimeout(timeout);
             reject(error);
           };
+          giveUpOnDirectRef.current = () => {
+            clearTimeout(timeout);
+            reject(new P2PConnectionError(SIMULATED_NO_DIRECT_REASON));
+          };
 
           // Check if already open
           const dc = rtc.getDataChannel();
@@ -505,6 +585,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         });
       } catch (error) {
         connectionFailedRejecter = null;
+        giveUpOnDirectRef.current = null;
+        rebuildAnswerRef.current = null;
+        const simulated = simulateNoDirectRef.current;
         if (
           !(error instanceof P2PConnectionError) ||
           !offerRelays ||
@@ -532,11 +615,23 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           fileMetadata,
           currentRelays: offerRelays,
         };
+        const fallbackMessage = simulated
+          ? SIMULATED_NO_DIRECT_MESSAGE
+          : RELAY_FALLBACK_MESSAGE;
+        // A real fallback starts long after the sender took the response in;
+        // a simulated one starts the moment the switch is flipped, before the
+        // sender has even seen the rebuilt code. Keep it on screen until the
+        // sender turns up on the control channel — its manifest is the first
+        // sign of that.
+        const answerWhilePending = simulated
+          ? { answerData: answerBinary }
+          : {};
         setState({
           status: 'fetching',
-          message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
+          message: `${fallbackMessage}. Connecting to relays...`,
           progress: { current: 0, total: fileSize },
           ...relayState,
+          ...answerWhilePending,
         });
         let data: Uint8Array;
         try {
@@ -556,7 +651,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
               setState({
                 status: 'fetching',
                 message: !p.manifest
-                  ? `${RELAY_FALLBACK_MESSAGE}. Waiting for the sender...`
+                  ? `${fallbackMessage}. Waiting for the sender...`
                   : p.chunksDone === p.chunksTotal
                     ? 'All pieces received — verifying...'
                     : `Receiving pieces through relays... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
@@ -565,6 +660,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
                   total,
                 },
                 ...relayState,
+                ...(p.manifest ? {} : answerWhilePending),
                 stats: p.stats,
               });
             },
@@ -595,6 +691,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         });
         return;
       }
+
+      giveUpOnDirectRef.current = null;
+      rebuildAnswerRef.current = null;
 
       if (abandoned()) return;
 
@@ -676,6 +775,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       if (runRef.current === run) {
         receivingRef.current = false;
         offerStepRef.current = null;
+        rebuildAnswerRef.current = null;
+        giveUpOnDirectRef.current = null;
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;
@@ -689,6 +790,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     receivedContent,
     startReceive,
     submitOffer,
+    setSimulateNoDirect,
     cancel,
     reset,
   };

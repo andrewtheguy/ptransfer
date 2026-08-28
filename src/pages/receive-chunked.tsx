@@ -41,6 +41,7 @@ export function ReceiveChunkedPage() {
     receivedContent,
     startReceive,
     submitOffer,
+    setSimulateNoDirect,
     cancel,
     reset,
   } = useCodeReceive();
@@ -291,8 +292,11 @@ export function ReceiveChunkedPage() {
 
   // --- Transferring ---
   const answerData = receiveState.answerData;
+  // The response stays up past its own step when the relay path was simulated
+  // from here: the hook keeps `answerData` set until the sender turns up.
   const showQRDisplay =
-    receiveState.status === 'showing_answer' &&
+    (receiveState.status === 'showing_answer' ||
+      receiveState.status === 'fetching') &&
     answerData instanceof Uint8Array;
 
   return (
@@ -307,7 +311,16 @@ export function ReceiveChunkedPage() {
 
         {/* The receiver's answer, carried back to the sender by hand */}
         {showQRDisplay && answerData && (
-          <AnswerReturn answerData={answerData} />
+          <AnswerReturn
+            answerData={answerData}
+            relayFallbackAvailable={receiveState.relayFallbackAvailable}
+            simulateNoDirect={receiveState.simulateNoDirect}
+            onSimulateNoDirectChange={
+              receiveState.status === 'showing_answer'
+                ? setSimulateNoDirect
+                : undefined
+            }
+          />
         )}
 
         {/* Download completed file */}
