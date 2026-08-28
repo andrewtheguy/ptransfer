@@ -147,11 +147,11 @@ response belonging to a **different** transfer, an old response pasted again, or
 altered on the way back is rejected straight away instead of turning into a connection
 that never completes — handy if you have two transfers open and paste the wrong one.
 
-It is **not** a defense against someone who photographed or copied your offer code: they
-can produce a matching tag as easily as the intended receiver can. The protection there is
-still that nothing enters the sender's page except what the sender scans or pastes. If you
-need a check that survives a leaked code, use [PIN Exchange](../README.md), where the
-receiver displays a confirmation code that the sender's operator must type.
+Anyone who photographed or copied your offer can produce a matching response, just as
+someone holding the matching PIN Exchange session can produce its short confirmation code.
+In both modes, the sender confirms the intended receiver by accepting the value that person
+returns. PIN Exchange has the sender type a short code; Code Exchange lets the sender scan
+or paste the full response instead.
 
 ## Relay Fallback (No Direct Connection)
 

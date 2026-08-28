@@ -122,14 +122,13 @@ export const CONFIRMATION_CODE_LENGTH = 8;
 // sender can check that the answer in its hand was produced by a peer that
 // read *this* offer, completed the same key agreement, and sent *this* answer.
 //
-// This is machine-checked, never read by a human: nothing is displayed and
-// nothing is typed. It is not the PIN Exchange confirmation code and does not
-// do that job — the offer is still the only secret gating a Code Exchange
-// transfer, so whoever captures the offer can still produce a valid tag. What
-// it closes is the gap below it: an answer from another transfer, a replayed
-// answer, and an answer whose SDP or ICE candidates were altered on the way
-// back are now rejected outright instead of silently derailing into a dead
-// connection or a garbage decrypt.
+// This tag is machine-checked inside the full response rather than displayed
+// as a separate short value. The sender's scan or paste of that response is the
+// Code Exchange confirmation handoff, serving the same role as typing the PIN
+// Exchange confirmation code. Neither derived value identifies a person on its
+// own; the sender selects the recipient by accepting the value returned by the
+// intended receiver. The tag rejects an answer from another transfer, a replay,
+// or an answer whose SDP or ICE candidates changed on the way back.
 //
 // 16 bytes = 128 bits, base64 in the payload (24 characters). Forging one
 // without the shared secret is a 2^-128 shot, and the width costs a couple of

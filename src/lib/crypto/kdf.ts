@@ -273,11 +273,12 @@ export interface AnswerConfirmationBinding {
  * would say only "someone who read this offer produced *an* answer", which is
  * not the same as "this is that answer".
  *
- * It is checked by the machine, not by a human — unlike the PIN Exchange
- * confirmation code (deriveConfirmationCode), nothing is displayed and nothing
- * is typed. Nor does it authenticate *who* answered: the offer is the only
- * secret Code Exchange has, so anyone who captured it can derive this tag too.
- * See ANSWER_CONFIRMATION_BYTES for exactly what it does and does not cover.
+ * The tag is checked by the machine inside the full response rather than shown
+ * as a separate short value. The sender confirms the receiver by scanning or
+ * pasting that response, serving the same role as typing the PIN Exchange
+ * confirmation code. Neither value identifies a person on its own: the sender
+ * selects the recipient by accepting the value returned by the intended
+ * receiver. See ANSWER_CONFIRMATION_BYTES for the tag's cryptographic scope.
  */
 export async function deriveAnswerConfirmation(
   sharedSecretKey: CryptoKey,
