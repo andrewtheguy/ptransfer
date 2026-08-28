@@ -17,11 +17,12 @@ the two implementations agree with each other on:
 Either side of a transfer may be a browser tab or the CLI. Where an
 implementation and this document disagree, this document wins.
 
-It is deliberately **outside the interop protocol**: nothing here is specified
-by [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md), which covers PIN Exchange and
-the shared data-channel layer only, and nothing here moves that document's
-version. What this mode versions instead is its own handshake
-(`TOR_HANDSHAKE_VERSION`, currently `1`).
+This is a cross-implementation interoperability contract: the browser and CLI
+both implement it. It is versioned separately from
+[`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md), whose
+`INTEROP_PROTOCOL_VERSION` covers PIN Exchange and the shared data-channel
+layer only. Changes here do not move that version. This mode instead versions
+its own handshake (`TOR_HANDSHAKE_VERSION`, currently `1`).
 
 ## Changing this document
 

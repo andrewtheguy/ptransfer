@@ -122,10 +122,11 @@ export interface TorSessionKeys {
 }
 
 /**
- * Labels for the Tor onion transport. It is not part of the interop protocol,
- * so it derives under labels of its own: a root that came out of a Tor
- * handshake can never produce a key PIN Exchange would also produce, even
- * though both roots are SPAKE2 transcripts over the same curve.
+ * Labels for the Tor onion transport. Its interoperability contract is
+ * versioned separately from INTEROP_PROTOCOL_VERSION, so it derives under
+ * labels of its own: a root that came out of a Tor handshake can never produce
+ * a key PIN Exchange would also produce, even though both roots are SPAKE2
+ * transcripts over the same curve.
  */
 const TOR_KEY_LABELS = {
   claimKey: 'ptransfer:tor-session:v1:claim',

@@ -36,21 +36,6 @@ behind it. Concretely:
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
-### Anonymous signaling beyond the proof of concept
-[ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) ships as an experimental
-option. What would take it out of that state:
-- **A relay pool worth relying on.** `ANONYMOUS_SIGNALING_RELAYS` is two
-  community-listed onion relays that accepted anonymous writes on the day they
-  were probed. Nothing monitors them, and the mode fails outright when they are
-  down. Re-probing, and a larger pool, are the difference between "works" and
-  "works when you need it".
-- **Bringing it into the contract.** `ptransfer-cli` now mints and accepts the
-  longer PIN, so an anonymous transfer works in every direction, but the mode
-  still lives in [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) rather than
-  [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md). Moving it there is what the pool
-  question above is blocking: a normative contract should not name two relays
-  nobody monitors.
-
 ## Backlog (Future Considerations)
 
 ### Relay Fallback for Data Transfer via ppng.io (piping-server)

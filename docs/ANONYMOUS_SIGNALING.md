@@ -243,10 +243,10 @@ anonymous-signaling proxy of its own.
 Anonymous signaling is **not** part of
 [INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md), and this document is where it is
 specified instead — the same arrangement the Tor onion transfer mode has in
-[TOR_TRANSPORT.md](./TOR_TRANSPORT.md). It stays outside the contract while the
-relay pool is unmonitored and the option is experimental, not because the two
-implementations disagree: a browser tab and `ptransfer-cli` interoperate in
-both directions today.
+[TOR_TRANSPORT.md](./TOR_TRANSPORT.md). It stays outside that document, and its
+version, while the relay pool is unmonitored and the option is experimental —
+not because the two implementations disagree: a browser tab and `ptransfer-cli`
+interoperate in both directions today.
 
 What that means for a third implementation: `INTEROP_PROTOCOL.md` specifies the
 12-character PIN, and an implementation of that document alone must reject a PIN

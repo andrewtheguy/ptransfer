@@ -51,10 +51,10 @@ restated here.
 - The shared WebRTC data-channel transfer layer: wire encoding, chunk framing,
   completion, and acknowledgement.
 
-**Out of scope — none of this may be implemented against this document.** Some
-of it is web-internal, and no other implementation should carry it at all; the
-rest are modes that more than one implementation does carry, each governed by a
-specification of its own that an implementation follows instead of this one:
+**Outside this document and its version — none of this may be implemented
+against this document.** Some of it is web-internal, and no other
+implementation should carry it at all; the rest are cross-implementation modes
+governed by separate specifications and version boundaries:
 
 - **Code Exchange** (the hand-carried PT01 offer/answer, its multi-QR chunking,
   its ECDH key agreement, and its answer confirmation tag). It is still
@@ -70,14 +70,15 @@ specification of its own that an implementation follows instead of this one:
   `ptransfer-cli` — that carries this same handshake to a disjoint pool of
   onion-service relays through a Tor client, and announces itself by minting a
   longer PIN. The handshake on the wire is identical; the transport and the PIN
-  length are not. It stays out of the contract while the relay pool is
+  length are not. It stays outside this document while the relay pool is
   unmonitored and the option is experimental, and it is specified in its own
-  document, the way the Tor onion transfer mode is. An implementation that does
-  not implement it MUST reject a PIN that is not exactly `PIN_LENGTH`
-  characters (§1) rather than attempt it — the relay pool such a PIN names is
-  not in this document, so a transfer could not succeed anyway.
-- The **Tor onion transfer mode**, which is a transport of its own and is
-  specified separately in [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
+  interoperability contract, the way the Tor onion transfer mode is. An
+  implementation that does not implement it MUST reject a PIN that is not
+  exactly `PIN_LENGTH` characters (§1) rather than attempt it — the relay
+  pool such a PIN names is not in this document, so a transfer could not
+  succeed anyway.
+- The **Tor onion transfer mode**, a cross-implementation transport governed
+  and versioned separately by [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
 - Storage strategy (in-memory vs OPFS scratch), relay health probing and
   caching, UI, timeouts that are purely local resource bounds, and anything
   else that is not observable by the peer.
