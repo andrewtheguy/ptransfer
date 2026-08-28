@@ -7,7 +7,7 @@
       "dependencies": {
         "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
         "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
-        "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.15/andrewtheguy-webtor-wasm-0.0.1-alpha.15.tgz",
+        "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.17/andrewtheguy-webtor-wasm-0.0.1-alpha.17.tgz",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1",
         "@radix-ui/react-collapsible": "^1.1.12",
@@ -49,7 +49,7 @@
 
     "@andrewtheguy/rxing-wasm": ["@andrewtheguy/rxing-wasm@https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz", {}, "sha512-J0JV1NixyxPkOuXeMSidfP0lhc/PBDb2y/qsHDiD6eAkr9sjIW3zz8b9u3pMZhuADV9/mc6DmbNrkG0jXTcPZQ=="],
 
-    "@andrewtheguy/webtor-wasm": ["@andrewtheguy/webtor-wasm@https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.15/andrewtheguy-webtor-wasm-0.0.1-alpha.15.tgz", {}, "sha512-keb1tmAVGMfK6S22CPxDVoiTJXfByfEmBZvX4tzCqkprosP5T9OldHbBqKsaZLqjFwjHSGsrFW7YCSDRRqIWYQ=="],
+    "@andrewtheguy/webtor-wasm": ["@andrewtheguy/webtor-wasm@https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.17/andrewtheguy-webtor-wasm-0.0.1-alpha.17.tgz", {}, "sha512-RYU0wzJqtZMXjZQPEuJcTD27cDr/SB79nSUlzCk85rqkHsUbpKfcZ9DKztaFm9P7nx2ubKE9j0/OcwMtkyX5Gw=="],
 
     "@apideck/better-ajv-errors": ["@apideck/better-ajv-errors@0.3.6", "", { "dependencies": { "json-schema": "^0.4.0", "jsonpointer": "^5.0.0", "leven": "^3.1.0" }, "peerDependencies": { "ajv": ">=8" } }, "sha512-P+ZygBLZtkp0qqOAJJVX4oX/sFo5JR3eBWwwuqHHhK0GIgQOKWrAfiAaWX0aArHkRWHMuggFEgAZNxVPwPZYaA=="],
 
