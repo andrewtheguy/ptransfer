@@ -10,8 +10,8 @@ import { QRDisplay } from './qr-display';
 export interface AnswerReturnProps {
   answerData: Uint8Array;
   /**
-   * Whether the sender's code named relays. Without them there is no relay
-   * path to fall back to, so the simulation is not offered.
+   * Whether the relay fallback could carry this file. Without a relay path to
+   * fall back to, the simulation is not offered.
    */
   relayFallbackAvailable?: boolean;
   /** Whether the response on screen is the simulated no-direct-route one. */

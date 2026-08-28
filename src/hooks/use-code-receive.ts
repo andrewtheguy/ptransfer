@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import {
+  type AnswerConfirmationSigner,
   computeOfferTranscriptHash,
   generateMutualAnswerBinary,
   parseMutualPayload,
@@ -65,8 +66,9 @@ export interface CodeReceiveState {
   totalRelays?: number;
   answerData?: Uint8Array; // Binary data for QR code
   /**
-   * Whether the offer named relays, so the relay fallback exists at all.
-   * Without it there is nothing for the simulation switch to fall back to.
+   * Whether the relay fallback could carry this file — the offer named
+   * relays and the file is within the relay size cap. Without both there is
+   * nothing for the simulation switch to fall back to.
    */
   relayFallbackAvailable?: boolean;
   /** Whether the response on screen is the simulated no-direct-route one. */
@@ -322,25 +324,50 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // Generate our ECDH keypair and derive shared secret
       setState({ status: 'generating_answer', message: 'Generating keys...' });
 
-      const ecdhKeyPair = await generateECDHKeyPair();
       const senderPublicKey = new Uint8Array(senderPublicKeyArray);
       const salt = new Uint8Array(saltArray);
 
-      // Derive shared secret as non-extractable CryptoKey
-      const sharedSecretKey = await deriveSharedSecretKey(
-        ecdhKeyPair.privateKey,
-        senderPublicKey,
-      );
-      const key = await deriveAESKeyFromSecretKey(sharedSecretKey, salt);
-      // Signs the answer once its fields are settled: proves to the sender
-      // that this answer, unaltered, came from a peer that read its offer and
-      // reached the same shared secret. Travels inside the answer code with
-      // nothing for either operator to read or type.
-      const signAnswer = (answerTranscriptHash: string) =>
-        deriveAnswerConfirmation(sharedSecretKey, salt, {
-          offerTranscriptHash,
-          answerTranscriptHash,
-        });
+      /**
+       * Everything one answer's ECDH key pair yields. The relay session is
+       * derived from the same shared secret, so a new key pair here is also a
+       * new relay session — which is how a response is given a control
+       * channel with no history behind it.
+       */
+      interface AnswerKeys {
+        publicKeyBytes: Uint8Array;
+        /** Chunk key for the direct path. */
+        key: CryptoKey;
+        /** Root of the relay session and of the confirmation tag. */
+        sharedSecretKey: CryptoKey;
+        /**
+         * Signs the answer once its fields are settled: proves to the sender
+         * that this answer, unaltered, came from a peer that read its offer
+         * and reached the same shared secret. Travels inside the answer code
+         * with nothing for either operator to read or type.
+         */
+        signAnswer: AnswerConfirmationSigner;
+      }
+
+      const deriveAnswerKeys = async (): Promise<AnswerKeys> => {
+        const ecdhKeyPair = await generateECDHKeyPair();
+        // Derive shared secret as non-extractable CryptoKey
+        const sharedSecretKey = await deriveSharedSecretKey(
+          ecdhKeyPair.privateKey,
+          senderPublicKey,
+        );
+        return {
+          publicKeyBytes: ecdhKeyPair.publicKeyBytes,
+          key: await deriveAESKeyFromSecretKey(sharedSecretKey, salt),
+          sharedSecretKey,
+          signAnswer: (answerTranscriptHash: string) =>
+            deriveAnswerConfirmation(sharedSecretKey, salt, {
+              offerTranscriptHash,
+              answerTranscriptHash,
+            }),
+        };
+      };
+
+      let keys = await deriveAnswerKeys();
 
       if (abandoned()) return;
 
@@ -371,6 +398,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // the only reason the simulation switch is offered at all. The answer
       // itself is always hand-carried back to the sender.
       const offerRelays = relaysFromOffer(offerPayload);
+
+      // The relays the simulation may hand the file to. Named relays are not
+      // enough on their own: past the relay size cap the fallback would
+      // refuse the file, so simulating a dead route would kill a working
+      // direct connection and leave both sides with nowhere to go.
+      const simulationRelays =
+        offerRelays && fileSize <= SLOW_TRANSPORT_MAX_BYTES
+          ? offerRelays
+          : null;
 
       interface DirectAttempt {
         rtc: WebRTCConnection;
@@ -420,11 +456,16 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         // Streaming receiver: decrypts each chunk into the sink as it arrives
         // (inflating deflated payloads in between) and resolves once DONE
         // arrives and all chunks authenticate.
-        const receiver = createTransferReceiver(key, contentEncoding, sink, {
-          estimatedBytes: fileSize,
-          onProgress: (current, total) =>
-            setState((s) => ({ ...s, progress: { current, total } })),
-        });
+        const receiver = createTransferReceiver(
+          keys.key,
+          contentEncoding,
+          sink,
+          {
+            estimatedBytes: fileSize,
+            onProgress: (current, total) =>
+              setState((s) => ({ ...s, progress: { current, total } })),
+          },
+        );
 
         const rtc = new WebRTCConnection(
           getWebRTCConfig(),
@@ -562,8 +603,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         const answerBinary = await generateMutualAnswerBinary(
           answerSDP,
           iceCandidates,
-          ecdhKeyPair.publicKeyBytes,
-          signAnswer,
+          keys.publicKeyBytes,
+          keys.signAnswer,
         );
 
         if (abandoned()) {
@@ -667,7 +708,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         );
         let data: Uint8Array;
         try {
-          const session = await deriveRelaySession(sharedSecretKey, salt);
+          const session = await deriveRelaySession(keys.sharedSecretKey, salt);
           data = await receiveFileLive(session, relays, {
             pool,
             isCancelled: () => abandoned() || switchedBack(),
@@ -740,12 +781,12 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
         // The switch, armed for this stint only. Flipping it ends the stint
         // in progress; the loop then builds the other kind. It is offered at
-        // all only when the offer named relays, since without them a dead
-        // route just fails the transfer.
+        // all only where the relay fallback could carry the file, since
+        // otherwise a dead route just fails the transfer.
         let switchedTo: boolean | null = null;
         let endStint: ((error: Error) => void) | null = null;
         simulateNoDirectRef.current = simulate;
-        switchRef.current = offerRelays
+        switchRef.current = simulationRelays
           ? (next) => {
               if (next === simulate || switchedTo !== null) return;
               switchedTo = next;
@@ -768,7 +809,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             answerData: attempt.answerBinary,
             contentType: 'file',
             fileMetadata,
-            relayFallbackAvailable: offerRelays !== null,
+            relayFallbackAvailable: simulationRelays !== null,
             simulateNoDirect: false,
           });
           try {
@@ -804,14 +845,14 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
         // Simulated: no peer connection at all. The response reuses the SDP
         // of the attempt just torn down, with its candidates left out.
-        if (!latestAnswerSDP || !offerRelays) {
+        if (!latestAnswerSDP || !simulationRelays) {
           throw new Error('Cannot simulate a dead route before an answer');
         }
         const answerBinary = await generateMutualAnswerBinary(
           latestAnswerSDP,
           [],
-          ecdhKeyPair.publicKeyBytes,
-          signAnswer,
+          keys.publicKeyBytes,
+          keys.signAnswer,
         );
         if (abandoned()) return;
         if (switchedTo !== null) {
@@ -819,11 +860,18 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           continue;
         }
         const outcome = await runRelayTransfer(
-          offerRelays,
+          simulationRelays,
           answerBinary,
           () => switchedTo !== null,
         );
         if (outcome === 'switched') {
+          // That stint left this side's `hello` on the control relays, and a
+          // relay keeps it for the rest of the exchange. A sender handed a
+          // response built on the same shared secret would read that stale
+          // hello out of the backlog and give up on the direct route before
+          // it had a chance — so the next attempt starts from new key
+          // material, which puts it in a relay session of its own.
+          keys = await deriveAnswerKeys();
           simulate = false;
           continue;
         }
