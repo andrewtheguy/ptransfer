@@ -296,7 +296,7 @@ describe('getRelayCandidates', () => {
   });
 
   it('prioritizes recently working relays and ignores stale ones', async () => {
-    const now = 2 * 24 * 60 * 60 * 1000;
+    const now = 8 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(
       {
         candidates: ['wss://candidate.example'],
@@ -305,6 +305,15 @@ describe('getRelayCandidates', () => {
       },
       [
         cachedRelay('wss://stale.example', {
+          lastCheckedAt: 1,
+          lastSucceededAt: 0,
+          consecutiveFailures: 1,
+        }),
+        cachedRelay('wss://recently-failed.example', {
+          lastCheckedAt: now - 200,
+          consecutiveFailures: 1,
+        }),
+        cachedRelay('wss://old-but-good.example', {
           lastSucceededAt: 0,
           rttMs: 100,
           supportsControl: true,
@@ -335,8 +344,19 @@ describe('getRelayCandidates', () => {
     expect(candidates).toEqual([
       'wss://working.example',
       'wss://slower.example',
+      'wss://old-but-good.example',
       'wss://candidate.example',
     ]);
+    const kept = storage.relayHealth.map((relay) => relay.url);
+    expect(kept).not.toContain('wss://stale.example');
+    // A failure recent enough keeps its entry, and its count, even though
+    // the relay was listed long ago; only its candidacy has lapsed.
+    expect(kept).toContain('wss://recently-failed.example');
+    expect(
+      storage.relayHealth.find(
+        (relay) => relay.url === 'wss://recently-failed.example',
+      )?.consecutiveFailures,
+    ).toBe(1);
   });
 
   it('never returns a seed, whichever cache it was left in', async () => {
@@ -489,10 +509,16 @@ describe('selectUploadRelays', () => {
 
 describe('saveRelayHealth', () => {
   it('records probe metadata, canonicalizes keys, and retains bounded failure history', async () => {
-    const now = 24 * 60 * 60 * 1000;
+    const now = 8 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(null, [
       cachedRelay('wss://stale.example', {
+        lastCheckedAt: 1,
         lastSucceededAt: 0,
+        consecutiveFailures: 1,
+      }),
+      cachedRelay('wss://old-but-good.example', {
+        lastSucceededAt: 0,
+        rttMs: 40,
         supportsControl: true,
         supportsStorage: true,
       }),
@@ -536,6 +562,12 @@ describe('saveRelayHealth', () => {
         lastCheckedAt: now - 1,
         lastSucceededAt: now - 1,
         rttMs: 30,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://old-but-good.example', {
+        lastSucceededAt: 0,
+        rttMs: 40,
         supportsControl: true,
         supportsStorage: true,
       }),

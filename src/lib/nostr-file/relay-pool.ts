@@ -175,16 +175,42 @@ function parseRelayHealth(value: unknown): CachedRelay[] {
       supportsStorage: relay.supportsStorage,
     };
     const previous = byUrl.get(url);
-    const freshness = Math.max(
-      parsed.lastDiscoveredAt,
-      parsed.lastSucceededAt ?? 0,
-    );
-    const previousFreshness = previous
-      ? Math.max(previous.lastDiscoveredAt, previous.lastSucceededAt ?? 0)
-      : -1;
-    if (freshness >= previousFreshness) byUrl.set(url, parsed);
+    if (relayFreshness(parsed) >= (previous ? relayFreshness(previous) : -1)) {
+      byUrl.set(url, parsed);
+    }
   }
   return [...byUrl.values()];
+}
+
+/**
+ * When the relay was last heard of: listed, probed, or proven. A failed probe
+ * counts — it is the verdict the entry exists to keep, and an entry that
+ * expired on it would come back from the next listing as unprobed, at the
+ * front of the sweep's queue.
+ */
+function relayFreshness(relay: CachedRelay): number {
+  return Math.max(
+    relay.lastDiscoveredAt,
+    relay.lastCheckedAt ?? 0,
+    relay.lastSucceededAt ?? 0,
+  );
+}
+
+/** The latest verdict was a pass. */
+function isHealthyRelay(relay: CachedRelay): boolean {
+  return relay.consecutiveFailures === 0 && relay.lastSucceededAt !== null;
+}
+
+/**
+ * Whether a cache entry is still worth keeping. A healthy relay is kept for
+ * good: it is what a start with dead seeds runs on, and it is probed again
+ * before it carries anything, so age costs one probe at most. Only failures
+ * and unprobed listings age out.
+ */
+function isFreshRelay(relay: CachedRelay, now: number): boolean {
+  if (isHealthyRelay(relay)) return true;
+  const freshness = relayFreshness(relay);
+  return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
 }
 
 /** A relay that discovery has named but no probe has judged yet. */
@@ -202,21 +228,15 @@ function emptyCachedRelay(url: string, lastDiscoveredAt: number): CachedRelay {
 }
 
 /**
- * Drop expired entries and order the cache by how much a future transfer
- * wants each relay: proven storage relays first, then fewer failures, then
+ * Drop expired entries (healthy relays never expire) and order the cache by
+ * how much a future transfer wants each relay: proven storage relays first, then fewer failures, then
  * lower latency, then most recently seen. `RELAY_CACHE_MAX_ENTRIES` bounds
  * what is kept, so eviction sheds repeatedly failing relays before ones the
  * background pass has yet to reach.
  */
 function rankRelayCache(relays: CachedRelay[], now: number): CachedRelay[] {
   return relays
-    .filter((relay) => {
-      const freshness = Math.max(
-        relay.lastDiscoveredAt,
-        relay.lastSucceededAt ?? 0,
-      );
-      return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
-    })
+    .filter((relay) => isFreshRelay(relay, now))
     .sort(
       (a, b) =>
         Number(b.supportsStorage) - Number(a.supportsStorage) ||
@@ -799,7 +819,7 @@ export async function selectUploadRelays(
 }
 
 /**
- * Candidate list with 24h caching. Every run merges fresh discovery results
+ * Candidate list with seven-day caching. Every run merges fresh discovery results
  * into the still-valid candidate and relay-health caches, so newly listed
  * relays become available without giving up cached fallbacks when discovery
  * is sparse or the default seeds are unreliable.
@@ -824,14 +844,9 @@ export async function getRelayCandidates(
     storage.getState(),
     storage.getRelayHealth(),
   ]);
-  const relayFreshness = (relay: CachedRelay) =>
-    Math.max(relay.lastDiscoveredAt, relay.lastSucceededAt ?? 0);
   const byUrl = new Map(
     savedRelayHealth
-      .filter((relay) => {
-        const freshness = relayFreshness(relay);
-        return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
-      })
+      .filter((relay) => isFreshRelay(relay, now))
       .map((relay) => [relay.url, relay]),
   );
   // Discovery drops seeds from what it returns, but the caches are older than
@@ -867,10 +882,7 @@ export async function getRelayCandidates(
         (capability === 'storage'
           ? relay.supportsStorage
           : relay.supportsControl) &&
-        relay.consecutiveFailures === 0 &&
-        relay.lastSucceededAt !== null &&
-        relay.lastSucceededAt <= now &&
-        now - relay.lastSucceededAt < RELAY_CANDIDATE_TTL_MS,
+        isHealthyRelay(relay),
     )
     .sort(
       (a, b) =>

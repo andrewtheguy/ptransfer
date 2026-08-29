@@ -93,12 +93,13 @@ names no relays at all — and then there is no relay fallback. See the offer-re
    `DEFAULT_RELAYS` is the signaling pool and never carries chunks, so a failed discovery
    fails the transfer with the not-enough-relays error rather than degrading to the
    seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in
-   IndexedDB for 24 h. Fresh discovery is merged with the valid cache on every run, so
+   IndexedDB for seven days. Fresh discovery is merged with the valid cache on every run, so
    new candidates are learned without discarding cached fallbacks. Every candidate has a
    canonical-URL-keyed `relay-health` record containing its discovery/check/success
    timestamps, latest RTT, consecutive failures, and proven control/storage
-   capabilities. Recently successful low-RTT relays are prioritized for 24 h on later
-   runs, but are always probed again before receiving file chunks. Cache schema changes
+   capabilities. Relays that passed a probe are kept for as long as they keep passing — a healthy
+   entry never expires, only failures and unprobed listings do — and lead later runs
+   by RTT, but are always probed again before receiving file chunks. Cache schema changes
    reset IndexedDB and recreate only the current stores; cached data is never migrated.
 2. **Health-check candidates** with a real write→read round trip per relay: a
    production-shaped probe event through the full codec at the full chunk size
@@ -376,7 +377,7 @@ sequenceDiagram
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
 | `UPLOAD_CHUNK_CONCURRENCY` | 16 | Chunks in flight |
 | `HEALTH_CHECK_TARGET_COUNT` | 16 | Stop once the storage ring has passed (the signaling backfill stops at its own gap size) |
-| `RELAY_CANDIDATE_TTL_MS` | 24 h | Lifetime of discovered candidates and relay-health priority |
+| `RELAY_CANDIDATE_TTL_MS` | 7 d | Lifetime of discovered candidates and of failed/unprobed relay-health entries; healthy entries never expire |
 | `D_TAG_FILTER_BATCH` | 50 | Max `d` ids per fetch filter (~3 MiB per query) |
 | `LIVE_BATCH_CHUNKS` | 64 | Chunks per `avail` announcement (3 MiB) |
 | `LIVE_HEARTBEAT_MS` | 15 s | Re-announce cadence when nothing changed |
