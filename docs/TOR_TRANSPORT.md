@@ -115,14 +115,14 @@ in, so every data character contributes to authentication.
 
 That generator is how *this mode* mints a password. The handshake below does not
 require it: it takes an opaque string and derives its SPAKE2 scalar from that.
-Code Exchange's anonymous relay option, currently implemented only in the
-browser, uses this latitude: it runs the same handshake with a password derived
-from the ECDH secret its own exchange already established, never shown to a
-person and never transmitted, and announces the address over its own encrypted
-control channel rather than handing the pair over by hand (see
+Both current implementations use this latitude for Code Exchange's anonymous
+relay option: they run the same handshake with a password derived from the ECDH
+secret that exchange already established, never shown to a person and never
+transmitted, and announce the address over their own encrypted control channel
+rather than handing the pair over by hand (see
 [CODE_EXCHANGE.md](CODE_EXCHANGE.md)). Nothing on the binding list changes for it: no
-frame, no bound, no version. An implementation of this document alone neither
-implements that option nor meets a peer using it.
+frame, no bound, no version. Implementing this document alone does not also
+implement that option or make a peer able to enter its Code Exchange session.
 
 ## Handshake
 

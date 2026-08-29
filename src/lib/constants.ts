@@ -3,11 +3,12 @@ export const OFFLINE_QR_TRANSFER_URL = 'https://qrsecure.kuvi.dev/transfer';
 
 /**
  * The companion command-line app. It speaks the same wire formats as this app
- * — PIN Exchange (including anonymous signaling) and the Tor Onion Service
- * mode — so either end of a transfer may be a browser tab or the CLI. Code
- * Exchange is not yet implemented by the CLI.
+ * — PIN Exchange (including anonymous signaling), Code Exchange and both of
+ * its fallbacks, and the Tor Onion Service mode — so either end of a transfer
+ * may be a browser tab or the CLI.
  *
- * See docs/INTEROP_PROTOCOL.md for what the two implementations must agree on.
+ * The shared contracts live in docs/INTEROP_PROTOCOL.md and the mode-specific
+ * protocol documents beside it.
  */
 export const PTRANSFER_CLI_URL =
   'https://github.com/andrewtheguy/ptransfer-cli';

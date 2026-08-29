@@ -78,7 +78,7 @@ it carries an `anon` flag and both pages use the same fixed onion-relay pool ins
 > the secret for the whole transfer: anyone who obtains it before it expires can answer it
 > and derive the transfer keys — but their answer still only counts if the sender scans or
 > pastes it. The response check described in
-> [Responses are checked against your code](#responses-are-checked-against-your-code)
+> [Responses are checked against your code](#the-returned-response-confirms-the-receiver-and-is-checked-against-your-code)
 > does not change this.
 
 - **As QR codes:** The sender's offer is larger, so it is split across **multiple QR codes**
@@ -291,7 +291,7 @@ to announce and no password that would open the handshake. Someone who photograp
 the offer can still produce a response of their own, but it is a response built on
 their own key, and the sender only ever publishes to the response it accepted and
 checked (see
-[Responses are checked against your code](#responses-are-checked-against-your-code)).
+[Responses are checked against your code](#the-returned-response-confirms-the-receiver-and-is-checked-against-your-code)).
 As everywhere else in Code Exchange, the offer remains the secret for the whole
 transfer, and the sender's own scan or paste remains the gate.
 

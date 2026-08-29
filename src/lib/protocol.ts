@@ -6,9 +6,9 @@
  *
  * Its scope is deliberately narrower than the app: PIN Exchange signaling and
  * the shared WebRTC data-channel transfer layer, and nothing else. Code
- * Exchange and its fallbacks are currently browser-only and stay outside the
- * contract while they are still changing shape. `docs/INTEROP_PROTOCOL.md`
- * defines exactly what is in and out.
+ * Exchange and its fallbacks, anonymous signaling, and the Tor transport are
+ * cross-implementation features with separate contracts and version
+ * boundaries. `docs/INTEROP_PROTOCOL.md` defines exactly what is in and out.
  *
  * A single monotonically increasing integer, deliberately not the app version:
  * the app bumps its patch version for any breaking change, most of which land

@@ -9,10 +9,10 @@ import {
  * The one question a tab that is about to reach the Tor network has to ask:
  * which Snowflake bridge it goes through.
  *
- * Both the Tor transfer mode and PIN Exchange's anonymous signaling put this
- * to the user on both the send and receive side, and the trade-off is the same
- * every time, so the wording lives here once rather than in four places that
- * would drift apart.
+ * The Tor transfer mode and the anonymous options in PIN Exchange and Code
+ * Exchange put this to the user on both the send and receive side. The
+ * trade-off is the same every time, so the wording lives here once rather
+ * than in six places that would drift apart.
  */
 
 const BRIDGE_DESCRIPTIONS: Record<TorBridge, string> = {

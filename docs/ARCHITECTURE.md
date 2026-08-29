@@ -10,23 +10,27 @@ Two implementations exist. This app is the reference one; the other is
 [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli), the companion
 command-line app for headless machines and terminals, which implements PIN
 Exchange (including anonymous signaling), Code Exchange (including its
-anonymous Tor fallback), and the Tor onion transport. What it does not
-implement is Code Exchange's ordinary clearnet fallback, the Nostr file relay,
-and the QR half of carrying a code — there is no camera at a terminal, so it
-copies and pastes the same codes as text. Either end of a transfer may be a
-browser tab or the CLI. What the two must agree on is specified in
+ordinary Nostr relay fallback and anonymous Tor fallback), and the Tor onion
+transport. What it does not implement is the QR half of carrying a Code
+Exchange code — it copies and pastes the same containers as text, can draw no
+offer QR grid yet, and has no camera with which to read one. Either end of a
+transfer may be a browser tab or the CLI. What the two must agree on is specified in
 [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md),
 [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md),
 [TOR_TRANSPORT.md](TOR_TRANSPORT.md), and
-[ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md); everything else in this
-document describes browser-app behavior outside the shared contract.
+[ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md), with the ordinary fallback
+specified downstream in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md); everything
+else in this document describes browser-app behavior outside the shared
+contract.
 
-Those four are the source of truth, and they live only here — the CLI
-implements against them instead of keeping a copy, and documents its own
-internals in its own repo. Each carries a *Changing this document* section
-naming the short list that actually binds another implementation, and the
-coordination value that moves when that list does; an edit anywhere else in
-them, this document included, asks nothing of the CLI.
+Those shared contracts live only here — the CLI implements against them
+instead of keeping a copy, and documents its own internals in its own repo.
+The four top-level protocol specifications carry a *Changing this document*
+section naming the short list that actually binds another implementation, and
+the coordination value (or fail-closed rule) that moves when that list does;
+the Nostr file-relay contract is selected by Code Exchange's `relays` field.
+An edit outside those normative surfaces, this document included, asks nothing
+of the CLI.
 
 ## Core Principles
 
@@ -486,7 +490,8 @@ fields, the key schedule, both transcript digests, and the anonymous
 fallback's rendezvous — is
 [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md). What follows is this
 app's implementation of it, plus the parts only this app carries: the multi-QR
-offer path and the clearnet relay fallback.
+offer and single-QR answer carriage, and the relay-health cache and background
+sweep around the shared clearnet relay fallback.
 
 Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. Camera is optional; signaling data can be exchanged via clipboard. **Network requirements:** With internet, STUN can help devices on different networks discover a direct ICE route, but success is not guaranteed. Without internet, devices must be able to reach each other directly, normally on the same local network (not air-gapped). WebRTC TURN relays are not configured; an eligible Code Exchange can instead use the application-level Nostr file fallback after direct setup fails.
 
