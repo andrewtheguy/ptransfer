@@ -132,8 +132,8 @@ export const DEFAULT_RELAYS = canonicalRelayPool(
 // costs its own rendezvous circuit, so it is kept small.
 export const ANONYMOUS_SIGNALING_RELAYS = canonicalRelayPool(
   [
-    'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion',
-    'ws://gnostr2jnapk72mnagq3cuykfon73temzp77hcbncn4silgt77boruid.onion',
+    'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion', // nostr.oxtr.dev
+    'ws://gnostr2jnapk72mnagq3cuykfon73temzp77hcbncn4silgt77boruid.onion', // nostr.girino.org
   ],
   'ANONYMOUS_SIGNALING_RELAYS',
   normalizeOnionRelayUrl,

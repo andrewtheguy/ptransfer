@@ -419,7 +419,11 @@ export function AboutContent() {
             </li>
             <li>
               <span className="font-medium text-foreground">Code Exchange</span>{' '}
-              is not supported by the CLI yet.
+              works in both directions too: the codes are copied and pasted as
+              text, which is the half of that exchange a terminal can take part
+              in — there is no camera to scan a QR grid with, and the CLI draws
+              none. Both of its fallbacks are interoperable too: the clearnet
+              Nostr file relay and the anonymous Tor one.
             </li>
             <li>
               Sender and receiver interoperate when they implement the same

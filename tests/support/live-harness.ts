@@ -32,7 +32,7 @@ export interface PwDownload {
 export interface PwPage {
   getByRole(
     role: string,
-    options?: { name?: string; exact?: boolean },
+    options?: { name?: string | RegExp; exact?: boolean },
   ): PwLocator;
   getByText(text: string, options?: { exact?: boolean }): PwLocator;
   getByTestId(testId: string): PwLocator;

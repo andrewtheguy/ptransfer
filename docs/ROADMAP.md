@@ -36,6 +36,12 @@ behind it. Concretely:
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
+### `ptransfer-cli`'s own roadmap
+Work that is specific to the CLI rather than to a contract both implementations
+follow — a relay-health cache between runs, and drawing a Code Exchange offer
+as a QR grid in a terminal — lives in that project's
+[`docs/ROADMAP.md`](https://github.com/andrewtheguy/ptransfer-cli/blob/main/docs/ROADMAP.md).
+
 ## Backlog (Future Considerations)
 
 ### Relay Fallback for Data Transfer via ppng.io (piping-server)
@@ -63,9 +69,10 @@ Findings from research (August 2026):
   general-purpose public piping infrastructure. It is also self-hostable if
   its goodwill or bandwidth tolerance for multi-GB transfers proves
   insufficient — there is no SLA.
-- **CLI support**: the CLI's current WebRTC transport is direct-only and fails
-  instead of relaying file bytes. A file-relay fallback is not supported there
-  yet.
+- **CLI support**: the CLI carries both of Code Exchange's data-path fallbacks
+  — the Nostr file relay and the anonymous Tor option — and is direct-only
+  everywhere else, PIN Exchange included, where it fails rather than relaying
+  file bytes. An HTTP file relay is not supported there.
 - Alternatives considered: a self-hosted Magic Wormhole transit relay
   (WebSocket-capable upstream, blind token-matching pipe, but requires running
   a server); or a TURN server (least protocol work since transport is already

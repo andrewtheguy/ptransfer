@@ -322,6 +322,20 @@ export function useCodeSend(): UseCodeSendReturn {
           return;
         }
 
+        // The fallback's own ceiling, checked here rather than where the
+        // fallback starts: by then the code has been handed over, a response
+        // taken in, and a bootstrap spent, and the sender would be learning
+        // that the fallback it selected cannot carry what it offered. The
+        // protocol puts the refusal on the selection for that reason.
+        if (anonymous && content.estimatedSize > SLOW_TRANSPORT_MAX_BYTES) {
+          setState({
+            status: 'error',
+            message: `This selection is ${formatFileSize(content.estimatedSize)}, over the ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)} the anonymous fallback's Tor transport allows.`,
+          });
+          sendingRef.current = false;
+          return;
+        }
+
         // The Tor transport's wire allowance, checked before a code is made
         // rather than after a bootstrap and a handshake. A ZIP's headers and
         // entry paths are wire bytes no file size accounts for, so a selection

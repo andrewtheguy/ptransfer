@@ -26,6 +26,7 @@ The live interoperability tests against `ptransfer-cli` live here and are run
 from here:
 
 - `bun run test:live:webrtc` — PIN Exchange over a real data channel
+- `bun run test:live:code` — Code Exchange over hand-carried codes
 - `bun run test:live:tor` — the onion transport
 
 Both drive a sibling `ptransfer-cli` checkout, so run the matching one after
@@ -49,10 +50,13 @@ because public keys can always be exported.
 - The companion CLI is `ptransfer-cli`
   (https://github.com/andrewtheguy/ptransfer-cli); this repo is the source of
   truth for everything the two share, so `docs/INTEROP_PROTOCOL.md`,
-  `docs/TOR_TRANSPORT.md`, and `docs/ANONYMOUS_SIGNALING.md` are specified here
+  `docs/CODE_EXCHANGE_PROTOCOL.md`, `docs/TOR_TRANSPORT.md`, and
+  `docs/ANONYMOUS_SIGNALING.md` are specified here
   and the CLI implements against them rather than restating them. Editing one of
   those docs does not by itself concern the CLI; only a change to the normative
   surface each doc names in its "Changing this document" section does, and that
-  shows up as a bumped `INTEROP_PROTOCOL_VERSION` or `TOR_HANDSHAKE_VERSION`.
+  shows up as a bumped `INTEROP_PROTOCOL_VERSION` or `TOR_HANDSHAKE_VERSION` —
+  or, for the two docs that carry no version, as a change that fails closed on
+  both sides.
   Keep CLI internals (its file names, crates, layout) out of these docs so the
   CLI can move without making them stale.
