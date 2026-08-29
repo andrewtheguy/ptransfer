@@ -296,7 +296,7 @@ describe('getRelayCandidates', () => {
   });
 
   it('prioritizes recently working relays and ignores stale ones', async () => {
-    const now = 2 * 24 * 60 * 60 * 1000;
+    const now = 8 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(
       {
         candidates: ['wss://candidate.example'],
@@ -489,7 +489,7 @@ describe('selectUploadRelays', () => {
 
 describe('saveRelayHealth', () => {
   it('records probe metadata, canonicalizes keys, and retains bounded failure history', async () => {
-    const now = 24 * 60 * 60 * 1000;
+    const now = 8 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(null, [
       cachedRelay('wss://stale.example', {
         lastSucceededAt: 0,

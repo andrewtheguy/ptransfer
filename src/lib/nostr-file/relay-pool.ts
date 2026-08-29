@@ -799,7 +799,7 @@ export async function selectUploadRelays(
 }
 
 /**
- * Candidate list with 24h caching. Every run merges fresh discovery results
+ * Candidate list with seven-day caching. Every run merges fresh discovery results
  * into the still-valid candidate and relay-health caches, so newly listed
  * relays become available without giving up cached fallbacks when discovery
  * is sparse or the default seeds are unreliable.
