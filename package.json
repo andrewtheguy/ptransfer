@@ -27,7 +27,7 @@
   "dependencies": {
     "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
     "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
-    "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.17/andrewtheguy-webtor-wasm-0.0.1-alpha.17.tgz",
+    "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.18/andrewtheguy-webtor-wasm-0.0.1-alpha.18.tgz",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@radix-ui/react-collapsible": "^1.1.12",
