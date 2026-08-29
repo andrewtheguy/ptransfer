@@ -305,6 +305,11 @@ describe('getRelayCandidates', () => {
       },
       [
         cachedRelay('wss://stale.example', {
+          lastCheckedAt: 1,
+          lastSucceededAt: 0,
+          consecutiveFailures: 1,
+        }),
+        cachedRelay('wss://old-but-good.example', {
           lastSucceededAt: 0,
           rttMs: 100,
           supportsControl: true,
@@ -335,8 +340,12 @@ describe('getRelayCandidates', () => {
     expect(candidates).toEqual([
       'wss://working.example',
       'wss://slower.example',
+      'wss://old-but-good.example',
       'wss://candidate.example',
     ]);
+    expect(storage.relayHealth.map((relay) => relay.url)).not.toContain(
+      'wss://stale.example',
+    );
   });
 
   it('never returns a seed, whichever cache it was left in', async () => {
@@ -492,7 +501,13 @@ describe('saveRelayHealth', () => {
     const now = 8 * 24 * 60 * 60 * 1000;
     const storage = memoryStorage(null, [
       cachedRelay('wss://stale.example', {
+        lastCheckedAt: 1,
         lastSucceededAt: 0,
+        consecutiveFailures: 1,
+      }),
+      cachedRelay('wss://old-but-good.example', {
+        lastSucceededAt: 0,
+        rttMs: 40,
         supportsControl: true,
         supportsStorage: true,
       }),
@@ -536,6 +551,12 @@ describe('saveRelayHealth', () => {
         lastCheckedAt: now - 1,
         lastSucceededAt: now - 1,
         rttMs: 30,
+        supportsControl: true,
+        supportsStorage: true,
+      }),
+      cachedRelay('wss://old-but-good.example', {
+        lastSucceededAt: 0,
+        rttMs: 40,
         supportsControl: true,
         supportsStorage: true,
       }),

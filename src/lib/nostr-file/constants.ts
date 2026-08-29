@@ -147,8 +147,10 @@ export const RELAY_CACHE_DATABASE_NAME = 'ptransfer:nostr-file:relay-cache';
 export const RELAY_CACHE_DATABASE_VERSION = 2;
 export const RELAY_CACHE_STATE_STORE = 'relay-pool-state';
 export const RELAY_CACHE_HEALTH_STORE = 'relay-health';
-// Generous, because nothing is trusted on the cache's word alone: a relay is
-// probed again before it carries anything, so an old verdict costs one probe.
+// Lifetime of a discovery or a failed verdict. A healthy relay is exempt and
+// stays cached until it fails: it is what a start with dead seeds runs on, and
+// it is probed again before it carries anything, so an old verdict costs one
+// probe, never a transfer.
 export const RELAY_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Relays retained in the health cache — the record of everything the
 // background pass has found, proved, or buried. Deliberately far above
