@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EVENT_KIND_FILE_CHUNK } from '../nostr-file/constants';
-import { probeSignalingRelay, probeSignalingRelays } from './relay-diagnostics';
+import {
+  parseRelayInput,
+  probeSignalingRelay,
+  probeSignalingRelays,
+} from './relay-diagnostics';
 import { EVENT_KIND_DATA_TRANSFER, EVENT_KIND_RENDEZVOUS } from './types';
 
 type Frame = [string, ...unknown[]];
@@ -17,7 +21,7 @@ type StoredEvent = { id: string; kind: number; content: string };
 class FakeRelay {
   static instances: FakeRelay[] = [];
   static behaviour: {
-    open?: boolean;
+    open?: boolean | 'hang';
     closeCode?: number;
     closeReason?: string;
     accept?: (kind: number) => { ok: boolean; reason?: string };
@@ -38,6 +42,7 @@ class FakeRelay {
     this.url = String(url);
     FakeRelay.instances.push(this);
     queueMicrotask(() => {
+      if (FakeRelay.behaviour.open === 'hang') return;
       if (FakeRelay.behaviour.open === false) {
         this.onerror?.({});
         this.onclose?.({
@@ -218,6 +223,21 @@ describe('probeSignalingRelay', () => {
     }
   });
 
+  // A socket that hangs instead of closing must read the same way as one that
+  // was refused: one problem, at the step that had it.
+  it('reports a connect that never resolves as a single timed-out step', async () => {
+    FakeRelay.behaviour = { open: 'hang' };
+    const result = await probeSignalingRelay(RELAY, 30);
+    expect(result.connect.status).toBe('failed');
+    expect(result.connect.detail).toContain('timed out');
+    for (const check of [result.pinExchange, result.codeExchange]) {
+      for (const step of check.steps) {
+        expect(step.status).toBe('skipped');
+        expect(step.detail).toBe('not attempted');
+      }
+    }
+  });
+
   // Browsers give page script nothing but close code 1006, so without this
   // fallback the page would report every network failure identically.
   it('asks the relay over HTTPS why the socket failed', async () => {
@@ -281,5 +301,74 @@ describe('probeSignalingRelays', () => {
       'http://a.example',
     ]);
     expect(results.map((result) => result.url)).toEqual(['wss://a.example']);
+  });
+});
+
+describe('parseRelayInput', () => {
+  it('accepts a list however it was separated', () => {
+    const { relays } = parseRelayInput(
+      'wss://a.example\nwss://b.example, wss://c.example wss://d.example',
+    );
+    expect(relays).toEqual([
+      'wss://a.example',
+      'wss://b.example',
+      'wss://c.example',
+      'wss://d.example',
+    ]);
+  });
+
+  // What people actually type. Refusing it would be pedantry: a relay URL has
+  // one plausible scheme.
+  it('fills in the scheme for a bare hostname', () => {
+    expect(parseRelayInput('nostr.example').relays).toEqual([
+      'wss://nostr.example',
+    ]);
+  });
+
+  it('canonicalizes and deduplicates', () => {
+    const { relays } = parseRelayInput(
+      'wss://a.example/ wss://a.example:443 wss://A.example',
+    );
+    expect(relays).toEqual(['wss://a.example']);
+  });
+
+  // Pasting straight out of a source file or a JSON list is the point.
+  it('strips the punctuation a pasted list brings with it', () => {
+    const { relays } = parseRelayInput(
+      `['wss://a.example', "wss://b.example"]`,
+    );
+    expect(relays).toEqual(['wss://a.example', 'wss://b.example']);
+  });
+
+  // A dropped entry with no explanation is the failure this page exists to
+  // cure, so every rejection says which entry and why.
+  it('reports what it refused instead of dropping it', () => {
+    const { relays, rejected } = parseRelayInput(
+      'wss://a.example http://b.example not a url',
+    );
+    expect(relays).toEqual(['wss://a.example']);
+    expect(rejected.map((entry) => entry.raw)).toEqual([
+      'http://b.example',
+      'not',
+      'a',
+      'url',
+    ]);
+    expect(rejected[0].reason).toBe('not a usable wss:// relay URL');
+    // `wss://` in front of a single word parses as a URL this app would
+    // otherwise accept, so prose typed into the box must not become a probe
+    // list.
+    expect(rejected[1].reason).toBe('not a URL');
+  });
+
+  it('names an onion address for what it is', () => {
+    const { rejected } = parseRelayInput(
+      'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion',
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toContain('only through Tor');
+  });
+
+  it('is empty for empty input', () => {
+    expect(parseRelayInput('   \n  ')).toEqual({ relays: [], rejected: [] });
   });
 });

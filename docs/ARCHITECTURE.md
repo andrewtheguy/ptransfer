@@ -496,7 +496,11 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
   acknowledge a write and never serve it. A browser withholds the reason a
   socket failed, so a failed connect is followed by a NIP-11 read over HTTPS to
   tell a host that is up and refusing the upgrade from one that cannot be
-  reached at all
+  reached at all. The page runs it over the shipped pool or over relays typed
+  in, which is how a candidate is vetted before it becomes a default;
+  `parseRelayInput` puts typed text through the same `normalizeRelayUrl` any
+  relay list goes through and returns what it refused, with the reason, rather
+  than dropping it
 
 ### Code Exchange Signaling (`src/lib/code-signaling.ts`)
 

@@ -284,10 +284,13 @@ async function runSocketProbe(
     };
     const timer = setTimeout(() => {
       for (const step of steps) {
-        if (step.status === 'skipped') {
-          step.status = 'failed';
-          step.detail = 'timed out';
-        }
+        if (step.status !== 'skipped' || step.detail) continue;
+        // Same rule as a close: a socket that never opened leaves one
+        // problem, not six. Only steps that had a socket to run on can be
+        // said to have timed out.
+        const attempted = step === connect || opened;
+        step.status = attempted ? 'failed' : 'skipped';
+        step.detail = attempted ? 'timed out' : 'not attempted';
       }
       finish();
     }, timeoutMs);
@@ -475,6 +478,80 @@ async function runSocketProbe(
       }
     };
   });
+}
+
+/** A relay URL typed or pasted by hand that could not be used. */
+export interface RejectedRelayInput {
+  /** Exactly what was typed, so the person can see which entry it was. */
+  raw: string;
+  reason: string;
+}
+
+export interface ParsedRelayInput {
+  /** Canonical, deduplicated, in the order first seen. */
+  relays: string[];
+  rejected: RejectedRelayInput[];
+}
+
+/** Whitespace and commas both separate entries, so a pasted list just works. */
+const INPUT_SEPARATORS = /[\s,]+/;
+
+/**
+ * Turn typed or pasted text into relay URLs to probe.
+ *
+ * Rejections are returned rather than dropped. Silently ignoring an entry is
+ * the exact failure this page exists to cure: someone would type a relay,
+ * watch it not appear, and have no way to tell a URL this app refused from a
+ * relay that failed its probe.
+ */
+export function parseRelayInput(text: string): ParsedRelayInput {
+  const relays: string[] = [];
+  const rejected: RejectedRelayInput[] = [];
+  const seen = new Set<string>();
+  for (const token of text.split(INPUT_SEPARATORS)) {
+    // Pasting from a source file or a JSON list brings the punctuation along.
+    const raw = token.replace(/^["'[\]]+|["'[\],]+$/g, '').trim();
+    if (!raw) continue;
+    // A bare hostname is what people type, and a relay URL has exactly one
+    // plausible scheme. This leniency belongs at the typed-input boundary and
+    // nowhere else: `normalizeRelayUrl` also vets lists arriving from the
+    // network, where guessing at what a malformed entry meant would be wrong.
+    //
+    // The dot is what keeps it from being too lenient. `wss://` in front of a
+    // single word produces a URL this app would accept as a relay, so a
+    // sentence typed into the box would come back as a list of hostnames to
+    // probe; a public relay always has a dotted name.
+    const candidate =
+      raw.includes('://') || raw.includes('.') ? withScheme(raw) : raw;
+    const url = normalizeRelayUrl(candidate);
+    if (url === null) {
+      rejected.push({ raw, reason: describeRejectedInput(candidate) });
+      continue;
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    relays.push(url);
+  }
+  return { relays, rejected };
+}
+
+function withScheme(raw: string): string {
+  return raw.includes('://') ? raw : `wss://${raw}`;
+}
+
+function describeRejectedInput(candidate: string): string {
+  let host: string;
+  try {
+    host = new URL(candidate).hostname;
+  } catch {
+    return 'not a URL';
+  }
+  if (host.endsWith('.onion')) {
+    // Probing it from here would open the clearnet socket the anonymous mode
+    // exists to avoid, so refusing it is the feature, not a gap.
+    return 'onion relay — reachable only through Tor, so not checked here';
+  }
+  return 'not a usable wss:// relay URL';
 }
 
 /**
