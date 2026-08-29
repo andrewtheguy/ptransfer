@@ -482,15 +482,21 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
   [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)
 - `availability.ts`: Relay availability probing (clearnet only; the anonymous
   path has nothing to preflight from this device's own address)
-- `relay-diagnostics.ts`: The full signaling round trip against one relay —
-  publish the rendezvous kind, publish the ephemeral handshake kind, read the
-  rendezvous back — behind the `/debug` page. Reachability alone answers the
-  wrong question: a relay can accept the socket and still refuse those kinds,
-  or acknowledge a write and never serve it, and only the round trip separates
-  a relay that works from one that merely responds. A browser withholds the
-  reason a socket failed, so a failed connect is followed by a NIP-11 read over
-  HTTPS to tell a host that is up and refusing the upgrade from one that cannot
-  be reached at all
+- `relay-diagnostics.ts`: What each transfer method asks of one relay, run for
+  real behind the `/debug` page. Over a single socket and under one throwaway
+  key it publishes the rendezvous kind, the ephemeral handshake kind, and a
+  control-sized event through the chunk codec, then reads the rendezvous and
+  the control event back. That yields two independent verdicts, because the
+  methods do not need the same thing: PIN Exchange needs the signaling kinds,
+  while Code Exchange hand-carries its code and needs a relay only for the
+  encrypted control channel of its fallback (see Offer Relays). A relay with a
+  kind allowlist routinely carries one and refuses the other, so a single
+  verdict would have to be wrong about one of them. Reachability answers
+  neither question: a relay can accept the socket and still refuse a kind, or
+  acknowledge a write and never serve it. A browser withholds the reason a
+  socket failed, so a failed connect is followed by a NIP-11 read over HTTPS to
+  tell a host that is up and refusing the upgrade from one that cannot be
+  reached at all
 
 ### Code Exchange Signaling (`src/lib/code-signaling.ts`)
 

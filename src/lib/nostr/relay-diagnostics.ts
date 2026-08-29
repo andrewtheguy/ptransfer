@@ -1,4 +1,8 @@
-import { finalizeEvent } from 'nostr-tools';
+import { type Event, finalizeEvent } from 'nostr-tools';
+import { wipeBufferSource } from '../crypto/memory';
+import { chunkAad, encodeChunkContent } from '../nostr-file/codec';
+import { CONTROL_PROBE_BYTES } from '../nostr-file/constants';
+import { buildProbeEvent } from '../nostr-file/events';
 import { generateEphemeralKeys } from './events';
 import { normalizeRelayUrl } from './relays';
 import { EVENT_KIND_DATA_TRANSFER, EVENT_KIND_RENDEZVOUS } from './types';
@@ -23,34 +27,56 @@ const PROBE_EXPIRATION_SEC = 60;
  */
 const HTTPS_FALLBACK_TIMEOUT_MS = 5000;
 
+const PIN_READ_BACK_SUB = 'pin-readback';
+const CODE_READ_BACK_SUB = 'code-readback';
+
 export type RelayProbeStatus = 'ok' | 'failed' | 'skipped';
 
 export interface RelayProbeStep {
-  /** What was attempted, in the order signaling itself would attempt it. */
+  /** What was attempted, in the order the transfer itself would attempt it. */
   label: string;
   status: RelayProbeStatus;
   /** Round-trip time, the relay's own rejection reason, or why it was skipped. */
   detail?: string;
 }
 
-export interface RelayProbeResult {
-  url: string;
-  /** Every step passed: this relay can carry a PIN Exchange. */
-  healthy: boolean;
-  /** Whole round trip in ms, or null if the relay never finished one. */
+/** One transfer method's requirements, checked end to end. */
+export interface RelayCheck {
+  /** The method this proves the relay can carry. */
+  label: string;
+  /** Every step passed. */
+  passed: boolean;
+  /** Time from the probe's start to this check's last step, or null if it failed. */
   rttMs: number | null;
   steps: RelayProbeStep[];
 }
 
+export interface RelayProbeResult {
+  url: string;
+  /** Shared precondition: both checks need this same socket. */
+  connect: RelayProbeStep;
+  /** PIN Exchange signaling: both signaling kinds written, rendezvous read back. */
+  pinExchange: RelayCheck;
+  /** Code Exchange's encrypted control channel: a chunk-kind write read back. */
+  codeExchange: RelayCheck;
+}
+
 /**
- * Does this relay actually work for signaling?
+ * Does this relay actually work — and for which transfer method?
  *
- * Opening a socket proves almost nothing — a relay can accept the connection
- * and still refuse the event kinds signaling needs, or acknowledge a write and
- * silently drop it. So the probe performs the real sequence under a throwaway
- * key: publish the rendezvous kind, publish the ephemeral handshake kind, then
- * query the rendezvous back. Only a relay that completes all four steps can
- * put a sender and a receiver in touch.
+ * The two methods ask different things of a relay, so one verdict cannot
+ * answer for both. PIN Exchange puts the peers in touch over the signaling
+ * kinds: a retained kind-4243 rendezvous and an ephemeral kind-24243
+ * handshake. Code Exchange carries no signaling on a relay at all — the code
+ * is hand-carried — but its relay fallback runs an encrypted control channel
+ * over the chunk kind. A relay with a kind allowlist routinely takes one and
+ * refuses the other, and a relay that is simply reachable proves neither: it
+ * can accept the connection and still refuse the kinds, or acknowledge a
+ * write and never serve it.
+ *
+ * So both suites run over one socket, under one throwaway key, in the shapes
+ * production uses. What a relay can carry is then a fact about that relay
+ * rather than a guess from whichever transfer happened to touch it last.
  *
  * Clearnet only, deliberately. The anonymous pool's relays are onion services
  * that must be reached through Tor, and probing them from here would open the
@@ -61,9 +87,11 @@ export async function probeSignalingRelay(
   timeoutMs: number = PROBE_TIMEOUT_MS,
 ): Promise<RelayProbeResult> {
   const result = await runSocketProbe(url, timeoutMs);
-  const [connect] = result.steps;
-  if (connect.status === 'failed') {
-    connect.detail = await describeConnectFailure(url, connect.detail);
+  if (result.connect.status === 'failed') {
+    result.connect.detail = await describeConnectFailure(
+      url,
+      result.connect.detail,
+    );
   }
   return result;
 }
@@ -100,51 +128,29 @@ async function describeConnectFailure(
   }
 }
 
-function runSocketProbe(
-  url: string,
-  timeoutMs: number,
-): Promise<RelayProbeResult> {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const steps: RelayProbeStep[] = [
-      { label: 'connect', status: 'skipped' },
-      { label: `write kind ${EVENT_KIND_RENDEZVOUS}`, status: 'skipped' },
-      { label: `write kind ${EVENT_KIND_DATA_TRANSFER}`, status: 'skipped' },
-      { label: 'read back', status: 'skipped' },
-    ];
-    const [connect, writeRendezvous, writeHandshake, readBack] = steps;
+interface ProbeEvents {
+  rendezvous: Event;
+  handshake: Event;
+  chunk: Event;
+  publicKey: string;
+  /** `d` tag of the rendezvous, so the read-back filter can name it. */
+  marker: string;
+  /** `d` tag of the control-channel event. */
+  chunkDTag: string;
+  /** Encoded content of the control event, to compare what comes back against. */
+  chunkContent: string;
+}
 
-    let settled = false;
-    let opened = false;
-    let socket: WebSocket | null = null;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket?.close();
-      } catch {
-        // A socket that never opened has nothing to close.
-      }
-      const healthy = steps.every((step) => step.status === 'ok');
-      resolve({
-        url,
-        healthy,
-        rttMs: healthy ? Date.now() - started : null,
-        steps,
-      });
-    };
-    const timer = setTimeout(() => {
-      for (const step of steps) {
-        if (step.status === 'skipped') {
-          step.status = 'failed';
-          step.detail = 'timed out';
-        }
-      }
-      finish();
-    }, timeoutMs);
-
-    const { secretKey, publicKey } = generateEphemeralKeys();
+/**
+ * Build all three events under one throwaway key, in the shapes production
+ * publishes. The control event goes through the real chunk codec
+ * (`buildProbeEvent`, AES-GCM then Z85) rather than a stand-in, so what the
+ * relay sees — kind, tags, encoding, size — is what a real transfer would put
+ * on it, and stays that way if the codec changes.
+ */
+async function buildProbeEvents(): Promise<ProbeEvents> {
+  const { secretKey, publicKey } = generateEphemeralKeys();
+  try {
     const createdAt = Math.floor(Date.now() / 1000);
     const marker = `probe:${publicKey.slice(0, 16)}`;
     // The production shapes, minus anything PIN-derived: a probe must not put
@@ -171,6 +177,121 @@ function runSocketProbe(
       secretKey,
     );
 
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const aesKey = await crypto.subtle.importKey(
+      'raw',
+      keyBytes as BufferSource,
+      'AES-GCM',
+      false,
+      ['encrypt'],
+    );
+    wipeBufferSource(keyBytes);
+    // CONTROL_PROBE_BYTES, not a full chunk: the control channel is what Code
+    // Exchange needs a relay for, and it is what `resolveTransferRelays`
+    // probes with, so this asks the same question of the same relay.
+    const payload = crypto.getRandomValues(new Uint8Array(CONTROL_PROBE_BYTES));
+    const chunkContent = await encodeChunkContent(
+      aesKey,
+      payload,
+      chunkAad('probe', 0, 1),
+    );
+    const { event: chunk, dTag: chunkDTag } = buildProbeEvent(
+      secretKey,
+      chunkContent,
+    );
+
+    return {
+      rendezvous,
+      handshake,
+      chunk,
+      publicKey,
+      marker,
+      chunkDTag,
+      chunkContent,
+    };
+  } finally {
+    wipeBufferSource(secretKey);
+  }
+}
+
+async function runSocketProbe(
+  url: string,
+  timeoutMs: number,
+): Promise<RelayProbeResult> {
+  const events = await buildProbeEvents();
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const connect: RelayProbeStep = { label: 'connect', status: 'skipped' };
+    const writeRendezvous: RelayProbeStep = {
+      label: `write kind ${EVENT_KIND_RENDEZVOUS} (rendezvous)`,
+      status: 'skipped',
+    };
+    const writeHandshake: RelayProbeStep = {
+      label: `write kind ${EVENT_KIND_DATA_TRANSFER} (handshake)`,
+      status: 'skipped',
+    };
+    const readRendezvous: RelayProbeStep = {
+      label: 'read the rendezvous back',
+      status: 'skipped',
+    };
+    const writeControl: RelayProbeStep = {
+      label: `write kind ${events.chunk.kind} (control message)`,
+      status: 'skipped',
+    };
+    const readControl: RelayProbeStep = {
+      label: 'read the control message back',
+      status: 'skipped',
+    };
+    const pinSteps = [writeRendezvous, writeHandshake, readRendezvous];
+    const codeSteps = [writeControl, readControl];
+    const steps = [connect, ...pinSteps, ...codeSteps];
+
+    // When each suite finished, so a check that passes early is not charged
+    // for the other one still running.
+    let pinMs: number | null = null;
+    let codeMs: number | null = null;
+    const noteIfDone = (own: RelayProbeStep[], set: (ms: number) => void) => {
+      if (own.every((step) => step.status === 'ok')) set(Date.now() - started);
+    };
+
+    let settled = false;
+    let opened = false;
+    let socket: WebSocket | null = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+        // A socket that never opened has nothing to close.
+      }
+      const check = (
+        label: string,
+        own: RelayProbeStep[],
+        rttMs: number | null,
+      ): RelayCheck => {
+        const passed =
+          connect.status === 'ok' && own.every((step) => step.status === 'ok');
+        return { label, passed, rttMs: passed ? rttMs : null, steps: own };
+      };
+      resolve({
+        url,
+        connect,
+        pinExchange: check('PIN Exchange signaling', pinSteps, pinMs),
+        codeExchange: check('Code Exchange control', codeSteps, codeMs),
+      });
+    };
+    const timer = setTimeout(() => {
+      for (const step of steps) {
+        if (step.status === 'skipped') {
+          step.status = 'failed';
+          step.detail = 'timed out';
+        }
+      }
+      finish();
+    }, timeoutMs);
+
     try {
       socket = new WebSocket(url);
     } catch (error) {
@@ -180,12 +301,15 @@ function runSocketProbe(
       return;
     }
 
+    const send = (frame: unknown) => socket?.send(JSON.stringify(frame));
+
     socket.onopen = () => {
       opened = true;
       connect.status = 'ok';
       connect.detail = `${Date.now() - started}ms`;
-      socket?.send(JSON.stringify(['EVENT', rendezvous]));
-      socket?.send(JSON.stringify(['EVENT', handshake]));
+      send(['EVENT', events.rendezvous]);
+      send(['EVENT', events.handshake]);
+      send(['EVENT', events.chunk]);
     };
 
     socket.onerror = () => {
@@ -210,7 +334,7 @@ function runSocketProbe(
         }
         // A step the socket outlived genuinely failed; one that never got a
         // socket to run on was not attempted, and saying it "failed" would
-        // report four problems where the relay has one.
+        // report six problems where the relay has one.
         step.status = opened ? 'failed' : 'skipped';
         step.detail = opened ? reason : 'not attempted';
       }
@@ -234,50 +358,114 @@ function runSocketProbe(
           boolean,
           string | undefined,
         ];
-        const step = id === rendezvous.id ? writeRendezvous : writeHandshake;
-        if (id !== rendezvous.id && id !== handshake.id) return;
-        step.status = accepted ? 'ok' : 'failed';
-        step.detail = accepted ? undefined : reason || 'rejected';
-        if (id === rendezvous.id) {
+        const write =
+          id === events.rendezvous.id
+            ? writeRendezvous
+            : id === events.handshake.id
+              ? writeHandshake
+              : id === events.chunk.id
+                ? writeControl
+                : null;
+        if (!write) return;
+        write.status = accepted ? 'ok' : 'failed';
+        write.detail = accepted ? undefined : reason || 'rejected';
+
+        // Only a write that landed can be read back; a refused one leaves the
+        // read with nothing to prove.
+        if (id === events.rendezvous.id) {
           if (accepted) {
-            socket?.send(
-              JSON.stringify([
-                'REQ',
-                'readback',
-                {
-                  kinds: [EVENT_KIND_RENDEZVOUS],
-                  authors: [publicKey],
-                  '#d': [marker],
-                  limit: 1,
-                },
-              ]),
-            );
+            send([
+              'REQ',
+              PIN_READ_BACK_SUB,
+              {
+                kinds: [EVENT_KIND_RENDEZVOUS],
+                authors: [events.publicKey],
+                '#d': [events.marker],
+                limit: 1,
+              },
+            ]);
           } else {
-            readBack.status = 'skipped';
-            readBack.detail = 'the write was refused';
+            readRendezvous.status = 'skipped';
+            readRendezvous.detail = 'the write was refused';
+          }
+        } else if (id === events.chunk.id) {
+          if (accepted) {
+            send([
+              'REQ',
+              CODE_READ_BACK_SUB,
+              {
+                kinds: [events.chunk.kind],
+                authors: [events.publicKey],
+                '#d': [events.chunkDTag],
+                limit: 1,
+              },
+            ]);
+          } else {
+            readControl.status = 'skipped';
+            readControl.detail = 'the write was refused';
           }
         }
+        noteIfDone(pinSteps, (ms) => {
+          pinMs = ms;
+        });
+        noteIfDone(codeSteps, (ms) => {
+          codeMs = ms;
+        });
       } else if (type === 'EVENT') {
         const [, subscription, event] = frame as [
           string,
           string,
-          { id?: string },
+          { id?: string; content?: string },
         ];
-        if (subscription === 'readback' && event?.id === rendezvous.id) {
-          readBack.status = 'ok';
+        if (
+          subscription === PIN_READ_BACK_SUB &&
+          event?.id === events.rendezvous.id
+        ) {
+          readRendezvous.status = 'ok';
+          noteIfDone(pinSteps, (ms) => {
+            pinMs = ms;
+          });
+        } else if (subscription === CODE_READ_BACK_SUB) {
+          if (event?.id !== events.chunk.id) return;
+          // Byte-identical content is the whole test: the codec round trip is
+          // already proven locally, so what is in question is whether the
+          // relay stored and served the payload intact.
+          const intact = event.content === events.chunkContent;
+          readControl.status = intact ? 'ok' : 'failed';
+          if (!intact) readControl.detail = 'served altered content';
+          noteIfDone(codeSteps, (ms) => {
+            codeMs = ms;
+          });
         }
       } else if (type === 'EOSE') {
-        if (readBack.status === 'skipped' && !readBack.detail) {
-          readBack.status = 'failed';
+        const [, subscription] = frame as [string, string];
+        const read =
+          subscription === PIN_READ_BACK_SUB
+            ? readRendezvous
+            : subscription === CODE_READ_BACK_SUB
+              ? readControl
+              : null;
+        if (read?.status === 'skipped' && !read.detail) {
+          read.status = 'failed';
           // The relay acknowledged the write and then did not serve it: the
           // failure a connect-only check can never see.
-          readBack.detail = 'acknowledged but not served';
+          read.detail = 'acknowledged but not served';
         }
       } else if (type === 'CLOSED') {
-        const [, , reason] = frame as [string, string, string | undefined];
-        if (readBack.status === 'skipped') {
-          readBack.status = 'failed';
-          readBack.detail = reason || 'subscription refused';
+        const [, subscription, reason] = frame as [
+          string,
+          string,
+          string | undefined,
+        ];
+        const read =
+          subscription === PIN_READ_BACK_SUB
+            ? readRendezvous
+            : subscription === CODE_READ_BACK_SUB
+              ? readControl
+              : null;
+        if (read?.status === 'skipped') {
+          read.status = 'failed';
+          read.detail = reason || 'subscription refused';
         }
       }
 
