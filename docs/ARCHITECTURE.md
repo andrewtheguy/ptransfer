@@ -489,9 +489,14 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
   the control event back. That yields two independent verdicts, because the
   methods do not need the same thing: PIN Exchange needs the signaling kinds,
   while Code Exchange hand-carries its code and needs a relay only for the
-  encrypted control channel of its fallback (see Offer Relays). A relay with a
-  kind allowlist routinely carries one and refuses the other, so a single
-  verdict would have to be wrong about one of them. Reachability answers
+  encrypted control channel of its fallback (see Offer Relays). Nothing makes
+  a relay treat the two alike — an allowlist can name one set of kinds and not
+  the other, the control event is far larger, and a rendezvous has to be
+  retained where an addressable chunk is replaced — so a single verdict would
+  be an assumption about which of them a relay was checked for. Every relay
+  sampled so far has been all-or-nothing across the three kinds; the split is
+  a difference that can exist, not one yet seen in the wild. Reachability
+  answers
   neither question: a relay can accept the socket and still refuse a kind, or
   acknowledge a write and never serve it. A browser withholds the reason a
   socket failed, so a failed connect is followed by a NIP-11 read over HTTPS to

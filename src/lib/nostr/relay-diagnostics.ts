@@ -69,10 +69,15 @@ export interface RelayProbeResult {
  * kinds: a retained kind-4243 rendezvous and an ephemeral kind-24243
  * handshake. Code Exchange carries no signaling on a relay at all — the code
  * is hand-carried — but its relay fallback runs an encrypted control channel
- * over the chunk kind. A relay with a kind allowlist routinely takes one and
- * refuses the other, and a relay that is simply reachable proves neither: it
- * can accept the connection and still refuse the kinds, or acknowledge a
- * write and never serve it.
+ * over the chunk kind. Nothing makes a relay treat those alike: an allowlist
+ * can name one set of kinds and not the other, the control event is far
+ * larger, and a rendezvous has to be retained where an addressable chunk is
+ * replaced. Every relay sampled so far has been all-or-nothing across the
+ * three kinds, so this is a difference that can exist rather than one
+ * observed in the wild — which is the point of measuring instead of assuming.
+ * A relay that is simply reachable proves neither: it can accept the
+ * connection and still refuse the kinds, or acknowledge a write and never
+ * serve it.
  *
  * So both suites run over one socket, under one throwaway key, in the shapes
  * production uses. What a relay can carry is then a fact about that relay
