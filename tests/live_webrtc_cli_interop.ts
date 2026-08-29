@@ -281,7 +281,7 @@ async function cliToCli(): Promise<void> {
   console.log('\n=== CLI sender -> CLI receiver ===');
   const source = join(CLI_ROOT, 'README.md');
   const outputDir = await mkdtemp(join(ARTIFACTS, 'cli-to-cli-'));
-  const sender = runCli(['test', 'send', source], 'CLI sender');
+  const sender = runCli(['pin', 'send', source], 'CLI sender');
   const pin = await waitForStdoutLine(
     sender,
     (line) => line.length === 12,
@@ -290,7 +290,7 @@ async function cliToCli(): Promise<void> {
   say(`the CLI sender's PIN is ${pin}`);
 
   const receiver = runCli(
-    ['test', 'receive', '--output', outputDir],
+    ['pin', 'receive', '--output', outputDir],
     'CLI receiver',
   );
   // The PIN is never an argument: it would be readable in the process list for
@@ -324,7 +324,7 @@ async function cliToWeb(activeBrowser: PwBrowser): Promise<void> {
   logPageConsole(page, 'web receiver', say);
   try {
     const source = await multiChunkFixture();
-    const sender = runCli(['test', 'send', source], 'CLI sender');
+    const sender = runCli(['pin', 'send', source], 'CLI sender');
     const pin = await waitForStdoutLine(
       sender,
       (line) => line.length === 12,
@@ -395,7 +395,7 @@ async function webToCli(activeBrowser: PwBrowser): Promise<void> {
     say(`the web sender's PIN is ${pin}`);
 
     const receiver = runCli(
-      ['test', 'receive', '--output', outputDir],
+      ['pin', 'receive', '--output', outputDir],
       'CLI receiver',
     );
     receiver.child.stdin.write(`${pin}\n`);
