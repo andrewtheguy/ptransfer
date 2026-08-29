@@ -21,12 +21,11 @@ pieces.
 
 This document is the architecture reference, and the contract the two
 implementations meet on: the web app and `ptransfer-cli` both carry this path,
-in both directions. What the CLI does not carry yet is the caching around it —
-no relay-health cache between transfers and no background sweep of the relay
-population — so it discovers and probes afresh every run and its ring is
-whatever that probe proves; it is on that project's own roadmap. Nothing on the
-wire depends on it either way: the cache changes which candidates are tried
-first, never what is published or how it is read back. An offer names no relays when its sender could not
+in both directions, along with the caching around it — the CLI keeps the same
+relay-health records in a file under the user's cache directory and runs the
+same background sweep behind a transfer. Nothing on the wire depends on the
+cache either way: it changes which candidates are tried first, never what is
+published or how it is read back. An offer names no relays when its sender could not
 prove enough of them, or when it is an anonymous offer, and then there is no
 clearnet fallback for that transfer. For the user-facing guide see
 [CODE_EXCHANGE.md](CODE_EXCHANGE.md); for the wire contract the two

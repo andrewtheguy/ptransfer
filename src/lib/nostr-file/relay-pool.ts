@@ -403,6 +403,11 @@ export async function discoverAllRelayCandidates(
     signal?: AbortSignal;
     isCancelled?: () => boolean;
     onProgress?: (found: number) => void;
+    /**
+     * Every relay found so far, after each page. A caller that abandons the
+     * enumeration mid-page still has what the pages before it turned up.
+     */
+    onCandidates?: (found: string[]) => void;
   } = {},
 ): Promise<string[]> {
   const canonicalSeeds = canonicalUrls(seeds);
@@ -432,6 +437,7 @@ export async function discoverAllRelayCandidates(
         if (!seedSet.has(url)) found.add(url);
       }
       opts.onProgress?.(found.size);
+      opts.onCandidates?.([...found]);
       // Step the cursor past the oldest event this page returned. A cursor
       // that fails to move means the relays are serving the same page again.
       const oldest = events.reduce(
@@ -667,26 +673,36 @@ export async function sweepRelayHealth(
   // querySync for DISCOVERY_PAGE_MAX_WAIT_MS. Racing the signal means a caller
   // about to destroy the pool is not held up by an in-flight page; the
   // abandoned query settles into nothing.
-  const discovered = await Promise.race([
+  // What the pages so far turned up, kept outside the discovery promise: an
+  // abort that wins the race below abandons that promise mid-page, and the
+  // relays it had already enumerated must not go with it.
+  let partial: string[] = [];
+  const raced = await Promise.race([
     discoverAllRelayCandidates(pool, seeds, {
       signal: opts.signal,
       isCancelled: opts.isCancelled,
+      onCandidates: (found) => {
+        partial = found;
+      },
     }).catch(() => [] as string[]),
     aborted.then(() => null),
   ]);
-  if (discovered === null || stopped()) return;
+  const discovered = raced ?? partial;
   // Discovery reopened the seeds; the ones not carrying this transfer are
-  // done again.
-  const doneSeeds = seeds.filter((url) => !transferRelays.includes(url));
-  if (doneSeeds.length > 0) pool.close?.(doneSeeds);
+  // done again. Not on an abort, whose caller is about to destroy the pool.
+  if (raced !== null) {
+    const doneSeeds = seeds.filter((url) => !transferRelays.includes(url));
+    if (doneSeeds.length > 0) pool.close?.(doneSeeds);
+  }
 
   const urls = canonicalUrls([...(opts.unprobed ?? []), ...discovered]).filter(
     (url) => !excluded.has(url),
   );
   if (urls.length === 0) return;
-  // Written down before a single probe runs: the enumeration is the part the
-  // next transfer needs most, and it must survive a teardown that lands long
-  // before the probing is done.
+  // Written down before a single probe runs, and before a stop is honoured:
+  // the enumeration is the part the next transfer needs most, and it must
+  // survive a teardown that lands long before the probing is done — or
+  // during the discovery itself.
   await saveDiscoveredRelays(storage, urls).catch(() => {});
   if (stopped()) return;
 

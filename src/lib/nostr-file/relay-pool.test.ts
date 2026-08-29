@@ -1283,7 +1283,12 @@ describe('sweepRelayHealth', () => {
     });
 
     // Resolving at all is the assertion: the hung page is still unresolved.
-    expect(storage.relayHealth).toEqual([]);
+    // What the sweep already had — here only the unprobed leftover — is
+    // written down as discovered, and nothing is probed.
+    expect(storage.relayHealth.map((relay) => relay.url)).toEqual([
+      'wss://stalled.example',
+    ]);
+    expect(storage.relayHealth[0].lastCheckedAt).toBeNull();
     expect(pool.closedRelays).toEqual([]);
     releaseQuery();
   });
