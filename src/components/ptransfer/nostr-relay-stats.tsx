@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { formatFileSize } from '@/lib/file-utils';
 import type {
   NostrFileRelayStats,
+  NostrFileSeedProbe,
   NostrFileTransferStats,
 } from '@/lib/nostr-file';
 
@@ -155,6 +156,7 @@ export function NostrRelayStatsPanel({
               ),
             )}
           </dl>
+          <SeedProbeList probes={stats.seedProbes} />
           <RelayList
             title="Signaling relays"
             relays={stats.relays.filter((r) => r.role === 'control')}
@@ -167,6 +169,48 @@ export function NostrRelayStatsPanel({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Every signaling seed the control probe was given, with its verdict. Unlike
+ * the lists below it this is not a record of relays the transfer used: a seed
+ * that failed carries no traffic and appears nowhere else, so naming the
+ * failures here is the whole point — it answers "which of the pool still
+ * works" without having to infer it from an absence.
+ */
+function SeedProbeList({ probes }: { probes: NostrFileSeedProbe[] }) {
+  if (probes.length === 0) return null;
+  const healthy = probes.filter((p) => typeof p.rttMs === 'number').length;
+  return (
+    <div className="space-y-1">
+      <p className="font-medium text-muted-foreground">
+        Signaling relay health ({healthy}/{probes.length} healthy)
+      </p>
+      <ul className="space-y-0.5">
+        {probes.map((probe) => (
+          <li
+            key={probe.url}
+            className="flex justify-between gap-4 text-muted-foreground"
+          >
+            <span className="truncate" title={probe.url}>
+              • {probe.url.replace('wss://', '')}
+            </span>
+            <span
+              className={`shrink-0 tabular-nums ${
+                probe.rttMs === null ? 'text-destructive' : ''
+              }`}
+            >
+              {probe.rttMs === undefined
+                ? 'not probed'
+                : probe.rttMs === null
+                  ? 'failed'
+                  : `healthy ${probe.rttMs}ms`}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

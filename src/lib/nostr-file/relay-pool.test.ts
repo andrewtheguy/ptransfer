@@ -665,6 +665,21 @@ describe('resolveTransferRelays', () => {
     }
   });
 
+  it('records a probe verdict for every seed, failures included', async () => {
+    // A seed that fails carries no traffic and so appears in no other part of
+    // the stats. Naming it here is what lets the statistics panel say which
+    // pool entries still work instead of leaving a bad one invisible.
+    const pool = createMockPool({
+      blackholeRelays: new Set([SEED_RELAYS[0]]),
+    });
+    const o = opts();
+    await resolveTransferRelays(pool, memoryStorage(), o);
+    expect(o.stats.seedProbes.map((probe) => probe.url)).toEqual(SEED_RELAYS);
+    const [failed, ...rest] = o.stats.seedProbes;
+    expect(failed.rttMs).toBeNull();
+    for (const probe of rest) expect(typeof probe.rttMs).toBe('number');
+  });
+
   it('backfills the whole control set from cached candidates when every default fails', async () => {
     const now = Date.now();
     const candidates = Array.from(

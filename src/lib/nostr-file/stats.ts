@@ -43,6 +43,25 @@ export interface NostrFileRelayStats {
   demoted: boolean;
 }
 
+/**
+ * One signaling-seed relay's control-probe verdict. The probe writes a
+ * control-sized event under a throwaway key and reads it back, so a relay
+ * that accepts the connection but refuses (or silently drops) the event
+ * fails here — which is the distinction a plain reachability check misses.
+ *
+ * Every seed the probe was given gets a row, passing or not: a pool entry
+ * that has stopped working is exactly what this list exists to name, and it
+ * would otherwise be invisible — only survivors go on to carry traffic.
+ */
+export interface NostrFileSeedProbe {
+  url: string;
+  /**
+   * Round-trip ms when the write->read probe passed, `null` when it failed,
+   * `undefined` when the probe's early stop meant this seed was never tried.
+   */
+  rttMs?: number | null;
+}
+
 export interface NostrFileTransferStats {
   role: 'sender' | 'receiver';
   fileBytes: number;
@@ -93,6 +112,8 @@ export interface NostrFileTransferStats {
       number
     >
   >;
+  /** Control-probe verdict per signaling seed, in pool order. */
+  seedProbes: NostrFileSeedProbe[];
   /** Control relays first, then ring relays in placement order. */
   relays: NostrFileRelayStats[];
 }
@@ -149,6 +170,7 @@ export function createTransferStats(
     relaysChecked: 0,
     relaysHealthy: 0,
     phaseMs: {},
+    seedProbes: [],
     relays: [],
   };
 }

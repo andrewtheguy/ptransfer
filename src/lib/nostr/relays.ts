@@ -107,8 +107,8 @@ export const DEFAULT_RELAYS = canonicalRelayPool(
     'wss://nos.lol',
     'wss://relay.primal.net',
     'wss://nostr.rocks',
-    'wss://relay.nostr.pub',
-    'wss://relay.snort.social',
+    'wss://relay.nostr.com',
+    'wss://nostr.oxtr.dev',
   ],
   'DEFAULT_RELAYS',
 );
