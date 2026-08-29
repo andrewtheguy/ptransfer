@@ -373,12 +373,21 @@ export async function resolveTransferRelays(
   };
 
   const probeStarted = Date.now();
+  // Record a verdict for every seed, not just the ones that pass. Only
+  // healthy seeds go on to carry control traffic, so without this a seed that
+  // has gone bad leaves no trace anywhere — it simply stops appearing, which
+  // reads the same as never having been in the pool.
+  stats.seedProbes = seeds.map((url) => ({ url }));
   const healthyDefaults = await healthCheckRelays(pool, seeds, {
     probeBytes: CONTROL_PROBE_BYTES,
     timeoutMs: CONTROL_PROBE_TIMEOUT_MS,
     targetCount: CONTROL_RELAY_COUNT,
     isCancelled: opts.isCancelled,
-    onProgress: opts.onControlProgress,
+    onProgress: (checked, healthy, url, rttMs) => {
+      const probe = stats.seedProbes.find((seed) => seed.url === url);
+      if (probe) probe.rttMs = rttMs;
+      opts.onControlProgress(checked, healthy);
+    },
   });
   stats.phaseMs.controlProbe = Date.now() - probeStarted;
   throwIfCancelled();

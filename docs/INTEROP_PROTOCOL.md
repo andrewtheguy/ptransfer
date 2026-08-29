@@ -1,6 +1,6 @@
 # pTransfer Interoperable Protocol
 
-**Interop protocol version: `4`**
+**Interop protocol version: `5`**
 
 This document is the normative wire contract between pTransfer implementations.
 The web app is the reference implementation; `ptransfer-cli` is the other
@@ -300,8 +300,8 @@ wss://relay.damus.io
 wss://nos.lol
 wss://relay.primal.net
 wss://nostr.rocks
-wss://relay.nostr.pub
-wss://relay.snort.social
+wss://relay.nostr.com
+wss://nostr.oxtr.dev
 ```
 
 ### 4.3 Rendezvous event (sender → everyone)

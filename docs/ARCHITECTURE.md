@@ -482,6 +482,30 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
   [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)
 - `availability.ts`: Relay availability probing (clearnet only; the anonymous
   path has nothing to preflight from this device's own address)
+- `relay-diagnostics.ts`: What each transfer method asks of one relay, run for
+  real behind the `/debug` page. Over a single socket and under one throwaway
+  key it publishes the rendezvous kind, the ephemeral handshake kind, and a
+  control-sized event through the chunk codec, then reads the rendezvous and
+  the control event back. That yields two independent verdicts, because the
+  methods do not need the same thing: PIN Exchange needs the signaling kinds,
+  while Code Exchange hand-carries its code and needs a relay only for the
+  encrypted control channel of its fallback (see Offer Relays). Nothing makes
+  a relay treat the two alike — an allowlist can name one set of kinds and not
+  the other, the control event is far larger, and a rendezvous has to be
+  retained where an addressable chunk is replaced — so a single verdict would
+  be an assumption about which of them a relay was checked for. Every relay
+  sampled so far has been all-or-nothing across the three kinds; the split is
+  a difference that can exist, not one yet seen in the wild. Reachability
+  answers
+  neither question: a relay can accept the socket and still refuse a kind, or
+  acknowledge a write and never serve it. A browser withholds the reason a
+  socket failed, so a failed connect is followed by a NIP-11 read over HTTPS to
+  tell a host that is up and refusing the upgrade from one that cannot be
+  reached at all. The page runs it over the shipped pool or over relays typed
+  in, which is how a candidate is vetted before it becomes a default;
+  `parseRelayInput` puts typed text through the same `normalizeRelayUrl` any
+  relay list goes through and returns what it refused, with the reason, rather
+  than dropping it
 
 ### Code Exchange Signaling (`src/lib/code-signaling.ts`)
 
@@ -648,7 +672,11 @@ channel the moment the direct WebRTC attempt fails.
   (`healthCheckRelays` at `CONTROL_PROBE_BYTES` / `CONTROL_PROBE_TIMEOUT_MS`,
   target `CONTROL_RELAY_COUNT`). Read-back matters: the sender needs relays that
   *serve* control messages, not just accept them. This step is awaited, because
-  the offer must name the relays before its QR can be shown.
+  the offer must name the relays before its QR can be shown. Every seed's
+  verdict is recorded in `stats.seedProbes`, pass or fail, and the transfer
+  statistics panel lists them: a failed seed carries no traffic and so shows up
+  nowhere else, which would make a pool entry that has gone bad indistinguishable
+  from one that was never configured.
 - **Backfill from full-size-proven discoveries.** When fewer than
   `CONTROL_RELAY_COUNT` defaults pass, storage discovery runs *early* and its
   candidates are **full-size** (`HEALTH_CHECK_PROBE_BYTES`) probed only until
