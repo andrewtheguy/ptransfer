@@ -72,11 +72,26 @@ export function SendTab() {
   const dragCounterRef = useRef(0);
 
   const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+  // The option belongs to PIN Exchange alone, and the switch is only rendered
+  // there — but the mode can be changed after it was turned on, so what the
+  // rest of this component reads is the conjunction, never the switch.
+  const anonymousSignalingActive = transferMode === 'pin' && anonymousSignaling;
+  // Same rule for the Code Exchange option: rendered only in that mode, read
+  // only as the conjunction, so switching mode never carries it along.
+  const anonymousRelayActive = transferMode === 'code' && anonymousRelay;
+  // Two ways to end up sending file bytes through Tor: the transport itself,
+  // and the fallback a Code Exchange sender selects. The ceiling is the
+  // transport's either way.
+  const usesTorTransport = transferMode === 'tor' || anonymousRelayActive;
   // The Tor transport's ceiling is far lower than the app's, and it is the
   // receiver's rule too — a CLI receiver refuses a larger offer outright — so
-  // it is enforced on the selection rather than discovered mid-transfer.
-  const sizeLimit =
-    transferMode === 'tor' ? TOR_MAX_TRANSFER_BYTES : MAX_MESSAGE_SIZE;
+  // it is enforced on the selection rather than discovered mid-transfer. For
+  // the anonymous fallback that means before a code is handed over: a sender
+  // that only found out afterwards would have spent the whole exchange to
+  // learn its selected fallback cannot carry the file.
+  const sizeLimit = usesTorTransport
+    ? TOR_MAX_TRANSFER_BYTES
+    : MAX_MESSAGE_SIZE;
   const isOverLimit = totalSize > sizeLimit;
   // Well under that ceiling, a Tor transfer is worth a word about — not
   // because it will be slow, but because it might be. Advice either way: the
@@ -94,17 +109,10 @@ export function SendTab() {
   // and the ceiling the two peers enforce is a fixed constant — so a selection
   // of many tiny files has to be caught here rather than mid-transfer.
   const overWireLimit =
-    transferMode === 'tor' &&
+    usesTorTransport &&
     !isOverLimit &&
     projectedWireBytesFor(selectedFiles, willZip) > TOR_MAX_WIRE_BYTES;
   const canSend = selectedFiles.length > 0 && !isOverLimit && !overWireLimit;
-  // The option belongs to PIN Exchange alone, and the switch is only rendered
-  // there — but the mode can be changed after it was turned on, so what the
-  // rest of this component reads is the conjunction, never the switch.
-  const anonymousSignalingActive = transferMode === 'pin' && anonymousSignaling;
-  // Same rule for the Code Exchange option: rendered only in that mode, read
-  // only as the conjunction, so switching mode never carries it along.
-  const anonymousRelayActive = transferMode === 'code' && anonymousRelay;
   // Whichever of the two is on, this tab loads a Tor client, so the bridge
   // question is the same question.
   const usesTorBridge = anonymousSignalingActive || anonymousRelayActive;
@@ -382,7 +390,11 @@ export function SendTab() {
         {isOverLimit && (
           <p className="text-xs text-destructive">
             Total size exceeds the {formatFileSize(sizeLimit)} limit
-            {transferMode === 'tor' ? ' of the Tor transport' : ''}
+            {usesTorTransport
+              ? transferMode === 'tor'
+                ? ' of the Tor transport'
+                : " of the anonymous fallback's Tor transport"
+              : ''}
           </p>
         )}
         {overWireLimit && (

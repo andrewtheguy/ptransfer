@@ -89,10 +89,10 @@ const say = (line: string) => console.log(`${elapsed().padStart(8)} ${line}`);
 
 /**
  * The two sides agree on the *interop* protocol version, not this app's npm
- * version: the app bumps its patch version for web-only changes (Code
- * Exchange, the relay fallback) the CLI does not implement. The npm version is
- * still read, but only so the harness can tell whether the server it finds is
- * serving the checkout it was pointed at.
+ * version: the app bumps its patch version for changes in parts of it no other
+ * implementation speaks. The npm version is still read, but only so the
+ * harness can tell whether the server it finds is serving the checkout it was
+ * pointed at.
  */
 async function assertProtocolVersionMatches(): Promise<void> {
   const cargoToml = await readFile(join(CLI_ROOT, 'Cargo.toml'), 'utf8');

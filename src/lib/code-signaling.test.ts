@@ -222,6 +222,36 @@ describe('offer-borne fallback relays', () => {
     ]);
   });
 
+  it('rejects an answer carrying any offer-only field', () => {
+    const answer = {
+      type: 'answer',
+      sdp: 'sdp',
+      candidates: [],
+      createdAt: Date.now(),
+      publicKey: Array.from(publicKey),
+      confirm: encodeAnswerConfirmation(
+        new Uint8Array(ANSWER_CONFIRMATION_BYTES),
+      ),
+    };
+    expect(isValidSignalingPayload(answer)).toBe(true);
+
+    // None of these is covered by the answer transcript the confirmation tag
+    // is computed over, so a correctly tagged answer carrying one would
+    // describe a file nothing agreed to.
+    const offerOnly = {
+      fileName: 'other.pdf',
+      fileSize: 1,
+      contentEncoding: 'identity',
+      mimeType: 'text/plain',
+      salt: Array.from(new Uint8Array(16)),
+    };
+    for (const [field, value] of Object.entries(offerOnly)) {
+      expect(isValidSignalingPayload({ ...answer, [field]: value })).toBe(
+        false,
+      );
+    }
+  });
+
   it('rejects a misplaced or unusable relay list', () => {
     const base = {
       type: 'offer',

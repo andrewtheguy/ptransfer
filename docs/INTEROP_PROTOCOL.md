@@ -56,15 +56,17 @@ against this document.** Some of it is web-internal, and no other
 implementation should carry it at all; the rest are cross-implementation modes
 governed by separate specifications and version boundaries:
 
-- **Code Exchange** (the hand-carried PT01 offer/answer, its multi-QR chunking,
-  its ECDH key agreement, and its answer confirmation tag). It is still
-  changing shape — a relay-based answer-return path was removed, and the
-  hand-carried answer was recently bound to its offer — so it stays out of the contract
-  until it stabilizes. It is described in
-  [ARCHITECTURE.md](ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts)
-  and [CODE_EXCHANGE.md](CODE_EXCHANGE.md), as web-internal documentation.
+- **Code Exchange** (the hand-carried PT01 offer/answer, its ECDH key
+  agreement, its answer confirmation tag, and its anonymous Tor fallback), a
+  cross-implementation mode with its own contract in
+  [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md), versioned separately.
+  Its direct transfer does use §7 of this document, which is governed here; its
+  multi-QR carriage is browser-only and is described in
+  [ARCHITECTURE.md](ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts).
 - The **Nostr file-relay data-path fallback** ([NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md)),
-  which only Code Exchange can reach.
+  the clearnet fallback only Code Exchange can reach. It is implemented by the
+  web app and by `ptransfer-cli`, and governed by its own document rather than
+  by this one.
 - **Anonymous signaling** ([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)):
   an experimental PIN Exchange option — implemented by the web app and by
   `ptransfer-cli` — that carries this same handshake to a disjoint pool of
@@ -85,7 +87,7 @@ governed by separate specifications and version boundaries:
 
 Where this document and [ARCHITECTURE.md](ARCHITECTURE.md) disagree about the
 interoperable subset, this document wins; ARCHITECTURE.md carries the design
-rationale and the currently browser-only parts.
+rationale and the browser-only parts.
 
 ## Changing this document
 

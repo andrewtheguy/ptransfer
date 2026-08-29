@@ -9,15 +9,19 @@ pTransfer is a browser-based encrypted file and folder transfer application. Its
 Two implementations exist. This app is the reference one; the other is
 [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli), the companion
 command-line app for headless machines and terminals, which implements PIN
-Exchange (including anonymous signaling) and the Tor onion transport, but does
-not yet implement Code Exchange or its fallbacks. Either end of a
-transfer may be a browser tab or the CLI. What the two must agree on is
-specified in [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md),
+Exchange (including anonymous signaling), Code Exchange (including its
+anonymous Tor fallback), and the Tor onion transport. What it does not
+implement is Code Exchange's ordinary clearnet fallback, the Nostr file relay,
+and the QR half of carrying a code — there is no camera at a terminal, so it
+copies and pastes the same codes as text. Either end of a transfer may be a
+browser tab or the CLI. What the two must agree on is specified in
+[INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md),
+[CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md),
 [TOR_TRANSPORT.md](TOR_TRANSPORT.md), and
 [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md); everything else in this
 document describes browser-app behavior outside the shared contract.
 
-Those three are the source of truth, and they live only here — the CLI
+Those four are the source of truth, and they live only here — the CLI
 implements against them instead of keeping a copy, and documents its own
 internals in its own repo. Each carries a *Changing this document* section
 naming the short list that actually binds another implementation, and the
@@ -37,7 +41,7 @@ constraints above.
 
 1. **Direct First, Selected Relay Fallback**: Both WebRTC-based modes try a direct data channel. PIN Exchange stops if that connection fails. Code Exchange can use one selected fallback when its payload is no larger than 100 MiB: the Nostr file-relay protocol in ordinary offers, or the Tor-backed anonymous relay path when the offer carries `anon: true`.
 2. **Single P2P Transfer Path**: `src/lib/p2p-transfer.ts` is the only file-transfer implementation used after signaling opens a WebRTC data channel. Both signaling methods use its 128 KiB AES-GCM chunks, `DONE:<chunkCount>:<byteCount>`, and data-channel `ACK` framing on the direct path.
-3. **Separate Relay Transfer Paths**: `src/lib/nostr-file/` implements the ordinary Code Exchange fallback: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check. `src/lib/tor/code-relay.ts` implements the anonymous variant: onion-service Nostr relays carry its encrypted control channel and the sender's temporary onion service carries the file using the shared Tor transfer protocol.
+3. **Separate Relay Transfer Paths**: `src/lib/nostr-file/` implements the ordinary Code Exchange fallback, which `ptransfer-cli` carries too: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check. `src/lib/tor/code-relay.ts` implements the anonymous variant: onion-service Nostr relays carry its encrypted control channel and the sender's temporary onion service carries the file using the shared Tor transfer protocol.
 4. **Bounded Receive Storage**: Direct receivers append authenticated chunks in reliable data-channel order to an adaptive sink: memory through 100 MiB, then OPFS. Both relay fallbacks are capped at 100 MiB. The Nostr fallback materializes its payload in memory while hashing, compressing, assembling, and verifying it; the Tor receiver streams into a bounded in-memory sink.
 5. **Method-Specific Setup and Failure Handling**: PIN Exchange uses Nostr for its PAKE handshake and WebRTC signals. Code Exchange hand-carries both the offer and the answer. An ordinary offer may name the public relays used as the fallback's encrypted control channel; an anonymous offer instead carries `anon: true` and uses the fixed onion-relay pool.
 6. **PIN Locates and Authenticates via PAKE (PIN Exchange)**: A rotating 12-character, case-sensitive letters-and-digits PIN locates the sender's rendezvous event and drives a SPAKE2 (RFC 9382, P-256) password-authenticated key exchange. Content and signaling keys are HKDF derivations off the SPAKE2 shared secret — which mixes fresh ephemeral scalars from both sides — so nothing published to relays can test a PIN guess offline, and a PIN recovered after the fact decrypts nothing.
@@ -45,11 +49,13 @@ constraints above.
 ## Signaling Methods
 
 > [!NOTE]
-> Only PIN Exchange and the shared data-channel transfer layer are part of the
-> cross-implementation contract. [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md)
-> specifies that subset normatively and carries the interop protocol version;
-> Code Exchange and its fallbacks are currently browser-only and are not yet
-> implemented by the CLI.
+> PIN Exchange and the shared data-channel transfer layer are specified
+> normatively by [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md), which carries the
+> interop protocol version; Code Exchange and its anonymous fallback are
+> specified by [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md), which is
+> versioned separately. Both of Code Exchange's fallbacks are shared; the
+> clearnet Nostr file relay has its own contract in
+> [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
 > This document is the design rationale for all of it.
 
 By default, Nostr is used for signaling. Code Exchange and the Tor onion transport are available as alternatives under the Transfer mode selector on the send page. The receive page has no selector: it infers the mode from what the receiver pastes or scans. Both sender and receiver still use the same method.
@@ -70,7 +76,7 @@ The table below compares the two WebRTC-based modes. The third — **Tor Onion S
 Code Exchange carries one advanced option of its own, **Anonymous signaling and
 relay** (experimental), which moves its fallback into Tor: the control channel onto
 onion-service Nostr relays and the file onto an onion service the sending tab
-publishes. It is currently browser-only, it is described for users in
+publishes. Both implementations ship it, it is described for users in
 [CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental), and
 its design is below under the fallback it replaces. With the option on, both devices
 need internet because Tor is reached over the network.
@@ -475,6 +481,13 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
 
 ### Code Exchange Signaling (`src/lib/code-signaling.ts`)
 
+The normative wire contract for this mode — the PT01 container, the payload
+fields, the key schedule, both transcript digests, and the anonymous
+fallback's rendezvous — is
+[CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md). What follows is this
+app's implementation of it, plus the parts only this app carries: the multi-QR
+offer path and the clearnet relay fallback.
+
 Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. Camera is optional; signaling data can be exchanged via clipboard. **Network requirements:** With internet, STUN can help devices on different networks discover a direct ICE route, but success is not guaranteed. Without internet, devices must be able to reach each other directly, normally on the same local network (not air-gapped). WebRTC TURN relays are not configured; an eligible Code Exchange can instead use the application-level Nostr file fallback after direct setup fails.
 
 **How it works:**
@@ -686,7 +699,7 @@ The pipeline is `whole-file deflate → chunk → AES-256-GCM → Z85` (deflate 
 
 The full architecture — relay discovery and placement ring, chunk event schema, manifest format, the live control-channel protocol (message vocabulary, re-sends, relay demotion), sequence diagrams, security model, and all tunables — is documented in [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md).
 
-#### Anonymous relay variant (experimental, currently browser-only)
+#### Anonymous relay variant (experimental)
 
 The **Anonymous signaling and relay** switch on the send tab replaces both halves of
 the fallback above for one transfer. The rendezvous that makes it possible lives in

@@ -389,7 +389,9 @@ export function ReceiveInput({
               ptransfer-cli
             </a>
             , the companion command-line app, is pasted here exactly the same
-            way. Only Code Exchange is not yet supported by the CLI.
+            way, and so is a sender code it minted — the CLI carries Code
+            Exchange as text, since a terminal has no camera to scan a QR grid
+            with.
           </p>
         </CollapsibleContent>
       </Collapsible>

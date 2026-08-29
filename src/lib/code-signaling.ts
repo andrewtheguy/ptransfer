@@ -259,8 +259,8 @@ async function sha256Hex(data: BufferSource): Promise<string> {
  * array instead, which fixes element order here rather than depending on key
  * ordering, and whose string escaping means no field value can forge a
  * delimiter into another. The `confirm` field is excluded by construction;
- * fields outside this list do not exist in the format (`relays` is rejected on
- * an answer) and no consumer reads any.
+ * fields outside this list do not exist in the format — every offer-only one
+ * is rejected on an answer — and no consumer reads any.
  */
 export async function computeAnswerTranscriptHash(
   payload: SignalingPayload,
@@ -326,7 +326,29 @@ export function isValidSignalingPayload(
   if (!isValidPublicKeyArray(p.publicKey)) return false;
   if (!isValidConfirmField(p)) return false;
   if (!isValidAnonField(p)) return false;
+  if (!isValidOfferOnlyFields(p)) return false;
   return isValidRelaysField(p);
+}
+
+/** The fields only an offer describes: what it is sending, and the salt every
+ * derivation off the exchange uses. */
+const OFFER_ONLY_FIELDS = [
+  'fileName',
+  'fileSize',
+  'contentEncoding',
+  'mimeType',
+  'salt',
+] as const;
+
+/**
+ * Offer-only means every offer-only field, not just the ones that steer a
+ * fallback. None of them is covered by the answer transcript the confirmation
+ * tag is computed over, so an answer carrying one would arrive correctly
+ * tagged and describe a file nothing agreed to.
+ */
+function isValidOfferOnlyFields(p: Record<string, unknown>): boolean {
+  if (p.type === 'offer') return true;
+  return OFFER_ONLY_FIELDS.every((field) => p[field] === undefined);
 }
 
 /**
