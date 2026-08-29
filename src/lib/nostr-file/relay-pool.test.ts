@@ -309,6 +309,10 @@ describe('getRelayCandidates', () => {
           lastSucceededAt: 0,
           consecutiveFailures: 1,
         }),
+        cachedRelay('wss://recently-failed.example', {
+          lastCheckedAt: now - 200,
+          consecutiveFailures: 1,
+        }),
         cachedRelay('wss://old-but-good.example', {
           lastSucceededAt: 0,
           rttMs: 100,
@@ -343,9 +347,16 @@ describe('getRelayCandidates', () => {
       'wss://old-but-good.example',
       'wss://candidate.example',
     ]);
-    expect(storage.relayHealth.map((relay) => relay.url)).not.toContain(
-      'wss://stale.example',
-    );
+    const kept = storage.relayHealth.map((relay) => relay.url);
+    expect(kept).not.toContain('wss://stale.example');
+    // A failure recent enough keeps its entry, and its count, even though
+    // the relay was listed long ago; only its candidacy has lapsed.
+    expect(kept).toContain('wss://recently-failed.example');
+    expect(
+      storage.relayHealth.find(
+        (relay) => relay.url === 'wss://recently-failed.example',
+      )?.consecutiveFailures,
+    ).toBe(1);
   });
 
   it('never returns a seed, whichever cache it was left in', async () => {

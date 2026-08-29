@@ -175,16 +175,25 @@ function parseRelayHealth(value: unknown): CachedRelay[] {
       supportsStorage: relay.supportsStorage,
     };
     const previous = byUrl.get(url);
-    const freshness = Math.max(
-      parsed.lastDiscoveredAt,
-      parsed.lastSucceededAt ?? 0,
-    );
-    const previousFreshness = previous
-      ? Math.max(previous.lastDiscoveredAt, previous.lastSucceededAt ?? 0)
-      : -1;
-    if (freshness >= previousFreshness) byUrl.set(url, parsed);
+    if (relayFreshness(parsed) >= (previous ? relayFreshness(previous) : -1)) {
+      byUrl.set(url, parsed);
+    }
   }
   return [...byUrl.values()];
+}
+
+/**
+ * When the relay was last heard of: listed, probed, or proven. A failed probe
+ * counts — it is the verdict the entry exists to keep, and an entry that
+ * expired on it would come back from the next listing as unprobed, at the
+ * front of the sweep's queue.
+ */
+function relayFreshness(relay: CachedRelay): number {
+  return Math.max(
+    relay.lastDiscoveredAt,
+    relay.lastCheckedAt ?? 0,
+    relay.lastSucceededAt ?? 0,
+  );
 }
 
 /** The latest verdict was a pass. */
@@ -200,7 +209,7 @@ function isHealthyRelay(relay: CachedRelay): boolean {
  */
 function isFreshRelay(relay: CachedRelay, now: number): boolean {
   if (isHealthyRelay(relay)) return true;
-  const freshness = Math.max(relay.lastDiscoveredAt, relay.lastSucceededAt ?? 0);
+  const freshness = relayFreshness(relay);
   return freshness <= now && now - freshness < RELAY_CANDIDATE_TTL_MS;
 }
 
