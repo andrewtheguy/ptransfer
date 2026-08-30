@@ -19,7 +19,8 @@ export const PTRANSFER_CLI_INSTALL_SH =
 
 /**
  * The Windows installer. That target is beta — it builds and ships with every
- * release, but Linux and macOS are the tested ones — and it wants PowerShell 7.
+ * release, but Linux and macOS are the tested ones. It runs under Windows
+ * PowerShell 5.1, but PowerShell 7 is recommended and is what it is tested in.
  */
 export const PTRANSFER_CLI_INSTALL_PS1 =
   'irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex';

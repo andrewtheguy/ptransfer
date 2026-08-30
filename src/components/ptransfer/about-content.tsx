@@ -446,9 +446,11 @@ export function AboutContent() {
             </code>
             <p className="text-xs text-muted-foreground">
               Windows is a beta target: it ships with every release, but Linux
-              and macOS are the tested ones. Run it under PowerShell 7, and copy
-              and paste a Code Exchange code with Ctrl+Shift+C and Ctrl+Shift+V
-              — a right-click copy or paste truncates it.
+              and macOS are the tested ones. The installer and the CLI run under
+              Windows PowerShell 5.1, but PowerShell 7 is recommended and is the
+              environment they are tested in. Copy and paste a Code Exchange
+              code with Ctrl+Shift+C and Ctrl+Shift+V — a right-click copy or
+              paste truncates it.
             </p>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
