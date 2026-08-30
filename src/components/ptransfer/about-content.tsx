@@ -7,6 +7,7 @@ import {
 import { SectionContainer } from '@/components/section-container';
 import {
   OFFLINE_QR_TRANSFER_URL,
+  PTRANSFER_CLI_INSTALL_PS1,
   PTRANSFER_CLI_INSTALL_SH,
   PTRANSFER_CLI_URL,
 } from '@/lib/constants';
@@ -437,6 +438,18 @@ export function AboutContent() {
             <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
               {PTRANSFER_CLI_INSTALL_SH}
             </code>
+            <p className="pt-1 text-xs font-medium text-foreground">
+              Install (Windows PowerShell, beta)
+            </p>
+            <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
+              {PTRANSFER_CLI_INSTALL_PS1}
+            </code>
+            <p className="text-xs text-muted-foreground">
+              Windows is a beta target: it ships with every release, but Linux
+              and macOS are the tested ones. Run it under PowerShell 7, and copy
+              and paste a Code Exchange code with Ctrl+Shift+C and Ctrl+Shift+V
+              — a right-click copy or paste truncates it.
+            </p>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
             Source, releases, and full documentation are on{' '}
