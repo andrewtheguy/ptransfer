@@ -38,16 +38,10 @@ It is not a separate protocol. Either end of a transfer may be a browser tab or 
 | Nostr relay fallback | yes | yes | Ordinary Code Exchange fallback; specified in [docs/NOSTR_FILE_RELAY.md](./docs/NOSTR_FILE_RELAY.md) |
 | Code Exchange Tor fallback | yes | yes | Experimental Code Exchange option; specified by the Code Exchange and Tor contracts |
 
-Install it with the one-liners that repo publishes:
+Install it with the one-liner that repo publishes (Linux and macOS):
 
 ```bash
-# Linux and macOS
 curl -sSL https://andrewtheguy.github.io/ptransfer-cli/install.sh | bash
-```
-
-```powershell
-# Windows
-irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex
 ```
 
 This repo is the source of truth for everything the two share: PIN Exchange, Code

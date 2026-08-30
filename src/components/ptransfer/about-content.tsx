@@ -7,7 +7,6 @@ import {
 import { SectionContainer } from '@/components/section-container';
 import {
   OFFLINE_QR_TRANSFER_URL,
-  PTRANSFER_CLI_INSTALL_PS1,
   PTRANSFER_CLI_INSTALL_SH,
   PTRANSFER_CLI_URL,
 } from '@/lib/constants';
@@ -437,12 +436,6 @@ export function AboutContent() {
             </p>
             <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
               {PTRANSFER_CLI_INSTALL_SH}
-            </code>
-            <p className="pt-1 text-xs font-medium text-foreground">
-              Install (Windows PowerShell)
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
-              {PTRANSFER_CLI_INSTALL_PS1}
             </code>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">

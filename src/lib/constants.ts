@@ -13,8 +13,6 @@ export const OFFLINE_QR_TRANSFER_URL = 'https://qrsecure.kuvi.dev/transfer';
 export const PTRANSFER_CLI_URL =
   'https://github.com/andrewtheguy/ptransfer-cli';
 
-/** One-line installers published from that repo's GitHub Pages site. */
+/** One-line installer published from that repo's GitHub Pages site. */
 export const PTRANSFER_CLI_INSTALL_SH =
   'curl -sSL https://andrewtheguy.github.io/ptransfer-cli/install.sh | bash';
-export const PTRANSFER_CLI_INSTALL_PS1 =
-  'irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex';
