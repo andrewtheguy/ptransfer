@@ -13,6 +13,14 @@ export const OFFLINE_QR_TRANSFER_URL = 'https://qrsecure.kuvi.dev/transfer';
 export const PTRANSFER_CLI_URL =
   'https://github.com/andrewtheguy/ptransfer-cli';
 
-/** One-line installer published from that repo's GitHub Pages site. */
+/** One-line installers published from that repo's GitHub Pages site. */
 export const PTRANSFER_CLI_INSTALL_SH =
   'curl -sSL https://andrewtheguy.github.io/ptransfer-cli/install.sh | bash';
+
+/**
+ * The Windows installer. That target is beta — it builds and ships with every
+ * release, but Linux and macOS are the tested ones. It runs under Windows
+ * PowerShell 5.1, but PowerShell 7 is recommended and is what it is tested in.
+ */
+export const PTRANSFER_CLI_INSTALL_PS1 =
+  'irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex';
