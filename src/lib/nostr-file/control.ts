@@ -4,8 +4,11 @@ import { decrypt, encrypt } from '../crypto/aes-gcm';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../nostr/events';
 import { normalizeRelayUrl } from '../nostr/relays';
 import {
+  CONTROL_DEMOTE_FAILURE_RATIO,
+  CONTROL_DEMOTE_MIN_PUBLISHES,
   CONTROL_KEY_INFO,
   CONTROL_MESSAGE_MAX_BYTES,
+  CONTROL_RELAY_MAX,
   EVENT_KIND_FILE_CHUNK,
   NOSTR_FILE_AAD_PREFIX,
   PUBLISH_BACKOFF_BASE_MS,
@@ -51,9 +54,17 @@ export type ChunkPlacement = [index: number, pos: number, gen: number];
  * chunk — the position in THIS message's `relays` of the relay it is on,
  * encoded with POSITION_ALPHABET — and `gens` lists the chunks that were
  * re-sent with their current generation (everything else is generation 0).
- * The whole ring and placement travel in every announcement, so a lost one
- * costs nothing; control bodies are deflated before sealing, which squeezes
- * the near-periodic map and shared-prefix relay URLs to a few hundred bytes.
+ * `ctl` is the sender's current control set: the offer's signaling relays
+ * minus the ones it has demoted, plus the replacements it promoted in their
+ * place. The receiver adds what it does not already hold, which is how a
+ * relay the offer never named reaches it — over the signaling relays that
+ * still work.
+ *
+ * The whole ring, placement, and control set travel in every announcement,
+ * so a lost one costs nothing: a swap the receiver missed is repeated on the
+ * next heartbeat rather than needing an acknowledgement of its own. Control
+ * bodies are deflated before sealing, which squeezes the near-periodic map
+ * and shared-prefix relay URLs to a few hundred bytes.
  */
 export interface AvailMessage {
   t: 'avail';
@@ -62,6 +73,7 @@ export interface AvailMessage {
   relays: string[];
   map: string;
   gens: [index: number, gen: number][];
+  ctl: string[];
 }
 
 /** One character per ring position; bounds the ring at 64 relays. */
@@ -261,6 +273,27 @@ function isPlacementList(
 }
 
 /**
+ * A relay list a peer sent: canonical `wss://` URLs, at most `max` of them,
+ * no duplicates. Null when it is not one.
+ *
+ * Positions index into the ring list, and both lists decide which sockets
+ * this side opens, so a repeat under an equivalent URL form (a trailing
+ * slash, an explicit `:443`) is forged or corrupt rather than merely untidy.
+ */
+function parseRelayList(value: unknown, max: number): string[] | null {
+  if (!Array.isArray(value) || value.length > max) return null;
+  const relays: string[] = [];
+  for (const relay of value) {
+    if (typeof relay !== 'string' || relay.length >= 200) return null;
+    const normalized = normalizeRelayUrl(relay);
+    if (normalized === null) return null;
+    relays.push(normalized);
+  }
+  if (new Set(relays).size !== relays.length) return null;
+  return relays;
+}
+
+/**
  * Shape-check a decrypted sender message; null if it is not one. Avail
  * messages are self-describing: `map` positions are validated against the
  * `relays` list travelling in the same message. `totalChunks` is null until
@@ -280,19 +313,12 @@ export function parseSenderMessage(
   }
   if (m.t === 'avail') {
     if (totalChunks === null) return null;
-    if (!Array.isArray(m.relays) || m.relays.length > UPLOAD_RELAY_COUNT) {
-      return null;
-    }
-    const relays: string[] = [];
-    for (const relay of m.relays) {
-      if (typeof relay !== 'string' || relay.length >= 200) return null;
-      const normalized = normalizeRelayUrl(relay);
-      if (normalized === null) return null;
-      relays.push(normalized);
-    }
-    // Ring positions index into the list, so a relay repeated under an
-    // equivalent URL form (e.g. trailing slash) is forged or corrupt.
-    if (new Set(relays).size !== relays.length) return null;
+    const relays = parseRelayList(m.relays, UPLOAD_RELAY_COUNT);
+    if (relays === null) return null;
+    // A control set is never empty: the sender publishes this very message
+    // over it, and demotion stops at MIN_CONTROL_RELAYS.
+    const ctl = parseRelayList(m.ctl, CONTROL_RELAY_MAX);
+    if (ctl === null || ctl.length === 0) return null;
     if (!isCount(m.upto, totalChunks)) return null;
     // No ring yet (still discovering) is presence-only: nothing placed.
     if (relays.length === 0 && m.upto > 0) return null;
@@ -319,6 +345,7 @@ export function parseSenderMessage(
       relays,
       map: m.map,
       gens: m.gens as [number, number][],
+      ctl,
     };
   }
   return null;
@@ -357,7 +384,29 @@ export interface ControlChannel {
    * soon as one relay accepts it; rejects when every relay refused.
    */
   send(message: object): Promise<void>;
+  /** Relays messages are currently published to, demotions excluded. */
+  relays(): string[];
+  /**
+   * Start publishing to — and subscribing to — these relays as well, up to
+   * CONTROL_RELAY_MAX in total. Already-known and unusable URLs are ignored;
+   * returns what was actually taken on.
+   */
+  add(relays: string[]): string[];
   close(): void;
+}
+
+/**
+ * When a control relay stops being worth publishing to. `onDemoted` is
+ * called once per relay, from inside the failing publish, so the caller can
+ * put a replacement in its place; the channel itself never promotes.
+ *
+ * Omit it and nothing is ever demoted — which is what the anonymous
+ * fallback's two-relay onion pool wants, having nothing to fall back to.
+ */
+export interface ControlDemotionPolicy {
+  /** Never demote below this many active relays. */
+  minRelays: number;
+  onDemoted: (relay: string) => void;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -367,21 +416,123 @@ const DELIVERY_FAILED_MESSAGE =
   'Lost contact with the Nostr relays — the control message could not be delivered';
 
 /**
+ * The channel's live relay set.
+ *
+ * Publishing shrinks it: a relay that gives up more than
+ * CONTROL_DEMOTE_FAILURE_RATIO of its settled publishes, once at least
+ * CONTROL_DEMOTE_MIN_PUBLISHES of them have settled, stops being published
+ * to. `add` grows it, with the replacement the caller chose.
+ *
+ * A demotion leaves the subscription in place, and the subscription set only
+ * ever grows. That is what keeps a swap safe without an acknowledgement:
+ * whatever the two sides currently publish to, each still hears everything
+ * the other says on every relay it has ever known, so the peer can never be
+ * stranded on a relay this side stopped watching.
+ */
+class ControlRelaySet {
+  /** Published to, in the order they were taken on. */
+  private active: string[];
+  /** Everything ever taken on — subscribed to, demoted or not. */
+  private readonly known: Set<string>;
+  private readonly settled = new Map<string, { ok: number; gaveUp: number }>();
+  private readonly stats: NostrFileTransferStats | undefined;
+  private readonly policy: ControlDemotionPolicy | undefined;
+
+  constructor(
+    relays: string[],
+    stats: NostrFileTransferStats | undefined,
+    policy: ControlDemotionPolicy | undefined,
+  ) {
+    this.active = [...new Set(relays)];
+    this.known = new Set(this.active);
+    this.stats = stats;
+    this.policy = policy;
+  }
+
+  /** A snapshot: one publish walks the set it started with. */
+  snapshot(): string[] {
+    return [...this.active];
+  }
+
+  /** Relays not yet known, capped at what the channel may ever hold. */
+  accept(relays: string[]): string[] {
+    const room = CONTROL_RELAY_MAX - this.known.size;
+    if (room <= 0) return [];
+    const fresh: string[] = [];
+    for (const relay of relays) {
+      if (fresh.length >= room) break;
+      const url = normalizeRelayUrl(relay);
+      if (url === null || this.known.has(url)) continue;
+      this.known.add(url);
+      this.active.push(url);
+      fresh.push(url);
+      if (this.stats) relayStatsFor(this.stats, url, 'control');
+    }
+    return fresh;
+  }
+
+  private tally(relay: string): { ok: number; gaveUp: number } {
+    let entry = this.settled.get(relay);
+    if (!entry) {
+      entry = { ok: 0, gaveUp: 0 };
+      this.settled.set(relay, entry);
+    }
+    return entry;
+  }
+
+  accepted(relay: string, bytes: number): void {
+    this.tally(relay).ok++;
+    if (!this.stats) return;
+    const row = relayStatsFor(this.stats, relay, 'control');
+    row.eventsAccepted++;
+    row.bytesUp += bytes;
+  }
+
+  attempted(relay: string): void {
+    if (this.stats)
+      relayStatsFor(this.stats, relay, 'control').publishAttempts++;
+  }
+
+  /** Every retry rejected. Demotes the relay once the ratio condemns it. */
+  gaveUp(relay: string): void {
+    const tally = this.tally(relay);
+    tally.gaveUp++;
+    if (this.stats) {
+      relayStatsFor(this.stats, relay, 'control').publishesFailed++;
+    }
+    if (!this.policy) return;
+    if (this.active.length <= this.policy.minRelays) return;
+    const settled = tally.ok + tally.gaveUp;
+    if (settled < CONTROL_DEMOTE_MIN_PUBLISHES) return;
+    if (tally.gaveUp / settled < CONTROL_DEMOTE_FAILURE_RATIO) return;
+    const at = this.active.indexOf(relay);
+    if (at < 0) return;
+    this.active.splice(at, 1);
+    if (this.stats) {
+      relayStatsFor(this.stats, relay, 'control').demoted = true;
+      this.stats.controlRelaysDemoted++;
+    }
+    this.policy.onDemoted(relay);
+  }
+}
+
+/**
  * Publish to every relay; resolve on the first acceptance, keep retrying the
  * rest in the background, reject only when all relays gave up. Per-relay
- * attempts, acceptances, bytes, and give-ups are tallied into `stats`.
+ * attempts, acceptances, bytes, and give-ups are tallied into `stats`, and a
+ * give-up may demote the relay it happened on.
  */
 function publishToAny(
   pool: NostrFilePool,
-  relays: string[],
+  set: ControlRelaySet,
   event: Event,
   isClosed: () => boolean,
-  stats?: NostrFileTransferStats,
 ): Promise<void> {
   // A channel closed before the first attempt says so, rather than blaming
   // relays it never tried; an empty ring has to settle too, or the caller
   // waits forever on a loop that never runs.
   if (isClosed()) return Promise.reject(new Error(CHANNEL_CLOSED_MESSAGE));
+  const relays = set.snapshot();
   if (relays.length === 0) {
     return Promise.reject(new Error(DELIVERY_FAILED_MESSAGE));
   }
@@ -391,14 +542,10 @@ function publishToAny(
       void (async () => {
         for (let attempt = 0; attempt <= PUBLISH_MAX_RETRIES; attempt++) {
           if (isClosed()) break;
-          if (stats) relayStatsFor(stats, relay, 'control').publishAttempts++;
+          set.attempted(relay);
           try {
             await Promise.all(pool.publish([relay], event));
-            if (stats) {
-              const row = relayStatsFor(stats, relay, 'control');
-              row.eventsAccepted++;
-              row.bytesUp += event.content.length;
-            }
+            set.accepted(relay, event.content.length);
             resolve();
             return;
           } catch {
@@ -407,9 +554,7 @@ function publishToAny(
             }
           }
         }
-        if (stats && !isClosed()) {
-          relayStatsFor(stats, relay, 'control').publishesFailed++;
-        }
+        if (!isClosed()) set.gaveUp(relay);
         failures++;
         if (failures === relays.length) {
           reject(
@@ -424,9 +569,15 @@ function publishToAny(
 }
 
 /**
- * Open the control channel: subscribe to the peer's messages on every ring
- * relay (backlog since the transfer started, live thereafter) and return a
- * sender for our own.
+ * Open the control channel: subscribe to the peer's messages on every
+ * control relay (backlog since the transfer started, live thereafter) and
+ * return a sender for our own.
+ *
+ * The relay set is live rather than fixed. With a `demotion` policy, a relay
+ * that keeps giving up publishes stops being published to and the caller is
+ * told, so it can `add` a replacement; the subscription stays, so nothing the
+ * peer sends over it is lost. Without one — the anonymous fallback's onion
+ * pool, the hello watch — the set only ever grows.
  *
  * `onMessage` receives every decryptable peer message with its author
  * pubkey; authorization (which pubkey is the peer) and ordering are the
@@ -448,6 +599,8 @@ export function openControlChannel(
     authors?: string[];
     /** Tally sent events and unsealed peer messages into these totals. */
     stats?: NostrFileTransferStats;
+    /** When to stop publishing to a relay. Omitted: never. */
+    demotion?: ControlDemotionPolicy;
     onMessage: (message: unknown, pubkey: string) => void;
   },
 ): ControlChannel {
@@ -457,32 +610,37 @@ export function openControlChannel(
   let closed = false;
   let n = 0;
 
-  const subscription: PoolSubscription = pool.subscribeMany(
-    relays,
-    {
-      kinds: [EVENT_KIND_FILE_CHUNK],
-      '#x': [controlChannelTag(transferId)],
-      since: opts.since,
-      ...(opts.authors ? { authors: opts.authors } : {}),
-    },
-    {
-      onevent: (event) => {
-        if (closed || seen.has(event.id)) return;
-        seen.add(event.id);
-        const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
-        if (!dTag.startsWith(`${transferId}:ctl:${peerRole}:`)) return;
-        void decodeControlMessage(key, transferId, peerRole, event.content)
-          .then((message) => {
-            if (closed) return;
-            if (opts.stats) opts.stats.controlReceived++;
-            onMessage(message, event.pubkey);
-          })
-          .catch(() => {
-            // Not sealed under this transfer's key — ignore.
-          });
-      },
-    },
-  );
+  const set = new ControlRelaySet(relays, opts.stats, opts.demotion);
+
+  const filter = {
+    kinds: [EVENT_KIND_FILE_CHUNK],
+    '#x': [controlChannelTag(transferId)],
+    since: opts.since,
+    ...(opts.authors ? { authors: opts.authors } : {}),
+  };
+  const onevent = (event: Event) => {
+    if (closed || seen.has(event.id)) return;
+    seen.add(event.id);
+    const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
+    if (!dTag.startsWith(`${transferId}:ctl:${peerRole}:`)) return;
+    void decodeControlMessage(key, transferId, peerRole, event.content)
+      .then((message) => {
+        if (closed) return;
+        if (opts.stats) opts.stats.controlReceived++;
+        onMessage(message, event.pubkey);
+      })
+      .catch(() => {
+        // Not sealed under this transfer's key — ignore.
+      });
+  };
+
+  // One subscription per batch of relays taken on. A promotion opens another
+  // rather than reopening the first: the events already read are in `seen`,
+  // and the relays already connected have no reason to re-serve their
+  // backlog because a new one joined.
+  const subscriptions: PoolSubscription[] = [
+    pool.subscribeMany(set.snapshot(), filter, { onevent }),
+  ];
 
   return {
     async send(message) {
@@ -499,13 +657,24 @@ export function openControlChannel(
         content,
         expiresAt: opts.expiresAt,
       });
-      await publishToAny(pool, relays, event, () => closed, opts.stats);
+      await publishToAny(pool, set, event, () => closed);
       if (opts.stats) opts.stats.controlSent++;
+    },
+    relays() {
+      return set.snapshot();
+    },
+    add(more) {
+      if (closed) return [];
+      const fresh = set.accept(more);
+      if (fresh.length > 0) {
+        subscriptions.push(pool.subscribeMany(fresh, filter, { onevent }));
+      }
+      return fresh;
     },
     close() {
       if (closed) return;
       closed = true;
-      subscription.close();
+      for (const subscription of subscriptions) subscription.close();
     },
   };
 }

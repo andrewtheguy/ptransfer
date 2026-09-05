@@ -2,13 +2,19 @@ import type { Event } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { chunkAad, encodeChunkContent, sha256 } from './codec';
-import { LIVE_BATCH_CHUNKS, NOSTR_FILE_CHUNK_SIZE } from './constants';
+import {
+  CONTROL_DEMOTE_MIN_PUBLISHES,
+  LIVE_BATCH_CHUNKS,
+  NOSTR_FILE_CHUNK_SIZE,
+} from './constants';
 import {
   type AckMessage,
+  type AvailMessage,
   deriveControlKey,
   encodePosition,
   openControlChannel,
   parseReceiverMessage,
+  parseSenderMessage,
 } from './control';
 import { type LiveReceiveProgress, receiveFileLive } from './download-live';
 import { buildChunkEvent } from './events';
@@ -111,6 +117,25 @@ function pickedRing(pool: MockPool, relays: string[]): PreparedStorageRelays {
     relayOverride: relays,
     storage: memoryStorage(),
   });
+}
+
+/**
+ * The same, plus the spares a real preparation holds back from the ring for
+ * the control channel to promote. A picked ring has no discovery behind it,
+ * so the reserve has to be supplied here.
+ */
+function ringWithReserve(
+  pool: MockPool,
+  relays: string[],
+  reserve: string[],
+  controlRelays: string[],
+): PreparedStorageRelays {
+  const prepared = prepareStorageRelays(pool, {
+    controlRelays,
+    relayOverride: relays,
+    storage: memoryStorage(),
+  });
+  return { ...prepared, reserve: Promise.resolve(reserve) };
 }
 
 /**
@@ -369,7 +394,7 @@ describe.sequential('live single-copy relay transfer', () => {
     const { sendDone, receiveDone } = await liveRoundTrip(pool, data, {
       onSend: (p) => {
         sendProgress.push(p);
-        if (p.relaysDemoted === 1) release();
+        if (p.storageRelaysDemoted === 1) release();
       },
     });
     const [received] = await Promise.all([receiveDone, sendDone]);
@@ -388,7 +413,7 @@ describe.sequential('live single-copy relay transfer', () => {
       expect(placed.get(i) ?? []).toHaveLength(1);
     }
     const last = sendProgress.at(-1);
-    expect(last?.relaysDemoted).toBe(1);
+    expect(last?.storageRelaysDemoted).toBe(1);
     // The first batch put a third of its chunks on r2 and each needed one
     // re-send; the in-flight workers parked at the gate had already picked
     // r2 for at most their own chunk each. Nothing beyond that went to r2.
@@ -492,6 +517,7 @@ describe.sequential('live single-copy relay transfer', () => {
     const held: PreparedStorageRelays = {
       stats: prepared.stats,
       ring: ringGate.then(() => prepared.ring),
+      reserve: ringGate.then(() => prepared.reserve),
     };
     held.ring.then(() => {
       ringResolvedAfterManifest = manifestOut;
@@ -569,6 +595,170 @@ describe.sequential('live single-copy relay transfer', () => {
     expect(received).toEqual(data);
   }, 15000);
 
+  it('replaces a signaling relay it cannot publish to, mid-transfer, and announces the new set', async () => {
+    // Three signaling relays, one of which rejects everything, and a spare
+    // the storage ring passed over. The offer named the three; the fourth is
+    // reachable only because the sender pushes it over the two that work.
+    const controlRelays = [
+      'wss://c1.example',
+      'wss://c2.example',
+      'wss://c3.example',
+    ];
+    const spare = 'wss://c-spare.example';
+    const pool = createMockPool({ failRelays: new Set([controlRelays[0]]) });
+    const data = randomBytes(2 * NOSTR_FILE_CHUNK_SIZE);
+    const session = newSession();
+    const since = nowSec();
+    let cancelled = false;
+    const sendProgress: LiveSendProgress[] = [];
+
+    const controlKey = await deriveControlKey(
+      session.receiver.keyBytes,
+      session.receiver.transferId,
+    );
+    const sendDone = sendFileLive(data, META, {
+      pool,
+      session: session.sender,
+      controlRelays,
+      storageRelays: ringWithReserve(pool, RELAYS, [spare], controlRelays),
+      isCancelled: () => cancelled,
+      onProgress: (p) => sendProgress.push(p),
+    });
+    sendDone.catch(() => {});
+
+    // A scripted receiver that only says hello. Every hello makes the sender
+    // re-announce, which is what hands the dead relay enough publishes to
+    // condemn itself while the transfer is still running.
+    const avails: AvailMessage[] = [];
+    const { secretKey } = generateEphemeralKeys();
+    const channel = openControlChannel(pool, controlRelays, {
+      transferId: session.receiver.transferId,
+      key: controlKey,
+      role: 'receiver',
+      secretKey,
+      since: since - 600,
+      expiresAt: since + 3600,
+      onMessage: (raw) => {
+        const msg = parseSenderMessage(raw, 2);
+        if (msg?.t === 'avail') avails.push(msg);
+      },
+    });
+    try {
+      for (let i = 0; i < CONTROL_DEMOTE_MIN_PUBLISHES * 2; i++) {
+        await channel.send({ t: 'hello' });
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      const deadline = Date.now() + 20000;
+      while (!avails.some((a) => a.ctl.includes(spare))) {
+        if (Date.now() > deadline) {
+          throw new Error('the replacement was never announced');
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      const latest = avails.at(-1) as AvailMessage;
+      expect(latest.ctl).toContain(spare);
+      expect(latest.ctl).not.toContain(controlRelays[0]);
+      // The dead relay is out of the publish set for good, and the spare is
+      // carrying control traffic in its place.
+      expect((pool.store.get(controlRelays[0]) ?? []).length).toBe(0);
+      expect((pool.store.get(spare) ?? []).length).toBeGreaterThan(0);
+      const last = sendProgress.at(-1);
+      expect(last?.controlRelaysDemoted).toBe(1);
+      expect(
+        last?.stats.relays.find((r) => r.url === controlRelays[0])?.demoted,
+      ).toBe(true);
+      // A signaling swap is not a storage demotion; the two are counted apart.
+      expect(last?.storageRelaysDemoted).toBe(0);
+    } finally {
+      cancelled = true;
+      channel.close();
+      await sendDone.catch(() => {});
+    }
+  }, 30000);
+
+  it('takes on a signaling relay the sender announces and acknowledges there', async () => {
+    // Scripted sender: announce a control set with a relay the offer never
+    // named — the swap a demotion produces — and the receiver must follow it
+    // there, or its acknowledgements would go somewhere the sender no longer
+    // publishes.
+    const pool = createMockPool();
+    const extra = 'wss://c-new.example';
+    const data = randomBytes(1000); // 1 chunk
+    const session = newSession();
+    const keyBytes = session.sender.keyBytes;
+    const { secretKey, publicKey } = generateEphemeralKeys();
+    const transferId = session.sender.transferId;
+    const createdAt = nowSec();
+    const manifest: NostrFileManifest = {
+      v: 7,
+      fileName: 'swap.bin',
+      fileSize: data.length,
+      mimeType: 'application/octet-stream',
+      fileHash: uint8ArrayToBase64(await sha256(data)),
+      pubkey: publicKey,
+      compression: 'none',
+      payloadSize: data.length,
+      chunkSize: 32768,
+      totalChunks: 1,
+      enc: 2,
+      createdAt,
+      expiresAt: createdAt + 3600,
+    };
+    const controlKey = await deriveControlKey(keyBytes, transferId);
+    const channel = openControlChannel(pool, CONTROL_RELAYS, {
+      transferId,
+      key: controlKey,
+      role: 'sender',
+      secretKey,
+      since: createdAt - 600,
+      expiresAt: manifest.expiresAt,
+      onMessage: () => {},
+    });
+    let cancelled = false;
+    try {
+      await channel.send({ t: 'manifest', manifest });
+      await channel.send({
+        t: 'avail',
+        upto: 1,
+        relays: ['wss://s1.example'],
+        map: encodePosition(0),
+        gens: [],
+        ctl: [...CONTROL_RELAYS, extra],
+      });
+
+      const receiveDone = receiveFileLive(session.receiver, CONTROL_RELAYS, {
+        pool,
+        isCancelled: () => cancelled,
+        since: createdAt,
+        expiresAt: createdAt + 3600,
+        onProgress: noProgress,
+      });
+      receiveDone.catch(() => {});
+
+      // The chunk is never placed, so the receiver stays in its fetch/ack
+      // loop — and its acknowledgements have to reach the announced relay.
+      const deadline = Date.now() + 15000;
+      while ((pool.store.get(extra) ?? []).length === 0) {
+        if (Date.now() > deadline) {
+          throw new Error('the receiver never published to the new relay');
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect((pool.store.get(extra) ?? []).length).toBeGreaterThan(0);
+      // The relays the offer named are still written to: the receiver adds,
+      // it never swaps one set for another.
+      for (const relay of CONTROL_RELAYS) {
+        expect((pool.store.get(relay) ?? []).length).toBeGreaterThan(0);
+      }
+      cancelled = true;
+      await receiveDone.catch(() => {});
+    } finally {
+      cancelled = true;
+      channel.close();
+    }
+  }, 20000);
+
   it('re-fetches a timed-out piece on its own clock, without a new announcement', async () => {
     // Scripted sender: announce the only chunk as available before the relay
     // actually serves it (late propagation), then go silent — no further
@@ -620,6 +810,7 @@ describe.sequential('live single-copy relay transfer', () => {
         relays: [storageRelay],
         map: encodePosition(0),
         gens: [],
+        ctl: CONTROL_RELAYS,
       });
 
       const receiveDone = receiveFileLive(session.receiver, CONTROL_RELAYS, {
