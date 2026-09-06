@@ -443,6 +443,13 @@ class ControlRelaySet {
     stats: NostrFileTransferStats | undefined,
     policy: ControlDemotionPolicy | undefined,
   ) {
+    // Taken as given, deliberately: `accept` runs `normalizeRelayUrl` because
+    // it takes URLs off a peer's `avail`, and that normalizer refuses `ws://`
+    // and `.onion` by design. The anonymous fallback opens this channel on the
+    // onion pool, so canonicalizing here would empty its relay set. Callers
+    // hand over canonical URLs already — a pool from `canonicalRelayPool`, an
+    // offer list through `normalizeOfferRelays`, a probe result from
+    // `canonicalUrls`.
     this.active = [...new Set(relays)];
     this.known = new Set(this.active);
     this.stats = stats;
