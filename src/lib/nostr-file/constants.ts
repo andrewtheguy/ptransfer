@@ -134,6 +134,23 @@ export const LIVE_RELAY_DEMOTE_MISSES = 2;
 // too: each chunk whose ring walk starts there otherwise burns the whole
 // retry-with-backoff schedule before moving on.
 export const LIVE_RELAY_DEMOTE_GIVEUPS = 3;
+// A control relay is demoted mid-transfer once this share of its control
+// publishes has been given up (every retry rejected). A ratio rather than a
+// run of consecutive failures: a rate-limiting relay still accepts the odd
+// message, which resets a consecutive counter forever while most of the
+// traffic it is handed is still being thrown away.
+export const CONTROL_DEMOTE_FAILURE_RATIO = 0.5;
+// ...measured over at least this many settled publishes, so an early unlucky
+// pair cannot condemn a relay that goes on to work.
+export const CONTROL_DEMOTE_MIN_PUBLISHES = 6;
+// Full-size-proven relays held back from the storage ring as control
+// replacements. They passed HEALTH_CHECK_PROBE_BYTES, which is strictly
+// stronger than the control probe, so a promotion needs no probe of its own.
+export const CONTROL_RESERVE_COUNT = 4;
+// Ceiling on the control relays one transfer may ever hold: the offer's set
+// plus every replacement. Bounds what a peer's announcement can make this
+// side connect to.
+export const CONTROL_RELAY_MAX = CONTROL_RELAY_COUNT + CONTROL_RESERVE_COUNT;
 // HKDF info label for the control-channel key derived from the file key.
 export const CONTROL_KEY_INFO = 'ptransfer-nostr-file:v1:control';
 // HKDF info label for the relay session (transfer id + file key) both sides

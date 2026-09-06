@@ -16,6 +16,7 @@ import {
   LIVE_MIN_RETRANSMITS_PER_CHUNK,
   LIVE_RELAY_DEMOTE_GIVEUPS,
   LIVE_RELAY_DEMOTE_MISSES,
+  MIN_CONTROL_RELAYS,
   NOSTR_FILE_CHUNK_SIZE,
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
@@ -51,8 +52,10 @@ export interface LiveSendProgress {
   receiverHave?: number;
   /** transfer phase: chunks re-sent after the receiver could not fetch them */
   resent?: number;
-  /** transfer phase: relays no longer used because the receiver cannot read from them */
-  relaysDemoted?: number;
+  /** transfer phase: storage relays no longer used because the receiver cannot read from them */
+  storageRelaysDemoted?: number;
+  /** transfer phase: signaling relays swapped out for giving up control messages */
+  controlRelaysDemoted?: number;
   /** Running totals for the whole transfer; one object, mutated in place. */
   stats: NostrFileTransferStats;
 }
@@ -74,9 +77,14 @@ export interface LiveSendProgress {
  * chunks it could not fetch — only those are re-sent, to another relay.
  * A relay the receiver keeps missing chunks on (it acknowledges writes but
  * does not serve them) is demoted: new chunks and re-sends skip it while
- * any other relay is left. Resolves once the receiver reports the verified
- * file, or throws when the transfer cannot complete (relay failure, expiry,
- * peer gone).
+ * any other relay is left. The signaling relays are watched the same way and
+ * on the same clock as the ring: one that gives up too large a share of its
+ * control messages is dropped from the publish set and replaced by a spare
+ * proven relay the ring passed over, and the new set travels in every
+ * announcement over the signaling relays that still work — so a defunct
+ * signaling relay is no longer something only a fresh transfer can escape.
+ * Resolves once the receiver reports the verified file, or throws when the
+ * transfer cannot complete (relay failure, expiry, peer gone).
  */
 export async function sendFileLive(
   data: Uint8Array,
@@ -93,8 +101,9 @@ export async function sendFileLive(
     controlRelays: string[];
     /**
      * The storage ring being prepared behind the exchange, on the same pool.
-     * Its discovery tallies are continued here; the background sweep behind
-     * it belongs to the caller and runs on.
+     * Its discovery tallies are continued here, and its reserve supplies the
+     * control channel's replacements; the background sweep behind it belongs
+     * to the caller and runs on.
      */
     storageRelays: PreparedStorageRelays;
     onProgress: (p: LiveSendProgress) => void;
@@ -206,6 +215,13 @@ export async function sendFileLive(
     let lastPeerN = 0;
     let lastPeerAt = 0;
 
+    // Control replacements: spare relays the storage ring passed over, and
+    // how many demotions are still waiting for one. The reserve arrives with
+    // the ring, which may be later than the first demotion, so the debt is
+    // counted rather than dropped and paid off whenever spares turn up.
+    const reserve: string[] = [];
+    let owedPromotions = 0;
+
     const stop = () => {
       finished = true;
       work.notify();
@@ -225,7 +241,7 @@ export async function sendFileLive(
     const transferStarted = Date.now();
     const report = () => {
       stats.chunksResent = resent;
-      stats.relaysDemoted = demoted.size;
+      stats.storageRelaysDemoted = demoted.size;
       stats.phaseMs.transfer = Date.now() - transferStarted;
       onProgress({
         phase: 'transfer',
@@ -234,7 +250,8 @@ export async function sendFileLive(
         receiverConnected: receiverPubkey !== null,
         receiverHave,
         resent,
-        relaysDemoted: demoted.size,
+        storageRelaysDemoted: demoted.size,
+        controlRelaysDemoted: stats.controlRelaysDemoted,
         stats,
       });
     };
@@ -284,6 +301,30 @@ export async function sendFileLive(
       work.notify();
     };
 
+    /**
+     * Put spares in the place of demoted signaling relays, fastest first.
+     *
+     * Nothing is published to tell the receiver on its own: the control set
+     * rides every announcement, so marking the announcement dirty is what
+     * pushes the replacement over the signaling relays that still work. The
+     * receiver holds on to the demoted ones as well, and this side never
+     * stops listening on them, so the swap needs no acknowledgement — a
+     * missed announcement is simply repeated on the next heartbeat.
+     */
+    const promote = () => {
+      let promoted = false;
+      while (owedPromotions > 0 && reserve.length > 0) {
+        const replacement = reserve.shift() as string;
+        if (channel.add([replacement]).length === 0) continue;
+        owedPromotions--;
+        promoted = true;
+      }
+      if (!promoted) return;
+      availDirty = true;
+      control.notify();
+      report();
+    };
+
     const channel = openControlChannel(pool, controlRelays, {
       transferId,
       key: controlKey,
@@ -292,6 +333,13 @@ export async function sendFileLive(
       since: createdAt - CLOCK_SKEW_TOLERANCE_SEC,
       expiresAt,
       stats,
+      demotion: {
+        minRelays: MIN_CONTROL_RELAYS,
+        onDemoted: () => {
+          owedPromotions++;
+          promote();
+        },
+      },
       onMessage: (raw, pubkey) => {
         if (finished || pubkey === publicKey) return;
         // First valid peer wins; only the code holder can seal messages.
@@ -336,7 +384,14 @@ export async function sendFileLive(
           map += encodePosition(placedPos[i]);
           if (gen[i] !== 0) gens.push([i, gen[i]]);
         }
-        return { t: 'avail', upto, relays: ring, map, gens };
+        return {
+          t: 'avail',
+          upto,
+          relays: ring,
+          map,
+          gens,
+          ctl: channel.relays(),
+        };
       };
 
       const worker = async (): Promise<void> => {
@@ -465,6 +520,15 @@ export async function sendFileLive(
       availDirty = true;
       const loop = controlLoop().catch(fail);
 
+      // The spares land with the ring. A signaling relay demoted before then
+      // is replaced the moment they arrive; one demoted after is replaced on
+      // the spot.
+      const reserveReady = opts.storageRelays.reserve.then((spares) => {
+        if (finished) return;
+        reserve.push(...spares);
+        promote();
+      });
+
       // The ring lands whenever its preparation finishes; workers exist only
       // once it does. A failure rejects `outcome`, and the teardown's
       // best-effort cancel tells a waiting receiver to stop.
@@ -492,7 +556,7 @@ export async function sendFileLive(
       } finally {
         stop();
         clearInterval(watchdog);
-        await Promise.allSettled([uploadStart, workers, loop]);
+        await Promise.allSettled([reserveReady, uploadStart, workers, loop]);
         if (!succeeded) {
           // Best effort: let the receiver stop waiting right away.
           await Promise.race([

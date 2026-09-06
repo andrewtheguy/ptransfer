@@ -171,7 +171,7 @@ async function runLive(data: Uint8Array) {
         onProgress: (p) => {
           if (p.phase === 'transfer') {
             process.stdout.write(
-              `\rsender: uploaded ${p.chunksDone}/${p.chunksTotal}, receiver has ${p.receiverHave ?? 0}, re-sent ${p.resent ?? 0}, relays demoted ${p.relaysDemoted ?? 0}      `,
+              `\rsender: uploaded ${p.chunksDone}/${p.chunksTotal}, receiver has ${p.receiverHave ?? 0}, re-sent ${p.resent ?? 0}, storage relays demoted ${p.storageRelaysDemoted ?? 0}, signaling relays swapped ${p.controlRelaysDemoted ?? 0}      `,
             );
           }
         },

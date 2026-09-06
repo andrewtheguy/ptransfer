@@ -5,6 +5,7 @@ import {
   CLOCK_SKEW_TOLERANCE_SEC,
   LIVE_FETCH_RETRY_MS,
   LIVE_IDLE_TIMEOUT_MS,
+  MIN_CONTROL_RELAYS,
 } from './constants';
 import {
   type ChunkPlacement,
@@ -59,6 +60,16 @@ export interface LiveReceiveProgress {
  * sender announces a new placement for it — or from the same placement once
  * LIVE_FETCH_RETRY_MS has passed, on the receiver's own clock, so a piece
  * whose fetch merely timed out recovers even when no announcement arrives.
+ *
+ * The signaling relays are not fixed for the life of the transfer either.
+ * Every announcement names the sender's current control set, and a relay in
+ * it this side does not already hold is taken on — that is how a replacement
+ * for a signaling relay the sender demoted arrives, over the ones that still
+ * work. This side demotes on its own record too: a relay that gives up too
+ * large a share of the acknowledgements handed to it stops being published
+ * to. Neither side ever stops *listening* on a relay it once held, so the two
+ * always overlap however their publish sets drift.
+ *
  * Resolves with the verified file.
  */
 export async function receiveFileLive(
@@ -297,6 +308,10 @@ export async function receiveFileLive(
       since: opts.since - CLOCK_SKEW_TOLERANCE_SEC,
       expiresAt: opts.expiresAt,
       stats,
+      // No reserve of its own: the receiver has proven no relays and could
+      // not name one the sender watches. It only stops publishing where its
+      // own messages keep dying, and follows the sender for replacements.
+      demotion: { minRelays: MIN_CONTROL_RELAYS, onDemoted: () => report() },
       onMessage: (raw, pubkey) => {
         if (finished) return;
         if (manifest && pubkey !== manifest.pubkey) return;
@@ -325,18 +340,25 @@ export async function receiveFileLive(
           report();
           return;
         }
-        if (msg.t === 'avail' && msg.relays.length > 0) {
-          if (ring.length === 0) {
-            ring = msg.relays;
-            for (const relay of ring) relayStatsFor(stats, relay, 'storage');
-          } else if (
-            msg.relays.length !== ring.length ||
-            msg.relays.some((r, i) => r !== ring[i])
-          ) {
-            // The sender never changes its ring — a different one is forged
-            // or corrupt. Dropped before bumping lastSenderN.
-            return;
+        if (msg.t === 'avail') {
+          if (msg.relays.length > 0) {
+            if (ring.length === 0) {
+              ring = msg.relays;
+              for (const relay of ring) relayStatsFor(stats, relay, 'storage');
+            } else if (
+              msg.relays.length !== ring.length ||
+              msg.relays.some((r, i) => r !== ring[i])
+            ) {
+              // The sender never changes its ring — a different one is forged
+              // or corrupt. Dropped before bumping lastSenderN.
+              return;
+            }
           }
+          // The control set, unlike the ring, does change: the sender swaps a
+          // signaling relay it has demoted for a spare it proved. Take on
+          // what is new and keep the rest — a relay dropped there may still
+          // be the one carrying this side's own messages.
+          channel?.add(msg.ctl);
         }
         lastSenderN = msg.n;
         lastPeerAt = Date.now();

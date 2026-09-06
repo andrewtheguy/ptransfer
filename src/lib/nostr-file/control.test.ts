@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { generateEphemeralKeys } from '../nostr/events';
-import { PUBLISH_BACKOFF_BASE_MS, PUBLISH_MAX_RETRIES } from './constants';
+import {
+  CONTROL_DEMOTE_MIN_PUBLISHES,
+  CONTROL_RELAY_MAX,
+  PUBLISH_BACKOFF_BASE_MS,
+  PUBLISH_MAX_RETRIES,
+} from './constants';
 import {
   buildControlEvent,
   controlChannelTag,
@@ -13,9 +18,13 @@ import {
   parseSenderMessage,
 } from './control';
 import { createMockPool } from './mock-pool';
+import { createTransferStats } from './stats';
 
 const TRANSFER_ID = 'a'.repeat(32);
 const RELAYS = ['wss://r1.example', 'wss://r2.example', 'wss://r3.example'];
+// The control set an avail carries — the signaling relays, disjoint from the
+// storage ring above.
+const CTL = ['wss://c1.example', 'wss://c2.example'];
 
 function fixedKeyBytes(fill = 7): Uint8Array {
   return new Uint8Array(32).fill(fill);
@@ -64,6 +73,7 @@ describe('control channel key and sealing', () => {
         [17, 1],
         [900, 2],
       ],
+      ctl: CTL,
     });
     // Deflate collapses the periodic map and the shared-prefix ring URLs:
     // a few hundred bytes, not ~3.1 KiB + 16 URLs.
@@ -131,6 +141,7 @@ describe('control message validation', () => {
     relays: RELAYS,
     map: 'ABCB',
     gens: [],
+    ctl: CTL,
     ...overrides,
   });
 
@@ -278,6 +289,34 @@ describe('control message validation', () => {
     ).toEqual(avail({ relays: [], upto: 0, map: '' }));
     expect(parseSenderMessage(avail({ relays: [] }), 4)).toBeNull();
   });
+
+  it('requires the avail control set to be a usable, bounded relay list', () => {
+    // Unlike the ring, this list decides which signaling relays the receiver
+    // connects to, so it is held to the same shape and bounded by what one
+    // transfer may ever hold.
+    expect(parseSenderMessage(avail({ ctl: undefined }), 4)).toBeNull();
+    expect(parseSenderMessage(avail({ ctl: CTL[0] }), 4)).toBeNull();
+    // Never empty: the sender published this very message over the set, and
+    // demotion stops at MIN_CONTROL_RELAYS.
+    expect(parseSenderMessage(avail({ ctl: [] }), 4)).toBeNull();
+    expect(parseSenderMessage(avail({ ctl: ['ws://c1.onion'] }), 4)).toBeNull();
+    expect(parseSenderMessage(avail({ ctl: [CTL[0], CTL[0]] }), 4)).toBeNull();
+    expect(
+      parseSenderMessage(
+        avail({
+          ctl: Array.from(
+            { length: CONTROL_RELAY_MAX + 1 },
+            (_, i) => `wss://c${i}.example`,
+          ),
+        }),
+        4,
+      ),
+    ).toBeNull();
+    // Canonicalized, like every other relay list that crosses the wire.
+    expect(
+      parseSenderMessage(avail({ ctl: CTL.map((url) => `${url}:443/`) }), 4),
+    ).toEqual(avail({ ctl: CTL }));
+  });
 });
 
 describe('openControlChannel', () => {
@@ -368,4 +407,92 @@ describe('openControlChannel', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(backoffTotal * 0.95);
     dead.close();
   }, 15000);
+
+  it('demotes a relay that gives up most of its publishes, and takes on the replacement', async () => {
+    const pool = createMockPool({ failRelays: new Set([RELAYS[0]]) });
+    const key = await deriveControlKey(fixedKeyBytes(), TRANSFER_ID);
+    const { secretKey } = generateEphemeralKeys();
+    const since = Math.floor(Date.now() / 1000);
+    const stats = createTransferStats('sender');
+    const demoted: string[] = [];
+    const channel = openControlChannel(pool, RELAYS, {
+      transferId: TRANSFER_ID,
+      key,
+      role: 'sender',
+      secretKey,
+      since,
+      expiresAt: since + 3600,
+      stats,
+      demotion: { minRelays: 2, onDemoted: (relay) => demoted.push(relay) },
+      onMessage: () => {},
+    });
+    try {
+      // Each send resolves on the healthy relays while the dead one works
+      // through its retry schedule in the background, so the give-ups pile
+      // up in parallel rather than one backoff at a time.
+      for (let i = 0; i < CONTROL_DEMOTE_MIN_PUBLISHES; i++) {
+        await channel.send({ t: 'cancel' });
+      }
+      const deadline = Date.now() + 10000;
+      while (demoted.length === 0) {
+        if (Date.now() > deadline) throw new Error('never demoted');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      expect(demoted).toEqual([RELAYS[0]]);
+      expect(channel.relays()).toEqual(RELAYS.slice(1));
+      expect(stats.controlRelaysDemoted).toBe(1);
+      expect(stats.relays.find((r) => r.url === RELAYS[0])?.demoted).toBe(true);
+
+      // The caller puts a spare in its place: published to from the next
+      // message on, and subscribed to alongside everything already held.
+      const spare = 'wss://spare.example';
+      expect(channel.add([spare])).toEqual([spare]);
+      // Already known, unusable, and over the ceiling are all ignored.
+      expect(channel.add([spare, RELAYS[0], 'http://nope.example'])).toEqual(
+        [],
+      );
+      expect(channel.relays()).toEqual([...RELAYS.slice(1), spare]);
+      await channel.send({ t: 'cancel' });
+      expect((pool.store.get(spare) ?? []).length).toBe(1);
+      // A demoted relay is no longer written to, but the subscription on it
+      // stays: the peer may still be publishing there.
+      const deadStore = (pool.store.get(RELAYS[0]) ?? []).length;
+      expect(deadStore).toBe(0);
+    } finally {
+      channel.close();
+    }
+  }, 20000);
+
+  it('never demotes below the floor, however badly every relay behaves', async () => {
+    const pool = createMockPool({ failRelays: new Set(RELAYS) });
+    const key = await deriveControlKey(fixedKeyBytes(), TRANSFER_ID);
+    const { secretKey } = generateEphemeralKeys();
+    const since = Math.floor(Date.now() / 1000);
+    const demoted: string[] = [];
+    const channel = openControlChannel(pool, RELAYS, {
+      transferId: TRANSFER_ID,
+      key,
+      role: 'sender',
+      secretKey,
+      since,
+      expiresAt: since + 3600,
+      demotion: { minRelays: 2, onDemoted: (relay) => demoted.push(relay) },
+      onMessage: () => {},
+    });
+    try {
+      // All three condemn themselves at once; the floor lets exactly one go,
+      // because a channel with nothing left to publish to is worse than one
+      // publishing to relays that mostly refuse.
+      await Promise.allSettled(
+        Array.from({ length: CONTROL_DEMOTE_MIN_PUBLISHES }, () =>
+          channel.send({ t: 'cancel' }),
+        ),
+      );
+      expect(demoted.length).toBe(1);
+      expect(channel.relays().length).toBe(2);
+    } finally {
+      channel.close();
+    }
+  }, 20000);
 });

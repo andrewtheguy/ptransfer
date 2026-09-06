@@ -48,7 +48,10 @@ Two separate relay sets do two different jobs:
 - **Control relays** (2–6): the proven relays the offer already named
   (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`). They carry only the
   encrypted control channel — a relay that caps event sizes or rate-limits large writes
-  (fine for signaling, useless for 48 KiB chunks) still serves perfectly here.
+  (fine for signaling, useless for 48 KiB chunks) still serves perfectly here. The set
+  is not frozen once the code is out: one that starts failing mid-transfer is demoted
+  and replaced from a reserve, announced over the ones that still work (see *Replacing
+  a signaling relay*).
 - **Storage relays** (the ring, up to 16, discovered): hold the encrypted pieces. The
   ring is announced over the control channel. The whole `DEFAULT_RELAYS` signaling pool
   is barred from the ring, so the two sets never overlap.
@@ -84,6 +87,11 @@ defaults are proven for control-sized messages; only their discovered replacemen
 also proven at full chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
 names no relays at all — and then there is no relay fallback. See the offer-relays section in
 [ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibcode-signalingts).
+
+What the offer names is where the control channel *starts*, not where it is stuck: a
+relay that was healthy when the code was made can rate-limit or fail an hour into an
+upload, and the code has already been hand-carried by then. *Replacing a signaling
+relay* below covers what happens then.
 
 ### Storage relay discovery and health check (`relay-pool.ts`)
 
@@ -124,7 +132,10 @@ names no relays at all — and then there is no relay fallback. See the offer-re
    competes with the control channel on a shared relay. The minimum viable batch is two
    relays. The batch order
    **is the placement ring**, announced to the receiver inside every `avail` control
-   message (never stored in the manifest).
+   message (never stored in the manifest). The fastest `CONTROL_RESERVE_COUNT` (4)
+   relays that passed the probe but missed the ring are kept as the control channel's
+   reserve; every unselected relay, reserve included, is disconnected until something
+   needs it.
 
 ### Chunking and content codec (`codec.ts`, `z85.ts`)
 
@@ -231,6 +242,23 @@ Because they are stored, a peer that subscribes late or whose socket dropped
 filter. Control messages publish to every control relay and count as delivered at the
 first acceptance.
 
+The control set is **not fixed for the life of the transfer**. A relay that gives up
+`CONTROL_DEMOTE_FAILURE_RATIO` (50%) or more of its control publishes — every retry
+rejected — once at least `CONTROL_DEMOTE_MIN_PUBLISHES` (6) of them have settled is
+demoted: it stops being published to, and the sender puts a spare in its place and
+names the new set in the next `avail` (see *Replacing a signaling relay* below). A
+ratio rather than a run of consecutive failures, because a rate-limiting relay
+accepts the occasional message, which resets a consecutive counter forever while most
+of what it is handed is still being thrown away.
+
+Two rules make a swap safe with no acknowledgement of its own:
+
+- **Demotion stops publishing, never listening.** The subscription set only ever
+  grows, on both sides, so whatever the two are currently publishing to, each still
+  hears everything the other says on every relay it has ever held.
+- **Demotion stops at `MIN_CONTROL_RELAYS` (2).** However badly every relay behaves,
+  a side never talks itself down to nothing.
+
 Anti-replay/misuse properties:
 
 - The AAD binds every message to the transfer and the sending role — a receiver message
@@ -246,14 +274,44 @@ Anti-replay/misuse properties:
 |---|---|---|---|
 | `manifest` | sender → receiver | `n`, `manifest` | First message: what is being relayed (file metadata, chunk layout, sender pubkey). Sizes the receiver's state; an `avail` before it arrives is rejected |
 | `hello` | receiver → sender | `n` | Receiver is online and subscribed; sent only after its direct attempt failed, so a sender still trying the direct route treats it as "no direct connection is possible" and switches to relays right away |
-| `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET` — 64 positions of encoding headroom; the actual ring is capped at `UPLOAD_RELAY_COUNT` = 16); `gens` lists re-sent chunks with their current generation |
+| `avail` | sender → receiver | `n`, `upto`, `relays`, `map`, `gens`, `ctl` | Chunks `[0, upto)` are uploaded. `relays` is the storage ring in placement order (empty while discovery is still running — presence only; the receiver adopts the first non-empty ring and drops any avail naming a different one); `map` has one character per chunk giving the position in this message's `relays` of the relay holding it (`POSITION_ALPHABET` — 64 positions of encoding headroom; the actual ring is capped at `UPLOAD_RELAY_COUNT` = 16); `gens` lists re-sent chunks with their current generation; `ctl` is the sender's current control set — canonical `wss://` URLs, never empty, at most `CONTROL_RELAY_MAX` (10) — and the receiver takes on every entry it does not already hold |
 | `ack` | receiver → sender | `n`, `avail`, `have`, `missing` | Outcome of fetching what avail `avail` announced: total chunks held, plus `missing` as `[index, pos, gen]` triples — tried at that exact placement and not found / not decryptable |
 | `done` | receiver → sender | `n` | Whole-file SHA-256 verified |
 | `cancel` | either side | `n` | Abort |
 
-The complete ring and placement travel in every `avail`, so a lost announcement costs
-nothing; bodies are deflated before sealing, which collapses the near-periodic map and
-the shared-prefix relay URLs to a few hundred bytes even for ~2100 chunks.
+The complete ring, placement, and control set travel in every `avail`, so a lost
+announcement costs nothing — a swap the receiver missed is repeated on the next
+heartbeat rather than needing an acknowledgement of its own. Bodies are deflated before
+sealing, which collapses the near-periodic map and the shared-prefix relay URLs to a few
+hundred bytes even for ~2100 chunks.
+
+### Replacing a signaling relay
+
+A defunct default is replaced before the code is shown (see *Control relays* above), but
+a relay that is healthy at that moment can rate-limit or fail an hour into a 90 MiB
+upload, and the offer that named it has already been hand-carried. So the swap happens
+mid-transfer as well, and it is asymmetric — the sender owns the set:
+
+1. The sender holds back up to `CONTROL_RESERVE_COUNT` (4) **reserve relays**: the
+   fastest relays that passed the full-size `HEALTH_CHECK_PROBE_BYTES` probe during
+   ring preparation but did not make the ring. A full-size pass is strictly stronger
+   than the control probe, so a promotion needs no probe of its own, and because the
+   ring never contains a signaling seed, a reserve relay is disjoint from both the ring
+   and the offer's control set by construction. Reserve relays are left disconnected
+   until promoted.
+2. When a control relay is demoted, the sender promotes the fastest spare left and
+   marks the announcement dirty. There is no message type for the swap: the new set
+   rides the `ctl` field of the next `avail`, over the signaling relays that still
+   work.
+3. The receiver adds every `ctl` entry it does not already hold — normalized, deduped,
+   and capped at `CONTROL_RELAY_MAX` in total — and keeps everything it already had.
+   It proves no relays of its own and never promotes; it only demotes, on its own
+   publish record, so it stops feeding a relay its acknowledgements keep dying on.
+
+An implementation that ignores `ctl` still interoperates: demotion never goes below
+`MIN_CONTROL_RELAYS` and neither side stops listening on a relay it once held, so the
+two publish sets always overlap. It simply forfeits the replacement and rides out the
+transfer on what is left of the offer's set.
 
 ### Sender loop
 
@@ -371,7 +429,9 @@ sequenceDiagram
 | `UPLOAD_RELAY_COUNT` | 16 | Storage relay batch per upload (placement ring size) |
 | `MIN_UPLOAD_RELAYS` | 2 | Fewest usable storage relays for an upload to start |
 | `CONTROL_RELAY_COUNT` | 6 | Target control relays (the relays the offer names) |
-| `MIN_CONTROL_RELAYS` | 2 | Fewest control relays; below this the offer names none and there is no fallback |
+| `MIN_CONTROL_RELAYS` | 2 | Fewest control relays; below this the offer names none and there is no fallback, and mid-transfer demotion stops here |
+| `CONTROL_RESERVE_COUNT` | 4 | Full-size-proven relays held back from the ring as control replacements |
+| `CONTROL_RELAY_MAX` | 10 | Control relays one transfer may ever hold (the offer's set plus every replacement) |
 | `CONTROL_PROBE_BYTES` | 256 | Control probe payload (a sealed control message is a few hundred bytes) |
 | `CONTROL_PROBE_TIMEOUT_MS` | 4 s | Control probe timeout — bounds code-ready time when a seed is dead |
 | `PUBLISH_MAX_RETRIES` | 3 | Per-relay publish retries (backoff 500 ms → 5 s + jitter) |
@@ -385,7 +445,9 @@ sequenceDiagram
 | `LIVE_IDLE_TIMEOUT_MS` | 3 min | Give up on a silent peer |
 | `LIVE_MIN_RETRANSMITS_PER_CHUNK` | 4 | Floor on re-sends per chunk before failing (actual: `max(N, 4)`) |
 | `LIVE_RELAY_DEMOTE_MISSES` | 2 | Reported misses before a relay is demoted |
-| `LIVE_RELAY_DEMOTE_GIVEUPS` | 3 | Publish give-ups (all retries rejected) before a relay is demoted |
+| `LIVE_RELAY_DEMOTE_GIVEUPS` | 3 | Publish give-ups (all retries rejected) before a storage relay is demoted |
+| `CONTROL_DEMOTE_FAILURE_RATIO` | 0.5 | Share of settled control publishes given up before a signaling relay is demoted |
+| `CONTROL_DEMOTE_MIN_PUBLISHES` | 6 | Settled control publishes before that ratio is allowed to condemn a relay |
 | `CLOCK_SKEW_TOLERANCE_SEC` | ±600 | Tolerated sender/receiver wall-clock disagreement |
 
 ## Code Map

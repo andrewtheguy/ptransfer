@@ -79,7 +79,7 @@ export function NostrRelayStatsPanel({
           : null,
       ],
       ['Chunks re-sent', String(stats.chunksResent)],
-      ['Relays demoted', String(stats.relaysDemoted)],
+      ['Storage relays demoted', String(stats.storageRelaysDemoted)],
     );
   } else {
     rows.push(
@@ -108,6 +108,7 @@ export function NostrRelayStatsPanel({
     'Control messages',
     `${stats.controlSent} sent / ${stats.controlReceived} received`,
   ]);
+  rows.push(['Signaling relays swapped', String(stats.controlRelaysDemoted)]);
 
   if (stats.relaysChecked > 0) {
     rows.push([

@@ -39,7 +39,11 @@ export interface NostrFileRelayStats {
   corruptEvents: number;
   /** Sender: receiver-reported misses against this relay. */
   missesReported: number;
-  /** Sender: demoted after repeated misses. */
+  /**
+   * No longer written to: a storage relay the receiver kept missing chunks
+   * on, or a control relay that gave up too large a share of its publishes.
+   * A demoted control relay is still subscribed to — only publishing stops.
+   */
   demoted: boolean;
 }
 
@@ -80,8 +84,15 @@ export interface NostrFileTransferStats {
   bytesPublished: number;
   /** Sender: chunks re-sent after the receiver reported them missing. */
   chunksResent: number;
-  /** Sender: relays demoted for not serving acknowledged writes. */
-  relaysDemoted: number;
+  /** Sender: storage relays demoted for not serving acknowledged writes. */
+  storageRelaysDemoted: number;
+  /**
+   * Either role: signaling relays dropped from the publish set mid-transfer
+   * for giving up too many control messages. The sender replaces each one
+   * from its reserve and announces the swap; the receiver adopts what the
+   * sender announces and demotes on its own publish record.
+   */
+  controlRelaysDemoted: number;
   /** Receiver: chunk events received (duplicates included). */
   eventsReceived: number;
   bytesReceived: number;
@@ -155,7 +166,8 @@ export function createTransferStats(
     publishesFailed: 0,
     bytesPublished: 0,
     chunksResent: 0,
-    relaysDemoted: 0,
+    storageRelaysDemoted: 0,
+    controlRelaysDemoted: 0,
     eventsReceived: 0,
     bytesReceived: 0,
     duplicateEvents: 0,

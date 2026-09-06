@@ -4,6 +4,7 @@ import {
   CONTROL_PROBE_BYTES,
   CONTROL_PROBE_TIMEOUT_MS,
   CONTROL_RELAY_COUNT,
+  CONTROL_RESERVE_COUNT,
   MIN_CONTROL_RELAYS,
   MIN_UPLOAD_RELAYS,
   PUBLISH_BACKOFF_BASE_MS,
@@ -94,6 +95,16 @@ export const NOT_ENOUGH_RELAYS_MESSAGE =
 
 export interface UploadRelaySelection {
   storageRelays: string[];
+  /**
+   * Up to CONTROL_RESERVE_COUNT relays that passed the full-size probe but
+   * did not make the ring, fastest first — the control channel's
+   * replacements for a signaling relay it demotes mid-transfer. They are
+   * proven at HEALTH_CHECK_PROBE_BYTES, which is strictly stronger than the
+   * control probe, so a promotion needs no probe of its own; and because the
+   * ring never contains a signaling seed, a reserve relay is disjoint from
+   * both the ring and the offer's control set by construction.
+   */
+  reserveRelays: string[];
   /**
    * Discovered candidates the health check early-stopped before reaching.
    * The caller sweeps them in the background so the cache ends up covering
@@ -266,7 +277,13 @@ export async function resolveUploadRelays(
     if (usable.length < MIN_UPLOAD_RELAYS) {
       throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
     }
-    return { storageRelays: seedRing(usable), unprobedCandidates: [] };
+    // A caller-picked ring has no discovery behind it, so there is nothing
+    // left over to hold in reserve.
+    return {
+      storageRelays: seedRing(usable),
+      reserveRelays: [],
+      unprobedCandidates: [],
+    };
   }
   let candidates: string[];
   const proven = (opts.discovered?.proven ?? []).filter(
@@ -304,13 +321,18 @@ export async function resolveUploadRelays(
   const unselected = healthy
     .filter((r) => !ringSet.has(r.url))
     .map((r) => r.url);
+  // `healthy` is sorted by round trip, so the reserve is the fastest of what
+  // the ring passed over. Every unselected relay is still closed, reserve
+  // included: a promotion reconnects it, and until one happens a spare socket
+  // reconnecting for the whole transfer buys nothing.
+  const reserveRelays = unselected.slice(0, CONTROL_RESERVE_COUNT);
   if (unselected.length > 0) pool.close?.(unselected);
   seedRing(relays);
   for (const { url, rttMs } of healthy) {
     const entry = stats.relays.find((r) => r.url === url);
     if (entry) entry.rttMs = rttMs;
   }
-  return { storageRelays: relays, unprobedCandidates };
+  return { storageRelays: relays, reserveRelays, unprobedCandidates };
 }
 
 export interface TransferRelaySelection {
@@ -436,6 +458,13 @@ export interface PreparedStorageRelays {
    */
   ring: Promise<string[]>;
   /**
+   * Proven relays the ring passed over, held back as control replacements
+   * (`UploadRelaySelection.reserveRelays`). Never rejects: a preparation
+   * that failed simply has no spares, and the control channel then demotes
+   * without replacing rather than failing the transfer.
+   */
+  reserve: Promise<string[]>;
+  /**
    * Discovery and health-check tallies (plus the ring's per-relay rows). The
    * transfer that adopts the ring keeps counting into the same object.
    */
@@ -505,7 +534,7 @@ export function prepareStorageRelays(
       isCancelled,
     }).catch(() => {});
   };
-  const ring = (async () => {
+  const selection = (async () => {
     const upload = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.relayOverride,
       excludeRelays: opts.controlRelays,
@@ -516,8 +545,14 @@ export function prepareStorageRelays(
       stats,
     });
     sweep(upload.storageRelays, upload.unprobedCandidates);
-    return upload.storageRelays;
+    return upload;
   })();
+  selection.catch(() => {});
+  const ring = selection.then((upload) => upload.storageRelays);
   ring.catch(() => {});
-  return { ring, stats };
+  const reserve = selection.then(
+    (upload) => upload.reserveRelays,
+    () => [],
+  );
+  return { ring, reserve, stats };
 }
