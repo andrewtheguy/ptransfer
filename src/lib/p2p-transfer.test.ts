@@ -141,6 +141,10 @@ function scriptedLink() {
     chunks(): number {
       return sent.filter((m) => typeof m !== 'string').length;
     },
+    /** Message and end listeners still attached to this end. */
+    listeners(): number {
+      return listeners.size + enders.size;
+    },
   };
 }
 
@@ -367,6 +371,23 @@ describe('sendFileOverLink', () => {
       t: 'abort',
       reason: 'cancelled',
     });
+  });
+
+  it('lets go of the link and tells the receiver when the source cannot be opened', async () => {
+    const key = await makeKey();
+    const peer = scriptedLink();
+    const source: TransferSource = {
+      ...zipSource(makePlaintext(100)),
+      stream: () => {
+        throw new Error('The file is no longer readable');
+      },
+    };
+
+    await expect(sendFileOverLink(peer.link, key, source)).rejects.toThrow(
+      'The file is no longer readable',
+    );
+    expect(peer.listeners()).toBe(0);
+    expect(peer.controls().at(-1)?.t).toBe('abort');
   });
 
   it('refuses a verdict that does not match what was sent', async () => {

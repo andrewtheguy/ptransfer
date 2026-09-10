@@ -491,8 +491,8 @@ export async function sendFileOverLink(
     if (failure) throw failure;
   };
 
-  const reader = (
-    encoding === 'deflate-raw'
+  const openReader = () =>
+    (encoding === 'deflate-raw'
       ? source.stream().pipeThrough(
           // lib.dom types the deflater's writable as BufferSource, which the
           // invariant pipeThrough signature rejects even though every chunk
@@ -502,7 +502,10 @@ export async function sendFileOverLink(
           ) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>,
         )
       : source.stream()
-  ).getReader();
+    ).getReader();
+  // Opened inside the cleanup scope below: a source that fails to open still
+  // releases the link and tells the receiver.
+  let openedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   const plainChunk = new Uint8Array(ENCRYPTION_CHUNK_SIZE);
   let plainChunkLength = 0;
 
@@ -532,6 +535,8 @@ export async function sendFileOverLink(
 
   let completed = false;
   try {
+    const reader = openReader();
+    openedReader = reader;
     while (true) {
       if (isCancelled?.()) throw new Error('Cancelled');
       if (failure) throw failure;
@@ -591,9 +596,9 @@ export async function sendFileOverLink(
     reportProgress(totalBytes, totalBytes);
     return totalBytes;
   } catch (error) {
-    if (!completed) {
-      await reader.cancel().catch(() => {});
-      reader.releaseLock();
+    if (!completed && openedReader) {
+      await openedReader.cancel().catch(() => {});
+      openedReader.releaseLock();
     }
     // The peer is told, unless it is the one that ended things.
     if (!peerGone) await sendAbort(link, abortReasonFor(failure ?? error));
