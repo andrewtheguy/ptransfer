@@ -576,6 +576,8 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
       );
     }
     rtc.close();
+    // The fallback runs its own control channel; the hello has done its job.
+    helloWatch?.close();
     if (named.kind === 'anonymous' && fallback.transport) {
       await anonymousFallback(
         pool,

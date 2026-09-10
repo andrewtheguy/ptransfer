@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
@@ -287,20 +287,19 @@ describe('sendFileOverLink', () => {
     const sending = sendFileOverLink(peer.link, key, zipSource(data), {
       windowChunks: 2,
     });
-    await tick();
     // Nothing acknowledged yet: the window is full at two.
-    expect(peer.chunks()).toBe(2);
+    await vi.waitFor(() => expect(peer.chunks()).toBe(2));
 
     peer.deliver({ t: 'ack', chunks: 1 });
-    await tick();
-    expect(peer.chunks()).toBe(3);
+    await vi.waitFor(() => expect(peer.chunks()).toBe(3));
 
     peer.deliver({ t: 'ack', chunks: 3 });
-    await tick();
-    expect(peer.chunks()).toBe(5);
-    expect(peer.controls()).toEqual([
-      { t: 'end', chunks: 5, bytes: data.length },
-    ]);
+    await vi.waitFor(() => {
+      expect(peer.chunks()).toBe(5);
+      expect(peer.controls()).toEqual([
+        { t: 'end', chunks: 5, bytes: data.length },
+      ]);
+    });
 
     peer.deliver({ t: 'done', chunks: 5, bytes: data.length });
     await expect(sending).resolves.toBe(data.length);

@@ -248,7 +248,7 @@ Whoever sends the last message of the conversation waits (up to 30 seconds) for
 the peer to close before tearing the stream down: over Tor the close is the
 delivery receipt for that final frame. Its absence after the receiver's `done`
 is reported but is not a transfer failure — by then the file is written and
-verified, and only the sender's knowledge of that is in doubt.
+verified; the receiver just cannot confirm that its `done` reached the sender.
 
 The stream carries both directions at once once the handshake is over: the
 receiver acknowledges chunks while the sender is still sending them. Writes

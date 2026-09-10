@@ -703,11 +703,6 @@ async function receiveOverTorFallback(
   const stopped = () => isCancelled() || switchedBack();
   const torStatus = () => opts.torProgress?.latest() ?? '';
 
-  const pool = createTransferPool({
-    websocketImplementation: transport.websocketImplementation,
-    connectionTimeoutMs: ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
-  });
-  opts.poolHolder.current = pool;
   const relayState = {
     contentType: 'file' as const,
     fileMetadata: {
@@ -733,6 +728,13 @@ async function receiveOverTorFallback(
     `${TOR_FALLBACK_MESSAGE}. ${torStatus() || 'Starting the Tor client...'}`,
   );
   const session = await deriveRelaySession(keys.sharedSecretKey, offer.salt);
+  // Created only once the session is in hand, so a failed derivation leaves
+  // nothing open; from here the finally below destroys it.
+  const pool = createTransferPool({
+    websocketImplementation: transport.websocketImplementation,
+    connectionTimeoutMs: ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
+  });
+  opts.poolHolder.current = pool;
   let payload: Blob;
   let received: FileMetadata;
   try {

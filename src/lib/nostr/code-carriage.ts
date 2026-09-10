@@ -123,14 +123,14 @@ export function carryOfferForAnswer(
   return new Promise<Uint8Array>((resolve, reject) => {
     let settled = false;
     let subId: string | null = null;
-    let retry: ReturnType<typeof setInterval> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     let cancelPoll: ReturnType<typeof setInterval> | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const processed = new Set<string>();
     const finish = (outcome: () => void) => {
       if (settled) return;
       settled = true;
-      clearInterval(retry);
+      clearTimeout(retry);
       clearInterval(cancelPoll);
       clearTimeout(timeout);
       if (subId) client.unsubscribe(subId);
@@ -173,12 +173,19 @@ export function carryOfferForAnswer(
       );
     };
 
-    retry = setInterval(() => {
+    // Each repeat is scheduled once the previous publish has finished, so a
+    // slow relay never has two of them in flight at once.
+    const scheduleRetry = () => {
       if (settled) return;
-      void publishOffer().catch((error: unknown) => {
-        console.error('Failed to republish the connection offer:', error);
-      });
-    }, opts.retryMs);
+      retry = setTimeout(() => {
+        if (settled) return;
+        publishOffer()
+          .catch((error: unknown) => {
+            console.error('Failed to republish the connection offer:', error);
+          })
+          .finally(scheduleRetry);
+      }, opts.retryMs);
+    };
     timeout = setTimeout(() => {
       finish(() =>
         reject(
@@ -194,7 +201,7 @@ export function carryOfferForAnswer(
 
     // The first publish failing means no relay took the offer at all; the
     // repeats are best-effort on top of one that did.
-    publishOffer().catch((error: unknown) => {
+    publishOffer().then(scheduleRetry, (error: unknown) => {
       finish(() =>
         reject(error instanceof Error ? error : new Error('Publish failed')),
       );
@@ -305,13 +312,20 @@ export function awaitCarriedOffer(
       console.error('Failed to query for an earlier offer:', error);
     });
 
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    client.unsubscribe(subId);
+    settleOffer(() => rejectOffer(new Error('Cancelled')));
+  };
+
+  // A wait that ended without an offer has nothing left to listen for.
   timeout = setTimeout(() => {
     settleOffer(() => rejectOffer(new Error(opts.timeoutMessage)));
+    close();
   }, opts.timeoutMs);
   cancelPoll = setInterval(() => {
-    if (opts.isCancelled()) {
-      settleOffer(() => rejectOffer(new Error('Cancelled')));
-    }
+    if (opts.isCancelled()) close();
   }, 250);
 
   return {
@@ -323,11 +337,6 @@ export function awaitCarriedOffer(
       });
       await publishAnswer();
     },
-    close() {
-      if (closed) return;
-      closed = true;
-      client.unsubscribe(subId);
-      settleOffer(() => rejectOffer(new Error('Cancelled')));
-    },
+    close,
   };
 }
