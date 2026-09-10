@@ -145,10 +145,13 @@ export interface TransferTransport {
   /** Send one control string. */
   sendText: (text: string) => Promise<void>;
   /**
-   * Resolve when the receiver's `ACK` arrives; reject if the transport closes
-   * first or the peer goes quiet past `ACK_TIMEOUT_MS`.
+   * Listen for the receiver's `ACK` from now on, and resolve when it arrives.
+   * The `ACK_TIMEOUT_MS` deadline runs from when `doneSent` (the `DONE` send)
+   * resolves, not from this call, so a slow `DONE` does not use up the
+   * receiver's time to answer. Rejects if the transport closes first, if the
+   * deadline passes, or with `doneSent`'s error if that send fails.
    */
-  waitForAck: () => Promise<void>;
+  waitForAck: (doneSent: Promise<void>) => Promise<void>;
 }
 
 export interface SendOptions {
@@ -319,12 +322,26 @@ export async function sendFileOverTransport(
   // during signaling.
   // Arm the acknowledgment wait *before* announcing the end of the transfer: a
   // receiver that answers the instant it sees DONE must not be able to answer
-  // into a gap where nothing is listening yet.
-  const acknowledged = transport.waitForAck();
+  // into a gap where nothing is listening yet. Its deadline starts once DONE
+  // is actually out, which is what `doneSent` tells it.
+  let announceDone!: (sent: Promise<void>) => void;
+  const doneSent = new Promise<void>((resolve) => {
+    announceDone = resolve;
+  });
+  const acknowledged = transport.waitForAck(doneSent);
   // If the DONE send fails first, nothing ever awaits this one.
   acknowledged.catch(() => undefined);
 
-  await transport.sendText(`${DONE_PREFIX}${chunkIndex}:${totalBytes}`);
+  // DONE waits on backpressure like any chunk, so it gets the same idle
+  // window: a peer that stops draining after the last chunk must not leave
+  // this send pending forever.
+  const sendingDone = withStallTimeout(
+    transport.sendText(`${DONE_PREFIX}${chunkIndex}:${totalBytes}`),
+    stallTimeoutMs,
+    `Transfer stalled: receiver stopped accepting data within ${Math.round(stallTimeoutMs / 1000)}s`,
+  );
+  announceDone(sendingDone);
+  await sendingDone;
   reportProgress(totalBytes, totalBytes);
 
   await acknowledged;
@@ -372,11 +389,12 @@ export function createDataChannelTransport(
   return {
     sendBinary: (data) => channel.sendBinary(data),
     sendText: (text) => channel.sendText(text),
-    waitForAck: async () => {
+    waitForAck: async (doneSent) => {
       await channel.waitFor(
         (message) => message === ACK,
         ACK_TIMEOUT_MS,
         'acknowledgment',
+        doneSent,
       );
     },
   };

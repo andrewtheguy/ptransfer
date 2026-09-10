@@ -8,6 +8,7 @@ import {
   createDataChannelTransport,
   createTransferReceiver,
   sendFileOverTransport,
+  type TransferTransport,
 } from './p2p-transfer';
 import { createAdaptiveAppendSink } from './scratch-sink';
 import {
@@ -205,6 +206,71 @@ describe('sendFileOverTransport', () => {
     expect(heardBySender.filter((m) => m.startsWith('seen:'))).toHaveLength(4);
     expect(heardBySender.at(-1)).toBe(ACK);
     expect(heardByReceiver.filter((m) => m === 'sender-note')).toHaveLength(4);
+  });
+
+  it('aborts as a stall when DONE cannot leave a channel that stopped draining', async () => {
+    const key = await makeKey();
+    const data = makePlaintext(100);
+    const source: TransferSource = {
+      name: 'small.zip',
+      type: 'application/zip',
+      size: data.length,
+      estimatedSize: data.length,
+      projectedWireBytes: data.length,
+      precompressed: true,
+      stream: () => new Blob([data as BlobPart]).stream(),
+    };
+    const [senderEnd] = fakeDataChannelPair();
+    // The only chunk goes out, leaves the buffer over this tiny threshold, and
+    // nothing drains it again: DONE is stuck behind backpressure.
+    const senderChannel = createDataChannelDuplex(senderEnd, 4);
+    senderEnd.hold();
+
+    await expect(
+      sendFileOverTransport(
+        createDataChannelTransport(senderChannel),
+        key,
+        source,
+        { stallTimeoutMs: 20 },
+      ),
+    ).rejects.toThrow('Transfer stalled');
+    expect(senderEnd.sent).toHaveLength(1);
+    senderChannel.close();
+  });
+
+  it('starts the ACK deadline only once DONE has actually gone out', async () => {
+    const key = await makeKey();
+    const data = makePlaintext(100);
+    const source: TransferSource = {
+      name: 'small.zip',
+      type: 'application/zip',
+      size: data.length,
+      estimatedSize: data.length,
+      projectedWireBytes: data.length,
+      precompressed: true,
+      stream: () => new Blob([data as BlobPart]).stream(),
+    };
+    const events: string[] = [];
+    const transport: TransferTransport = {
+      sendBinary: async () => {},
+      sendText: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        events.push('DONE transmitted');
+      },
+      waitForAck: async (doneSent) => {
+        events.push('listening');
+        await doneSent;
+        events.push('deadline started');
+      },
+    };
+
+    await sendFileOverTransport(transport, key, source);
+
+    expect(events).toEqual([
+      'listening',
+      'DONE transmitted',
+      'deadline started',
+    ]);
   });
 
   it('deflates a single-file source on the wire and the receiver restores it', async () => {

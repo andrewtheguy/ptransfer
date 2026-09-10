@@ -53,11 +53,17 @@ export interface DuplexChannel {
    * messages it declines are left to the other subscribers. Rejects if the
    * channel closes or errors first, or after `timeoutMs`. `purpose` names what
    * is awaited in those errors ("acknowledgment").
+   *
+   * With `clockStart`, listening begins now but the `timeoutMs` clock starts
+   * only once it resolves, so a reply can be listened for before the message
+   * it answers has gone out without that send eating into the reply's time.
+   * If `clockStart` rejects, the wait rejects with its error.
    */
   waitFor: (
     accept: (message: ChannelMessage) => boolean,
     timeoutMs: number,
     purpose: string,
+    clockStart?: Promise<unknown>,
   ) => Promise<ChannelMessage>;
   /** Close the channel. Pending waits reject; later sends fail. */
   close: () => void;
@@ -182,7 +188,12 @@ export function createDataChannelDuplex(
     };
   };
 
-  const waitFor: DuplexChannel['waitFor'] = (accept, timeoutMs, purpose) =>
+  const waitFor: DuplexChannel['waitFor'] = (
+    accept,
+    timeoutMs,
+    purpose,
+    clockStart,
+  ) =>
     new Promise<ChannelMessage>((resolve, reject) => {
       if (!isOpen()) {
         reject(
@@ -196,6 +207,7 @@ export function createDataChannelDuplex(
       }
 
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const settle = (outcome: () => void) => {
         if (settled) return;
         settled = true;
@@ -221,9 +233,19 @@ export function createDataChannelDuplex(
         );
       };
       enders.add(onEnd);
-      const timer = setTimeout(() => {
-        settle(() => reject(new Error(`Timeout waiting for ${purpose}`)));
-      }, timeoutMs);
+      const startClock = () => {
+        if (settled) return;
+        timer = setTimeout(() => {
+          settle(() => reject(new Error(`Timeout waiting for ${purpose}`)));
+        }, timeoutMs);
+      };
+      if (clockStart) {
+        clockStart.then(startClock, (error: unknown) =>
+          settle(() => reject(error)),
+        );
+      } else {
+        startClock();
+      }
     });
 
   const close = () => {

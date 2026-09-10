@@ -172,6 +172,43 @@ describe('createDataChannelDuplex', () => {
     );
   });
 
+  it('listens at once but starts the waitFor clock only when clockStart resolves', async () => {
+    const { a, b } = duplexPair();
+    let startClock!: () => void;
+    const clockStart = new Promise<void>((resolve) => {
+      startClock = resolve;
+    });
+
+    const answered = b.waitFor((m) => m === 'ACK', 10, 'reply', clockStart);
+    // Well past the timeout, but the clock has not started.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await a.sendText('ACK');
+    await expect(answered).resolves.toBe('ACK');
+
+    const unanswered = b.waitFor(() => false, 10, 'reply', clockStart);
+    startClock();
+    await expect(unanswered).rejects.toThrow('Timeout waiting for reply');
+  });
+
+  it('rejects waitFor with the error of a clockStart that fails', async () => {
+    const { a, b } = duplexPair();
+    const seen: ChannelMessage[] = [];
+    const waited = b.waitFor(
+      (m) => {
+        seen.push(m);
+        return false;
+      },
+      1000,
+      'reply',
+      Promise.reject(new Error('send failed')),
+    );
+
+    await expect(waited).rejects.toThrow('send failed');
+    await a.sendText('late');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(seen).toEqual([]);
+  });
+
   it('fails sends once the channel is closed', async () => {
     const { a } = duplexPair();
     a.close();
