@@ -1,35 +1,46 @@
+import {
+  createDataChannelDuplex,
+  type DuplexChannel,
+} from '@/lib/duplex-channel';
+
 export type WebRTCSignal =
   | { type: 'offer'; sdp: string }
   | { type: 'answer'; sdp: string }
   | { type: 'candidate'; candidate?: RTCIceCandidateInit | null };
 
-type WebRTCData = string | ArrayBuffer | ArrayBufferView | Blob;
-
-// Backpressure threshold: pause sending while the send buffer exceeds this.
-const BACKPRESSURE_THRESHOLD = 1024 * 1024; // 1 MiB
-
+/**
+ * One peer connection and its single data channel.
+ *
+ * This class owns connection setup — the offer/answer, ICE, and the channel's
+ * creation — and nothing past it. Once the channel opens it is handed to
+ * `onDataChannelOpen` as a `DuplexChannel`, which both peers send and listen
+ * on alike; which side made the offer says nothing about which way messages
+ * may flow afterwards.
+ */
 export class WebRTCConnection {
   private pc: RTCPeerConnection;
-  private dataChannel: RTCDataChannel | null = null;
+  private channel: DuplexChannel | null = null;
   private onSignal: (signal: WebRTCSignal) => void;
-  private onDataChannelOpen: () => void;
-  private onDataChannelMessage: (data: string | ArrayBuffer) => void;
+  private onDataChannelOpen: (channel: DuplexChannel) => void;
   private onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
 
   private remoteDescriptionSet = false;
   private candidateQueue: RTCIceCandidate[] = [];
 
+  /**
+   * `onDataChannelOpen` runs from the channel's open event, before any message
+   * can be dispatched on it. A client that must see every message subscribes
+   * there; see `DuplexChannel`.
+   */
   constructor(
     config: RTCConfiguration,
     onSignal: (signal: WebRTCSignal) => void,
-    onDataChannelOpen: () => void,
-    onDataChannelMessage: (data: string | ArrayBuffer) => void,
+    onDataChannelOpen: (channel: DuplexChannel) => void,
     onConnectionStateChange?: (state: RTCPeerConnectionState) => void,
   ) {
     this.pc = new RTCPeerConnection(config);
     this.onSignal = onSignal;
     this.onDataChannelOpen = onDataChannelOpen;
-    this.onDataChannelMessage = onDataChannelMessage;
     this.onConnectionStateChange = onConnectionStateChange;
 
     this.pc.onicecandidate = (event) => {
@@ -59,28 +70,26 @@ export class WebRTCConnection {
     };
   }
 
+  /**
+   * Create the data channel. Only the offering side calls this; the answering
+   * side receives the same channel through `ondatachannel`. The WebRTC
+   * defaults make it ordered and reliable, which INTEROP_PROTOCOL.md §7
+   * requires.
+   */
   public createDataChannel(label: string) {
     console.log('Creating DataChannel:', label);
     const channel = this.pc.createDataChannel(label);
     this.setupDataChannel(channel);
   }
 
-  private setupDataChannel(channel: RTCDataChannel) {
-    this.dataChannel = channel;
-    // Receivers assume binary messages arrive as ArrayBuffer; make it explicit
-    // rather than relying on the browser default.
-    channel.binaryType = 'arraybuffer';
-    // Enables the 'bufferedamountlow' event used by sendWithBackpressure.
-    channel.bufferedAmountLowThreshold = BACKPRESSURE_THRESHOLD;
-    this.dataChannel.onopen = () => {
-      console.log('Data channel open state:', this.dataChannel?.readyState);
-      this.onDataChannelOpen();
-    };
-    this.dataChannel.onmessage = (event) => {
-      this.onDataChannelMessage(event.data);
-    };
-    this.dataChannel.onerror = (err) => {
-      console.error('DataChannel error:', err);
+  private setupDataChannel(dc: RTCDataChannel) {
+    // Wrapped at once, so its message listener is in place before the open
+    // event hands the channel to anyone.
+    const channel = createDataChannelDuplex(dc);
+    this.channel = channel;
+    dc.onopen = () => {
+      console.log('Data channel open state:', dc.readyState);
+      this.onDataChannelOpen(channel);
     };
   }
 
@@ -154,10 +163,6 @@ export class WebRTCConnection {
 
   public getPeerConnection(): RTCPeerConnection {
     return this.pc;
-  }
-
-  public getDataChannel(): RTCDataChannel | null {
-    return this.dataChannel;
   }
 
   /**
@@ -268,82 +273,8 @@ export class WebRTCConnection {
     }
   }
 
-  public send(data: WebRTCData) {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-      throw new Error('Data channel not open');
-    }
-
-    this.sendData(data);
-  }
-
-  /**
-   * Send data with backpressure support.
-   * Waits for buffer to drain if it exceeds the threshold.
-   */
-  public async sendWithBackpressure(
-    data: WebRTCData,
-    bufferThreshold: number = BACKPRESSURE_THRESHOLD,
-  ): Promise<void> {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-      throw new Error('Data channel not open');
-    }
-
-    // Wait for the buffer to drain if it's too full, driven by the
-    // 'bufferedamountlow' event with a coarse interval as a safety fallback
-    // (covers unsupported/missed events and channel close).
-    while (this.dataChannel.bufferedAmount > bufferThreshold) {
-      const dc = this.dataChannel;
-      dc.bufferedAmountLowThreshold = bufferThreshold;
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          dc.removeEventListener('bufferedamountlow', onLow);
-          clearInterval(poll);
-          resolve();
-        };
-        const onLow = () => finish();
-        const poll = setInterval(() => {
-          if (
-            dc.readyState !== 'open' ||
-            dc.bufferedAmount <= bufferThreshold
-          ) {
-            finish();
-          }
-        }, 100);
-        dc.addEventListener('bufferedamountlow', onLow);
-      });
-      if (this.dataChannel.readyState !== 'open') {
-        throw new Error('Data channel closed before send completed');
-      }
-    }
-
-    this.sendData(data);
-  }
-
-  private sendData(data: WebRTCData) {
-    if (!this.dataChannel) {
-      throw new Error('Data channel not open');
-    }
-
-    if (typeof data === 'string') {
-      this.dataChannel.send(data);
-    } else if (data instanceof Blob) {
-      this.dataChannel.send(data);
-    } else if (data instanceof ArrayBuffer) {
-      this.dataChannel.send(data);
-    } else if (ArrayBuffer.isView(data)) {
-      // send() transmits exactly [byteOffset, byteOffset+byteLength). Callers
-      // pass fresh, exact-size views (encryptChunk output), so no copy is needed.
-      this.dataChannel.send(data as ArrayBufferView<ArrayBuffer>);
-    } else {
-      throw new Error('Unsupported data type for data channel send');
-    }
-  }
-
   public close() {
-    if (this.dataChannel) this.dataChannel.close();
+    this.channel?.close();
     this.pc.close();
   }
 }

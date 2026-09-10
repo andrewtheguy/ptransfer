@@ -67,12 +67,18 @@ export function createTorTransport(framed: TorFramedStream): TransferTransport {
   return {
     sendBinary: (data) => framed.sendBinary(data),
     sendText: (text) => framed.sendText(text),
-    waitForAck: () => waitForTorAck(framed),
+    waitForAck: (doneSent) => waitForTorAck(framed, doneSent),
   };
 }
 
-/** Read frames until the receiver's `ACK` arrives, or the wait runs out. */
-async function waitForTorAck(framed: TorFramedStream): Promise<void> {
+/**
+ * Read frames until the receiver's `ACK` arrives, or the wait runs out. The
+ * wait's clock starts once `doneSent` resolves.
+ */
+async function waitForTorAck(
+  framed: TorFramedStream,
+  doneSent: Promise<void>,
+): Promise<void> {
   const acknowledged = (async () => {
     for (;;) {
       const message = await framed.receive();
@@ -86,17 +92,26 @@ async function waitForTorAck(framed: TorFramedStream): Promise<void> {
     }
   })();
 
+  let finished = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error('Timeout waiting for acknowledgment')),
-      ACK_TIMEOUT_MS,
-    );
-  });
+  const expired = doneSent.then(
+    () =>
+      new Promise<never>((_, reject) => {
+        if (finished) return;
+        timer = setTimeout(
+          () => reject(new Error('Timeout waiting for acknowledgment')),
+          ACK_TIMEOUT_MS,
+        );
+      }),
+  );
+  // Whichever loses the race settles unobserved later.
+  acknowledged.catch(() => undefined);
+  expired.catch(() => undefined);
 
   try {
     await Promise.race([acknowledged, expired]);
   } finally {
+    finished = true;
     clearTimeout(timer);
   }
 }

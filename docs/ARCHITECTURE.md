@@ -267,17 +267,17 @@ service carries the file.
 
 ### Shared P2P Transfer Layer (`src/lib/p2p-transfer.ts`)
 
-Once a reliable, ordered, message-oriented transport is open — a WebRTC data channel for Nostr and Code Exchange, a framed onion stream for the Tor transport — every mode uses one shared file-transfer protocol:
+Once a reliable, ordered, message-oriented transport is open — a WebRTC data channel for Nostr and Code Exchange, a framed onion stream for the Tor transport — every mode uses one shared file-transfer protocol. Over WebRTC it runs as one client of the bidirectional data channel described under [WebRTC](#webrtc-srclibwebrtcts-and-srclibduplex-channelts), not as the channel's owner:
 
 1. Sender reads a lazy transfer source in its wire encoding and coalesces the output into `ENCRYPTION_CHUNK_SIZE` (`128 KiB`) chunks. The encoding follows the no-recompress rule: a single-file send is deflated on the fly through the browser's native `CompressionStream('deflate-raw')`, while a multi-file/folder send — a ZIP whose entries are already deflated — travels as-is, its bytes emitted while fflate is still reading and packaging entries. Either way the final wire length is unknown during signaling.
 2. Each slice is encrypted with `encryptChunk`, producing `[chunk_index_be_u16][nonce_12][ciphertext][tag_16]`.
-3. Sender sends encrypted chunks with WebRTC backpressure enabled (`bufferedAmountLowThreshold` defaults to 1 MiB).
+3. Sender sends encrypted chunks with WebRTC backpressure enabled (the duplex channel's sends wait while more than 1 MiB is buffered).
 4. Sender sends the control string `DONE:<totalChunks>:<totalBytes>` carrying the wire (encoded) byte count.
 5. Receiver waits for all pending decryptions, validates both `DONE` values, verifies that the indices arrived exactly once in data-channel order, and checks the total decrypted wire byte count. Deflated payloads are inflated between decryption and storage (capped at the transfer size limit as a decompression-bomb guard), so the sealed payload is the original file.
 6. Receiver sends the control string `ACK` on the same data channel.
-7. Sender waits up to `ACK_TIMEOUT_MS` (`30s`) for `ACK`; timeout is a transfer failure.
+7. Sender waits up to `ACK_TIMEOUT_MS` (`30s`) for `ACK`; timeout is a transfer failure. It listens for `ACK` before sending `DONE`, but the 30 s clock starts only once `DONE` has actually been handed off, so time `DONE` spends behind backpressure does not count against the receiver.
 
-Both sides run an idle/stall watchdog (`STALL_TIMEOUT_MS`, `60s`) over the active transfer instead of any overall wall-clock deadline. On the sender each chunk hand-off (`sendWithBackpressure`) must complete within the window, so a receiver that stops draining the channel aborts the send. On the receiver the window resets on every incoming data-channel message (armed once the channel opens via `start()`), so a sender that goes quiet mid-stream aborts the receive. Either side timing out rejects with `P2PConnectionError`, which the UI treats as a connection failure.
+Both sides run an idle/stall watchdog (`STALL_TIMEOUT_MS`, `60s`) over the active transfer instead of any overall wall-clock deadline. On the sender each chunk hand-off (`sendBinary`, which resolves only once the channel has room) and the `DONE` hand-off after them must complete within the window, so a receiver that stops draining the channel aborts the send. On the receiver the window resets on every incoming data-channel message (armed once the channel opens via `start()`), so a sender that goes quiet mid-stream aborts the receive. Either side timing out rejects with `P2PConnectionError`, which the UI treats as a connection failure.
 
 The receiver rejects duplicate indexes, out-of-range indexes, malformed chunk lengths, transfers exceeding the application limit, and malformed final counts.
 
@@ -774,16 +774,17 @@ key, and the sender still publishes only to the response it accepted — the sam
 the clearnet fallback has, and the same one the answer confirmation tag does not
 raise.
 
-### WebRTC (`src/lib/webrtc.ts`)
+### WebRTC (`src/lib/webrtc.ts` and `src/lib/duplex-channel.ts`)
 
-Handles direct peer-to-peer connections using WebRTC data channels.
+`WebRTCConnection` handles connection setup and nothing past it: the offer and answer, ICE candidate queuing, Google and Cloudflare STUN servers for direct candidate discovery (TURN relay candidates are never configured), connection state monitoring, and the single ordered, reliable data channel. The offering side creates that channel; when it opens, either side's `WebRTCConnection` hands it over as a `DuplexChannel`.
 
-**Features:**
-- ICE candidate queuing for reliable connection establishment
-- Google and Cloudflare STUN servers for direct ICE candidate discovery; TURN relay candidates are never configured
-- 128 KiB encrypted chunk messages with backpressure (WebRTC handles fragmentation)
-- Backpressure support (waits for buffer to drain before sending more data)
-- Connection state monitoring
+The `DuplexChannel` is symmetric. Which peer made the offer, and which one sends the file, says nothing about which way messages may flow once the channel is open: both sides send text and binary messages and both listen. Its properties:
+
+- **Ordered sends with backpressure.** Every send, text or binary, joins one queue and leaves in call order; each waits while more than 1 MiB is buffered, so a message sent while a chunk waits on the drain cannot overtake it. The 128 KiB encrypted chunk messages rely on WebRTC for fragmentation.
+- **Broadcast receive.** Every current subscriber sees every incoming message, so several clients share the channel without taking messages from each other. `waitFor` is a subscriber that settles on the first message it accepts — the sender's `ACK` wait is one — and rejects when the channel closes, errors, or times out.
+- **No backlog.** A message that arrives while nothing is subscribed is dropped rather than held, so a peer cannot fill this side's memory with messages nothing reads. A client that must see everything subscribes from the channel-open callback, which runs before any message can be dispatched.
+
+The shared transfer layer is one client of it. On the direct path it reserves binary messages for content chunks toward the receiver; the receiver ignores every text message but `DONE`, and the sender's `ACK` wait ignores every message but `ACK`, so other text messages can travel beside a transfer in either direction.
 
 ### React Hooks (`src/hooks/`)
 
@@ -946,8 +947,8 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 | ICE gathering | 5 seconds | Bounded wait while preparing Code Exchange offer/answer QR payloads |
 | Ordinary Code Exchange offer-relay probe | 4 seconds | Per-relay write→read bound when proving the public relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means an ordinary offer without a fallback. Anonymous offers use the fixed onion pool instead |
 | Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
-| Data-channel ACK wait | 30 seconds | Sender wait after `DONE:<chunkCount>:<byteCount>` for receiver `ACK` |
-| P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |
+| Data-channel ACK wait | 30 seconds | Sender wait for receiver `ACK`, counted from when `DONE:<chunkCount>:<byteCount>` has been handed off |
+| P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off and to the `DONE` hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |
 | Nostr relay peer idle | 3 minutes | Fallback receiver gives up if no sender control message arrives or the sender goes silent; the fallback sender applies the same window after upload completion once the receiver has been seen (`LIVE_IDLE_TIMEOUT_MS`) |
 | PIN rotation | 2 minutes | Fresh PIN + rendezvous event cadence (`PIN_ROTATION_MS`) |
 | PIN validity | Roughly 2–4 minutes | A PIN is honored only in the bucket where it was minted and the immediately following bucket; `PIN_TTL_MS` = 4 minutes is the maximum age bound, while NIP-40 expiry is the exact end of the second bucket |

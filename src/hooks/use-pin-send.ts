@@ -914,7 +914,7 @@ export function usePinSend(): UsePinSendReturn {
                 );
                 await client.publish(event);
               },
-              async () => {
+              async (channel) => {
                 cleanup();
 
                 setState((prevState) => ({
@@ -932,7 +932,7 @@ export function usePinSend(): UsePinSendReturn {
                   // After the data channel is open, nostr is no longer involved:
                   // completion is the data-channel ACK awaited here.
                   await sendFileOverTransport(
-                    createDataChannelTransport(rtc),
+                    createDataChannelTransport(channel),
                     sessionKeys.content,
                     content,
                     {
@@ -958,9 +958,6 @@ export function usePinSend(): UsePinSendReturn {
                     // ignore
                   }
                 }
-              },
-              () => {
-                // Data-channel messages are not used by the PIN Exchange sender.
               },
             );
 

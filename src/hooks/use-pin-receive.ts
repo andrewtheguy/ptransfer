@@ -19,6 +19,7 @@ import {
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
+import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
@@ -851,6 +852,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         // Listener for the P2P transfer
         const transferResult = await new Promise<Blob>((resolve, reject) => {
           let rtc: WebRTCConnection | null = null;
+          let channel: DuplexChannel | null = null;
           let settled = false;
 
           // Streaming receiver: decrypts each chunk into the sink as it
@@ -945,21 +947,20 @@ export function usePinReceive(): UsePinReceiveReturn {
               client.unsubscribe(subId);
               // The file is fully received; a failure to send the ACK or tear
               // down rtc must not prevent the Promise from settling.
-              try {
-                if (rtc) {
-                  const conn = rtc;
-                  conn.send(ACK);
-                  // Linger so the ACK reaches the sender; see ACK_LINGER_MS.
-                  setTimeout(() => {
-                    try {
-                      conn.close();
-                    } catch {
-                      // ignore
-                    }
-                  }, ACK_LINGER_MS);
-                }
-              } catch (e) {
-                console.error('ACK/teardown error', e);
+              if (rtc) {
+                const conn = rtc;
+                // Chunks only arrive over an open channel, so it is set by now.
+                channel
+                  ?.sendText(ACK)
+                  .catch((e) => console.error('ACK send error', e));
+                // Linger so the ACK reaches the sender; see ACK_LINGER_MS.
+                setTimeout(() => {
+                  try {
+                    conn.close();
+                  } catch {
+                    // ignore
+                  }
+                }, ACK_LINGER_MS);
               }
               resolve(result);
             })
@@ -997,9 +998,14 @@ export function usePinReceive(): UsePinReceiveReturn {
                 );
                 await client.publish(event);
               },
-              () => {
+              (opened) => {
                 // Data channel opened; the idle watchdog covers the receiving
                 // stage from here on, replacing the pre-open connection timeout.
+                channel = opened;
+                opened.subscribe((data) => {
+                  if (settled) return;
+                  receiver.onMessage(data);
+                });
                 dataChannelOpened = true;
                 clearConnectionTimeout();
                 receiver.start();
@@ -1009,10 +1015,6 @@ export function usePinReceive(): UsePinReceiveReturn {
                   message: 'Receiving via P2P...',
                   useWebRTC: true,
                 }));
-              },
-              (data) => {
-                if (settled) return;
-                receiver.onMessage(data);
               },
             );
             return rtc;

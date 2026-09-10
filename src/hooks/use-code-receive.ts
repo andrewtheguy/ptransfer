@@ -18,6 +18,7 @@ import {
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
 import { wipeBufferSource } from '@/lib/crypto/memory';
+import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferMetadata, TransferState } from '@/lib/nostr';
@@ -527,11 +528,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           : null;
 
       interface DirectAttempt {
-        rtc: WebRTCConnection;
         receiver: TransferReceiver;
         answerBinary: Uint8Array;
-        /** Resolves on an open data channel, rejects on a dead route. */
-        opened: Promise<void>;
+        /** Resolves with the open data channel, rejects on a dead route. */
+        opened: Promise<DuplexChannel>;
         /** Ends that wait now, with the reason the loop should act on. */
         stop: (error: Error) => void;
         /** Peer connection, receiver and sink, discarded together. */
@@ -552,7 +552,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         const iceCandidates: RTCIceCandidate[] = [];
         let answerSDP: RTCSessionDescriptionInit | null = null;
         let answerSDPResolver: (() => void) | null = null;
-        let dataChannelResolver: (() => void) | null = null;
+        let dataChannelResolver: ((channel: DuplexChannel) => void) | null =
+          null;
+        // Set by the open callback, for a wait that begins after the fact.
+        let openChannel: DuplexChannel | null = null;
         let connectionFailedRejecter: ((error: Error) => void) | null = null;
         let stopWait: ((error: Error) => void) | null = null;
         // A dead route can be known before the wait promise below exists
@@ -598,16 +601,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
               iceCandidates.push(new RTCIceCandidate(signal.candidate));
             }
           },
-          () => {
+          (channel) => {
             // Data channel opened; the idle watchdog covers the receiving
             // stage from here on.
+            channel.subscribe(receiver.onMessage);
             receiver.start();
+            openChannel = channel;
             if (dataChannelResolver) {
-              dataChannelResolver();
+              dataChannelResolver(channel);
             }
-          },
-          (data) => {
-            receiver.onMessage(data);
           },
           (connectionState) => {
             // A dead route is known long before the connection timeout; the
@@ -733,7 +735,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         // Wait for the data channel to open. When no direct route exists and
         // the offer named relays, the file comes through them instead;
         // without relays, or past the relay size cap, the failure stands.
-        const opened = new Promise<void>((resolve, reject) => {
+        const opened = new Promise<DuplexChannel>((resolve, reject) => {
           // A failure that landed before this promise existed is not lost.
           if (earlyConnectionFailure) {
             reject(earlyConnectionFailure);
@@ -752,9 +754,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             reject(new P2PConnectionError('Connection timeout'));
           }, CODE_CONNECTION_TIMEOUT_MS);
 
-          dataChannelResolver = () => {
+          dataChannelResolver = (channel) => {
             clearTimeout(timeout);
-            resolve();
+            resolve(channel);
           };
           connectionFailedRejecter = (error) => {
             clearTimeout(timeout);
@@ -766,10 +768,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           };
 
           // Check if already open
-          const dc = rtc.getDataChannel();
-          if (dc && dc.readyState === 'open') {
+          if (openChannel) {
             clearTimeout(timeout);
-            resolve();
+            resolve(openChannel);
           }
         });
         // The caller awaits this a tick later; keep a rejection that already
@@ -777,7 +778,6 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         void opened.catch(() => {});
 
         return {
-          rtc,
           receiver,
           answerBinary,
           opened,
@@ -1053,7 +1053,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           : runRelayTransfer(relays, held, switchedBack);
 
       let simulate = false;
-      let connected: DirectAttempt | null = null;
+      let connected: { attempt: DirectAttempt; channel: DuplexChannel } | null =
+        null;
 
       for (;;) {
         if (abandoned()) return;
@@ -1082,6 +1083,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             continue;
           }
           endStint = attempt.stop;
+          let channel: DuplexChannel;
           setState({
             status: 'showing_answer',
             message: 'Show this to sender and wait for connection',
@@ -1094,7 +1096,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             torStatus,
           });
           try {
-            await attempt.opened;
+            channel = await attempt.opened;
           } catch (error) {
             attempt.dispose();
             if (error instanceof SimulationSwitched) {
@@ -1128,7 +1130,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             return;
           }
           switchRef.current = null;
-          connected = attempt;
+          connected = { attempt, channel };
           break;
         }
 
@@ -1169,7 +1171,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
       switchRef.current = null;
       if (!connected || abandoned()) return;
-      const { rtc, receiver } = connected;
+      const { attempt, channel } = connected;
+      const { receiver } = attempt;
 
       setState({
         status: 'receiving',
@@ -1207,8 +1210,14 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
       if (abandoned()) return;
 
-      // Acknowledge only after all chunks authenticate and reassemble.
-      rtc.send(ACK);
+      // Acknowledge only after all chunks authenticate and reassemble. The
+      // file is whole either way, so a lost ACK is the sender's problem to
+      // report, not a reason to discard what arrived.
+      try {
+        await channel.sendText(ACK);
+      } catch (error) {
+        console.error('ACK send error', error);
+      }
 
       // Set received content
       setReceivedContent({
