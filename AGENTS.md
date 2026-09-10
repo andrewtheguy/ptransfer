@@ -9,6 +9,7 @@
 - Bump `INTEROP_PROTOCOL_VERSION` in `src/lib/protocol.ts` whenever anything
   specified in `docs/INTEROP_PROTOCOL.md` changes, and leave it alone otherwise;
   it is not the package version.
+- No ptransfer-cli interoperability because this project is undergoing major refactoring
 
 ## Checks to run
 
