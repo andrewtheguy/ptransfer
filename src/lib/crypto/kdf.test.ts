@@ -38,24 +38,25 @@ async function pakeRoots(): Promise<{
 }
 
 describe('Nostr session KDF', () => {
-  it('derives non-extractable session keys that are not interchangeable', async () => {
+  it('derives a non-extractable signals key distinct from the seal keys', async () => {
     const { sender } = await pakeRoots();
-    const keys = await derivePinSessionKeys(sender, generateSalt());
+    const salt = generateSalt();
+    const { signals } = await derivePinSessionKeys(sender, salt);
+    const seals = await deriveHandshakeSealKeys(sender, salt);
 
-    for (const key of [keys.signals, keys.content]) {
-      expect(key.extractable).toBe(false);
-      expect(key.algorithm.name).toBe('AES-GCM');
-      expect(key.usages).toEqual(['encrypt', 'decrypt']);
-    }
+    expect(signals.extractable).toBe(false);
+    expect(signals.algorithm.name).toBe('AES-GCM');
+    expect(signals.usages).toEqual(['encrypt', 'decrypt']);
 
-    const plaintext = new TextEncoder().encode('signal payload');
-    const encrypted = await encrypt(keys.signals, plaintext);
+    const plaintext = new TextEncoder().encode('carried code');
+    const encrypted = await encrypt(signals, plaintext);
 
-    await expect(decrypt(keys.signals, encrypted)).resolves.toEqual(plaintext);
-    await expect(decrypt(keys.content, encrypted)).rejects.toThrow();
+    await expect(decrypt(signals, encrypted)).resolves.toEqual(plaintext);
+    await expect(decrypt(seals.claimKey, encrypted)).rejects.toThrow();
+    await expect(decrypt(seals.confirmKey, encrypted)).rejects.toThrow();
   });
 
-  it('both PAKE peers derive the same session keys', async () => {
+  it('both PAKE peers derive the same signals key', async () => {
     const { sender, receiver } = await pakeRoots();
     const salt = generateSalt();
 
@@ -63,8 +64,8 @@ describe('Nostr session KDF', () => {
     const receiverKeys = await derivePinSessionKeys(receiver, salt);
 
     const plaintext = new TextEncoder().encode('cross-peer check');
-    const encrypted = await encrypt(senderKeys.content, plaintext);
-    await expect(decrypt(receiverKeys.content, encrypted)).resolves.toEqual(
+    const encrypted = await encrypt(senderKeys.signals, plaintext);
+    await expect(decrypt(receiverKeys.signals, encrypted)).resolves.toEqual(
       plaintext,
     );
   });

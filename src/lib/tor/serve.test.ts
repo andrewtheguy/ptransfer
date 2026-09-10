@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ENCRYPTION_CHUNK_SIZE } from '@/lib/crypto';
 import type { TransferMetadata } from '@/lib/nostr';
-import { createFileTransferSource } from '@/lib/transfer-source';
+import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorClientHandshake, sendReady } from './handshake';
 import { createOnionStreamPair } from './mock-stream';
 import { serveUntilSent, TOR_WAIT_TIMEOUT_MS } from './serve';
 import { receiveFileOverTor } from './transfer';
 import type { OnionService, OnionStream } from './webtor';
+
+// Captured before the fake timers go in: the crypto under the handshake and
+// every chunk resolves on real time, and the test has to wait for it.
+const realSetTimeout = globalThis.setTimeout;
+const settle = () => new Promise((resolve) => realSetTimeout(resolve, 20));
 
 const ONION =
   'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion:9735';
@@ -29,16 +35,6 @@ function oneStreamService(stream: OnionStream): OnionService {
   };
 }
 
-function sourceOf(
-  bytes: Uint8Array,
-): ReturnType<typeof createFileTransferSource> {
-  return createFileTransferSource(
-    new File([bytes as BlobPart], 'slow.bin', {
-      type: 'application/octet-stream',
-    }),
-  );
-}
-
 describe('serveUntilSent', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -52,57 +48,88 @@ describe('serveUntilSent', () => {
    *
    * A regression test with a specific history: on the CLI side the deadline
    * once raced the whole accept loop, so an authenticated transfer still
-   * moving bytes was cancelled 30 minutes after the *wait* began. The clock
-   * crosses that deadline here after the receiver has sent `ready`, which is
-   * the shape that used to fail.
+   * moving bytes was cancelled 30 minutes after the *wait* began. Here the
+   * transfer itself runs past that deadline — its source yields a chunk every
+   * 50 seconds, inside the stall window both sides keep, for longer than the
+   * deadline in all — which is the shape that used to fail.
    */
   it('lets an authenticated transfer outlive the wait deadline', async () => {
-    // Several 128 KiB chunks, and compressible, so the deflate-raw wire
-    // encoding is exercised rather than skipped.
-    const payload = new Uint8Array(400_000).map((_, i) => i % 251);
+    const GAP_MS = 50_000;
+    const pieces = Math.ceil(TOR_WAIT_TIMEOUT_MS / GAP_MS) + 2;
+    const piece = new Uint8Array(ENCRYPTION_CHUNK_SIZE).map((_, i) => i % 251);
+    const total = pieces * piece.length;
+    let produced = 0;
+    const source: TransferSource = {
+      name: 'slow.zip',
+      type: 'application/zip',
+      size: total,
+      estimatedSize: total,
+      projectedWireBytes: total,
+      precompressed: true,
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (produced === pieces) {
+              controller.close();
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, GAP_MS));
+            produced += 1;
+            controller.enqueue(piece.slice());
+          },
+        }),
+    };
     const [serviceSide, clientSide] = createOnionStreamPair();
-    const source = sourceOf(payload);
 
     const metadata: TransferMetadata = {
       contentType: 'file',
       fileName: source.name,
-      fileSize: source.estimatedSize,
-      contentEncoding: 'deflate-raw',
+      fileSize: total,
+      contentEncoding: 'identity',
       mimeType: source.type,
     };
 
+    let authenticated!: () => void;
+    const handshakeDone = new Promise<void>((resolve) => {
+      authenticated = resolve;
+    });
     const received = (async () => {
       const client = new TorFramedStream(clientSide);
       const { keys } = await runTorClientHandshake(client, PASSWORD, ONION);
       await sendReady(client);
-
-      // Authenticated. From here the peer is the receiver, and the wait
-      // deadline is no longer anything it has to race — so cross it.
-      await vi.advanceTimersByTimeAsync(TOR_WAIT_TIMEOUT_MS * 2);
-
-      return receiveFileOverTor(client, keys.contentKey, 'deflate-raw', {
-        estimatedBytes: metadata.fileSize,
+      authenticated();
+      return receiveFileOverTor(client, keys.contentKey, 'identity', {
+        estimatedBytes: total,
       });
     })();
 
-    await expect(
-      serveUntilSent({
-        service: oneStreamService(serviceSide),
-        onion: ONION,
-        password: PASSWORD,
-        metadata,
-        content: source,
-        fileMetadata: {
-          fileName: metadata.fileName,
-          fileSize: metadata.fileSize,
-          mimeType: metadata.mimeType,
-        },
-        isCancelled: () => false,
-        setState: () => {},
-      }),
-    ).resolves.toBeUndefined();
+    const serving = serveUntilSent({
+      service: oneStreamService(serviceSide),
+      onion: ONION,
+      password: PASSWORD,
+      metadata,
+      content: source,
+      fileMetadata: {
+        fileName: metadata.fileName,
+        fileSize: metadata.fileSize,
+        mimeType: metadata.mimeType,
+      },
+      isCancelled: () => false,
+      setState: () => {},
+    });
 
+    // Drive the clock gap by gap, well past the wait deadline, letting each
+    // chunk's crypto finish in real time before the next gap.
+    await handshakeDone;
+    await settle();
+    for (let i = 0; i <= pieces; i++) {
+      await vi.advanceTimersByTimeAsync(GAP_MS);
+      await settle();
+    }
+
+    await expect(serving).resolves.toBeUndefined();
     const blob = await received;
-    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(payload);
+    expect(blob.size).toBe(total);
+    expect(produced * GAP_MS).toBeGreaterThan(TOR_WAIT_TIMEOUT_MS);
   });
 });

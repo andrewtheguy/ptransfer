@@ -22,6 +22,11 @@ Both WebRTC-based exchange methods start with something you hand to the receiver
 use it to coordinate the two devices. Code Exchange is the method where you carry the *whole*
 connection code instead, so no relay coordinates anything: **you** move the sender's
 connection data across by hand — using a **QR code**, **copy/paste**, or a mix of the two.
+
+The two methods run the same session underneath. PIN Exchange carries these very codes for
+you, sealed over its relays once you have typed the receiver's confirmation code, so it
+reaches the same direct connection and the same fallbacks described below. What Code
+Exchange adds is doing without the relays for the handshake.
 The two methods are interchangeable at every step: either side can scan or paste, whichever
 is more convenient.
 
@@ -31,9 +36,10 @@ in — relays never carry signaling in this mode, so a bystander who saw the sen
 cannot push a response into the sender's page.
 
 Once the two devices are connected, file bytes are sent directly peer-to-peer over WebRTC
-using the shared pTransfer data-channel protocol (encrypted 128 KiB chunks, `DONE:<chunkCount>:<byteCount>`,
-then a single receiver `ACK` once `DONE` validates the chunk count and final byte count and all chunks have
-authenticated and reassembled).
+using the shared pTransfer transfer protocol: encrypted 128 KiB chunks, acknowledged by the
+receiver as it stores them, then an `end` the receiver answers with `done` once the chunk count
+and final byte count check out and every chunk has authenticated. Either side that gives up tells
+the other why.
 
 If a direct connection **cannot** be made — for example, a restrictive NAT or firewall on
 either end — an eligible transfer automatically attempts its selected fallback. The
@@ -326,5 +332,5 @@ transfer, and the sender's own scan or paste remains the gate.
 | Sender reports a failed connection after the answer arrived | The direct WebRTC route is blocked and the selected fallback was unavailable or also failed. In ordinary mode this can mean the offer named no relays or too few storage relays worked; in anonymous mode Tor or the onion relays may have failed. A file over 100 MiB cannot use either fallback. Start over on a network that allows a direct connection, or use the suggested offline-QR app. |
 | Transfer fails after the offer is collected (direct flow) | Both devices must have network connectivity to each other (same Wi-Fi, or both on the internet). |
 | Sender shows expired error | Generate a new offer by retrying the send flow. |
-| Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends the final data-channel ACK. |
+| Sender times out after sending (direct flow) | Keep the receiver page open until it verifies the file and sends its final `done`. |
 | Relay fallback stalls or times out | Both devices need internet access to the selected Nostr or Tor infrastructure, not to each other. Both pages must stay open — a side that goes silent for a few minutes ends the transfer. Everything must finish within 1 hour of the exchange start; after that, start a new one. |

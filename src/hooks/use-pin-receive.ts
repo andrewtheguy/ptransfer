@@ -1,12 +1,23 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useRef, useState } from 'react';
+import { hangUp } from '@/lib/code-exchange/hang-up';
+import {
+  acceptOffer,
+  buildDirectAttempt,
+  deriveAnswerKeys,
+  eligibleFallbackRelays,
+  finishDirectReceive,
+  readOffer,
+  receiveOverFallback,
+  sameTransferMetadata,
+  unrelayableError,
+} from '@/lib/code-exchange/receive';
+import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import {
   computePinHintFromLocator,
-  decrypt,
   deriveConfirmationCode,
   deriveHandshakeSealKeys,
   derivePinSessionKeys,
-  encrypt,
   finishPake,
   getPinBucket,
   isRendezvousFresh,
@@ -15,7 +26,6 @@ import {
   MAX_CLAIM_CANDIDATES,
   MAX_MESSAGE_SIZE,
   PIN_HINT_LOOKBACK_BUCKETS,
-  type PinSessionKeys,
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
@@ -24,6 +34,7 @@ import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
   ANONYMOUS_SIGNALING_RELAYS,
+  awaitCarriedOffer,
   base64ToUint8Array,
   type ClaimPayload,
   type ConfirmPayload,
@@ -31,7 +42,6 @@ import {
   computeTransferMetadataHash,
   createHandshakeEvent,
   createNostrClient,
-  createSignalingEvent,
   DEFAULT_RELAYS,
   EVENT_KIND_DATA_TRANSFER,
   EVENT_KIND_RENDEZVOUS,
@@ -41,25 +51,17 @@ import {
   openHandshakePayload,
   parseHandshakeEvent,
   parseRendezvousEvent,
-  parseSignalingEvent,
   type RendezvousPayload,
   sealHandshakePayload,
   type TransferMetadata,
   type TransferState,
 } from '@/lib/nostr';
-import { ACK, createTransferReceiver } from '@/lib/p2p-transfer';
-import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
+import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
+import type { AppendSink } from '@/lib/scratch-sink';
 import type { TorBridge } from '@/lib/tor/client';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
-import { WebRTCConnection } from '@/lib/webrtc';
-import { getWebRTCConfig } from '@/lib/webrtc-config';
-
-/**
- * Time to establish the WebRTC data channel once signaling has started.
- * Bounds the post-offer phase, which the per-transfer stall watchdog does not
- * cover (it only arms once the channel opens). Mirrors the sender's timeout.
- */
-const P2P_CONNECTION_TIMEOUT_MS = 30000;
+import type { WebRTCConnection } from '@/lib/webrtc';
 
 /**
  * Time to wait for the sender's confirm after publishing the claims. The
@@ -71,7 +73,7 @@ const P2P_CONNECTION_TIMEOUT_MS = 30000;
 const CONFIRM_TIMEOUT_MS = 60000;
 
 /**
- * Time to wait for the sender's first WebRTC signal after its confirm.
+ * Time to wait for the sender's offer after its confirm.
  *
  * Generous because a human is in the loop here: the sender publishes nothing
  * past the confirm until its operator types the confirmation code this side
@@ -85,14 +87,20 @@ const CONFIRM_TIMEOUT_MS = 60000;
 const OFFER_WAIT_TIMEOUT_MS = 180000;
 
 /**
- * How long to keep the peer connection alive after sending the final ACK.
- * The sender closes the connection as soon as the ACK arrives; this delayed
- * close is only a fallback for a sender that never does. Closing in the same
- * tick as the send can tear the transport down before the ACK datagram is
- * delivered, making the sender report "data channel closed before
- * acknowledgment" even though the transfer succeeded.
+ * How long the direct route may take to open when a fallback can take over
+ * if it does not. No human carries this side's answer — it reaches the
+ * sender within seconds — so the sender's own window is already running, and
+ * this outlasts it just enough that the sender's verdict on the route comes
+ * first.
  */
-const ACK_LINGER_MS = 3000;
+const DIRECT_ATTEMPT_TIMEOUT_MS = 30000;
+
+/**
+ * The same with nothing to fall back to: a dead route then simply fails the
+ * transfer, so the wait matches the sender's backstop rather than cutting it
+ * short.
+ */
+const NO_FALLBACK_ATTEMPT_TIMEOUT_MS = 120000;
 
 /**
  * One rendezvous candidate the receiver has run its side of the PAKE against
@@ -148,11 +156,15 @@ export function usePinReceive(): UsePinReceiveReturn {
     useState<ReceivedContent | null>(null);
   const [confirmationCode, setConfirmationCode] = useState<string | null>(null);
 
-  const clientRef = useRef<NostrClient | null>(null);
   const cancelledRef = useRef(false);
   const receivingRef = useRef(false);
   // Distinguishes invocations; see the note where a run claims one.
   const runIdRef = useRef(0);
+  // Closes everything the current run holds open: its relay client, the Tor
+  // client behind an anonymous transfer, the wait for the sender's offer, the
+  // peer connection, and the fallback's pool. Set by the run, called by
+  // cancel.
+  const releaseRef = useRef<(() => void) | null>(null);
   // Storage backing the in-flight or completed transfer. Discarded whenever
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
@@ -171,10 +183,8 @@ export function usePinReceive(): UsePinReceiveReturn {
     cancelledRef.current = true;
     receivingRef.current = false;
     setConfirmationCode(null);
-    if (clientRef.current) {
-      clientRef.current.close();
-      clientRef.current = null;
-    }
+    releaseRef.current?.();
+    releaseRef.current = null;
     setState({ status: 'idle' });
   }, [discardSink]);
 
@@ -202,10 +212,34 @@ export function usePinReceive(): UsePinReceiveReturn {
       const runId = ++runIdRef.current;
       const superseded = () => runIdRef.current !== runId;
       const abandoned = () => cancelledRef.current || superseded();
-      // The client this run created, closed by this run whoever owns the ref
-      // by then. Reading it back out of clientRef would be reading someone
-      // else's.
-      let ownClient: NostrClient | null = null;
+      // What this run holds open, closed by this run whoever owns the ref by
+      // then — and by cancel, which reaches it through releaseRef.
+      let client: NostrClient | null = null;
+      let transport: AnonymousSignalingTransport | null = null;
+      let closeCarriage: (() => void) | null = null;
+      const rtcHolder: { current: WebRTCConnection | null } = { current: null };
+      let channel: DuplexChannel | null = null;
+      const poolHolder: {
+        current: ReturnType<typeof createTransferPool> | null;
+      } = { current: null };
+      // A cancel tells a sender mid-transfer why the connection is going
+      // away; any other exit has already said what happened.
+      const release = (cancelling = false) => {
+        if (cancelling) hangUp(rtcHolder.current, channel);
+        else rtcHolder.current?.close();
+        rtcHolder.current = null;
+        channel = null;
+        poolHolder.current?.destroy();
+        poolHolder.current = null;
+        closeCarriage?.();
+        closeCarriage = null;
+        client?.close();
+        client = null;
+        transport?.close();
+        transport = null;
+      };
+      const cancelRelease = () => release(true);
+      releaseRef.current = cancelRelease;
 
       setReceivedContent(null);
       setConfirmationCode(null);
@@ -258,33 +292,40 @@ export function usePinReceive(): UsePinReceiveReturn {
             ? 'Starting the Tor client for anonymous signaling...'
             : 'Connecting to relays...',
         });
-        const client = createNostrClient([...relays], {
-          ...(options.anonymous
-            ? {
-                anonymous: {
-                  bridge: options.bridge,
-                  onStatus: (message: string) => {
-                    if (abandoned()) return;
-                    setState({ status: 'connecting', message });
-                  },
-                },
+        // One Tor client for the whole anonymous transfer: its relay sockets
+        // carry the handshake, and the Tor fallback reaches the sender's
+        // onion service through it if no direct route opens.
+        const torProgress = createTorProgress();
+        let bootstrapOnScreen = true;
+        if (options.anonymous) {
+          transport = new AnonymousSignalingTransport({
+            bridge: options.bridge,
+            onStatus: (message) => {
+              torProgress.push(message);
+              if (bootstrapOnScreen && !abandoned()) {
+                setState({ status: 'connecting', message });
               }
-            : {}),
-        });
-        ownClient = client;
-        clientRef.current = client;
+            },
+          });
+        }
+        client = createNostrClient(
+          [...relays],
+          transport ? { anonymousTransport: transport } : {},
+        );
+        const nostr = client;
 
         if (abandoned()) return;
 
         if (options.anonymous) {
-          await client.waitForAnonymousTransport();
+          await nostr.waitForAnonymousTransport();
+          bootstrapOnScreen = false;
           if (abandoned()) return;
           setState({
             status: 'connecting',
             message: 'Tor is up. Opening onion relay connections...',
           });
         }
-        await client.waitForConnection();
+        await nostr.waitForConnection();
 
         if (abandoned()) return;
 
@@ -306,7 +347,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         // fix it: whoever can forge 50 events can forge 50,000, and chasing
         // pages would hand an attacker an unbounded loop. See
         // docs/ARCHITECTURE.md, "Availability Is a Non-Goal".
-        const events = await client.query([
+        const events = await nostr.query([
           {
             kinds: [EVENT_KIND_RENDEZVOUS],
             '#h': hints,
@@ -554,8 +595,8 @@ export function usePinReceive(): UsePinReceiveReturn {
             if (timeout) clearTimeout(timeout);
             if (cancelPoll) clearInterval(cancelPoll);
             if (queryPoll) clearInterval(queryPoll);
-            if (subId) client.unsubscribe(subId);
-            if (rendezvousSubId) client.unsubscribe(rendezvousSubId);
+            if (subId) nostr.unsubscribe(subId);
+            if (rendezvousSubId) nostr.unsubscribe(rendezvousSubId);
             timeout = null;
             cancelPoll = null;
             queryPoll = null;
@@ -646,7 +687,7 @@ export function usePinReceive(): UsePinReceiveReturn {
             })();
           };
 
-          subId = client.subscribe(
+          subId = nostr.subscribe(
             [
               {
                 kinds: [EVENT_KIND_DATA_TRANSFER],
@@ -712,13 +753,13 @@ export function usePinReceive(): UsePinReceiveReturn {
               // The confirm subscription and poll already cover this claim:
               // its transfer id and author match the original candidate's.
               candidates.push(claim);
-              await client.publish(claim.claimEvent);
+              await nostr.publish(claim.claimEvent);
             })().catch((err) => {
               console.error('Failed to re-claim replacement rendezvous:', err);
             });
           };
 
-          rendezvousSubId = client.subscribe(
+          rendezvousSubId = nostr.subscribe(
             [
               {
                 kinds: [EVENT_KIND_RENDEZVOUS],
@@ -730,7 +771,7 @@ export function usePinReceive(): UsePinReceiveReturn {
 
           const publishAndPoll = async () => {
             for (const candidate of candidates) {
-              await client.publish(candidate.claimEvent);
+              await nostr.publish(candidate.claimEvent);
             }
             if (settled || abandoned()) return;
             // Backstop for relays that processed the publish before the
@@ -739,7 +780,7 @@ export function usePinReceive(): UsePinReceiveReturn {
               if (settled || abandoned()) return;
               void (async () => {
                 try {
-                  const existing = await client.query([
+                  const existing = await nostr.query([
                     {
                       kinds: [EVENT_KIND_DATA_TRANSFER],
                       '#t': candidates.map((c) => c.transferId),
@@ -788,7 +829,6 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         const resolvedFileName = metadata.fileName || 'unknown';
         const resolvedFileSize = metadata.fileSize;
-        const resolvedContentEncoding = metadata.contentEncoding;
         const resolvedMimeType =
           metadata.mimeType || 'application/octet-stream';
 
@@ -802,7 +842,7 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         // The confirm proved the sender ran our PAKE session, and its sealed
         // metadata is now on the table. The sender publishes nothing further
-        // — no WebRTC offer, no file byte — until its operator types this
+        // — no connection offer, no file byte — until its operator types this
         // code. Someone who front-ran us with a stolen PIN holds a different
         // SPAKE2 session, so the code on their screen is not the one the
         // sender is about to be told.
@@ -827,307 +867,184 @@ export function usePinReceive(): UsePinReceiveReturn {
             mimeType: resolvedMimeType,
           },
           useWebRTC: false,
-          currentRelays: client.getRelays(),
+          currentRelays: nostr.getRelays(),
           totalRelays: relays.length,
         });
 
-        // Session keys are HKDF derivations off the same SPAKE2 root — the
-        // PIN authenticated the exchange, and the exchange's fresh ephemeral
-        // scalars supply the entropy.
-        const sessionKeys: PinSessionKeys = await derivePinSessionKeys(
+        // The session's signals key seals the codes this session carries: the
+        // offer the sender publishes once its operator has typed the code on
+        // screen here, and the answer that goes back.
+        const { signals: signalsKey } = await derivePinSessionKeys(
           session.rootKey,
           salt,
         );
+        if (abandoned()) return;
 
-        // Decrypted chunks land in the receive sink as they arrive. A cancel
-        // during its creation cannot see it through sinkRef yet, so discard
-        // it here instead of leaving its scratch storage orphaned.
-        const sink = await createAdaptiveAppendSink(resolvedFileSize);
-        if (abandoned()) {
-          void sink.discard();
+        // The sender publishes nothing past its confirm until its operator
+        // types that code, so the offer arriving is how this side learns the
+        // code matched.
+        const carriage = awaitCarriedOffer({
+          client: nostr,
+          secretKey,
+          transferId,
+          senderPubkey,
+          signalsKey,
+          isCancelled: abandoned,
+          timeoutMs: OFFER_WAIT_TIMEOUT_MS,
+          timeoutMessage:
+            'The sender did not enter the confirmation code in time. Start a new transfer.',
+        });
+        closeCarriage = carriage.close;
+        const offerCode = await carriage.offer;
+        if (abandoned()) return;
+
+        // The code has done its job.
+        setConfirmationCode(null);
+        const fileMetadata = {
+          fileName: resolvedFileName,
+          fileSize: resolvedFileSize,
+          mimeType: resolvedMimeType,
+        };
+        setState({
+          status: 'receiving',
+          message: 'Sender confirmed — connecting...',
+          contentType: 'file',
+          fileMetadata,
+          currentRelays: nostr.getRelays(),
+          totalRelays: relays.length,
+        });
+
+        const offer = acceptOffer(await readOffer(offerCode));
+        // The humans compared a code bound to the metadata the confirm
+        // delivered, so the offer has to describe that same file.
+        if (!sameTransferMetadata(offer.metadata, metadata)) {
+          throw new Error(
+            "The sender's connection offer describes a different file than it confirmed. Start a new transfer.",
+          );
+        }
+        // The fallback stays on the side of the privacy line this PIN's kind
+        // drew: an anonymous transfer never hands either device's address to
+        // a clearnet relay, and an ordinary one has no Tor client to run the
+        // other kind.
+        if (
+          offer.fallback !== 'none' &&
+          offer.fallback !== (options.anonymous ? 'anonymous' : 'relay')
+        ) {
+          throw new Error(
+            options.anonymous
+              ? "The sender's connection offer asks for a clearnet fallback, which anonymous signaling never uses. Start a new transfer."
+              : "The sender's connection offer asks for the Tor fallback, which only an anonymous PIN uses. Start a new transfer.",
+          );
+        }
+
+        const keys = await deriveAnswerKeys(offer);
+        if (abandoned()) return;
+        const fallbackRelays = eligibleFallbackRelays(offer);
+        const attempt = await buildDirectAttempt({
+          offer,
+          keys,
+          sinkHolder: sinkRef,
+          rtcHolder,
+          connectionTimeoutMs: fallbackRelays
+            ? DIRECT_ATTEMPT_TIMEOUT_MS
+            : NO_FALLBACK_ATTEMPT_TIMEOUT_MS,
+          isCancelled: abandoned,
+          // The answer is built behind the "connecting" line above; its
+          // steps are the response page's in Code Exchange, not this one's.
+          report: (update) => {
+            if (update.status !== 'generating_answer' && !abandoned()) {
+              setState(update);
+            }
+          },
+          onProgress: (current, total) =>
+            setState((s) => ({
+              ...s,
+              status: 'receiving',
+              progress: { current, total },
+            })),
+        });
+        if (!attempt) return;
+        await carriage.answer(attempt.answerBinary);
+        if (abandoned()) return;
+
+        try {
+          channel = await attempt.opened;
+        } catch (error) {
+          attempt.dispose();
+          if (
+            !(error instanceof P2PConnectionError) ||
+            !offer.fallbackRelays ||
+            abandoned()
+          ) {
+            throw error;
+          }
+          if (!fallbackRelays) throw unrelayableError(offer, error);
+          // The offer and answer have done their job; the fallback meets the
+          // sender on its own control channel from here.
+          carriage.close();
+          const receipt = await receiveOverFallback({
+            offer,
+            keys,
+            transport,
+            torProgress,
+            hold: null,
+            poolHolder,
+            switchedBack: () => false,
+            isCancelled: abandoned,
+            report: (update) => {
+              if (!abandoned()) setState(update);
+            },
+          });
+          if (!receipt || receipt === 'switched' || abandoned()) return;
+          setReceivedContent(receipt.content);
+          setState({
+            status: 'complete',
+            message: receipt.message,
+            contentType: 'file',
+            fileMetadata: {
+              fileName: receipt.content.fileName,
+              fileSize: receipt.content.fileSize,
+              mimeType: receipt.content.mimeType,
+            },
+            stats: receipt.stats,
+          });
           return;
         }
-        sinkRef.current = sink;
+        carriage.close();
 
-        // Listener for the P2P transfer
-        const transferResult = await new Promise<Blob>((resolve, reject) => {
-          let rtc: WebRTCConnection | null = null;
-          let channel: DuplexChannel | null = null;
-          let settled = false;
-
-          // Streaming receiver: decrypts each chunk into the sink as it
-          // arrives (inflating deflated payloads in between). Nostr is not
-          // involved past signaling; the data-channel ACK below confirms
-          // completion.
-          const receiver = createTransferReceiver(
-            sessionKeys.content,
-            resolvedContentEncoding,
-            sink,
-            {
-              estimatedBytes: resolvedFileSize,
-              onProgress: (current, total) =>
-                setState((s) => ({
-                  ...s,
-                  status: 'receiving',
-                  progress: { current, total },
-                })),
-            },
-          );
-
-          let cancelPoll: ReturnType<typeof setInterval> | null = null;
-          let dataChannelOpened = false;
-          let signalSeen = false;
-          let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
-          const clearConnectionTimeout = () => {
-            if (connectionTimeout) {
-              clearTimeout(connectionTimeout);
-              connectionTimeout = null;
-            }
-          };
-
-          // Bound the pre-open phase: the stall watchdog only arms once the
-          // data channel opens, so a sender that never completes WebRTC would
-          // leave receiver.done unresolved without this. Two windows: a long
-          // one while the sender's operator types the confirmation code (its
-          // first signal is what ends that wait), then the ordinary
-          // connection timeout once signaling has started. Cleared the moment
-          // the channel opens (see below), on cancel, and on success/failure.
-          const armConnectionTimeout = (delayMs: number) => {
-            clearConnectionTimeout();
-            connectionTimeout = setTimeout(() => {
-              if (settled || dataChannelOpened) return;
-              settled = true;
-              if (cancelPoll) clearInterval(cancelPoll);
-              client.unsubscribe(subId);
-              try {
-                if (rtc) rtc.close();
-              } catch {
-                // ignore
-              }
-              // Only a failure after signaling started is a connection
-              // problem worth suggesting the offline-QR fallback for; before
-              // that, the sender simply never entered the code.
-              reject(
-                signalSeen
-                  ? new P2PConnectionError('WebRTC connection timeout')
-                  : new Error(
-                      'The sender did not enter the confirmation code in time. Start a new transfer.',
-                    ),
-              );
-            }, delayMs);
-          };
-          armConnectionTimeout(OFFER_WAIT_TIMEOUT_MS);
-
-          // cancel() only flips cancelledRef and closes the relay client; rtc is
-          // local to this Promise and unreachable from there. Poll so a cancel
-          // always settles the wait, even when rtc cannot be closed by cancel().
-          // A stalled stream is aborted by the receiver's own idle watchdog.
-          cancelPoll = setInterval(() => {
-            if (abandoned() && !settled) {
-              settled = true;
-              clearConnectionTimeout();
-              receiver.dispose();
-              if (cancelPoll) clearInterval(cancelPoll);
-              client.unsubscribe(subId);
-              try {
-                if (rtc) rtc.close();
-              } catch {
-                // ignore
-              }
-              reject(new Error('Cancelled'));
-            }
-          }, 250);
-
-          receiver.done
-            .then((result) => {
-              if (settled) return;
-              settled = true;
-              clearConnectionTimeout();
-              if (cancelPoll) clearInterval(cancelPoll);
-              client.unsubscribe(subId);
-              // The file is fully received; a failure to send the ACK or tear
-              // down rtc must not prevent the Promise from settling.
-              if (rtc) {
-                const conn = rtc;
-                // Chunks only arrive over an open channel, so it is set by now.
-                channel
-                  ?.sendText(ACK)
-                  .catch((e) => console.error('ACK send error', e));
-                // Linger so the ACK reaches the sender; see ACK_LINGER_MS.
-                setTimeout(() => {
-                  try {
-                    conn.close();
-                  } catch {
-                    // ignore
-                  }
-                }, ACK_LINGER_MS);
-              }
-              resolve(result);
-            })
-            .catch((err) => {
-              if (settled) return;
-              settled = true;
-              clearConnectionTimeout();
-              if (cancelPoll) clearInterval(cancelPoll);
-              client.unsubscribe(subId);
-              try {
-                if (rtc) rtc.close();
-              } catch {
-                // ignore
-              }
-              reject(err instanceof Error ? err : new Error('Transfer failed'));
-            });
-
-          const initWebRTC = () => {
-            if (rtc) return rtc;
-
-            rtc = new WebRTCConnection(
-              getWebRTCConfig(),
-              async (signal) => {
-                const signalPayload = { type: 'signal', signal };
-                const signalJson = JSON.stringify(signalPayload);
-                const encryptedSignal = await encrypt(
-                  sessionKeys.signals,
-                  new TextEncoder().encode(signalJson),
-                );
-                const event = createSignalingEvent(
-                  secretKey,
-                  senderPubkey,
-                  transferId,
-                  encryptedSignal,
-                );
-                await client.publish(event);
-              },
-              (opened) => {
-                // Data channel opened; the idle watchdog covers the receiving
-                // stage from here on, replacing the pre-open connection timeout.
-                channel = opened;
-                opened.subscribe((data) => {
-                  if (settled) return;
-                  receiver.onMessage(data);
-                });
-                dataChannelOpened = true;
-                clearConnectionTimeout();
-                receiver.start();
-                setState((s) => ({
-                  ...s,
-                  status: 'receiving',
-                  message: 'Receiving via P2P...',
-                  useWebRTC: true,
-                }));
-              },
-            );
-            return rtc;
-          };
-
-          const processedEventIds = new Set<string>();
-
-          const processEvent = async (event: Event) => {
-            if (settled) return;
-            if (processedEventIds.has(event.id)) return;
-            processedEventIds.add(event.id);
-
-            const signalData = parseSignalingEvent(event);
-            if (signalData && signalData.transferId === transferId) {
-              try {
-                const decrypted = await decrypt(
-                  sessionKeys.signals,
-                  signalData.encryptedSignal,
-                );
-                const signalPayload = JSON.parse(
-                  new TextDecoder().decode(decrypted),
-                );
-                if (signalPayload.type === 'signal' && signalPayload.signal) {
-                  // A signal that decrypts under the session's signals key
-                  // means the sender's operator entered the code: the gate
-                  // is open, the code has done its job, and the ordinary
-                  // connection timeout takes over from the code-entry wait.
-                  if (!signalSeen && !settled) {
-                    signalSeen = true;
-                    setConfirmationCode(null);
-                    if (!dataChannelOpened) {
-                      armConnectionTimeout(P2P_CONNECTION_TIMEOUT_MS);
-                    }
-                    setState((s) => ({
-                      ...s,
-                      status: 'receiving',
-                      message: 'Sender confirmed — connecting...',
-                    }));
-                  }
-                  const r = initWebRTC();
-                  await r.handleSignal(signalPayload.signal);
-                }
-              } catch (e) {
-                console.error('Signal handling error', e);
-              }
-            }
-          };
-
-          const subId = client.subscribe(
-            [
-              {
-                kinds: [EVENT_KIND_DATA_TRANSFER],
-                '#t': [transferId],
-                authors: [senderPubkey],
-              },
-            ],
-            processEvent,
-          );
-
-          // Fire-and-forget: Query existing events in parallel with the live subscription.
-          // This catches events published before we subscribed. Errors are logged inside.
-          void (async () => {
-            try {
-              const existingEvents = await client.query([
-                {
-                  kinds: [EVENT_KIND_DATA_TRANSFER],
-                  '#t': [transferId],
-                  authors: [senderPubkey],
-                  limit: 50,
-                },
-              ]);
-              for (const event of existingEvents) {
-                await processEvent(event);
-              }
-            } catch (err) {
-              console.error('Failed to query existing events:', err);
-            }
-          })();
+        setState({
+          status: 'receiving',
+          message: 'Receiving via P2P...',
+          contentType: 'file',
+          fileMetadata,
+          useWebRTC: true,
+          progress: { current: 0, total: resolvedFileSize },
         });
+        const payload = await finishDirectReceive({
+          attempt,
+          rtcHolder,
+          isCancelled: abandoned,
+        });
+        if (!payload || abandoned()) return;
 
-        if (abandoned()) return;
-
-        // P2P transfer streamed already-decrypted chunks into the sink; this is
-        // the sealed payload.
-        const contentData = transferResult;
-
-        if (abandoned()) return;
-
-        // Completion is confirmed to the sender via the data-channel ACK sent when
-        // receiver.done resolved; no relay event is published post-transfer.
-
-        // Set received content
         setReceivedContent({
           contentType: 'file',
-          data: contentData,
+          data: payload,
           fileName: resolvedFileName,
-          fileSize: contentData.size,
+          fileSize: payload.size,
           mimeType: resolvedMimeType,
         });
-
-        setState((prevState) => ({
+        setState({
           status: 'complete',
           message: 'File received (P2P)!',
           contentType: 'file',
           fileMetadata: {
             fileName: resolvedFileName,
-            fileSize: contentData.size,
+            fileSize: payload.size,
             mimeType: resolvedMimeType,
           },
-          currentRelays: prevState.currentRelays,
-          totalRelays: prevState.totalRelays,
-          useWebRTC: prevState.useWebRTC,
-        }));
+          useWebRTC: true,
+        });
       } catch (error) {
         // A superseded run reports nothing and abandons nothing: the sink and
         // the code on screen are the replacement's now, and its own storage
@@ -1154,8 +1071,8 @@ export function usePinReceive(): UsePinReceiveReturn {
         // Idempotent backstop for early exits — the happy path already wiped
         // it the moment the claims were built.
         wipeBufferSource(pinMaterial.pakeSecret);
-        if (clientRef.current === ownClient) clientRef.current = null;
-        ownClient?.close();
+        if (releaseRef.current === cancelRelease) releaseRef.current = null;
+        release();
       }
     },
     [discardSink],

@@ -2,7 +2,7 @@
 
 ## Overview
 
-pTransfer is a browser-based encrypted file and folder transfer application. Its two WebRTC-based modes are rotating-PIN-authenticated Nostr signaling and Code Exchange, whose offer and receiver answer are both handed over by QR or copy/paste. Both prefer direct P2P transfer over WebRTC. Code Exchange can instead carry files up to 100 MiB over its selected fallback when a direct connection cannot be established: public Nostr storage relays ordinarily, or a temporary Tor onion service when its experimental anonymous option is selected. PIN Exchange has no data-path fallback. In PIN Exchange the content-encryption key comes from a PIN-driven SPAKE2 password-authenticated key exchange; in Code Exchange it comes from an ephemeral ECDH exchange authenticated by the QR/clipboard offer path. A third mode publishes a v3 onion service and carries the transfer through Tor without a WebRTC connection between the devices; it is specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
+pTransfer is a browser-based encrypted file and folder transfer application. Its two WebRTC-based modes run the same session — a Code Exchange offer and answer — and differ in how those two codes travel: Code Exchange hands them over by QR or copy/paste, and PIN Exchange carries them over Nostr, sealed under a rotating-PIN-driven SPAKE2 password-authenticated key exchange. Both prefer direct P2P transfer over WebRTC, and both can instead carry files up to 100 MiB over the offer's selected fallback when a direct connection cannot be established: public Nostr storage relays ordinarily, or a temporary Tor onion service when the transfer is anonymous (Code Exchange's anonymous option, or PIN Exchange's anonymous signaling). In both modes the content-encryption key comes from the ephemeral ECDH exchange inside the codes, authenticated by the path the codes took — a person's hand, or the PAKE-sealed channel behind the confirmation code. A third mode publishes a v3 onion service and carries the transfer through Tor without a WebRTC connection between the devices; it is specified in [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
 
 ## Implementations
 
@@ -43,12 +43,13 @@ These describe the present implementation rather than permanent product
 principles. They may change as transports evolve without changing the two
 constraints above.
 
-1. **Direct First, Selected Relay Fallback**: Both WebRTC-based modes try a direct data channel. PIN Exchange stops if that connection fails. Code Exchange can use one selected fallback when its payload is no larger than 100 MiB: the Nostr file-relay protocol in ordinary offers, or the Tor-backed anonymous relay path when the offer carries `anon: true`.
-2. **Single P2P Transfer Path**: `src/lib/p2p-transfer.ts` is the only file-transfer implementation used after signaling opens a WebRTC data channel. Both signaling methods use its 128 KiB AES-GCM chunks, `DONE:<chunkCount>:<byteCount>`, and data-channel `ACK` framing on the direct path.
-3. **Separate Relay Transfer Paths**: `src/lib/nostr-file/` implements the ordinary Code Exchange fallback, which `ptransfer-cli` carries too: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check. `src/lib/tor/code-relay.ts` implements the anonymous variant: onion-service Nostr relays carry its encrypted control channel and the sender's temporary onion service carries the file using the shared Tor transfer protocol.
-4. **Bounded Receive Storage**: Direct receivers append authenticated chunks in reliable data-channel order to an adaptive sink: memory through 100 MiB, then OPFS. Both relay fallbacks are capped at 100 MiB. The Nostr fallback materializes its payload in memory while hashing, compressing, assembling, and verifying it; the Tor receiver streams into a bounded in-memory sink.
-5. **Method-Specific Setup and Failure Handling**: PIN Exchange uses Nostr for its PAKE handshake and WebRTC signals. Code Exchange hand-carries both the offer and the answer. An ordinary offer may name the public relays used as the fallback's encrypted control channel; an anonymous offer instead carries `anon: true` and uses the fixed onion-relay pool.
-6. **PIN Locates and Authenticates via PAKE (PIN Exchange)**: A rotating 12-character, case-sensitive letters-and-digits PIN locates the sender's rendezvous event and drives a SPAKE2 (RFC 9382, P-256) password-authenticated key exchange. Content and signaling keys are HKDF derivations off the SPAKE2 shared secret — which mixes fresh ephemeral scalars from both sides — so nothing published to relays can test a PIN guess offline, and a PIN recovered after the fact decrypts nothing.
+1. **Direct First, Selected Relay Fallback**: Both WebRTC-based modes try a direct data channel. If it fails, either can use the one fallback its offer selected when the payload is no larger than 100 MiB: the Nostr file-relay protocol in ordinary offers, or the Tor-backed anonymous relay path when the offer carries `anon: true`. An anonymous PIN's offer always asks for the Tor one.
+2. **Single Transfer Protocol**: `src/lib/p2p-transfer.ts` is the only file-transfer implementation used once a WebRTC data channel or a Tor stream is open. Every mode uses its bidirectional protocol: 128 KiB AES-GCM chunks within a window the receiver's acknowledgments open, an `end` the receiver answers with its `done` verdict, and an `abort` either side sends with its reason.
+3. **One Code Exchange Session**: `src/lib/code-exchange/` is the session both WebRTC modes run — the key pair and WebRTC offer, the fallback prepared behind the exchange, the direct attempt, and the fallback that replaces it. The two modes' hooks differ only in how the codes travel and what gates them.
+4. **Separate Relay Transfer Paths**: `src/lib/nostr-file/` implements the ordinary Code Exchange fallback, which `ptransfer-cli` carries too: whole-payload deflate for single files (identity for already-compressed generated ZIPs), 48 KiB payload chunks, AES-256-GCM, Z85, an encrypted control channel, and a whole-file SHA-256 check. `src/lib/tor/code-relay.ts` implements the anonymous variant: onion-service Nostr relays carry its encrypted control channel and the sender's temporary onion service carries the file using the shared Tor transfer protocol.
+5. **Bounded Receive Storage**: Direct receivers append authenticated chunks in reliable data-channel order to an adaptive sink: memory through 100 MiB, then OPFS. Both relay fallbacks are capped at 100 MiB. The Nostr fallback materializes its payload in memory while hashing, compressing, assembling, and verifying it; the Tor receiver streams into a bounded in-memory sink.
+6. **Method-Specific Carriage**: PIN Exchange uses Nostr for its PAKE handshake and then carries the offer and answer sealed over it. Code Exchange hand-carries both. An ordinary offer may name the public relays used as the fallback's encrypted control channel; an anonymous offer instead carries `anon: true` and uses the fixed onion-relay pool.
+7. **PIN Locates and Authenticates via PAKE (PIN Exchange)**: A rotating 12-character, case-sensitive letters-and-digits PIN locates the sender's rendezvous event and drives a SPAKE2 (RFC 9382, P-256) password-authenticated key exchange. The key that seals the carried codes is an HKDF derivation off the SPAKE2 shared secret — which mixes fresh ephemeral scalars from both sides — and the content key comes from the ECDH exchange inside those codes, so nothing published to relays can test a PIN guess offline, and a PIN recovered after the fact decrypts nothing.
 
 ## Signaling Methods
 
@@ -68,10 +69,10 @@ The table below compares the two WebRTC-based modes. The third — **Tor Onion S
 
 | Feature | Nostr / PIN Exchange (Default) | Code Exchange (Hand-Carried Offer) |
 |---------|-----------------|---------------------------------------|
-| Signaling path | Decentralized relays | Offer and answer both by QR/copy-paste; the sender scans or pastes the answer |
+| Signaling path | Decentralized relays: the PAKE handshake, then the offer and answer sealed over it | Offer and answer both by QR/copy-paste; the sender scans or pastes the answer |
 | ICE servers | STUN only (Google + Cloudflare); no TURN | STUN only (same WebRTC config); no TURN |
-| File transport | Direct WebRTC only | Direct WebRTC first; automatic selected fallback up to 100 MiB when available: Nostr storage relays ordinarily, or Tor with the anonymous option |
-| Privacy | Public rendezvous routing record; handshake and WebRTC signals sealed after PAKE. Optional anonymous signaling hides both devices' IP addresses from the Nostr relays, but never from the WebRTC peer | Offer and answer are only obfuscated and must be delivered authentically; both fallbacks encrypt the file, and the anonymous fallback keeps its control and file paths inside Tor |
+| File transport | Direct WebRTC first; automatic selected fallback up to 100 MiB when available: Nostr storage relays ordinarily, or Tor with anonymous signaling | Direct WebRTC first; automatic selected fallback up to 100 MiB when available: Nostr storage relays ordinarily, or Tor with the anonymous option |
+| Privacy | Public rendezvous routing record; handshake and carried codes sealed after PAKE. Optional anonymous signaling hides both devices' IP addresses from the Nostr relays and keeps its fallback inside Tor, but never hides them from a direct WebRTC peer | Offer and answer are only obfuscated and must be delivered authentically; both fallbacks encrypt the file, and the anonymous fallback keeps its control and file paths inside Tor |
 | Complexity | More complex | Hand-carried code (QR or copy/paste) |
 | Internet Required | Yes | No for ordinary Code Exchange on the same local network; yes with the anonymous option |
 | Network Requirement | Internet access to common signaling relays plus a direct ICE route | Same local network without internet; with internet, either a direct ICE route or the selected usable fallback |
@@ -87,21 +88,21 @@ need internet because Tor is reached over the network.
 
 ## Transfer Flow
 
-pTransfer has two method-specific WebRTC setup paths and prefers one shared P2P transfer path. If WebRTC opens, both modes call `src/lib/p2p-transfer.ts`. If it does not, PIN Exchange fails, while an eligible Code Exchange switches to the fallback selected by its offer.
+pTransfer has two ways to carry one Code Exchange session and one shared transfer path. If WebRTC opens, both modes call `src/lib/p2p-transfer.ts`. If it does not, an eligible transfer in either mode switches to the fallback selected by its offer.
 
 ### Unified Transfer Flow (All Signaling Methods)
 
 ```mermaid
 flowchart TD
-    subgraph Nostr[Nostr setup]
+    subgraph Nostr[PIN Exchange carriage]
         N1[Rotating rendezvous event<br/>plaintext + blinded SPAKE2 element]
         N2[Claim / confirm handshake<br/>sealed with PAKE session keys]
-        N3[Encrypted WebRTC signals<br/>PAKE-derived signals key]
+        N3[PT01 offer and answer<br/>sealed with the PAKE signals key]
         N1 --> N2
-        N2 --> N3
+        N2 -->|confirmation code typed| N3
     end
 
-    subgraph Code[Code Exchange setup]
+    subgraph Code[Code Exchange carriage]
         M1[QR/clipboard offer<br/>obfuscated PT01 payload]
         M2[QR/clipboard answer<br/>scanned or pasted by the sender]
         M1 --> M2
@@ -109,10 +110,9 @@ flowchart TD
 
     N3 --> Direct{WebRTC data<br/>channel opens?}
     M2 --> Direct
-    Direct -->|yes| Transfer[Shared P2P transfer layer<br/>src/lib/p2p-transfer.ts]
-    Direct -->|no, PIN Exchange| Failed[Transfer fails]
-    Direct -->|no, Code Exchange| Eligible{Selected fallback available<br/>and payload ≤ 100 MiB?}
-    Eligible -->|no| Failed
+    Direct -->|yes| Transfer[Shared transfer protocol<br/>src/lib/p2p-transfer.ts]
+    Direct -->|no| Eligible{Selected fallback available<br/>and payload ≤ 100 MiB?}
+    Eligible -->|no| Failed[Transfer fails]
     Eligible -->|yes| Anonymous{Anonymous offer?}
     Anonymous -->|no| Relay[Nostr relay fallback<br/>src/lib/nostr-file/]
     Relay --> RelayChunks[48 KiB payload chunks<br/>AES-GCM + Z85 + SHA-256]
@@ -120,13 +120,13 @@ flowchart TD
     Anonymous -->|yes| TorRelay[Tor relay fallback<br/>src/lib/tor/code-relay.ts]
     TorRelay --> TorChunks[Onion-service Nostr control channel<br/>+ temporary sender onion service]
     TorChunks --> TorDone[Shared Tor handshake,<br/>framing, and transfer protocol]
-    Transfer --> Chunks[128 KiB AES-GCM chunks<br/>authenticated chunk index]
-    Chunks --> Done[DONE:&lt;chunkCount&gt;:&lt;byteCount&gt;]
+    Transfer --> Chunks[128 KiB AES-GCM chunks<br/>within the receiver's ack window]
+    Chunks --> Done[end: chunk and byte counts]
     Done --> Verify[Receiver verifies count, indexes,<br/>sizes, and authentication tags]
-    Verify --> Ack[Data-channel ACK]
+    Verify --> Ack[Receiver's done verdict]
 ```
 
-Both modes derive their keys from an ephemeral exchange — PIN Exchange from the SPAKE2 run the PIN authenticates, Code Exchange from an ECDH exchange whose authenticity rests on the QR/clipboard offer path. On direct connections, `src/lib/p2p-transfer.ts` receives the content key plus an open data channel and runs the same encrypted chunk, validation, `DONE`, and `ACK` flow for both setup methods. The ordinary Code Exchange fallback derives a distinct session id and file key from the ECDH secret and uses its own manifest/control/chunk protocol. The anonymous fallback derives its control channel and onion-service password from that same secret, then reuses the Tor transport unchanged.
+Both modes derive their content key from the same ephemeral ECDH exchange inside the codes; what authenticates it is the path the codes took — the QR/clipboard path in Code Exchange, and in PIN Exchange the SPAKE2 session the PIN authenticates, whose signals key seals both codes. On direct connections, `src/lib/p2p-transfer.ts` receives the content key plus an open data channel and runs the same encrypted chunk, acknowledgment, validation, and verdict flow for both carriages. The ordinary Code Exchange fallback derives a distinct session id and file key from the ECDH secret and uses its own manifest/control/chunk protocol. The anonymous fallback derives its control channel and onion-service password from that same secret, then reuses the Tor transport unchanged.
 
 ### Signaling Setup Diagrams
 
@@ -143,10 +143,12 @@ sequenceDiagram
     Sender->>Receiver: Confirm (sealed with the session confirm key, carries file metadata)
     Note over Receiver: Verifies the confirm, derives and displays the confirmation code
     Note over Sender,Receiver: Human channel: receiver reads the code, sender types it
-    Note over Sender: Publishes no WebRTC signal until the typed code matches
-    Note over Sender,Receiver: Both hold PAKE-derived session keys (signals + content)
-    Sender->>Receiver: WebRTC Offer
-    Receiver-->>Sender: WebRTC Answer
+    Note over Sender: Builds its Code Exchange offer meanwhile, but publishes nothing until the typed code matches
+    Note over Sender,Receiver: Both hold the PAKE-derived signals key
+    Sender->>Receiver: PT01 offer, sealed (republished every 5 s until answered)
+    Note over Receiver: Checks the offer describes the confirmed file
+    Receiver-->>Sender: PT01 answer with its confirmation tag, sealed
+    Note over Sender: Verifies the tag; both derive the ECDH content key
     Sender->>Receiver: WebRTC data channel opens
 ```
 
@@ -154,13 +156,23 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Sender
+    participant Relays as Nostr relays
     participant Receiver
-    Sender->>Receiver: Rendezvous event (via Nostr)
-    Receiver-->>Sender: Claim
-    Sender->>Receiver: Confirm
-    Note over Sender,Receiver: P2P connection timeout (30s)
-    Note over Sender,Receiver: Transfer fails — UI suggests offline-QR app
+    Sender->>Receiver: Rendezvous, claim, confirm, code (via Nostr)
+    Sender->>Receiver: Sealed offer and answer (via Nostr)
+    Note over Sender,Receiver: Direct WebRTC attempt fails
+    alt Offer named relays (standard PIN) and payload ≤ 100 MiB
+        Receiver->>Relays: Sealed hello on the offer's control relays
+        Sender->>Relays: Encrypted manifest, control, and file-piece events
+        Relays-->>Receiver: Encrypted file pieces
+    else Offer carries anon (anonymous PIN) and payload ≤ 100 MiB
+        Note over Sender,Receiver: Same exchange over onion relays; the file travels through the sender's onion service
+    else No eligible fallback
+        Note over Sender,Receiver: Transfer fails — UI suggests offline-QR app
+    end
 ```
+
+The PIN sender starts preparing the fallback when the transfer starts, not when it builds its offer: proving the control relays, preparing the storage ring, and sweeping the relay population all run behind the PIN on screen, so by the time a receiver has claimed and confirmed, the offer's relays are proven and the ring is ready.
 
 ### Code Exchange Mode - Signaling Setup and Ordinary Fallback
 ```mermaid
@@ -258,32 +270,32 @@ service carries the file.
 |-----------|-------------|
 | `pin.ts` | Rotating PIN: generation, weighted checksum, kind classification by length, locator extraction, and the locator-keyed rendezvous hint. 12 characters normally, 16 when the sender turns on anonymous signaling — see [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) |
 | `spake2.ts` | SPAKE2 (RFC 9382) over P-256 via @noble/curves: PIN-to-scalar derivation, blinded element generation, and the transcript-keyed root-key derivation. The PAKE math runs outside Web Crypto (which has no group operations); the root is locked into a non-extractable HKDF CryptoKey immediately and intermediates are wiped |
-| `kdf.ts` | Session-key derivation off the SPAKE2 root (HKDF-SHA256, `signals`/`content`/`claim`/`confirm` labels), the confirmation-code (short authentication string) derivation, and salt generation |
-| `ecdh.ts` | ECDH key agreement for Code Exchange (non-extractable keys); authenticated by the QR/clipboard path |
+| `kdf.ts` | Session-key derivation off the SPAKE2 root (HKDF-SHA256, `signals`/`claim`/`confirm` labels), the confirmation-code (short authentication string) derivation, the Code Exchange content key and answer confirmation tag, and salt generation |
+| `ecdh.ts` | ECDH key agreement for the Code Exchange session both modes run (non-extractable keys); authenticated by the path the codes took |
 | `aes-gcm.ts` | AES-256-GCM encryption/decryption |
 | `base32.ts` | Crockford Base32 encoding and forgiving normalization for the confirmation code |
 | `stream-crypto.ts` | Streaming encryption/decryption (128 KiB chunks, protocol-agnostic) |
 | `constants.ts` | Crypto parameters, 55-character PIN alphabet, rotation/TTL windows, online-guess budgets |
 
-### Shared P2P Transfer Layer (`src/lib/p2p-transfer.ts`)
+### Shared Transfer Protocol (`src/lib/p2p-transfer.ts`)
 
-Once a reliable, ordered, message-oriented transport is open — a WebRTC data channel for Nostr and Code Exchange, a framed onion stream for the Tor transport — every mode uses one shared file-transfer protocol. Over WebRTC it runs as one client of the bidirectional data channel described under [WebRTC](#webrtc-srclibwebrtcts-and-srclibduplex-channelts), not as the channel's owner:
+Once a reliable, ordered, message-oriented transport is open — a WebRTC data channel for Nostr and Code Exchange, a framed onion stream for the Tor transport — every mode uses one shared file-transfer protocol, specified in [INTEROP_PROTOCOL.md §7](INTEROP_PROTOCOL.md#7-transfer). It is bidirectional throughout rather than a one-way stream with an acknowledgment tacked on the end: the receiver tells the sender what it has stored as it stores it, the sender never runs more than a window ahead of that, completion is a verdict the receiver sends back, and either side stops the other with a reason. Over WebRTC it runs as one client of the bidirectional data channel described under [WebRTC](#webrtc-srclibwebrtcts-and-srclibduplex-channelts), not as the channel's owner.
 
 1. Sender reads a lazy transfer source in its wire encoding and coalesces the output into `ENCRYPTION_CHUNK_SIZE` (`128 KiB`) chunks. The encoding follows the no-recompress rule: a single-file send is deflated on the fly through the browser's native `CompressionStream('deflate-raw')`, while a multi-file/folder send — a ZIP whose entries are already deflated — travels as-is, its bytes emitted while fflate is still reading and packaging entries. Either way the final wire length is unknown during signaling.
-2. Each slice is encrypted with `encryptChunk`, producing `[chunk_index_be_u16][nonce_12][ciphertext][tag_16]`.
-3. Sender sends encrypted chunks with WebRTC backpressure enabled (the duplex channel's sends wait while more than 1 MiB is buffered).
-4. Sender sends the control string `DONE:<totalChunks>:<totalBytes>` carrying the wire (encoded) byte count.
-5. Receiver waits for all pending decryptions, validates both `DONE` values, verifies that the indices arrived exactly once in data-channel order, and checks the total decrypted wire byte count. Deflated payloads are inflated between decryption and storage (capped at the transfer size limit as a decompression-bomb guard), so the sealed payload is the original file.
-6. Receiver sends the control string `ACK` on the same data channel.
-7. Sender waits up to `ACK_TIMEOUT_MS` (`30s`) for `ACK`; timeout is a transfer failure. It listens for `ACK` before sending `DONE`, but the 30 s clock starts only once `DONE` has actually been handed off, so time `DONE` spends behind backpressure does not count against the receiver.
+2. Each slice is encrypted with `encryptChunk`, producing `[chunk_index_be_u16][nonce_12][ciphertext][tag_16]`, and sent as a binary message.
+3. The receiver decrypts and stores each chunk in order and answers with `{"t":"ack","chunks":n}`, the cumulative count stored. The sender keeps at most `TRANSFER_WINDOW_CHUNKS` (32, i.e. 4 MiB) chunks beyond the last acknowledgment, and the receiver enforces it — so what a receiver holds unwritten is bounded no matter how fast the sender's side is, which a browser data channel cannot do on its own: it has no receive-side backpressure. The sender also waits on the channel's own buffer (sends wait while more than 1 MiB is buffered). Its progress bar follows the acknowledgments, so it shows what arrived rather than what left its buffer.
+4. After the last chunk the sender sends `{"t":"end","chunks":n,"bytes":b}` carrying the wire (encoded) byte count.
+5. Receiver waits for all pending decryptions, validates both values, verifies that the indices arrived exactly once in order, and checks the total decrypted wire byte count. Deflated payloads are inflated between decryption and storage (capped at the transfer size limit as a decompression-bomb guard), so the sealed payload is the original file.
+6. Receiver finalizes its storage and answers `{"t":"done","chunks":n,"bytes":b}`, echoing `end`; the sender checks the echo and treats a matching `done` as completion.
+7. Either side that gives up — cancelled by its user, a chunk that fails authentication or a protocol check, a full disk, an over-limit payload — sends `{"t":"abort","reason":"…"}` and the other stops at once with that reason (`TransferAbortedError`) instead of finding out from a timeout. A transport that closes before `done` is a connection failure (`P2PConnectionError`).
 
-Both sides run an idle/stall watchdog (`STALL_TIMEOUT_MS`, `60s`) over the active transfer instead of any overall wall-clock deadline. On the sender each chunk hand-off (`sendBinary`, which resolves only once the channel has room) and the `DONE` hand-off after them must complete within the window, so a receiver that stops draining the channel aborts the send. On the receiver the window resets on every incoming data-channel message (armed once the channel opens via `start()`), so a sender that goes quiet mid-stream aborts the receive. Either side timing out rejects with `P2PConnectionError`, which the UI treats as a connection failure.
+Both sides run an idle/stall watchdog (`STALL_TIMEOUT_MS`, `60s`) instead of any overall wall-clock deadline, each measuring the other. The sender fails when, with anything outstanding — chunks not yet acknowledged, or an `end` not yet answered — the receiver moves nothing forward for the window; with nothing outstanding, as while it waits on a slow source, it runs no clock, and a receiver's `abort` still reaches it mid-read. The receiver's window resets on every incoming message (armed once the transport opens, via `attach()`), so a sender that goes quiet mid-stream aborts the receive. A timeout on either side rejects with `P2PConnectionError`, which the UI treats as a connection failure.
 
-The receiver rejects duplicate indexes, out-of-range indexes, malformed chunk lengths, transfers exceeding the application limit, and malformed final counts.
+The receiver rejects duplicate indexes, out-of-range indexes, malformed chunk lengths, chunks beyond the window or after `end`, transfers exceeding the application limit, and malformed final counts. Text that is not a transfer control message is left to whatever else shares the link.
 
 ### Tor Onion Transport (`src/lib/tor/`)
 
-The same transfer layer, over a Tor stream instead of a data channel. `TorFramedStream` restores the discrete binary/text messages the choreography needs (`[kind][length][payload]`), and above that framing `sendFileOverTransport` and `createTransferReceiver` are the identical code the WebRTC path runs — one shared wire protocol with two transports, which is why the `TransferTransport` interface exists.
+The same transfer protocol, over a Tor stream instead of a data channel. `TorFramedStream` restores the discrete binary/text messages the protocol needs (`[kind][length][payload]`) and serializes its frame writes, `createTorLink` turns it into the same push-fed, bidirectional link a data channel is — one read loop hands every frame to subscribers while acknowledgments and chunks cross in both directions — and above that `sendFileOverLink` and `createTransferReceiver` are the identical code the WebRTC path runs. One shared wire protocol with two transports is why the `TransferLink` interface exists.
 
 What differs is everything below it: the rendezvous is an `.onion` address plus a one-time password rather than a relay lookup, the SPAKE2 identities are the address itself (`torPakeIdentities`) rather than two Nostr pubkeys, and the session keys derive under `ptransfer:tor-session:v1:*` labels so a Tor root can never produce a PIN Exchange key. There is no additional confirmation code: the receiver enters the one-time password separately, and that password is the manually entered authentication value for this mode. The transport caps a transfer at `SLOW_TRANSPORT_MAX_BYTES` (100 MiB), the ceiling it shares with the Nostr file relay, and suggests — without enforcing — staying under 1 MiB. See [TOR_TRANSPORT.md](TOR_TRANSPORT.md) for the handshake and key schedule, [TOR_BROWSER.md](TOR_BROWSER.md) for pTransfer's browser adapter, and webtor-rs's [Onion-Service Architecture](https://github.com/andrewtheguy/webtor-rs/blob/main/docs/ONION_SERVICE_ARCHITECTURE.md) for the Tor engine beneath it.
 
@@ -339,8 +351,9 @@ Each side blinds a fresh ephemeral scalar with the RFC 9382 constants (`pA = x·
 | Wire hint | Locator segment (public) | `hint:<bucket>` | 8 hex chars | `#h` lookup tag on the rendezvous event; `<bucket> = floor(now_ms / PIN_ROTATION_MS)` |
 | Claim key | SPAKE2 root | `claim` | AES-256-GCM key | Seals the receiver's claim payload |
 | Confirm key | SPAKE2 root | `confirm` | AES-256-GCM key | Seals the sender's confirm payload (file metadata included) |
-| Signals key | SPAKE2 root | `signals` | AES-256-GCM key | Encrypts relay-carried WebRTC signaling |
-| Content key | SPAKE2 root | `content` | AES-256-GCM key | Encrypts P2P file chunks |
+| Signals key | SPAKE2 root | `signals` | AES-256-GCM key | Seals the carried Code Exchange offer and answer |
+
+There is no PAKE content key. The file is encrypted under the Code Exchange session's ECDH-derived content key, and both fallbacks derive from that same ECDH secret; the PAKE's job is to authenticate the two codes the agreement rides in.
 
 Successfully sealing or opening under the claim/confirm keys *is* the PAKE's key confirmation: only a peer that ran the same session — same PIN, same elements, same identities, same transfer — holds them.
 
@@ -352,10 +365,11 @@ The rendezvous event is **plaintext**: `transferId`, the sender's Nostr pubkey (
 
 1. **Claim (receiver → sender)**: carries the receiver's element `pB` in plaintext (the sender needs it to finish the PAKE before any key exists) and the plaintext `target` — the transcript hash of the exact rendezvous the claim was derived against, which routes the claim to the single-use element it spends — plus a body sealed with the session claim key: `transferId`, the echoed sender nonce, a fresh receiver nonce, both peers' Nostr pubkeys, and the rendezvous transcript hash (see below). The receiver publishes one claim per rendezvous candidate it collected, and re-claims replacement rendezvous events (same transfer, same author) with a fresh `y` while waiting for the confirm, up to `MAX_CLAIM_ATTEMPTS` total claims.
 2. **Verify + lockout (sender)**: the claim's `target` routes it to the one retained generation whose current element it names — provided that generation's bucket is current-or-previous and its verification budget is not exhausted; a claim naming a spent, expired, or foreign target costs nothing. The element is consumed before verification (single-use, RFC 9382 §7), the attempt burns a unit of the generation's `CLAIM_VERIFY_LIMIT` budget (the online-guessing meter), and the sender finishes the SPAKE2 run against `pB` and tries the seal. A body that opens *and* matches the publication's nonce, the transfer id, the sender's own pubkey, the claim event's author, and the publication's transcript hash — the plaintext target routed but carries no authority; this sealed echo does — is proof the receiver knows a live PIN *and* is acting on the rendezvous this sender actually published. The bucket is checked again after the asynchronous verification so a boundary crossing cannot admit an expired claim. The **first verified claim locks the transfer** to that receiver: rotation stops, rendezvous publishing stops, retained PAKE secrets are wiped, and all other claims are ignored. A claim that fails verification consumed the element, so the sender publishes a replacement rendezvous for that generation (fresh `x`, element, and nonce; same transfer, hint, bucket, and salt) — the honest receiver that lost the race re-claims it. Invalid claims are otherwise silently ignored (transfer tags are public, so treating them as fatal would allow trivial denial of service).
-3. **Confirm (sender → receiver)**: published *immediately* on verification, sealed with the session confirm key. It echoes both nonces, both pubkeys, and the transcript hash, and it **delivers the file metadata** (`fileName`, `fileSize`, `contentEncoding`, `mimeType`, `contentType`). This is the sender's PIN proof in the reverse direction, tells the receiver which of its claims won, and is what lets the receiver display anything at all. It is *not* gated on the confirmation code — the code gates the WebRTC offer and the file bytes, which is where the harm lives. A front-runner who knew the PIN learns the metadata here, exactly as they could under the old protocol by decrypting the rendezvous.
-4. **Confirmation code (human channel)**: the receiver verifies the confirm, derives the code, and displays it; the sender parks until its operator types the matching code, then starts WebRTC signaling. See the next section.
+3. **Confirm (sender → receiver)**: published *immediately* on verification, sealed with the session confirm key. It echoes both nonces, both pubkeys, and the transcript hash, and it **delivers the file metadata** (`fileName`, `fileSize`, `contentEncoding`, `mimeType`, `contentType`). This is the sender's PIN proof in the reverse direction, tells the receiver which of its claims won, and is what lets the receiver display anything at all. It is *not* gated on the confirmation code — the code gates the offer and the file bytes, which is where the harm lives. A front-runner who knew the PIN learns the metadata here, exactly as they could under the old protocol by decrypting the rendezvous.
+4. **Confirmation code (human channel)**: the receiver verifies the confirm, derives the code, and displays it; the sender parks until its operator types the matching code. See the next section.
+5. **Carried codes**: past the gate the sender publishes its Code Exchange offer sealed under the signals key, and the receiver answers it the same way ([INTEROP_PROTOCOL.md §4.8](INTEROP_PROTOCOL.md#48-carried-codes)). The sender builds the offer while its operator is typing — gathering candidates and waiting on the fallback's relays need no human — but publishes it only once the code matches, and republishes it every 5 s until an answer comes back. The receiver refuses an offer that describes a different file than the confirm delivered, or one whose fallback crosses the PIN's privacy line (a standard PIN's names clearnet relays or none; an anonymous PIN's carries `anon: true` or none); the sender checks the answer's confirmation tag exactly as Code Exchange does. From there the session is Code Exchange's: direct attempt, then the fallback.
 
-Both sides hold the session keys from the same root (`derivePinSessionKeys`: `signals` and `content` labels). A relay man-in-the-middle cannot substitute either SPAKE2 element: without `w` an element cannot be unblinded, a substituted element lands each side on a different root key, and every seal — claim, confirm, signals — simply fails.
+Both sides derive the signals key from the same root (`derivePinSessionKeys`). A relay man-in-the-middle cannot substitute either SPAKE2 element: without `w` an element cannot be unblinded, a substituted element lands each side on a different root key, and every seal — claim, confirm, carried codes — simply fails. Nor can it substitute a code: only the two ends of the locked session can seal one, which is what authenticates the ECDH exchange inside.
 
 - **Why nonces**: the sender nonce is fresh per rotation and the receiver nonce is fresh per claim, and both are bound into the transcript, so nothing captured replays across rotations, transfers, or directions (claim and confirm also use distinct HKDF labels and differ by their `type` field). The ephemeral scalars are fresh per claim on both sides — see *Single-use elements* — so the nonces are belt-and-suspenders for replay, not the only defense.
 - **Offline guessing does not exist**: this is the PAKE's core property. Blinded elements and transcript-keyed seals give a passive observer nothing to grind against, at any hardware budget. The metadata that used to sit behind a PIN-derived seal on the rendezvous — the one thing offline recovery ever bought — now travels only inside the confirm, keyed by the session.
@@ -369,7 +383,7 @@ A PIN is a value a human reads off a screen and says out loud. Anything that can
 `deriveConfirmationCode` (`kdf.ts`) is a short authentication string: HKDF-SHA256 over the SPAKE2 root with the public per-transfer salt, info label `ptransfer:nostr-session:v4:confirmation` bound to the transfer id, both handshake nonces, the rendezvous transcript hash, and the metadata hash, truncated to 40 bits and encoded as 8 Crockford Base32 characters.
 
 - **Receiver**: derives and displays the code once the sender's confirm verifies — which delivered the metadata the code must attest to. The wait is short: the confirm is published on claim verification, with no human in that leg.
-- **Sender**: derives the same value from the claim it locked onto, publishes its confirm, and parks. No WebRTC offer and no file bytes leave the sender until its operator types a matching code. A mismatch is retryable — a typo must not kill a transfer — and never settles the gate.
+- **Sender**: derives the same value from the claim it locked onto, publishes its confirm, and parks. No offer and no file bytes leave the sender until its operator types a matching code. A mismatch is retryable — a typo must not kill a transfer — and never settles the gate.
 - **Why it works**: the code proves possession of the *locked* session, not receiver identity — a front-runner that won the claim race holds that session and can compute the code. What it cannot do is deliver it: the sender's operator learns the code from the intended receiver over an authenticated human channel (in person, a call), and when a front-runner holds the lock, the intended receiver never got a confirm and has no code to give. The gate therefore never opens, and no signal or file byte leaves the sender.
 - **What it covers**: the shared secret, the transfer id, both nonces, the rendezvous transcript hash, and the file-metadata hash — so the code attests to *what* is being transferred and *who* published it as well as to the keys. See *Transcript Binding*.
 - **It also subsumes key confirmation**: a relay that tampered with either SPAKE2 element would land the two sides on different roots and therefore different codes — though the sealed handshake will have failed long before the humans compare anything.
@@ -380,7 +394,7 @@ A PIN is a value a human reads off a screen and says out loud. Anything that can
 The SPAKE2 transcript keys every session to the transfer id, both Nostr identities, and both elements — so a rewrapped identity, a forwarded claim, or a substituted element yields a different root and every seal fails on its own. Two things live *outside* that transcript and need explicit binding:
 
 - **The rest of the rendezvous record.** `computeRendezvousTranscriptHash` (`nostr/transcript.ts`) is SHA-256 over a canonical JSON array — a versioned label, `type`, `transferId`, `senderPubkey`, the SPAKE2 element, the nonce, the relay list, and the salt. The receiver hashes the rendezvous it acted on into its sealed claim; the sender compares against the hash of what it actually published, per generation. Any altered plaintext field — a swapped salt, a doctored relay list — is rejected automatically. The same digest feeds the confirmation-code KDF, so even a missed check would surface as two humans reading different codes. (A JSON array rather than an object so element order is fixed; JSON string escaping so no field value can forge a delimiter into another.)
-- **The file metadata**, which no longer exists at claim time — it travels inside the sealed confirm. Its own digest, `computeTransferMetadataHash` (same canonicalization: versioned label, `contentType`, `fileName`, `fileSize`, `contentEncoding`, `mimeType`), is bound into the confirmation-code KDF on both sides. The AES-GCM seal on the confirm already authenticates the metadata cryptographically; the code binding makes the string the humans compare attest to *what* is being transferred, closing the class of attack where genuine bytes are delivered under an attacker-chosen name and MIME type. (`fileSize` is a progress hint, never the wire length; the wire byte count is authenticated in-band by the DONE check in `p2p-transfer.ts`.)
+- **The file metadata**, which no longer exists at claim time — it travels inside the sealed confirm. Its own digest, `computeTransferMetadataHash` (same canonicalization: versioned label, `contentType`, `fileName`, `fileSize`, `contentEncoding`, `mimeType`), is bound into the confirmation-code KDF on both sides. The AES-GCM seal on the confirm already authenticates the metadata cryptographically; the code binding makes the string the humans compare attest to *what* is being transferred, closing the class of attack where genuine bytes are delivered under an attacker-chosen name and MIME type. (`fileSize` is a progress hint, never the wire length; the wire byte count is authenticated in-band by the `end` check in `p2p-transfer.ts`.)
 
 ### User Interface Architecture
 
@@ -462,13 +476,13 @@ Uses Nostr protocol for decentralized signaling between sender and receiver.
 | Kind | Purpose |
 |------|---------|
 | 4243 | Rendezvous (regular) - rotating plaintext record: transferId, sender pubkey, blinded SPAKE2 element, handshake nonce, relay hints (NIP-40 expiry = PIN_TTL_MS); tagged with the locator-derived `#h` hint. Carries no file metadata and nothing PIN-testable |
-| 24243 | Data Transfer (ephemeral) - claim/confirm handshake and WebRTC signals |
+| 24243 | Data Transfer (ephemeral) - claim/confirm handshake and the carried codes |
 
 **Event Types (via tags):**
 - `rendezvous`: Initial transfer setup; republished with a fresh PIN/hint/nonce/element every 2 minutes until claimed
 - `claim`: Receiver's SPAKE2 element in plaintext plus a body sealed with the PAKE session's claim key. Tags are plaintext for routing; opening the seal is the receiver's PIN proof, and the body repeats the transfer id and nonces for authentication
-- `confirm`: Sender's mutual PIN proof, sealed with the session's confirm key; published immediately on claim verification and carries the file metadata. The confirmation code gates the WebRTC offer, not this event
-- `signal`: WebRTC signaling (offer/answer/candidates), encrypted in the event content with the PAKE-derived `signals` key
+- `confirm`: Sender's mutual PIN proof, sealed with the session's confirm key; published immediately on claim verification and carries the file metadata. The confirmation code gates the offer, not this event
+- `signal`: a carried Code Exchange offer or answer — the PT01 container byte for byte, sealed in the event content with the PAKE-derived `signals` key (`src/lib/nostr/code-carriage.ts`)
 
 **Files:**
 - `types.ts`: Type definitions for payloads and events
@@ -523,7 +537,7 @@ Signaling method using QR codes or copy/paste for WebRTC offer/answer exchange. 
 - Sender generates WebRTC offer with ICE candidates
 - Both offer and answer include a required finite `createdAt` timestamp. The receiver rejects an offer older than `TRANSFER_EXPIRATION_MS`; the sender validates the answer timestamp's shape and enforces expiry against its own offer/session start time
 - Payload is obfuscated using a time-bucketed seed to avoid casual inspection.
-- The offer additionally carries `relays` when relays were proven while it was being built: the control relays of the data-path fallback (see [Offer relays](#offer-relays-srclibcode-signalingts)). The field is offer-only and must be a usable list; an answer carrying it, or an offer carrying an unusable list, is rejected as malformed. The answer is never carried over relays — it enters the sender's page only through the sender's own scan or paste.
+- The offer additionally carries `relays` when relays were proven while it was being built: the control relays of the data-path fallback (see [Offer relays](#offer-relays-srclibcode-signalingts)). The field is offer-only and must be a usable list; an answer carrying it, or an offer carrying an unusable list, is rejected as malformed. In Code Exchange the answer is never carried over relays — it enters the sender's page only through the sender's own scan or paste. (PIN Exchange carries both codes over relays, sealed under its PAKE session; see [Claim / Confirm Handshake](#claim--confirm-handshake-mutual-pin-proof-via-pake-key-confirmation).)
 - The answer carries a required `confirm` tag binding it to the offer it answers and to its own contents (see [Answer confirmation tag](#answer-confirmation-tag)). The field is answer-only and mandatory there; an offer carrying one, or an answer without a well-formed one, is rejected as malformed.
 
 > [!IMPORTANT]
@@ -654,16 +668,25 @@ A 2-hour sliding window (current bucket + 1 previous bucket) is used to find the
 - Uses the bundled QR WASM packages for generation and scanning
 
 **Security Model:**
-- **Nostr**: The rotating PIN drives a SPAKE2 exchange; the mutual claim/confirm handshake is sealed with session keys only matching PAKE peers hold, and signals and content are encrypted with keys off the same root. Nothing published can test a PIN offline, public transfer IDs cannot start the sender state machine, and a leaked PIN decrypts no content — file metadata is never exposed to relays in plaintext (the published confirm is sealed ciphertext relays cannot decrypt)
+- **Nostr**: The rotating PIN drives a SPAKE2 exchange; the mutual claim/confirm handshake is sealed with session keys only matching PAKE peers hold, and the carried Code Exchange offer and answer are sealed with a key off the same root, which is what authenticates the ECDH exchange that produces the content key. Nothing published can test a PIN offline, public transfer IDs cannot start the sender state machine, and a leaked PIN decrypts no content — file metadata is never exposed to relays in plaintext (the published confirm is sealed ciphertext relays cannot decrypt)
 - **Code Exchange**: The hand-carried signaling payload is obfuscated and time-limited, not encrypted. Direct content uses an ECDH-derived AES-256-GCM key over the data channel; the fallback derives a separate relay session and file key from the same ECDH secret. These protections assume the offer's QR/clipboard delivery is authentic; the sender's own scan or paste of the answer is what admits a receiver — see the security boundary note above
 - **All modes**: Once WebRTC connection is established, DTLS encrypts all data in transit, and file content is additionally encrypted with the shared chunk protocol
 
 ### Offer Relays (`src/lib/code-signaling.ts`)
 
 While the offer is built, the sender proves a small set of Nostr relays and names them in
-the offer's `relays` field. They carry no signaling — the answer always comes back by
-hand — and exist only so the data-path fallback described below has a proven control
-channel the moment the direct WebRTC attempt fails.
+the offer's `relays` field. They carry no signaling — a Code Exchange answer comes back by
+hand, and a PIN Exchange one over the PIN session's own signaling relays — and exist only
+so the data-path fallback described below has a proven control channel the moment the
+direct WebRTC attempt fails.
+
+When the fallback is prepared is the one thing the two modes do differently.
+`startSenderFallback` (`src/lib/code-exchange/send.ts`) owns all of it, and Code Exchange
+starts it as it starts building the offer. PIN Exchange starts it the moment its transfer
+starts, behind the PIN on screen: a receiver takes minutes to claim, confirm, and read a
+code aloud, and the relay proof, the storage ring, and the sweep behind them run in that
+wait rather than after it, so the offer is ready to go the moment the confirmation code
+matches.
 
 - **Relay selection (`resolveTransferRelays`, `src/lib/nostr-file/upload.ts`).**
   Reused whole from the storage transfer, so the exchange inherits its exact
@@ -781,56 +804,57 @@ raise.
 The `DuplexChannel` is symmetric. Which peer made the offer, and which one sends the file, says nothing about which way messages may flow once the channel is open: both sides send text and binary messages and both listen. Its properties:
 
 - **Ordered sends with backpressure.** Every send, text or binary, joins one queue and leaves in call order; each waits while more than 1 MiB is buffered, so a message sent while a chunk waits on the drain cannot overtake it. The 128 KiB encrypted chunk messages rely on WebRTC for fragmentation.
-- **Broadcast receive.** Every current subscriber sees every incoming message, so several clients share the channel without taking messages from each other. `waitFor` is a subscriber that settles on the first message it accepts — the sender's `ACK` wait is one — and rejects when the channel closes, errors, or times out.
+- **Broadcast receive.** Every current subscriber sees every incoming message, so several clients share the channel without taking messages from each other. `waitFor` is a subscriber that settles on the first message it accepts, and rejects when the channel closes, errors, or times out; `onEnd` tells a client once when the channel can no longer carry anything.
 - **No backlog.** A message that arrives while nothing is subscribed is dropped rather than held, so a peer cannot fill this side's memory with messages nothing reads. A client that must see everything subscribes from the channel-open callback, which runs before any message can be dispatched.
 
-The shared transfer layer is one client of it. On the direct path it reserves binary messages for content chunks toward the receiver; the receiver ignores every text message but `DONE`, and the sender's `ACK` wait ignores every message but `ACK`, so other text messages can travel beside a transfer in either direction.
+The shared transfer protocol is one client of it, and the channel is its `TransferLink`. On the direct path it reserves binary messages for content chunks toward the receiver; its control messages are JSON objects typed by `t`, and each side ignores text that is not one of the four it defines, so other text messages can travel beside a transfer in either direction.
 
 ### React Hooks (`src/hooks/`)
 
+Both WebRTC modes run the Code Exchange session in `src/lib/code-exchange/` — `send.ts` (`startSenderFallback`, `createSenderOffer`, `completeSend`) and `receive.ts` (`acceptOffer`, `buildDirectAttempt`, `receiveOverFallback`, `finishDirectReceive`). The hooks own what differs: where the codes come from, what gates them, and the UI state.
+
 **`use-pin-send.ts`** - Sender logic (PIN Exchange):
-1. Read content; generate transfer salt and ephemeral Nostr identity
-2. Rotate: every 2 minutes mint a fresh PIN, start a fresh SPAKE2 run, and publish a plaintext rendezvous event carrying the blinded element (up to 30 minutes)
-3. On each incoming claim, route by its plaintext target to the single retained generation whose current element it names, consume that element (single-use, budgeted by `CLAIM_VERIFY_LIMIT`), finish the PAKE against the claimant's element and try the sealed body; first verified claim locks the transfer, a failed claim triggers a replacement rendezvous publish (invalid claims are otherwise ignored)
-4. Derive session keys and the confirmation code from the winning session's root; publish the confirm (sealed metadata included) immediately
-5. Wait for the operator to enter the code the receiver is showing (`CONFIRM_CODE_ENTRY_TIMEOUT_MS`); mismatches are retryable and no WebRTC signal is published until one matches
-6. Attempt P2P connection (30s timeout for connection only)
-7. If P2P connects: transfer via data channel
-8. If P2P connection fails: transfer fails — no TURN or automatic transfer fallback; a `P2PConnectionError` is surfaced so the UI can suggest the offline-QR app ([src/lib/errors.ts](../src/lib/errors.ts))
-9. Wait for the receiver's data-channel `ACK` after `DONE:<chunkCount>:<byteCount>`
+1. Read content; generate transfer salt and ephemeral Nostr identity. For anonymous signaling, start the one Tor client the signaling sockets and the Tor fallback share
+2. Start preparing the fallback at once (`startSenderFallback`): proving the offer's control relays, then the storage ring and the sweep behind it — or, anonymously, the Tor fallback's onion-relay pool. It runs behind the PIN on screen
+3. Rotate: every 2 minutes mint a fresh PIN, start a fresh SPAKE2 run, and publish a plaintext rendezvous event carrying the blinded element (up to 30 minutes)
+4. On each incoming claim, route by its plaintext target to the single retained generation whose current element it names, consume that element (single-use, budgeted by `CLAIM_VERIFY_LIMIT`), finish the PAKE against the claimant's element and try the sealed body; first verified claim locks the transfer, a failed claim triggers a replacement rendezvous publish (invalid claims are otherwise ignored)
+5. Derive the signals key and the confirmation code from the winning session's root; publish the confirm (sealed metadata included) immediately, and start building the Code Exchange offer
+6. Wait for the operator to enter the code the receiver is showing (`CONFIRM_CODE_ENTRY_TIMEOUT_MS`); mismatches are retryable and nothing is published past the confirm until one matches
+7. Publish the sealed offer, republishing every 5 s, and wait up to 60 s for the receiver's sealed answer (`carryOfferForAnswer`)
+8. From there, the Code Exchange session (`completeSend`): verify the answer's confirmation tag, attempt the direct connection with the receiver's `hello` watched on the fallback's control relays, then send over the data channel — or, when no direct route opens, through the fallback the offer named. With no eligible fallback, a `P2PConnectionError` is surfaced so the UI can suggest the offline-QR app ([src/lib/errors.ts](../src/lib/errors.ts))
 
 **`use-pin-receive.ts`** - Receiver logic (PIN Exchange):
-1. Derive hints for the current and previous buckets from the PIN's public locator segment and query rendezvous candidates within the maximum 4-minute freshness bound
+1. Derive hints for the current and previous buckets from the PIN's public locator segment and query rendezvous candidates within the maximum 4-minute freshness bound. For anonymous signaling, start the one Tor client the signaling sockets and the Tor fallback share
 2. Structurally validate candidates (author/transfer binding, element validity) — the rendezvous is plaintext, so nothing distinguishes the real one yet
 3. Run the receiver side of the PAKE against each candidate (up to `MAX_CLAIM_CANDIDATES`) and publish one sealed claim each, naming its rendezvous transcript hash as the plaintext target; re-claim replacement rendezvous events from claimed senders while waiting (up to `MAX_CLAIM_ATTEMPTS` total), then wipe the PIN scalar
 4. Wait (`CONFIRM_TIMEOUT_MS`, 60s) for a confirm that opens under one claimed session's confirm key; verify its echoes and take its sealed file metadata
 5. Derive the confirmation code (bound to the metadata) and display it for the user to read to the sender
-6. Listen for P2P signals — the sender's first signal means the code matched (`OFFER_WAIT_TIMEOUT_MS`, 3 minutes); derive session keys from the same root
-7. Receive via data channel
-8. Send data-channel `ACK` after all chunks authenticate and reassemble; no relay completion event is published
+6. Wait for the sealed offer (`awaitCarriedOffer`, `OFFER_WAIT_TIMEOUT_MS`, 3 minutes) — its arrival means the code matched. Refuse it unless it describes the confirmed file and its fallback matches the PIN's kind
+7. Build the answer (`buildDirectAttempt`) and publish it sealed, answering again whenever the sender repeats the offer
+8. Attempt the direct connection (30 s with an eligible fallback, 120 s without); on success receive over the data channel and send the `done` verdict, on failure run the offer's fallback (`receiveOverFallback`). No response has to be handed over by a person, so nothing is held on screen
 
 **Code Exchange Mode:**
 
 **`use-code-send.ts`** - Sender logic (Code Exchange):
-1. Validate the lazy transfer source and its advertised/estimated size
-2. Generate ECDH keypair and salt
-3. Create the WebRTC offer and gather ICE candidates while preparing the selected fallback. Ordinary mode proves the public relays the offer will name and starts preparing storage relays without reading file data; anonymous mode starts its Tor client and onion-relay control pool instead
+1. Validate the lazy transfer source and its advertised/estimated size (`describeSendSource`; the anonymous fallback's cap via `torFallbackRefusal`)
+2. Start preparing the selected fallback (`startSenderFallback`). Ordinary mode proves the public relays the offer will name and then prepares storage relays without reading file data; anonymous mode starts its Tor client and onion-relay control pool instead
+3. Generate the ECDH keypair and salt, create the WebRTC offer, and gather ICE candidates while that runs (`createSenderOffer`)
 4. Obfuscate the offer payload (salt, ECDH public key, file metadata, and either the optional relay list or `anon: true`): JSON → deflate → obfuscate → binary
 5. Display it as a multi-QR URL grid (chunked into ~400-byte URL QR codes) plus a base64 copy button
 6. Accept the receiver's answer from the scan/paste input and derive the ECDH shared secret
 7. Attempt the direct WebRTC connection (20 seconds when a fallback is available, otherwise 120 seconds). With a fallback available, the relay session is derived up front and the selected control relays are watched for the receiver's sealed `hello` (`watchForReceiverHello`): the receiver's ICE agent declares the direct route dead long before the sender's, so its `hello` ends the direct attempt at once instead of waiting out the window
-8. On success, encrypt/send 128 KiB chunks over the data channel and wait for its `ACK`
+8. On success, send 128 KiB chunks over the data channel within the receiver's acknowledgment window and wait for its `done`
 9. On connection failure (ICE failure, timeout, or the receiver's `hello`), use the eligible fallback: ordinary mode materializes the source (up to 100 MiB) and runs `sendFileLive`, while anonymous mode runs `serveOverAnonymousRelay` over the shared Tor transport. Otherwise surface the P2P failure
 
 **`use-code-receive.ts`** - Receiver logic (Code Exchange):
 1. Wait for offer data (from multi-QR chunk collector or paste)
-2. De-obfuscate offer, extract metadata, ECDH public key, and salt
+2. De-obfuscate offer, extract metadata, ECDH public key, and salt (`readOffer`, `acceptOffer`)
 3. Generate ECDH keypair, derive shared secret and AES key
 4. Create WebRTC answer with ICE candidates
 5. Obfuscate answer payload: JSON → deflate → obfuscate → single binary QR code
 6. Show the answer as a QR code / copy-paste text for the sender to scan or paste
 7. Attempt the direct WebRTC connection (120 seconds, `CODE_CONNECTION_TIMEOUT_MS`); an ICE `failed` state ends the attempt immediately. This side does not take the sender's 20-second window: its clock would start while the response is still on screen waiting to be handed over by a human, so a short window would give up on a route nobody had tried yet
-8. On success, decrypt/authenticate incoming chunks into the adaptive receive sink, validate `DONE:<chunkCount>:<byteCount>`, and send the data-channel `ACK`
+8. On success, decrypt/authenticate incoming chunks into the adaptive receive sink, acknowledging each, validate the sender's `end`, and send the `done` verdict
 9. On connection failure, if the fallback is eligible, discard the P2P sink and run `receiveFileLive` in ordinary mode or `receiveOverAnonymousRelay` in anonymous mode. The response stays on screen while that runs — the sender still needs it, and the fallback cannot start without it — until the sender turns up on the control channel with a manifest or onion announcement. While it is held there the fetch's 3-minute idle watchdog is suspended (`awaitingHandover`), since a sender that has not been handed the response yet is not late; the transfer's own 1-hour expiry still bounds the wait. Without an eligible fallback, surface the P2P failure
 10. Present the received content
 
@@ -844,7 +868,7 @@ The shared transfer layer is one client of it. On the direct path it reserves bi
 
 ### Unified P2P Transfer Layer
 
-When direct WebRTC succeeds, both signaling methods enter the same transfer code path with an open data channel and an already-derived AES-GCM `CryptoKey`. In both modes that key comes from an ephemeral exchange — the SPAKE2 run in PIN Exchange, ECDH authenticated by the QR/clipboard offer path in Code Exchange — and the P2P layer treats it as an opaque AES key with the same encrypted chunk framing. Code Exchange's ordinary Nostr file fallback does not use this framing or `src/lib/p2p-transfer.ts`; its anonymous Tor fallback reuses the shared 128 KiB chunk and `DONE`/`ACK` transfer protocol over a Tor framed stream.
+When direct WebRTC succeeds, both signaling methods enter the same transfer code path with an open data channel and an already-derived AES-GCM `CryptoKey`. In both modes that key comes from the Code Exchange session's ephemeral ECDH exchange — authenticated by the QR/clipboard path in Code Exchange, and by the PAKE-sealed carriage in PIN Exchange — and the transfer layer treats it as an opaque AES key with the same encrypted chunk framing. The ordinary Nostr file fallback does not use this framing or `src/lib/p2p-transfer.ts`; the anonymous Tor fallback reuses the shared transfer protocol over a Tor framed stream.
 
 **Why encrypt when WebRTC provides DTLS?**
 - **Defense in depth**: Multiple encryption layers protect against implementation bugs
@@ -869,19 +893,20 @@ In PIN Exchange, the rendezvous payload is published as plaintext JSON. Encrypti
 2. **Salt Generation**: 16 random bytes (public, in the rendezvous event tags; HKDF salt for the session keys)
 3. **SPAKE2 Run**: the PIN reduces to the password scalar `w` (no key stretching — there is nothing to stretch against); each side blinds a fresh ephemeral scalar and the transcript hash becomes the non-extractable session root. The `#h` hint is a separate HKDF keyed by the public locator segment
 4. **Handshake Seal Keys**: HKDF off the root (`claim` and `confirm` labels) — opening either seal is the PAKE's key confirmation
-5. **Confirmation Code**: HKDF over the root, bound to the transfer id, both nonces, the rendezvous transcript hash, and the metadata hash, rendered as 8 Crockford Base32 characters — displayed by the receiver, typed by the sender, and required before the sender publishes any WebRTC signal
-6. **Session Key Derivation**: both sides derive `signals` and `content` AES-GCM keys off the same root via HKDF with the transfer salt
-7. **Chunk Encryption**: AES-256-GCM with 12-byte nonce per 128 KiB chunk using the PAKE-derived `content` key
+5. **Confirmation Code**: HKDF over the root, bound to the transfer id, both nonces, the rendezvous transcript hash, and the metadata hash, rendered as 8 Crockford Base32 characters — displayed by the receiver, typed by the sender, and required before the sender publishes its offer
+6. **Signals Key**: both sides derive the `signals` AES-GCM key off the same root via HKDF with the transfer salt, and seal the carried offer and answer under it
+7. **Content Key**: the Code Exchange session inside those codes derives it from its ECDH exchange (`ptransfer-mutual`), exactly as Code Exchange does; both fallbacks derive from that same secret
+8. **Chunk Encryption**: AES-256-GCM with 12-byte nonce per 128 KiB chunk using that content key
 
 ### What's Encrypted Where
 
-| Data | PIN Exchange P2P | Code Exchange P2P | Code Exchange Nostr fallback | Code Exchange Tor fallback |
+| Data | PIN Exchange P2P | Code Exchange P2P | Nostr fallback (either mode) | Tor fallback (either mode) |
 |------|-------------------|---------------------|-----------------------|----------------------------|
-| Setup / rendezvous | Plaintext rendezvous record (blinded SPAKE2 element, nonce, relay hints; no file metadata) | Obfuscated PT01 offer; hand-carried PT01 answer | Same Code Exchange setup; the relays the offer named become the encrypted control relays | Same Code Exchange setup with `anon: true`; an onion-service password is derived from ECDH and the temporary onion address is sealed over the derived control channel |
-| Authentication / key agreement | Claim and confirm sealed with PAKE-derived AES-GCM keys; the confirm carries metadata and the human confirmation code gates WebRTC signaling | ECDH public keys in the offer/answer; authenticity rests on the offer's QR/clipboard delivery path | Relay session id and file key derived from the same ECDH secret; encrypted manifest authenticates metadata inside the control channel | The ECDH-derived password drives the Tor transport's SPAKE2 handshake; the hand-carried offer path authenticates the ECDH exchange |
-| WebRTC signals | AES-GCM encrypted under the PAKE-derived `signals` key on Nostr events | Included in the obfuscated offer/answer | Not used after the failed direct attempt | Included in the hand-carried offer/answer for the first direct attempt; not used once the fallback starts |
-| Transfer completion | Plain `ACK` inside the encrypted WebRTC data channel after `DONE` validation | Same P2P `DONE` / `ACK` protocol | Sealed `done` control message after whole-file SHA-256 verification | `DONE` / `ACK` inside the authenticated Tor framed stream |
-| File content | AES-256-GCM, 128 KiB chunks with authenticated indices, inside WebRTC DTLS | Same P2P chunk framing with an ECDH-derived key | AES-256-GCM over 48 KiB payload chunks with transfer/index/total AAD, Z85-encoded into signed Nostr events | AES-256-GCM, 128 KiB chunks with authenticated indices, inside the Tor onion stream |
+| Setup / rendezvous | Plaintext rendezvous record (blinded SPAKE2 element, nonce, relay hints; no file metadata), then the PT01 offer and answer sealed under the PAKE `signals` key | Obfuscated PT01 offer; hand-carried PT01 answer | The same offer/answer; the relays the offer named become the encrypted control relays | The same offer/answer with `anon: true`; an onion-service password is derived from ECDH and the temporary onion address is sealed over the derived control channel |
+| Authentication / key agreement | Claim and confirm sealed with PAKE-derived AES-GCM keys; the confirm carries metadata and the human confirmation code gates the offer; the sealed carriage authenticates the ECDH exchange | ECDH public keys in the offer/answer; authenticity rests on the offer's QR/clipboard delivery path | Relay session id and file key derived from the same ECDH secret; encrypted manifest authenticates metadata inside the control channel | The ECDH-derived password drives the Tor transport's SPAKE2 handshake; the path the codes took authenticates the ECDH exchange |
+| WebRTC signaling (SDP/ICE) | Inside the offer/answer, sealed on Nostr events | Included in the obfuscated offer/answer | Carried in the offer/answer for the first direct attempt; not used once the fallback starts | Carried in the offer/answer for the first direct attempt; not used once the fallback starts |
+| Transfer completion | The receiver's `done` verdict inside the encrypted WebRTC data channel, after its checks of the sender's `end` | Same transfer protocol | Sealed `done` control message after whole-file SHA-256 verification | The same `end` / `done` exchange inside the authenticated Tor framed stream |
+| File content | AES-256-GCM, 128 KiB chunks with authenticated indices under the ECDH-derived key, inside WebRTC DTLS | Same chunk framing with the same ECDH-derived key | AES-256-GCM over 48 KiB payload chunks with transfer/index/total AAD, Z85-encoded into signed Nostr events | AES-256-GCM, 128 KiB chunks with authenticated indices, inside the Tor onion stream |
 
 ### Streaming Encryption (All P2P Transfers)
 
@@ -889,13 +914,13 @@ All direct P2P transfers (PIN Exchange and Code Exchange) encrypt content in 128
 
 - **Sender side**: a lazy source is coalesced into 128 KiB chunks, so only bounded in-flight data is materialized. A picked `File` streams from the browser through a native `deflate-raw` compressor; a multi-file/folder source feeds fflate's already-compressed ZIP output directly into the same chunker (never recompressed). Each chunk is encrypted with the transfer key and its own authenticated index, then sent in order.
 - **Receiver side (all P2P modes)**: every payload appends in reliable data-channel order to an adaptive sink, which starts in memory and migrates to OPFS before crossing 100 MiB; deflated payloads pass through a native `deflate-raw` decompressor on the way in, bounded by the transfer size limit as a decompression-bomb guard. There is no intermediate encrypted-chunk storage; each authenticated chunk is written and dropped immediately.
-- **Completion**: the sender finishes with `DONE:<totalChunks>:<totalBytes>` (wire bytes). The receiver verifies the chunk count, in-order index sequence, and final decrypted wire byte count before sending `ACK` on the data channel.
+- **Flow and completion**: the receiver acknowledges every chunk it stores, and the sender stays within a 4 MiB window of those acknowledgments. The sender finishes with `end` carrying the chunk count and wire bytes; the receiver verifies the chunk count, in-order index sequence, and final decrypted wire byte count before answering `done`.
 
 **OPFS scratch lifecycle (privacy):** for P2P payloads received over 100 MiB, plaintext transiently touches browser-managed disk in `transfer-scratch` files until the transfer is reset. P2P senders do not create scratch files. Payloads of 100 MiB or less stay in memory and never touch disk. Every receiver abandonment path (cancel mid-transfer, transfer error, reset, starting a new receive) discards its scratch file, and a boot-time sweep plus a pre-transfer sweep remove files that crashed or closed sessions left behind, so leftovers never outlive the next visit.
 
 **Streamed archive creation:** multi-file and folder sends are packaged with fflate's streaming `Zip` container while each entry is deflated by the browser's native `CompressionStream('deflate-raw')`. Each input file flows chunk by chunk through the deflater into a backpressured `TransformStream`; generated ZIP bytes flow immediately into encryption and WebRTC. Native deflate avoids fflate's streaming-deflate corruption (101arrowz/fflate#260, #282 — its streaming compressor can emit invalid back-references so entries fail CRC on extraction) while preserving ZIP's per-entry CRC-32 checksums and bounded memory use. The sender never assembles the ZIP in memory or OPFS, and later entries need not be read before earlier archive bytes are sent.
 
-**No whole-file checksum on P2P:** Direct-transfer integrity relies solely on per-chunk AES-GCM authentication (auth tag + authenticated chunk index) together with the completeness checks above and the final `ACK`. The P2P protocol computes no digest over the assembled file and carries no manifest. This does not apply to the Nostr file fallback, whose encrypted manifest carries a SHA-256 digest verified after assembly.
+**No whole-file checksum on P2P:** Direct-transfer integrity relies solely on per-chunk AES-GCM authentication (auth tag + authenticated chunk index) together with the completeness checks above and the final `done`. The P2P protocol computes no digest over the assembled file and carries no manifest. This does not apply to the Nostr file fallback, whose encrypted manifest carries a SHA-256 digest verified after assembly.
 
 **Encrypted Chunk Format:**
 ```
@@ -913,16 +938,16 @@ The 2-byte chunk index is also passed to AES-GCM as additional authenticated dat
 ```mermaid
 flowchart TD
     Secret[PIN handshake or authentic Code Exchange] --> Signaling[Signaling offer/answer/ICE]
-    Signaling --> Key[Exchange-derived AES content key<br/>SPAKE2 in PIN Exchange, ECDH in Code Exchange]
+    Signaling --> Key[ECDH-derived AES content key<br/>codes carried by hand or sealed under the PIN's PAKE]
     Signaling --> DTLS[WebRTC handshake<br/>DTLS]
     DTLS --> Channel[P2P data channel]
     Channel --> Chunks[128 KiB encrypted chunks]
     Key --> Write[Decrypt + append/inflate in data-channel order]
     Chunks --> Write
-    Write --> Ack[Data-channel ACK]
+    Write --> Ack[ack per chunk, then the done verdict]
 ```
 
-Both receive modes reject duplicate, out-of-order, malformed, and oversized encrypted frames as each arrives, then verify the chunk count and total wire bytes announced by `DONE` before completion is acknowledged. The metadata `fileSize` is only a progress hint, never a bound on the payload.
+Both receive modes reject duplicate, out-of-order, malformed, and oversized encrypted frames as each arrives, then verify the chunk count and total wire bytes announced by `end` before answering `done`. The metadata `fileSize` is only a progress hint, never a bound on the payload.
 
 ## Size Limits
 
@@ -941,22 +966,22 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 
 | Timeout | Duration | Purpose |
 |---------|----------|---------|
-| Nostr P2P connection | 30 seconds | Time to establish WebRTC connection after relay signaling starts |
-| Code Exchange P2P connection, sender, when a fallback is available | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`), timed from the moment the sender takes the response in; a timeout starts the selected fallback only if the file and prepared transport are eligible. The sender cuts the window short as soon as the receiver's `hello` shows up on the selected control relays |
-| Code Exchange P2P connection, otherwise | 120 seconds | Direct-attempt backstop (`CODE_CONNECTION_TIMEOUT_MS`): the sender when no fallback is available, and the receiver either way, since its wait starts before the sender has even seen the response. An ICE `failed` state ends either attempt sooner |
-| ICE gathering | 5 seconds | Bounded wait while preparing Code Exchange offer/answer QR payloads |
-| Ordinary Code Exchange offer-relay probe | 4 seconds | Per-relay write→read bound when proving the public relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering, and a total failure just means an ordinary offer without a fallback. Anonymous offers use the fixed onion pool instead |
-| Nostr P2P offer retry | 5 seconds | Interval to retry WebRTC offer if no answer event has been processed |
-| Data-channel ACK wait | 30 seconds | Sender wait for receiver `ACK`, counted from when `DONE:<chunkCount>:<byteCount>` has been handed off |
-| P2P transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`) applied to both sides of an active transfer. The receiver arms it via the watchdog's `start()` when the data channel opens (not only after the first chunk arrives); the sender applies it per chunk hand-off and to the `DONE` hand-off. It resets on each chunk sent / message received, so a steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline. |
+| Direct attempt, sender, when a fallback is available | 20 seconds | Direct-attempt window (`RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS`), timed from the moment the sender takes the answer in, in either mode; a timeout starts the selected fallback only if the file and prepared transport are eligible. The sender cuts the window short as soon as the receiver's `hello` shows up on the selected control relays |
+| Direct attempt, otherwise | 120 seconds | Direct-attempt backstop (`CODE_CONNECTION_TIMEOUT_MS`): the sender when no fallback is available, and the Code Exchange receiver either way, since its wait starts before the sender has even seen the response. An ICE `failed` state ends either attempt sooner |
+| Direct attempt, PIN Exchange receiver | 30 seconds with an eligible fallback, 120 without | Its answer reaches the sender within seconds rather than by hand, so the sender's 20-second window is already running; this outlasts it so the sender's verdict comes first, and matches the sender's backstop when there is nothing to fall back to |
+| ICE gathering | 5 seconds | Bounded wait while building an offer or answer |
+| Offer-relay probe | 4 seconds | Per-relay write→read bound when proving the public relays the offer names (`CONTROL_PROBE_TIMEOUT_MS`); runs under ICE gathering in Code Exchange and behind the PIN on screen in PIN Exchange, and a total failure just means an ordinary offer without a fallback. Anonymous offers use the fixed onion pool instead |
+| PIN Exchange offer retry | 5 seconds | Interval at which the sender republishes its sealed offer until an answer arrives |
+| PIN Exchange answer wait | 60 seconds | Sender wait for the receiver's sealed answer once the offer is out; no human is in this leg |
+| Transfer stall | 60 seconds | Idle/stall window (`STALL_TIMEOUT_MS`), each side measuring the other. The receiver arms it when the transport opens (`attach()`) and resets it on every message; the sender runs it whenever something it sent is unacknowledged — chunks, or an `end` awaiting `done` — and restarts it on every acknowledgment that moves the count. A steadily-progressing transfer of any size never trips it; a peer that goes quiet aborts after this span. There is no overall transfer deadline, and a sender waiting on its own input runs no clock |
 | Nostr relay peer idle | 3 minutes | Fallback receiver gives up if no sender control message arrives or the sender goes silent; the fallback sender applies the same window after upload completion once the receiver has been seen (`LIVE_IDLE_TIMEOUT_MS`) |
 | PIN rotation | 2 minutes | Fresh PIN + rendezvous event cadence (`PIN_ROTATION_MS`) |
 | PIN validity | Roughly 2–4 minutes | A PIN is honored only in the bucket where it was minted and the immediately following bucket; `PIN_TTL_MS` = 4 minutes is the maximum age bound, while NIP-40 expiry is the exact end of the second bucket |
 | Receiver confirm wait | 60 seconds | Receiver wait for the sender's confirm after publishing its claims (`CONFIRM_TIMEOUT_MS`). Short because the sender confirms on verification with no human in the loop; this is also where a mistyped-but-checksum-valid PIN surfaces |
-| Receiver offer wait | 3 minutes | Receiver wait for the sender's first WebRTC signal after the confirm (`OFFER_WAIT_TIMEOUT_MS`). Generous because the sender's operator is typing the confirmation code in between |
+| Receiver offer wait | 3 minutes | Receiver wait for the sender's sealed offer after the confirm (`OFFER_WAIT_TIMEOUT_MS`). Generous because the sender's operator is typing the confirmation code in between |
 | Sender confirmation-code entry | 150 seconds | Sender wait for its operator to type the receiver's code (`CONFIRM_CODE_ENTRY_TIMEOUT_MS`). This is shorter than the receiver's offer wait, so the sender's entry deadline normally expires first when no matching code is entered |
 | Sender PIN rotation/wait backstop | 30 minutes | Resource bound on an unclaimed transfer (relay publishing + retained file handle) before it is canceled (`PIN_WAIT_TIMEOUT_MS`); not a security window — bucket validation caps each PIN at roughly 2–4 minutes. Note this deadline is tracked twice and independently: a `setTimeout` inside the sender's claim wait, and `PinDisplay`'s own `requestAnimationFrame` countdown that fires `onExpire`. Whichever fires first ends the wait |
-| Code Exchange transfer TTL | 1 hour | Code Exchange session validity (`TRANSFER_EXPIRATION_MS`) |
+| Code Exchange session TTL | 1 hour | Validity of the Code Exchange session both modes run, counted from the offer's `createdAt` (`TRANSFER_EXPIRATION_MS`) |
 | Receiver PIN inactivity | 5 minutes | Clears PIN input if no changes made |
 
 ## TTL / Expiration Spec
@@ -976,11 +1001,11 @@ pTransfer enforces hard session TTLs. Expired requests MUST NOT establish a sess
   - Reject rendezvous events published outside the current-or-previous bucket window before claiming (Nostr) — a bucket test, so a future-dated `created_at` is rejected too; reject expired/missing TTL before answering (Code Exchange).
 - **Sender-side (pre-transfer)**:
   - Only verify claims against retained PIN generations whose recorded bucket is the sender's current or immediately previous bucket (and whose `CLAIM_VERIFY_LIMIT` budget remains); consume each published element on the first claim targeting it and never finish its scalar twice; recheck the bucket after opening the claim, and stop publishing and honoring PINs at the first verified claim and at the 30-minute backstop.
-  - Publish no WebRTC signaling until the operator enters the receiver's confirmation code, and abandon the locked claim if that does not happen within `CONFIRM_CODE_ENTRY_TIMEOUT_MS`.
+  - Publish no offer until the operator enters the receiver's confirmation code, and abandon the locked claim if that does not happen within `CONFIRM_CODE_ENTRY_TIMEOUT_MS`.
 
 **No Backward Compatibility**
 - Requests/payloads missing TTL fields are rejected (treated as invalid).
-- Shared P2P data-channel completion requires `DONE:<chunkCount>:<byteCount>` followed by receiver `ACK`.
+- Transfer completion requires the sender's `end` followed by a receiver `done` that echoes it.
 - Multi-QR offer links require `/r#...` (raw hash payload, no `d=` prefix) and first-chunk CRC32 metadata; older URL or chunk formats are rejected.
 
 ## Leaked-PIN Exposure (Including After Expiry)
@@ -988,8 +1013,8 @@ pTransfer enforces hard session TTLs. Expired requests MUST NOT establish a sess
 PIN rotation and the NIP-40 `expiration` tag are **liveness controls, not cryptographic erasure**: they stop a PIN from authenticating anything new, but they cannot delete events a relay already received and chose to retain. So "what if a PIN leaks later?" reduces to "what does a known PIN unlock among retained events?" — and with the PAKE the answer is now **nothing at all**:
 
 - **There is no offline crack.** The SPAKE2 elements are password-blinded and the sealed payloads are keyed by a transcript that includes the fresh ephemeral shared point, so retained relay events cannot even *verify* a PIN guess, let alone be decrypted by a known PIN. The old protocol's residual exposure — a PIN-encrypted rendezvous record recoverable by grinding PBKDF2 — no longer exists, because the rendezvous carries no ciphertext and no metadata.
-- **File content is never recoverable from a PIN — before or after expiry.** PIN Exchange content and signaling keys are HKDF derivations off the SPAKE2 root, which requires the ephemeral scalars both devices generated and discarded; the PIN alone reconstructs nothing. PIN Exchange file bytes travel over WebRTC/DTLS and never use the Code Exchange relay fallback.
-- **What retained events reveal to *anyone*, PIN or not**: the plaintext rendezvous record — `transferId`, an ephemeral sender pubkey, a blinded group element, a nonce, and relay hints. No file name, size, or type; those traveled only inside the sealed confirm. WebRTC signaling (SDP/ICE, i.e. participant **IP addresses**) is encrypted with the session `signals` key and is not exposed.
+- **File content is never recoverable from a PIN — before or after expiry.** The PIN Exchange signals key is an HKDF derivation off the SPAKE2 root, which requires the ephemeral scalars both devices generated and discarded, and the content key comes out of an ECDH exchange whose private keys were ephemeral too; the PIN alone reconstructs neither. File bytes travel over WebRTC/DTLS, or — when the direct route fails — as ciphertext through the offer's fallback, under keys from that same ECDH secret.
+- **What retained events reveal to *anyone*, PIN or not**: the plaintext rendezvous record — `transferId`, an ephemeral sender pubkey, a blinded group element, a nonce, and relay hints. No file name, size, or type; those traveled only inside the sealed confirm. The carried offer and answer — and with them the SDP/ICE, i.e. participant **IP addresses** — are sealed with the session `signals` key and are not exposed.
 - **A recovered PIN grants no access.** After the first verified claim the sender ignores all other claims, so a PIN learned minutes (or years) later can neither join, redirect, nor decrypt the transfer.
 - **A PIN leaked *while live* still does not get the file.** This is the case rotation alone never covered — and the one case a PAKE cannot help with either, since the attacker genuinely knows the password. Someone who reads the PIN off the sender's screen can claim the transfer during its window. They then have to supply a confirmation code derived from a PAKE session secret they do not share, over a channel the sender chose. They cannot, and the sender sends nothing.
 
@@ -1002,7 +1027,7 @@ PIN rotation and the NIP-40 `expiration` tag are **liveness controls, not crypto
 - **The relays are not ours.** Ordinary PIN Exchange signaling and Code Exchange's ordinary data fallback ride public Nostr relays this project neither operates, hosts, nor pays for. Their anonymous variants use community-operated onion relays and the Tor network instead. There is no service capacity or availability guarantee the app controls. An operator can rate-limit events, drop them, or disappear tomorrow.
 - **Attacking relays blocks paths, not protection.** Unavailable signaling relays can hide a PIN Exchange rendezvous. Unavailable storage or onion relays can stop the selected fallback. They do not weaken the PIN/confirmation code, reveal keys, or turn authenticated ciphertext into plaintext; the failure is non-delivery.
 - **Code Exchange can avoid relays.** A QR/clipboard offer and answer can establish the same direct P2P path without Nostr, but only when the devices can form a direct ICE route. The built-in relay lists are fixed; custom relay configuration remains a roadmap item.
-- **Direct delivery is best-effort too.** WebRTC is STUN-only with no TURN server. PIN Exchange therefore fails when no direct route exists; Code Exchange's selected Nostr or Tor fallback improves that case but remains best-effort third-party infrastructure.
+- **Direct delivery is best-effort too.** WebRTC is STUN-only with no TURN server. When no direct route exists, the selected Nostr or Tor fallback — available to both WebRTC modes — improves that case but remains best-effort third-party infrastructure.
 
 The client bounds work without promising availability: PIN Exchange meters PAKE claim verification and limits claim candidates, while the Code Exchange file fallback health-checks/caches relays, retries missing pieces, and demotes failing relays. These controls limit abuse and improve delivery; none makes third-party relay availability a security guarantee.
 
@@ -1010,15 +1035,15 @@ The client bounds work without promising availability: PIN Exchange meters PAKE 
 
 1. **Ephemeral Keys**: New Nostr keypair and fresh SPAKE2 ephemeral scalars generated for each transfer (and each rotation); the PAKE gives per-transfer session keys that no long-lived secret — the PIN included — can later reconstruct (a recovered PIN never decrypts content, or anything else retained on relays)
 2. **PIN Role — Locate and Authenticate Only**: The Nostr PIN's public locator segment derives the rendezvous lookup hint; the rest of it is the SPAKE2 password. It derives **no** keys on its own — every key is an HKDF derivation off the PAKE root, which requires the discarded ephemeral scalars. It also does not decide *who* receives the file — that is the confirmation code.
-3. **No Server Trust for File Content**: PIN Exchange relays carry routing records and sealed handshake/signaling events, never file bytes. Code Exchange's ordinary fallback storage relays can carry file pieces, but only as AES-256-GCM ciphertext; its metadata and whole-file hash stay inside the encrypted control channel. The anonymous fallback carries encrypted control messages over onion relays and encrypted file chunks inside a Tor onion circuit. File plaintext and keys never leave either device.
+3. **No Server Trust for File Content**: PIN Exchange's signaling relays carry routing records and sealed handshake events and codes, never file bytes. The ordinary fallback's storage relays can carry file pieces, in either mode, but only as AES-256-GCM ciphertext; its metadata and whole-file hash stay inside the encrypted control channel. The anonymous fallback carries encrypted control messages over onion relays and encrypted file chunks inside a Tor onion circuit. File plaintext and keys never leave either device.
 4. **PIN Entropy and Windows**: about 46.3 effective bits (8 secret characters from the 55-character alphabet; the 3-character locator is public by construction and the check digit is deterministic). That is deliberately small, because the only guessing channel is online: the PAKE leaves nothing to grind offline, the sender verifies at most `CLAIM_VERIFY_LIMIT` claims per 2-minute generation with no failure feedback, first-claim lockout makes any later recovery worthless, and the confirmation code makes a *live* leak worthless too.
 5. **Relay MITM Resistance**: Neither SPAKE2 element can be substituted without the PIN — an attacker cannot unblind or re-blind an element, so any tampering lands the two sides on different roots and every seal fails. The SPAKE2 transcript additionally keys each session to both Nostr identities and the transfer id, and the sealed payloads echo a hash of the full rendezvous record and (in the code KDF) the file metadata — see *Transcript Binding*. The confirmation code is an independent human-level check on the same properties.
 6. **Denial-of-Service Posture**: Invalid claims are ignored rather than fatal — transfer tags are public, so failing hard on a bad claim would let any observer kill transfers. The cost is that the attacker gets online guesses, which is why they are metered (`CLAIM_VERIFY_LIMIT`) rather than unlimited; exhausting the budget stalls a generation, which is a nuisance, not a compromise. Note the deliberate scope limit: an attacker who repeatedly wins the first-claim race can stall a transfer. Preventing data theft is in scope; preventing nuisance is not. The same holds for the relays themselves — they are third-party infrastructure, and knocking them over blocks transfers without reaching the participants' devices or their data. See *Availability Is a Non-Goal*.
-7. **Transport Security**: All P2P transfers (Nostr, Code Exchange) use both AES-256-GCM encryption (128 KiB chunks) and WebRTC DTLS
+7. **Transport Security**: All P2P transfers (PIN Exchange, Code Exchange) use both AES-256-GCM encryption (128 KiB chunks) and WebRTC DTLS
 8. **Code Exchange Authentication Caveat**: Code Exchange ECDH is unauthenticated by itself. An attacker who can substitute the QR/clipboard offer or answer can mount a man-in-the-middle attack. Use a direct visual/local exchange path when active tampering matters.
 9. **Shared Chunk Security**: P2P file chunks use the same AES-GCM chunk framing in both modes, including authenticated chunk indices
 10. **XSS Protection**: Sensitive cryptographic material (session roots, key derivation outputs) is held as non-extractable CryptoKeys or in closure scope, never on the global `window` object; the entered PIN is reduced to its PAKE scalar and wiped as soon as it validates, and the scalar itself is wiped once the handshake no longer needs it. The SPAKE2 group math necessarily runs in JavaScript memory (@noble/curves) — an accepted trade for secrets that are transfer-scoped and dead within minutes
-11. **Front-Running Resistance (PIN Exchange)**: The first valid claim still wins the lock, but winning it yields nothing but the metadata a PIN-knower could already obtain. The sender withholds every WebRTC signal and all file bytes until a human supplies the receiver's PAKE-derived confirmation code, so observing the PIN — the one attack neither rotation nor the PAKE can address, because the PIN is meant to be read aloud — does not get the file
+11. **Front-Running Resistance (PIN Exchange)**: The first valid claim still wins the lock, but winning it yields nothing but the metadata a PIN-knower could already obtain. The sender withholds its offer and all file bytes until a human supplies the receiver's PAKE-derived confirmation code, so observing the PIN — the one attack neither rotation nor the PAKE can address, because the PIN is meant to be read aloud — does not get the file
 12. **Resource Cleanup**: All error paths properly clean up timeouts, intervals, and subscriptions to prevent resource leaks
 13. **Input Validation**: Cryptographic functions and receive paths validate sizes/counts before expensive operations where possible
 

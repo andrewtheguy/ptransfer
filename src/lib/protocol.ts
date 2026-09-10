@@ -4,9 +4,10 @@
  * app at https://github.com/andrewtheguy/ptransfer-cli — has to match to
  * transfer with this app.
  *
- * Its scope is deliberately narrower than the app: PIN Exchange signaling and
- * the shared WebRTC data-channel transfer layer, and nothing else. Code
- * Exchange and its fallbacks, anonymous signaling, and the Tor transport are
+ * Its scope is deliberately narrower than the app: PIN Exchange signaling,
+ * including how it carries a Code Exchange offer and answer, and the shared
+ * transfer layer every transport runs, and nothing else. Code Exchange itself
+ * and its fallbacks, anonymous signaling, and the Tor transport are
  * cross-implementation features with separate contracts and version
  * boundaries. `docs/INTEROP_PROTOCOL.md` defines exactly what is in and out.
  *
@@ -24,4 +25,4 @@
  * budgets, timeouts, and size limits are agreed only by both sides implementing
  * the same spec. Do not treat a completed transfer as evidence of a match.
  */
-export const INTEROP_PROTOCOL_VERSION = '5';
+export const INTEROP_PROTOCOL_VERSION = '6';

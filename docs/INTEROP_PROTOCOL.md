@@ -1,6 +1,6 @@
 # pTransfer Interoperable Protocol
 
-**Interop protocol version: `5`**
+**Interop protocol version: `6`**
 
 This document is the normative wire contract between pTransfer implementations.
 The web app is the reference implementation; `ptransfer-cli` is the other
@@ -47,26 +47,32 @@ restated here.
 
 - PIN Exchange signaling over Nostr: the rendezvous / claim / confirm handshake,
   the PIN and its SPAKE2 password-authenticated key exchange, the key schedule,
-  the confirmation code, and the encrypted WebRTC signaling that follows.
-- The shared WebRTC data-channel transfer layer: wire encoding, chunk framing,
-  completion, and acknowledgement.
+  the confirmation code, and the sealed carriage of a Code Exchange offer and
+  answer that follows it (§4.8).
+- The shared transfer layer that runs once a transport is open: wire
+  encoding, chunk framing, flow control, completion, and abort (§6–§7).
 
 **Outside this document and its version — none of this may be implemented
 against this document.** Some of it is web-internal, and no other
 implementation should carry it at all; the rest are cross-implementation modes
 governed by separate specifications and version boundaries:
 
-- **Code Exchange** (the hand-carried PT01 offer/answer, its ECDH key
-  agreement, its answer confirmation tag, and its anonymous Tor fallback), a
-  cross-implementation mode with its own contract in
+- **Code Exchange** (the PT01 offer/answer, its ECDH key agreement, its answer
+  confirmation tag, and its anonymous Tor fallback), a cross-implementation
+  mode with its own contract in
   [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md), versioned separately.
-  Its direct transfer does use §7 of this document, which is governed here; its
-  multi-QR carriage is browser-only and is described in
+  PIN Exchange carries its two codes (§4.8), so a PIN Exchange session runs
+  that contract from the offer on — key schedule, direct attempt, and
+  fallbacks — and it governs all of it. What is fixed here is only how the
+  codes travel over the PIN session, and what a PIN receiver checks about an
+  offer on top of what that contract checks. Its direct transfer uses §7 of
+  this document, which is governed here; its multi-QR carriage is browser-only
+  and is described in
   [ARCHITECTURE.md](ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts).
 - The **Nostr file-relay data-path fallback** ([NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md)),
-  the clearnet fallback only Code Exchange can reach. It is implemented by the
-  web app and by `ptransfer-cli`, and governed by its own document rather than
-  by this one.
+  the clearnet fallback a Code Exchange offer's `relays` field selects —
+  whether a person carried that offer or a PIN session did. It is governed by
+  its own document rather than by this one.
 - **Anonymous signaling** ([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)):
   an experimental PIN Exchange option — implemented by the web app and by
   `ptransfer-cli` — that carries this same handshake to a disjoint pool of
@@ -74,7 +80,9 @@ governed by separate specifications and version boundaries:
   longer PIN. The handshake on the wire is identical; the transport and the PIN
   length are not. It stays outside this document while the relay pool is
   unmonitored and the option is experimental, and it is specified in its own
-  interoperability contract, the way the Tor onion transfer mode is. An
+  interoperability contract, the way the Tor onion transfer mode is. Its
+  offers ask for Code Exchange's Tor fallback rather than the clearnet one
+  (§4.8). An
   implementation that does not implement it MUST reject a PIN that is not
   exactly `PIN_LENGTH` characters (§1) rather than attempt it — the relay
   pool such a PIN names is not in this document, so a transfer could not
@@ -266,10 +274,15 @@ as the HKDF salt and a distinct info label:
 | Claim seal key | `ptransfer:nostr-session:v4:claim` | AES-256-GCM key |
 | Confirm seal key | `ptransfer:nostr-session:v4:confirm` | AES-256-GCM key |
 | Signaling key | `ptransfer:nostr-session:v4:signals` | AES-256-GCM key |
-| Content key | `ptransfer:nostr-session:v4:content` | AES-256-GCM key |
 | Confirmation code | see §5 | 5 bytes |
 
-**AES-GCM framing** for sealed handshake payloads and encrypted signals:
+There is no PAKE content key. The file is encrypted under the content key of
+the Code Exchange session the handshake carries (§4.8) — the ECDH derivation
+of [CODE_EXCHANGE_PROTOCOL.md §3](CODE_EXCHANGE_PROTOCOL.md#3-key-schedule) —
+and so is everything either fallback derives. The PAKE's part is to
+authenticate the two codes that agreement rides in.
+
+**AES-GCM framing** for sealed handshake payloads and carried codes:
 
 ```
 nonce(12 bytes, random per message) ‖ ciphertext ‖ tag(16 bytes)
@@ -287,7 +300,7 @@ different and does use AAD.)
 | Kind | Class | Use |
 |---|---|---|
 | `4243` | regular (relays retain it) | Rendezvous |
-| `24243` | ephemeral | Claim, confirm, and WebRTC signal |
+| `24243` | ephemeral | Claim, confirm, and carried code |
 
 The rendezvous is a **regular** kind on purpose: a receiver that connects after
 publication must still be able to query it, which an ephemeral kind would not
@@ -474,7 +487,7 @@ MUST reject metadata that is not shaped as §4.7 requires.
 - `contentType` is `"file"`; no other value is defined.
 - `fileSize` is the **input** size — a progress hint only. It is never the wire
   length, and never a bound on the payload; the wire byte count is
-  authenticated in band by `DONE` (§7).
+  authenticated in band by `end` (§7.4).
 - `contentEncoding` is how the payload bytes travel (§6). A receiver MUST reject
   any value other than the two above.
 
@@ -487,15 +500,26 @@ canonical = JSON.stringify([ label, contentType, fileName, fileSize,
 hash      = hex(SHA-256(utf8(canonical)))
 ```
 
-### 4.8 WebRTC signals
+### 4.8 Carried codes
+
+Once the confirmation code matches (§5), the two peers run a Code Exchange
+session ([CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md)): the sender
+makes an offer, the receiver answers it, and everything from there — the ECDH
+key schedule, the answer confirmation tag, the direct WebRTC attempt, and the
+fallback the offer names — is that contract's. What this section fixes is how
+the two codes travel: sealed under the session's signals key, rather than
+handed over by a person.
 
 Kind `24243`, tags in order `t` = `transferId`, `p` = **sender** pubkey (both
 directions), `type` = `signal`. Content is base64 of the AES-GCM sealing (§3,
 signals key) of:
 
 ```json
-{ "type": "signal", "signal": { … offer | answer | candidate … } }
+{ "type": "offer" | "answer", "code": "<base64 of the PT01 container>" }
 ```
+
+The container rides byte for byte: the answer's confirmation tag is bound to a
+digest of the offer container's bytes, so both sides must hash the same bytes.
 
 Subscription filters:
 
@@ -504,8 +528,35 @@ Subscription filters:
 - Receiver waiting for the offer: kind `24243`, `#t` = transfer id,
   `authors` = the sender.
 
-Offer and answer bundles are republished while the connection is pending, so a
-relay miss does not strand the session.
+The exchange:
+
+1. The sender publishes **no offer** until its operator has entered the
+   matching confirmation code. It then publishes its offer, and republishes it
+   every 5 s until an answer arrives, so a relay miss does not strand the
+   session.
+2. The receiver acts on the **first** offer that opens under the signals key
+   and ignores any different one after it. It answers that offer, and answers
+   again each time the same offer is repeated — the sender has not seen the
+   answer yet.
+3. The sender takes the first answer that opens under the signals key and
+   checks its confirmation tag exactly as Code Exchange does, refusing a
+   mismatch before it acts on anything in it.
+
+On top of what Code Exchange itself checks, a PIN receiver MUST refuse an
+offer that:
+
+- describes a different file than the confirm delivered — `fileName`,
+  `fileSize`, `contentEncoding`, and `mimeType` must all equal the confirm's
+  metadata (§4.7), which is what the confirmation code attests to; or
+- asks for a fallback on the other side of the PIN's privacy line. A standard
+  PIN's offer names clearnet `relays` or no fallback; an anonymous PIN's
+  ([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)) carries `anon: true` or
+  no fallback. A sender whose selection is over the Tor fallback's cap offers
+  none rather than the clearnet one.
+
+The seal is what authenticates the codes here, where a person's hand does in
+Code Exchange: only the two ends of the locked PAKE session hold the signals
+key, and the sender seals nothing under it before the human gate opens.
 
 ---
 
@@ -530,8 +581,8 @@ code = crockfordBase32(bits)                    # 8 characters
 `|` cannot occur inside a field and the join is unambiguous.
 
 - The **receiver** derives and displays it once the confirm verifies.
-- The **sender** derives the same value and publishes **no WebRTC signal and no
-  file byte** until its operator enters a matching code. Comparison normalizes
+- The **sender** derives the same value and publishes **no offer and no file
+  byte** until its operator enters a matching code. Comparison normalizes
   Crockford Base32 (`I`/`L` → `1`, `O` → `0`, case-insensitive, hyphens
   ignored). A mismatch is retryable — a typo must not kill a transfer — and
   never opens the gate.
@@ -550,7 +601,7 @@ The compression rule is **flow-based, never content-sniffed**:
 A single file is deflated on the fly with **raw DEFLATE** (RFC 1951 — no zlib
 or gzip wrapper) and inflated by the receiver. A ZIP is already compressed
 entry by entry and is never recompressed. Either way the final wire length is
-unknown during signaling, which is why `fileSize` is only a hint and `DONE`
+unknown during signaling, which is why `fileSize` is only a hint and `end`
 carries the authoritative count.
 
 Whether a ZIP's entries are stored or deflated is an implementation choice and
@@ -561,26 +612,36 @@ it, as a decompression-bomb guard.
 
 ---
 
-## 7. Data-channel transfer
+## 7. Transfer
 
-Once the WebRTC data channel is open, both peers hold the `content` key and run
-this protocol. It is the same protocol for every signaling method.
+Once a transport is open, both peers hold the content key and run this
+protocol. It is the same protocol for every mode: over a WebRTC data channel
+for PIN Exchange and Code Exchange, whose content key is the Code Exchange
+session's (§3), and over a framed onion stream for the Tor transport of
+[TOR_TRANSPORT.md](TOR_TRANSPORT.md), whose handshake supplies its own.
 
-Whichever peer creates the channel MUST create it **ordered and reliable** —
-the WebRTC default, i.e. `ordered: true` with neither `maxRetransmits` nor
-`maxPacketLifeTime` set. This is stated rather than assumed because §7.3's
-receive discipline has no way to recover otherwise: an unordered channel still
-delivers every message, but SCTP hands each one up as soon as it reassembles,
-so a single retransmit lets a later chunk overtake an earlier one and the peer
-rejects the index. Nothing on the wire announces the setting, and a loopback or
-lossless path never reveals it, so an implementation whose WebRTC binding
-defaults differently can pass every local test and corrupt every real
-transfer.
+The transport is a **reliable, ordered, bidirectional** message link that
+keeps binary and text messages apart. Whichever peer creates a data channel
+MUST create it **ordered and reliable** — the WebRTC default, i.e.
+`ordered: true` with neither `maxRetransmits` nor `maxPacketLifeTime` set. This
+is stated rather than assumed because §7.5's receive discipline has no way to
+recover otherwise: an unordered channel still delivers every message, but SCTP
+hands each one up as soon as it reassembles, so a single retransmit lets a
+later chunk overtake an earlier one and the peer rejects the index. Nothing on
+the wire announces the setting, and a loopback or lossless path never reveals
+it, so an implementation whose WebRTC binding defaults differently can pass
+every local test and corrupt every real transfer.
+
+Both directions are used throughout. The receiver tells the sender what it has
+stored as it stores it, the sender never runs more than a window ahead of
+that, completion is a verdict the receiver sends back, and either side stops
+the other with a reason rather than leaving it to a timeout.
 
 ### 7.1 Chunk framing
 
 The payload — in its wire encoding (§6) — is split into `ENCRYPTION_CHUNK_SIZE`
-= 128 KiB pieces, and each is sent as one **binary** data-channel message:
+= 128 KiB pieces, and each is sent as one **binary** message, sender to
+receiver only:
 
 ```
 [2 bytes: chunk index, big-endian][12 bytes: nonce][ciphertext][16 bytes: tag]
@@ -593,49 +654,103 @@ altered or whose ciphertext was swapped with another chunk's.
 Indices start at 0 and increase by one. The 2-byte field caps a transfer at
 65 536 chunks (`MAX_CHUNKS`).
 
-Senders apply WebRTC backpressure (the reference implementation drains at a
-1 MiB `bufferedAmountLowThreshold`).
+### 7.2 Control messages
 
-### 7.2 Completion
+Every **text** message the transfer sends is one JSON object, its type in `t`:
 
-After the last chunk the sender sends one **text** message:
+| `t` | Direction | Fields | Meaning |
+|---|---|---|---|
+| `ack` | receiver → sender | `chunks` | This many chunks have authenticated and been stored |
+| `end` | sender → receiver | `chunks`, `bytes` | The payload is complete: its chunk count and wire byte count |
+| `done` | receiver → sender | `chunks`, `bytes` | Verified and stored; echoes `end` |
+| `abort` | either | `reason` | This side is stopping, and why |
 
+```json
+{ "t": "ack", "chunks": 3 }
+{ "t": "end", "chunks": 4, "bytes": 393233 }
+{ "t": "done", "chunks": 4, "bytes": 393233 }
+{ "t": "abort", "reason": "cancelled" }
 ```
-DONE:<totalChunks>:<totalBytes>
-```
 
-`totalBytes` is the **wire** byte count (post-encoding, pre-encryption). Both
-values are decimal, non-empty, no sign, no leading `+`.
+- `chunks` and `bytes` are non-negative integers, `chunks` at most
+  `MAX_CHUNKS` and `bytes` at most `MAX_MESSAGE_SIZE`. A message of a type
+  defined here whose fields are malformed is a protocol violation (§7.6).
+- A text message that is not a JSON object with a `t` defined here is not
+  addressed to the transfer, and a peer MUST ignore it: the link may carry
+  other messages beside the transfer.
+- `reason` is a short human-readable string. A peer cuts a longer one at 200
+  characters, and reads a missing one as empty. `cancelled` is the reason a
+  side sends when its user cancelled.
+
+### 7.3 Flow control
+
+- After each chunk it has authenticated and stored, the receiver sends `ack`
+  with the cumulative count of chunks stored.
+- The sender MUST NOT send chunk index `i` unless
+  `i < acked + TRANSFER_WINDOW_CHUNKS`, where `acked` is the largest `ack`
+  count it has received and `TRANSFER_WINDOW_CHUNKS` = 32 (4 MiB). The window
+  bounds what a receiver ever holds unwritten, and is wide enough that the
+  link's round trip rather than the window sets the pace.
+- The receiver MUST abort a transfer whose sender sends chunk index
+  `i ≥ stored + TRANSFER_WINDOW_CHUNKS`, where `stored` is the last count it
+  acknowledged.
+- The sender MUST abort on an `ack` whose count exceeds the chunks it sent.
+- A sender also applies the transport's own backpressure (the reference
+  implementation drains a data channel at a 1 MiB `bufferedAmountLowThreshold`).
+
+### 7.4 Completion
+
+After the last chunk the sender sends `end` with the chunk count and the
+**wire** byte count (post-encoding, pre-encryption).
 
 The receiver MUST verify that the chunk count matches what it received, that
-indices arrived exactly once in data-channel order, and that the decrypted wire
-byte count matches — then, and only then, reply with the text message:
+indices arrived exactly once in order, and that the decrypted wire byte count
+matches; then, and only then, it finalizes what it stored and replies `done`
+with the same two values. The sender MUST check that `done` echoes exactly
+what it sent; a mismatch, or a `done` before `end`, is a protocol violation.
 
-```
-ACK
-```
+The transfer is complete for the sender when a matching `done` arrives, and it
+then closes the transport. Over a framed onion stream the receiver waits up to
+30 s for that close, which is the delivery receipt for `done`; its absence is
+reported but does not undo a file already verified.
 
-The sender waits `ACK_TIMEOUT_MS` = 30 s for it; a timeout is a transfer
-failure.
+### 7.5 Receive discipline
 
-### 7.3 Receive discipline
-
-Receivers **append in reliable data-channel order**. There is no positional or
+Receivers **append in reliable arrival order**. There is no positional or
 out-of-order write path: no wire payload has a length known up front, so an
 index cannot be turned into an offset. A receiver MUST reject a chunk whose
 index is not the next expected one, a duplicate index, a short chunk before the
-final one, a malformed length, and a transfer that exceeds `MAX_MESSAGE_SIZE`.
+final one, a chunk after `end`, a malformed length, and a transfer that exceeds
+`MAX_MESSAGE_SIZE`.
 
 There is **no whole-file checksum and no manifest**. Integrity rests entirely
 on per-chunk AES-GCM authentication with the authenticated index, plus the
 completeness checks above.
 
-### 7.4 Stall watchdog
+### 7.6 Abort
 
-`STALL_TIMEOUT_MS` = 60 s, an idle window rather than an overall deadline. The
-sender applies it to each chunk hand-off; the receiver arms it when the channel
-opens and resets it on every incoming message, `DONE` included. A steadily
-progressing transfer of any size never trips it.
+- A side that gives up — cancelled by its user, a chunk that fails a check, a
+  protocol violation, a local failure such as storage — sends `abort` with its
+  reason and closes the transport. Sending it is best effort: the peer's
+  watchdog (§7.7) covers one that is lost.
+- A side that receives `abort` stops at once and reports the peer's reason. It
+  does not answer with an `abort` of its own.
+- A transport that closes before `done` has arrived is a connection failure,
+  on either side.
+
+### 7.7 Stall watchdog
+
+`STALL_TIMEOUT_MS` = 60 s, an idle window rather than an overall deadline, each
+side measuring the other:
+
+- The sender fails when, with anything outstanding — chunks not yet
+  acknowledged, or an `end` not yet answered by `done` — neither an `ack` that
+  moves the count nor `done` arrives within the window. With nothing
+  outstanding, as while it waits on its own input, it runs no clock.
+- The receiver arms it when the transport opens and resets it on every
+  incoming message.
+
+A steadily progressing transfer of any size never trips it.
 
 ---
 
@@ -664,6 +779,8 @@ progressing transfer of any size never trips it.
 | `ENCRYPTION_CHUNK_SIZE` | 128 KiB |
 | `MAX_CHUNKS` | 65 536 |
 | `MAX_MESSAGE_SIZE` | 2 GiB |
+| `TRANSFER_WINDOW_CHUNKS` | 32 |
+| `abort` reason | at most 200 characters |
 
 Peer-visible timeouts:
 
@@ -671,13 +788,18 @@ Peer-visible timeouts:
 |---|---|
 | Receiver wait for the confirm | 60 s |
 | Sender confirmation-code entry | 150 s |
-| Receiver wait for the sender's first signal | 180 s |
-| WebRTC connection | 30 s |
+| Receiver wait for the offer | 180 s |
+| Sender wait for the answer | 60 s |
+| Offer retry interval | 5 s |
 | ICE gathering | 5 s |
-| Signal bundle retry interval | 5 s |
-| Data-channel `ACK` | 30 s |
+| Direct attempt, sender | 20 s with a fallback, 120 s without |
+| Direct attempt, receiver | 30 s with a fallback, 120 s without |
 | Transfer stall (idle) | 60 s |
 | Sender rotation/wait backstop | 30 min |
+
+The direct-attempt windows run from when each side has the other's code; the
+receiver's outlasts the sender's, so the sender's verdict on the route comes
+first.
 
 ---
 
@@ -737,12 +859,13 @@ web side. Changing either digest is a protocol bump, never an accident.
 | PIN, hint, transfer id | [`src/lib/crypto/pin.ts`](../src/lib/crypto/pin.ts), [`constants.ts`](../src/lib/crypto/constants.ts) |
 | SPAKE2 | [`src/lib/crypto/spake2.ts`](../src/lib/crypto/spake2.ts) |
 | Key schedule, confirmation code | [`src/lib/crypto/kdf.ts`](../src/lib/crypto/kdf.ts) |
+| Carried codes | [`src/lib/nostr/code-carriage.ts`](../src/lib/nostr/code-carriage.ts), running the Code Exchange session in [`src/lib/code-exchange/`](../src/lib/code-exchange/) |
 | AES-GCM framing | [`src/lib/crypto/aes-gcm.ts`](../src/lib/crypto/aes-gcm.ts) |
 | Events, tags, filters | [`src/lib/nostr/events.ts`](../src/lib/nostr/events.ts), [`types.ts`](../src/lib/nostr/types.ts) |
 | Transcript hashes | [`src/lib/nostr/transcript.ts`](../src/lib/nostr/transcript.ts) |
 | Handshake choreography | [`src/hooks/use-pin-send.ts`](../src/hooks/use-pin-send.ts), [`use-pin-receive.ts`](../src/hooks/use-pin-receive.ts) |
 | Wire encoding | [`src/lib/transfer-source.ts`](../src/lib/transfer-source.ts) |
-| Data-channel protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts), over the channel in [`src/lib/duplex-channel.ts`](../src/lib/duplex-channel.ts) |
+| Transfer protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts), over the channel in [`src/lib/duplex-channel.ts`](../src/lib/duplex-channel.ts) or the Tor link in [`src/lib/tor/transfer.ts`](../src/lib/tor/transfer.ts) |
 
 Design rationale for all of the above — why a PAKE, why the PIN is split, what
 the confirmation code does and does not cover, the threat model — is in

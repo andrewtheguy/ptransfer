@@ -177,16 +177,6 @@ export function useTorReceive(): UseTorReceiveReturn {
           },
         );
 
-        // The ACK is the last frame of the conversation and the sender is
-        // waiting on it; its close is the receipt that it arrived. Failing to
-        // get one does not undo a file that is already written and verified,
-        // so it is reported rather than raised.
-        try {
-          await framed.waitForClose();
-        } catch (error) {
-          console.warn('[tor] The sender never acknowledged receipt:', error);
-        }
-
         // Cancelling between the last frame and this point still means the
         // user asked for nothing: publishing the payload here would hand back
         // a file — and a 'complete' state — after `cancel()` reset the UI.

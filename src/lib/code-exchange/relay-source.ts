@@ -3,7 +3,7 @@ import { formatFileSize } from '@/lib/file-utils';
 import { NostrFileCancelledError } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
-/** Input handling for the Nostr relay fallback in the Code Exchange hooks. */
+/** Input handling for the Nostr relay fallback. */
 
 export async function readSourceFully(
   source: TransferSource,

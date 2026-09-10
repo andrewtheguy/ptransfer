@@ -1,26 +1,29 @@
 import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
+import type {
+  ChannelEndReason,
+  ChannelListener,
+  ChannelMessage,
+} from '@/lib/duplex-channel';
 import {
-  ACK,
-  ACK_TIMEOUT_MS,
   createTransferReceiver,
-  DONE_PREFIX,
   type SendOptions,
-  sendFileOverTransport,
-  type TransferTransport,
+  sendFileOverLink,
+  type TransferLink,
 } from '@/lib/p2p-transfer';
 import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TransferSource, WireEncoding } from '@/lib/transfer-source';
-import type { TorFramedStream } from './framing';
+import { LINGER_TIMEOUT_MS, type TorFramedStream } from './framing';
 
 /**
  * The file transfer itself, once a Tor stream has been framed and the
  * handshake has produced a content key.
  *
  * Above the framing this is the *same* protocol as the WebRTC data path —
- * encrypted chunks, a `DONE:<chunks>:<bytes>` trailer, an `ACK` back — so it
- * runs on the shared implementation in `lib/p2p-transfer.ts` rather than a
- * second copy of it. All this module adds is the pull-to-push adaptation a
- * stream needs and the transport's own size ceiling.
+ * encrypted chunks one way, acknowledgments and the receiver's verdict the
+ * other — so it runs on the shared implementation in `lib/p2p-transfer.ts`
+ * rather than a second copy of it. All this module adds is the link that
+ * turns a pull-based framed stream into the push-fed, bidirectional one the
+ * protocol runs on, and the transport's own size ceiling.
  */
 
 /**
@@ -57,68 +60,124 @@ export const TOR_SUGGESTED_MAX_BYTES = 1024 * 1024;
  */
 export const TOR_MAX_WIRE_BYTES = TOR_MAX_TRANSFER_BYTES + 1024 * 1024;
 
+/** A framed Tor stream as a `TransferLink`. */
+export interface TorLink extends TransferLink {
+  /**
+   * Resolve once the peer has closed its end, or reject after `timeoutMs`.
+   *
+   * Over Tor the close is the delivery receipt for the last message of a
+   * conversation: whoever sent it waits for the peer to hang up before
+   * tearing the stream down, since the peer closes as soon as it has acted on
+   * that message.
+   */
+  waitForPeerClose: (timeoutMs?: number) => Promise<void>;
+}
+
 /**
- * The framed Tor stream as a `TransferTransport`.
+ * Wrap a framed stream whose handshake is over as a `TransferLink`.
  *
- * `sendBytes` resolves once the bytes have been handed to the circuit, which
- * is the backpressure the sender's stall window is measuring.
+ * From here on one read loop owns the stream's incoming side and hands every
+ * frame to the link's subscribers — which must therefore subscribe right
+ * after this returns, before the loop's first read completes. A frame that
+ * arrives with nobody subscribed is dropped, as on a data channel.
  */
-export function createTorTransport(framed: TorFramedStream): TransferTransport {
+export function createTorLink(framed: TorFramedStream): TorLink {
+  const listeners = new Set<ChannelListener>();
+  const enders = new Set<(reason: ChannelEndReason) => void>();
+  let endedWith: ChannelEndReason | null = null;
+  let resolveEnded!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
+
+  const end = (reason: ChannelEndReason) => {
+    if (endedWith !== null) return;
+    endedWith = reason;
+    resolveEnded();
+    for (const ender of Array.from(enders)) ender(reason);
+    enders.clear();
+  };
+
+  void (async () => {
+    try {
+      for (;;) {
+        const frame = await framed.receive();
+        if (frame === null) {
+          end('closed');
+          return;
+        }
+        const message: ChannelMessage = frame.isString
+          ? new TextDecoder().decode(frame.data)
+          : // Subscribers expect to own an exact-size ArrayBuffer.
+            (frame.data.buffer.slice(
+              frame.data.byteOffset,
+              frame.data.byteOffset + frame.data.byteLength,
+            ) as ArrayBuffer);
+        for (const listener of Array.from(listeners)) {
+          try {
+            listener(message);
+          } catch (error) {
+            console.error('[tor] A link listener failed:', error);
+          }
+        }
+      }
+    } catch (error) {
+      // A malformed frame (or a stream that broke mid-frame) ends the
+      // conversation; the transfer above reports what that meant.
+      console.info('[tor] The transfer stream ended:', error);
+      end('error');
+    }
+  })();
+
+  const whileOpen = <T>(send: () => Promise<T>): Promise<T> =>
+    endedWith === null
+      ? send()
+      : Promise.reject(new Error('The Tor stream is closed'));
+
   return {
-    sendBinary: (data) => framed.sendBinary(data),
-    sendText: (text) => framed.sendText(text),
-    waitForAck: (doneSent) => waitForTorAck(framed, doneSent),
+    sendBinary: (data) => whileOpen(() => framed.sendBinary(data)),
+    sendText: (text) => whileOpen(() => framed.sendText(text)),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    onEnd(listener) {
+      if (endedWith !== null) {
+        listener(endedWith);
+        return () => {};
+      }
+      enders.add(listener);
+      return () => {
+        enders.delete(listener);
+      };
+    },
+    async waitForPeerClose(timeoutMs = LINGER_TIMEOUT_MS) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `The peer did not close the stream within ${Math.round(timeoutMs / 1000)}s`,
+              ),
+            ),
+          timeoutMs,
+        );
+      });
+      try {
+        await Promise.race([ended, expired]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
   };
 }
 
 /**
- * Read frames until the receiver's `ACK` arrives, or the wait runs out. The
- * wait's clock starts once `doneSent` resolves.
- */
-async function waitForTorAck(
-  framed: TorFramedStream,
-  doneSent: Promise<void>,
-): Promise<void> {
-  const acknowledged = (async () => {
-    for (;;) {
-      const message = await framed.receive();
-      if (message === null) {
-        throw new Error('The Tor stream closed before acknowledgment');
-      }
-      if (!message.isString) continue; // Ignore stray binary messages.
-      const text = new TextDecoder().decode(message.data);
-      if (text === ACK) return;
-      // Ignore any other control string.
-    }
-  })();
-
-  let finished = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = doneSent.then(
-    () =>
-      new Promise<never>((_, reject) => {
-        if (finished) return;
-        timer = setTimeout(
-          () => reject(new Error('Timeout waiting for acknowledgment')),
-          ACK_TIMEOUT_MS,
-        );
-      }),
-  );
-  // Whichever loses the race settles unobserved later.
-  acknowledged.catch(() => undefined);
-  expired.catch(() => undefined);
-
-  try {
-    await Promise.race([acknowledged, expired]);
-  } finally {
-    finished = true;
-    clearTimeout(timer);
-  }
-}
-
-/**
  * Send `source` over an authenticated Tor stream and wait for the receiver's
- * `ACK`. Returns the wire byte count.
+ * verdict. Returns the wire byte count.
  */
 export function sendFileOverTor(
   framed: TorFramedStream,
@@ -126,7 +185,7 @@ export function sendFileOverTor(
   source: TransferSource,
   opts: Omit<SendOptions, 'maxWireBytes'> = {},
 ): Promise<number> {
-  return sendFileOverTransport(createTorTransport(framed), contentKey, source, {
+  return sendFileOverLink(createTorLink(framed), contentKey, source, {
     ...opts,
     maxWireBytes: TOR_MAX_WIRE_BYTES,
   });
@@ -136,17 +195,18 @@ export interface TorReceiveOptions {
   onProgress?: (current: number, total: number) => void;
   /** The sender's advertised input size: a progress hint, never a bound. */
   estimatedBytes?: number;
-  /** Return true to abandon the transfer between messages. */
+  /** Return true to abandon the transfer; the sender is told. */
   isCancelled?: () => boolean;
 }
 
 /**
- * Receive a payload from an authenticated Tor stream and acknowledge it.
+ * Receive a payload from an authenticated Tor stream.
  *
- * The stream is pull-based and the shared receiver is push-fed, so this is the
- * loop between them: every frame goes to the receiver until it seals the
- * payload. Only then is `ACK` sent — it means the bytes are authenticated and
- * written, which is exactly what the sender treats it as.
+ * The receiver acknowledges every chunk it stores and ends by sending its
+ * verdict, `done`, which is the last message of the conversation — so this
+ * then waits for the sender to hang up, its receipt that the verdict landed.
+ * A missing receipt does not undo a file that is already written and
+ * verified, so it is reported rather than raised.
  */
 export async function receiveFileOverTor(
   framed: TorFramedStream,
@@ -160,62 +220,26 @@ export async function receiveFileOverTor(
     estimatedBytes: opts.estimatedBytes,
     maxWireBytes: TOR_MAX_WIRE_BYTES,
   });
-  receiver.start();
+  const link = createTorLink(framed);
+  receiver.attach(link);
 
-  // `DONE` is the last frame the sender sends before it waits for `ACK`, so
-  // the pump stops there and hands the stream back. It has to stop rather than
-  // park in another read: this side still writes `ACK` and then waits for the
-  // sender's close, and a second concurrent reader on the same stream would be
-  // competing for those bytes.
-  let sawDone = false;
-  const pump = (async () => {
-    while (!sawDone) {
-      const message = await framed.receive();
-      // A close between frames ends the pump; whether that was the end of a
-      // completed transfer or the middle of one is settled below.
-      if (message === null) return;
-      if (opts.isCancelled?.()) throw new Error('Cancelled');
-      if (message.isString) {
-        const text = new TextDecoder().decode(message.data);
-        sawDone = text.startsWith(DONE_PREFIX);
-        receiver.onMessage(text);
-      } else {
-        // The receiver's ArrayBuffer path expects to own the bytes.
-        receiver.onMessage(
-          message.data.buffer.slice(
-            message.data.byteOffset,
-            message.data.byteOffset + message.data.byteLength,
-          ) as ArrayBuffer,
-        );
-      }
-    }
-  })();
-
-  // A chunk that fails to authenticate settles the transfer while the pump is
-  // still parked on a read the sender may never satisfy, so a rejection — and
-  // only a rejection — cuts the wait short. On that path the stream is dead to
-  // this side and the caller tears it down.
-  const failed = receiver.done.then(
-    () => new Promise<never>(() => {}),
-    (error: unknown) => {
-      throw error;
-    },
-  );
-  failed.catch(() => undefined);
-
+  const cancelPoll = setInterval(() => {
+    if (opts.isCancelled?.()) receiver.dispose();
+  }, 250);
   let payload: Blob;
   try {
-    await Promise.race([pump, failed]);
-    if (!sawDone) {
-      throw new Error('The Tor stream closed before the transfer completed');
-    }
     payload = await receiver.done;
   } catch (error) {
-    receiver.dispose();
     await sink.discard().catch(() => undefined);
     throw error;
+  } finally {
+    clearInterval(cancelPoll);
   }
 
-  await framed.sendText(ACK);
+  try {
+    await link.waitForPeerClose();
+  } catch (error) {
+    console.warn('[tor] The sender never acknowledged receipt:', error);
+  }
   return payload;
 }

@@ -175,7 +175,15 @@ describe('a Tor transfer end to end', () => {
         serviceMetadata,
       );
       if (handshake.outcome !== 'ready') throw new Error('expected ready');
-      return sendFileOverTor(service, handshake.keys.contentKey, source);
+      const sent = await sendFileOverTor(
+        service,
+        handshake.keys.contentKey,
+        source,
+      );
+      // The receiver's verdict was the last message; hanging up is the
+      // receipt it waits for, as serveUntilSent's teardown gives it.
+      await service.close();
+      return sent;
     })();
 
     const receiving = (async () => {

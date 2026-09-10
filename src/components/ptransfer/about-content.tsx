@@ -36,7 +36,8 @@ const COMMON_DETAILS = [
 const PIN_DETAILS = [
   {
     label: 'Key exchange:',
-    value: 'SPAKE2 password-authenticated key exchange over the PIN',
+    value:
+      'SPAKE2 password-authenticated key exchange over the PIN, which then carries a Code Exchange ECDH exchange for you',
   },
   {
     label: 'PIN format:',
@@ -59,9 +60,14 @@ const PIN_DETAILS = [
   },
   { label: 'Signaling:', value: 'Relay signaling' },
   {
+    label: 'Fallback:',
+    value:
+      "Code Exchange's: public Nostr relays, or Tor with anonymous signaling on, for eligible files up to 100 MiB",
+  },
+  {
     label: 'Anonymous signaling:',
     value:
-      'Optional and experimental: the sender turns it on, the PIN comes out longer, and both sides carry the handshake through Tor to onion-service relays instead. File data is unaffected',
+      'Optional and experimental: the sender turns it on, the PIN comes out longer, and both sides carry the handshake through Tor to onion-service relays instead. A direct file transfer is unaffected; the fallback goes through Tor',
   },
 ] as const;
 
@@ -232,9 +238,10 @@ export function AboutContent() {
               <p className="mt-2 text-sm text-muted-foreground">
                 PIN Exchange uses an end-to-end encrypted direct WebRTC
                 transfer. Instead of you carrying the whole connection code, the
-                app carries the handshake through third-party Nostr relays and
-                authenticates it with a SPAKE2 exchange driven by the PIN you
-                share. PIN Exchange has no file-relay fallback.
+                app carries it for you through third-party Nostr relays, sealed
+                under a SPAKE2 exchange driven by the PIN you share — so it
+                reaches the same direct connection and the same fallbacks as
+                Code Exchange.
               </p>
               <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
                 <li>
@@ -259,12 +266,14 @@ export function AboutContent() {
                   PIN, routes both devices&apos; relay connections through Tor
                   to relays run as onion services. It is slower and less
                   reliable, and it does not anonymize the direct WebRTC
-                  connection or STUN.
+                  connection or STUN; if no direct connection forms, the file
+                  goes through Tor rather than public relays.
                 </li>
                 <li>
-                  File data is always transferred directly peer-to-peer over
-                  WebRTC in this mode; PIN Exchange relays carry signaling, not
-                  file contents.
+                  File data goes directly peer-to-peer over WebRTC whenever a
+                  direct route exists. PIN Exchange&apos;s signaling relays
+                  never carry file contents; only a failed direct connection
+                  hands an eligible file to Code Exchange&apos;s fallback.
                 </li>
               </ul>
               <SpecList items={PIN_DETAILS} />
@@ -359,13 +368,12 @@ export function AboutContent() {
           <QrCode className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <p>
             Both WebRTC modes try a direct route first, and neither configures a
-            TURN server. PIN Exchange fails if no direct route exists. Code
-            Exchange can instead use its selected encrypted fallback for
-            eligible files up to 100 MiB, but both its public-relay and Tor
-            options are best-effort too. Tor Onion Service is a separate mode
-            and creates no WebRTC connection between the peers. If a transfer
-            cannot complete and the devices are together, transfer the file
-            offline with animated QR codes using{' '}
+            TURN server. If no direct route exists, either can use its selected
+            encrypted fallback for eligible files up to 100 MiB, but both the
+            public-relay and Tor options are best-effort too. Tor Onion Service
+            is a separate mode and creates no WebRTC connection between the
+            peers. If a transfer cannot complete and the devices are together,
+            transfer the file offline with animated QR codes using{' '}
             <a
               href={OFFLINE_QR_TRANSFER_URL}
               target="_blank"
