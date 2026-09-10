@@ -359,15 +359,6 @@ export async function receiveOverAnonymousRelay(
       },
     );
 
-    // The sender is waiting on this side's `ACK`; its close is the receipt
-    // that it landed. A file already written and verified does not become
-    // unreceived because the receipt went missing.
-    try {
-      await framed.waitForClose();
-    } catch (error) {
-      console.warn('[tor] The sender never acknowledged receipt:', error);
-    }
-
     return { payload, metadata };
   } finally {
     channel.close();

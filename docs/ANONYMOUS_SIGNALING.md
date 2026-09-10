@@ -5,8 +5,10 @@ recognizes it and follows. Both devices then carry the PIN Exchange handshake to
 Nostr relays run as onion services, through a Tor client, instead of over
 clearnet WebSockets.
 
-It does not route file data through Tor, and it does not make the transfer as a
-whole anonymous.
+File data goes through Tor only when no direct connection can be made: the
+Code Exchange session an anonymous PIN carries asks for that mode's Tor
+fallback rather than its clearnet one. A direct connection is still WebRTC, so
+the option does not make the transfer as a whole anonymous.
 
 Both implementations ship it, and either side of a transfer may be a browser tab
 or `ptransfer-cli`. This document is the shared specification: the PIN lengths,
@@ -177,14 +179,25 @@ It does not hide a device's IP address from:
 - the other WebRTC peer, once the direct connection is negotiated; or
 - the STUN services used for file-transfer ICE candidate discovery.
 
-That last pair is the important limit. **File data never goes through Tor.** It
-travels over the same direct WebRTC data channel as any other PIN Exchange
-transfer, so the peer learns an IP address for this device at the moment the
-connection forms, and so may STUN. What the option removes is the relay's view.
+That last pair is the important limit. **A direct connection does not go
+through Tor.** File data travels over the same direct WebRTC data channel as any
+other PIN Exchange transfer whenever one forms, so the peer learns an IP address
+for this device at that moment, and so may STUN. What the option removes is the
+relays' view.
+
+When no direct connection forms, the file does go through Tor. The offer an
+anonymous PIN session carries asks for Code Exchange's Tor fallback
+([CODE_EXCHANGE_PROTOCOL.md §5](./CODE_EXCHANGE_PROTOCOL.md#5-the-anonymous-fallback)):
+the two devices coordinate over this same onion relay pool and the file
+travels through an onion service the sender publishes, on the Tor client the
+signaling already bootstrapped. It never asks for the clearnet fallback, which
+would hand both devices' addresses to public storage relays, and a receiver
+refuses an offer that does (INTEROP_PROTOCOL.md §4.8). A selection over that
+fallback's 100 MiB cap gets no fallback at all rather than the clearnet one.
 
 Nostr events remain end-to-end protected exactly as in ordinary PIN Exchange.
 Tor adds transport-level network privacy; it does not replace SPAKE2, event
-signatures, encrypted signaling, or content encryption.
+signatures, the sealed codes, or content encryption.
 
 The PIN's length is public in the same sense the PIN is: whoever sees it knows
 the mode. Since the PIN is only ever handed to the intended recipient, that
@@ -236,4 +249,5 @@ it takes three things and no more — mint and classify a PIN at
 `ANONYMOUS_PIN_LENGTH`, use `ANONYMOUS_SIGNALING_RELAYS` for it and nothing
 else, and refuse to open a socket for it to anything but
 `ws://<v3 address>.onion`. Everything else is the handshake `INTEROP_PROTOCOL.md`
-already specifies, unchanged.
+already specifies, unchanged — including the rule, in its §4.8, that an
+anonymous PIN session's offer asks for the Tor fallback or none.

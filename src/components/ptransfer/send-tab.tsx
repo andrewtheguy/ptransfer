@@ -150,9 +150,9 @@ export function SendTab() {
   }, [selectedFiles]);
 
   const pinModeDescription =
-    "Carry a short 12-character PIN — the option when scanning a QR or moving a long code isn't practical: no camera, a blocked clipboard, or devices that aren't side by side. Relays carry the handshake and your PIN authenticates it, then the file goes over direct WebRTC.";
+    "Carry a short 12-character PIN — the option when scanning a QR or moving a long code isn't practical: no camera, a blocked clipboard, or devices that aren't side by side. Relays carry the handshake and your PIN authenticates it, then they carry the connection code for you: the file goes over direct WebRTC, with the same automatic relay fallback as Code Exchange for an eligible file up to 100 MiB.";
   const pinModeHowItWorksDescription =
-    'The handshake travels through relays and is authenticated by a SPAKE2 exchange driven by your PIN. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Needs internet on both sides, and there is no data-relay fallback if direct WebRTC fails. The receiver can be this app or ptransfer-cli.';
+    "The handshake travels through relays and is authenticated by a SPAKE2 exchange driven by your PIN. Once you type the receiver's confirmation code, it carries a Code Exchange offer and answer sealed under that exchange, so if direct WebRTC fails, an eligible encrypted file up to 100 MiB can use the same automatic Nostr relay fallback. Relays can see routing metadata, but they receive neither plaintext file contents nor the content key. Needs internet on both sides.";
   const codeModeDescription =
     "Carry the full code, by QR or copy/paste, and bring the receiver's reply back the same way. Nothing about the handshake touches a relay. If the direct connection fails, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.";
   const torModeDescription =
@@ -160,7 +160,7 @@ export function SendTab() {
   const torModeHowItWorksDescription =
     'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
   const anonymousSignalingHowItWorksDescription =
-    'The handshake travels through Tor to onion-service relays, so no Nostr relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection, which Tor does not cover. The receiver can be this app or ptransfer-cli.';
+    'The handshake travels through Tor to onion-service relays, so no Nostr relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection when one can be made, which Tor does not cover; if none can, an encrypted file up to 100 MiB goes through a Tor onion service this tab publishes rather than public relays.';
   const anonymousRelayHowItWorksDescription =
     'The code is obfuscated, not encrypted, so hand it only to the intended recipient; it authenticates the ECDH exchange, and the reply only enters your page when you scan or paste it yourself. A direct WebRTC connection is still tried first, exactly as always. If none can be made, both devices reach Tor rather than the clearnet: they coordinate over Nostr relays run as onion services, and this tab publishes a Tor onion service that carries the encrypted file, up to 100 MiB. Both devices need internet for that, and the recipient starts bootstrapping Tor the moment they take your code in — so this is not the offline, same-network case ordinary Code Exchange covers. Bootstrapping Tor in a browser takes a while on a first run, and this fails more often than the ordinary relay fallback.';
   const codeModeHowItWorksDescription =
@@ -545,9 +545,11 @@ export function SendTab() {
                     the recipient's page knows to look on the same relays — they
                     do not have to turn anything on, or even know this exists.
                     It starts much more slowly and is less reliable. It does not
-                    anonymize the file transfer itself: that is still a direct
-                    WebRTC connection, so your recipient and the STUN services
-                    see the same network metadata as always.
+                    anonymize a direct file transfer: that is still a WebRTC
+                    connection, so your recipient and the STUN services see the
+                    same network metadata as always. If no direct connection can
+                    be made, the file goes through Tor rather than public
+                    relays.
                   </p>
                 </div>
                 <Switch

@@ -7,17 +7,18 @@ import {
 } from './constants';
 
 /**
- * Session keys for PIN Exchange, derived from the SPAKE2 root
- * key established by the PIN handshake (see spake2.ts). The SPAKE2 output
- * already mixes fresh ephemeral scalars from both sides, so it is the
- * transfer's ephemeral shared secret — there is no separate ECDH exchange in
- * this mode.
+ * Session keys for PIN Exchange, derived from the SPAKE2 root key established
+ * by the PIN handshake (see spake2.ts).
+ *
+ * There is one: the key that seals the Code Exchange offer and answer the
+ * session carries (see nostr/code-carriage.ts). The content key is not a PAKE
+ * derivation — it comes out of the ECDH agreement inside those codes, the same
+ * key schedule Code Exchange uses, and the PAKE is what authenticates the
+ * codes that agreement rides on.
  */
 export interface PinSessionKeys {
-  /** Encrypts relay-carried WebRTC signaling (offer/answer/candidates). */
+  /** Seals the carried Code Exchange offer and answer. */
   signals: CryptoKey;
-  /** Encrypts P2P file content chunks on the data channel. */
-  content: CryptoKey;
 }
 
 /**
@@ -35,7 +36,6 @@ export interface HandshakeSealKeys {
 
 const SESSION_KEY_LABELS = {
   signals: 'ptransfer:nostr-session:v4:signals',
-  content: 'ptransfer:nostr-session:v4:content',
 } as const satisfies Record<keyof PinSessionKeys, string>;
 
 const HANDSHAKE_KEY_LABELS = {
@@ -72,19 +72,18 @@ async function deriveSessionKey(
 /**
  * Derive the PIN Exchange session keys from the non-extractable HKDF root
  * returned by finishPake (spake2.ts) and the public per-transfer salt.
- * Distinct HKDF info labels guarantee signaling and content never reuse the
- * same AES-GCM key.
  */
 export async function derivePinSessionKeys(
   sharedSecretKey: CryptoKey,
   salt: Uint8Array,
 ): Promise<PinSessionKeys> {
-  const [signals, content] = await Promise.all([
-    deriveSessionKey(sharedSecretKey, salt, SESSION_KEY_LABELS.signals),
-    deriveSessionKey(sharedSecretKey, salt, SESSION_KEY_LABELS.content),
-  ]);
-
-  return { signals, content };
+  return {
+    signals: await deriveSessionKey(
+      sharedSecretKey,
+      salt,
+      SESSION_KEY_LABELS.signals,
+    ),
+  };
 }
 
 /**

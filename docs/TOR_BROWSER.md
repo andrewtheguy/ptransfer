@@ -97,13 +97,15 @@ diagnosable failure and a silent one.
 | `src/lib/tor/onion-address.ts` | Parsing, canonicalizing, and checksum-verifying the address |
 | `src/lib/tor/handshake.ts` | The spec's handshake frames and key schedule |
 | `src/lib/tor/framing.ts` | `TorFramedStream` — `[kind][length][payload]` over the stream |
-| `src/lib/tor/transfer.ts` | The size caps and the bridge to the shared transfer layer |
+| `src/lib/tor/transfer.ts` | The size caps, and `createTorLink`: the framed stream as the bidirectional link the shared transfer protocol runs on |
 | `src/hooks/use-tor-send.ts`, `use-tor-receive.ts` | The accept loop, its bounds, and the UI state |
 
-Above the framing, `sendFileOverTransport` and `createTransferReceiver` in
+Above the framing, `sendFileOverLink` and `createTransferReceiver` in
 `src/lib/p2p-transfer.ts` are the identical code the WebRTC path runs — one
-shared wire protocol with two transports, which is why the `TransferTransport`
-interface exists.
+shared wire protocol with two transports, which is why the `TransferLink`
+interface exists. The protocol is bidirectional while it runs (acknowledgments
+flow back while chunks go out), so `createTorLink` gives the stream one read
+loop and `TorFramedStream` serializes its frame writes.
 
 ## Testing it
 

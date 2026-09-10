@@ -30,7 +30,10 @@ const KIND_TEXT = 1;
  */
 export const MAX_FRAME_BYTES = ENCRYPTION_CHUNK_SIZE + ENCRYPTED_CHUNK_OVERHEAD;
 
-/** How long `waitForClose` waits for the peer to hang up. */
+/**
+ * How long the side that sent the last message of a conversation waits for
+ * the peer to hang up; see `createTorLink`'s `waitForPeerClose`.
+ */
 export const LINGER_TIMEOUT_MS = 30_000;
 
 /** One framed message: an encrypted chunk, or a control string. */
@@ -42,9 +45,12 @@ export interface TorMessage {
 /**
  * Framed message transport over one Tor stream.
  *
- * Sends and receives are not synchronized against each other because the
- * protocol above is strictly turn-taking — handshake ping-pong, then chunks
- * out and `ACK` back — so there is never a read and a write in flight at once.
+ * Reads and writes run independently, as the two directions of a stream do:
+ * the transfer above is bidirectional, acknowledgments coming back while
+ * chunks go out. Writes are serialized here so two senders can never
+ * interleave one frame's bytes into another's; reads have one reader at a
+ * time by construction — the handshake's turn-taking, then the transfer
+ * link's single read loop.
  */
 export class TorFramedStream {
   private readonly stream: OnionStream;
@@ -53,6 +59,8 @@ export class TorFramedStream {
   private bufferedLength = 0;
   private ended = false;
   private closed = false;
+  /** Every frame write, in call order. */
+  private sendChain: Promise<void> = Promise.resolve();
 
   constructor(stream: OnionStream) {
     this.stream = stream;
@@ -114,45 +122,6 @@ export class TorFramedStream {
     return new TextDecoder(undefined, { fatal: true }).decode(message.data);
   }
 
-  /**
-   * Block until the peer closes its end, which is the receipt for the last
-   * frame sent.
-   *
-   * Whoever sends the *last* message of a conversation calls this before
-   * tearing the stream down: the peer closes as soon as it has acted on that
-   * frame, so its close is the delivery receipt. A peer that instead goes
-   * quiet past the linger timeout says the last frame may never have arrived,
-   * which is why that throws rather than returning.
-   */
-  async waitForClose(timeoutMs = LINGER_TIMEOUT_MS): Promise<void> {
-    const drained = (async () => {
-      while (!this.ended) {
-        // Nothing should follow the last frame; drain and keep waiting rather
-        // than guess at what it meant.
-        await this.fill();
-      }
-    })();
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(
-            new Error(
-              `The peer did not close the stream within ${Math.round(timeoutMs / 1000)}s`,
-            ),
-          ),
-        timeoutMs,
-      );
-    });
-
-    try {
-      await Promise.race([drained, expired]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   /** Close this side of the stream. Idempotent, and never throws. */
   async close(): Promise<void> {
     if (this.closed) return;
@@ -177,7 +146,13 @@ export class TorFramedStream {
     frame[0] = kind;
     new DataView(frame.buffer).setUint32(1, payload.length, false);
     frame.set(payload, HEADER_LENGTH);
-    await this.stream.sendBytes(frame);
+    const sent = this.sendChain.then(async () => {
+      await this.stream.sendBytes(frame);
+    });
+    // A failed write does not stall the ones behind it; each still reports
+    // its own outcome.
+    this.sendChain = sent.catch(() => undefined);
+    await sent;
   }
 
   /**

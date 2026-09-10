@@ -1,51 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { hangUp } from '@/lib/code-exchange/hang-up';
 import {
-  type AnswerConfirmationSigner,
-  computeOfferTranscriptHash,
-  generateMutualAnswerBinary,
-  isAnonymousOffer,
-  parseMutualPayload,
-  relaysFromOffer,
-  type SignalingPayload,
-} from '@/lib/code-signaling';
-import {
-  deriveAESKeyFromSecretKey,
-  deriveAnswerConfirmation,
-  deriveSharedSecretKey,
-  generateECDHKeyPair,
-  MAX_MESSAGE_SIZE,
-  SLOW_TRANSPORT_MAX_BYTES,
-  TRANSFER_EXPIRATION_MS,
-} from '@/lib/crypto';
-import { wipeBufferSource } from '@/lib/crypto/memory';
+  type AcceptedOffer,
+  acceptOffer,
+  buildDirectAttempt,
+  type DirectAttempt,
+  deriveAnswerKeys,
+  eligibleFallbackRelays,
+  fallbackMessage,
+  finishDirectReceive,
+  type ReadOffer,
+  readOffer,
+  receiveOverFallback,
+  unrelayableError,
+} from '@/lib/code-exchange/receive';
+import { createTorProgress } from '@/lib/code-exchange/tor-progress';
+import { generateMutualAnswerBinary } from '@/lib/code-signaling';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
-import { formatFileSize } from '@/lib/file-utils';
-import type { TransferMetadata, TransferState } from '@/lib/nostr';
-import {
-  ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
-  AnonymousSignalingTransport,
-} from '@/lib/nostr/anonymous-transport';
-import { ANONYMOUS_SIGNALING_RELAYS } from '@/lib/nostr/relays';
-import { receiveFileLive } from '@/lib/nostr-file/download-live';
-import { deriveRelaySession } from '@/lib/nostr-file/session';
-import { createTransferPool } from '@/lib/nostr-file/transfer-pool';
-import { NostrFileCancelledError } from '@/lib/nostr-file/upload';
-import {
-  ACK,
-  createTransferReceiver,
-  type TransferReceiver,
-} from '@/lib/p2p-transfer';
+import type { TransferState } from '@/lib/nostr';
+import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
+import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
-import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import type { AppendSink } from '@/lib/scratch-sink';
 import type { TorBridge } from '@/lib/tor/client';
-import {
-  deriveOnionPassword,
-  receiveOverAnonymousRelay,
-} from '@/lib/tor/code-relay';
 import type { ReceivedContent } from '@/lib/types';
-import { WebRTCConnection } from '@/lib/webrtc';
-import { getWebRTCConfig } from '@/lib/webrtc-config';
+import type { WebRTCConnection } from '@/lib/webrtc';
 
 // Extended transfer status for Code Exchange receive mode
 export type CodeReceiveStatus =
@@ -106,17 +86,6 @@ export interface CodeReceiveState {
   torStatus?: string;
 }
 
-/**
- * An accepted offer, plus the digest of the container it arrived in. The
- * digest is what the answer's confirmation tag is bound to, so it has to be
- * taken from the bytes the receiver was handed rather than recomputed from
- * the parsed payload later.
- */
-interface IncomingOffer {
-  payload: SignalingPayload;
-  transcriptHash: string;
-}
-
 /** What the receive flow is told before it is handed an offer. */
 export interface CodeReceiveOptions {
   /**
@@ -142,12 +111,7 @@ export interface UseCodeReceiveReturn {
   reset: () => void;
 }
 
-const ICE_GATHER_TIMEOUT_MS = 5000;
 const CODE_CONNECTION_TIMEOUT_MS = 120000;
-const RELAY_FALLBACK_MESSAGE =
-  'No direct connection — receiving the file through Nostr instead';
-const TOR_FALLBACK_MESSAGE =
-  'No direct connection — receiving the file through Tor instead';
 // What the response page says while the simulation is on: the relay fetch is
 // already running behind it, but nothing has begun until the sender takes the
 // response in, and a progress bar would claim otherwise.
@@ -185,27 +149,29 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     useState<ReceivedContent | null>(null);
 
   const rtcRef = useRef<WebRTCConnection | null>(null);
+  // The data channel of the attempt that connected, so a cancel can tell
+  // the sender.
+  const channelRef = useRef<DuplexChannel | null>(null);
   const cancelledRef = useRef(false);
   const receivingRef = useRef(false);
   // Storage backing the in-flight or completed transfer. Discarded whenever
   // the payload it backs is abandoned; kept after completion because
   // receivedContent.data reads from it until reset.
   const sinkRef = useRef<AppendSink | null>(null);
-  // Pool carrying the relay transfer after a failed direct connection.
-  // Cancel reaches it through this ref so an abandoned receive stops talking
-  // to relays instead of finishing the round on a dead session.
+  // Pool carrying the fallback after a failed direct connection. Cancel
+  // reaches it through this ref so an abandoned receive stops talking to
+  // relays instead of finishing the round on a dead session.
   const relayPoolRef = useRef<ReturnType<typeof createTransferPool> | null>(
     null,
   );
   // The Tor client an anonymous offer starts bootstrapping the moment it is
-  // taken in, and the socket adapter its control channel is built on. Null for
-  // an ordinary offer, which never loads one. Closing it takes the bootstrap,
-  // the relay sockets and every circuit with it.
+  // taken in. Null for an ordinary offer, which never loads one. Closing it
+  // takes the bootstrap, the relay sockets and every circuit with it.
   const transportRef = useRef<AnonymousSignalingTransport | null>(null);
 
   // The step a receive blocks on until the UI settles it. Cancel rejects it
   // while pending so the flow unwinds immediately.
-  const offerStepRef = useRef<PendingStep<IncomingOffer> | null>(null);
+  const offerStepRef = useRef<PendingStep<ReadOffer> | null>(null);
   // Which side of the switch on the response page the flow is currently on.
   // The switch exists only to exercise the relay path without a hostile
   // network: it hands the sender a response with no ICE candidates in it and
@@ -244,10 +210,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     const offerStep = offerStepRef.current;
     offerStepRef.current = null;
     offerStep?.reject(new Error('Cancelled'));
-    if (rtcRef.current) {
-      rtcRef.current.close();
-      rtcRef.current = null;
-    }
+    // A sender mid-transfer is told why the connection is going away.
+    hangUp(rtcRef.current, channelRef.current);
+    rtcRef.current = null;
+    channelRef.current = null;
     setState({ status: 'idle' });
   }, [discardSink]);
 
@@ -270,26 +236,18 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   const submitOffer = useCallback(async (offerData: Uint8Array) => {
     const step = offerStepRef.current;
     if (!step) return;
-
-    // Parse mutual payload (no decryption needed)
-    const parsed = await parseMutualPayload(offerData);
+    let read: ReadOffer;
+    try {
+      read = await readOffer(offerData);
+    } catch (error) {
+      if (offerStepRef.current === step) offerStepRef.current = null;
+      step.reject(error instanceof Error ? error : new Error('Invalid offer'));
+      return;
+    }
     // The step may have been cancelled while parsing; settle-once makes the
-    // calls below harmless then, but don't clear a newer run's step.
+    // call below harmless then, but don't clear a newer run's step.
     if (offerStepRef.current === step) offerStepRef.current = null;
-    if (!parsed) {
-      step.reject(new Error('Invalid offer format'));
-      return;
-    }
-    if (parsed.type !== 'offer') {
-      step.reject(new Error('Expected offer, got answer'));
-      return;
-    }
-    // Hash the container as it arrived, before anything downstream can
-    // reshape it; the answer's confirmation tag is bound to this exact value.
-    step.resolve({
-      payload: parsed,
-      transcriptHash: await computeOfferTranscriptHash(offerData),
-    });
+    step.resolve(read);
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doReceive is defined below and only invoked at call time; references stable refs/setState
@@ -312,115 +270,36 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     // either case this closure must stop and leave the shared refs alone.
     const abandoned = () => cancelledRef.current || runRef.current !== run;
     try {
-      // Show input for scanning/pasting offer
       setState({
         status: 'waiting_for_offer',
         message: "Scan or paste the sender's code",
       });
 
-      // Wait for offer to be submitted
-      const offerStep = createPendingStep<IncomingOffer>();
+      const offerStep = createPendingStep<ReadOffer>();
       offerStepRef.current = offerStep;
-      const { payload: offerPayload, transcriptHash: offerTranscriptHash } =
-        await offerStep.promise;
-
+      const offer: AcceptedOffer = acceptOffer(await offerStep.promise);
       if (abandoned()) return;
 
-      // Enforce TTL
-      if (
-        typeof offerPayload.createdAt !== 'number' ||
-        !Number.isFinite(offerPayload.createdAt)
-      ) {
-        setState({
-          status: 'error',
-          message: 'Offer missing timestamp. Ask sender to create a new one.',
-        });
-        return;
-      }
-      if (Date.now() - offerPayload.createdAt > TRANSFER_EXPIRATION_MS) {
-        setState({
-          status: 'error',
-          message: 'Offer expired. Ask sender to create a new one.',
-        });
-        return;
-      }
+      const anonymous = offer.fallback === 'anonymous';
+      const { fileName, fileSize, mimeType } = offer.metadata;
+      const fileMetadata = { fileName, fileSize, mimeType };
 
-      // Extract metadata from offer
-      const {
-        fileName,
-        fileSize,
-        contentEncoding,
-        mimeType,
-        salt: saltArray,
-        publicKey: senderPublicKeyArray,
-      } = offerPayload;
-
-      // Validate required fields
-      if (!saltArray) {
-        setState({
-          status: 'error',
-          message: 'Invalid offer: missing encryption salt',
-        });
-        return;
-      }
-
-      // Validate required metadata
-      if (
-        !fileName ||
-        !mimeType ||
-        typeof fileSize !== 'number' ||
-        !Number.isFinite(fileSize) ||
-        fileSize < 0 ||
-        (contentEncoding !== 'deflate-raw' && contentEncoding !== 'identity')
-      ) {
-        setState({
-          status: 'error',
-          message: 'Invalid offer: missing or invalid file metadata',
-        });
-        return;
-      }
-
-      // Security check: Enforce MAX_MESSAGE_SIZE
-      if (fileSize > MAX_MESSAGE_SIZE) {
-        setState({
-          status: 'error',
-          message: `Transfer rejected: Size (${formatFileSize(fileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
-        });
-        return;
-      }
-
-      if (abandoned()) return;
-
-      // Which fallback this offer asks for. The sender's switch, and the only
-      // thing that decides it: there is nothing to turn on here, and nothing
-      // to agree in advance. The UI has read the same flag off the same bytes
-      // already — that is what the bridge above was asked for — but this is
-      // the flag the flow acts on, taken from the offer it verified.
-      const anonymous = isAnonymousOffer(offerPayload);
       // The slow part, started the moment the offer is taken in rather than
       // once the direct route is known to be dead — a bootstrap is minutes,
       // and by then the sender is already waiting. It runs behind the direct
       // attempt and is closed with the transfer, used or not.
-      let torStatus = '';
-      // Installed by the fallback while it waits on the bootstrap: from then
-      // on the client's progress is the transfer's only progress, and a cold
-      // start is minutes — one frozen line for all of them reads as a hang.
-      let reportTorStatus: ((message: string) => void) | null = null;
+      const torProgress = createTorProgress();
       let transport: AnonymousSignalingTransport | null = null;
       if (anonymous) {
         transport = new AnonymousSignalingTransport({
           bridge,
           onStatus: (message) => {
-            torStatus = message;
             console.info('[tor] Code Exchange fallback:', message);
+            torProgress.push(message);
             if (abandoned()) return;
-            if (reportTorStatus) {
-              reportTorStatus(message);
-              return;
-            }
-            // Otherwise only ever an addition to the response page. Every
-            // other state this flow sets is written whole, so a stale line
-            // cannot outlive the step it belonged to.
+            // Only ever an addition to the response page. Every other state
+            // this flow sets is written whole, so a stale line cannot outlive
+            // the step it belonged to.
             setState((current) =>
               current.status === 'showing_answer'
                 ? { ...current, torStatus: message }
@@ -431,54 +310,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         transportRef.current = transport;
       }
 
-      // Generate our ECDH keypair and derive shared secret
       setState({ status: 'generating_answer', message: 'Generating keys...' });
-
-      const senderPublicKey = new Uint8Array(senderPublicKeyArray);
-      const salt = new Uint8Array(saltArray);
-
-      /**
-       * Everything one answer's ECDH key pair yields. The relay session is
-       * derived from the same shared secret, so a new key pair here is also a
-       * new relay session — which is how a response is given a control
-       * channel with no history behind it.
-       */
-      interface AnswerKeys {
-        publicKeyBytes: Uint8Array;
-        /** Chunk key for the direct path. */
-        key: CryptoKey;
-        /** Root of the relay session and of the confirmation tag. */
-        sharedSecretKey: CryptoKey;
-        /**
-         * Signs the answer once its fields are settled: proves to the sender
-         * that this answer, unaltered, came from a peer that read its offer
-         * and reached the same shared secret. Travels inside the answer code
-         * with nothing for either operator to read or type.
-         */
-        signAnswer: AnswerConfirmationSigner;
-      }
-
-      const deriveAnswerKeys = async (): Promise<AnswerKeys> => {
-        const ecdhKeyPair = await generateECDHKeyPair();
-        // Derive shared secret as non-extractable CryptoKey
-        const sharedSecretKey = await deriveSharedSecretKey(
-          ecdhKeyPair.privateKey,
-          senderPublicKey,
-        );
-        return {
-          publicKeyBytes: ecdhKeyPair.publicKeyBytes,
-          key: await deriveAESKeyFromSecretKey(sharedSecretKey, salt),
-          sharedSecretKey,
-          signAnswer: (answerTranscriptHash: string) =>
-            deriveAnswerConfirmation(sharedSecretKey, salt, {
-              offerTranscriptHash,
-              answerTranscriptHash,
-            }),
-        };
-      };
-
-      let keys = await deriveAnswerKeys();
-
+      let keys = await deriveAnswerKeys(offer);
       if (abandoned()) return;
 
       // ------------------------------------------------------------------
@@ -497,293 +330,19 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       // sender has to be handed the current one.
       // ------------------------------------------------------------------
 
-      const fileMetadata = {
-        fileName: fileName!,
-        fileSize: fileSize!,
-        mimeType: mimeType!,
-      };
-
-      // The relays the offer named, if any: the control relays of the
-      // file-relay fallback used only after the direct connection fails, and
-      // the only reason the simulation switch is offered at all. The answer
-      // itself is always hand-carried back to the sender.
-      const offerRelays = relaysFromOffer(offerPayload);
-
-      // Which relays carry the fallback's control channel, or null when this
-      // offer has no fallback at all. An anonymous offer names none because
-      // its pool is a constant both sides hold; everything below reads this
-      // rather than the offer's list, so the two paths differ only in what
-      // the control channel goes on to arrange.
-      const fallbackRelays: string[] | null = anonymous
-        ? [...ANONYMOUS_SIGNALING_RELAYS]
-        : offerRelays;
-
-      // The relays the simulation may hand the file to. Named relays are not
-      // enough on their own: past the relay size cap the fallback would
-      // refuse the file, so simulating a dead route would kill a working
-      // direct connection and leave both sides with nowhere to go.
-      const simulationRelays =
-        fallbackRelays && fileSize <= SLOW_TRANSPORT_MAX_BYTES
-          ? fallbackRelays
-          : null;
-
-      interface DirectAttempt {
-        receiver: TransferReceiver;
-        answerBinary: Uint8Array;
-        /** Resolves with the open data channel, rejects on a dead route. */
-        opened: Promise<DuplexChannel>;
-        /** Ends that wait now, with the reason the loop should act on. */
-        stop: (error: Error) => void;
-        /** Peer connection, receiver and sink, discarded together. */
-        dispose: () => void;
-      }
+      // The relays the simulation may hand the file to: the switch is offered
+      // only where the fallback could carry the file, since otherwise
+      // simulating a dead route would kill a working direct connection and
+      // leave both sides with nowhere to go.
+      const simulationRelays = eligibleFallbackRelays(offer);
 
       // The SDP of the most recent attempt, which the simulated response
       // reuses. Its ICE credentials belong to a closed connection by then,
       // which does not matter: nothing will ever answer it.
       let latestAnswerSDP: RTCSessionDescriptionInit | null = null;
 
-      const buildDirectAttempt = async (): Promise<DirectAttempt | null> => {
-        setState({
-          status: 'generating_answer',
-          message: 'Creating P2P answer...',
-        });
-
-        const iceCandidates: RTCIceCandidate[] = [];
-        let answerSDP: RTCSessionDescriptionInit | null = null;
-        let answerSDPResolver: (() => void) | null = null;
-        let dataChannelResolver: ((channel: DuplexChannel) => void) | null =
-          null;
-        // Set by the open callback, for a wait that begins after the fact.
-        let openChannel: DuplexChannel | null = null;
-        let connectionFailedRejecter: ((error: Error) => void) | null = null;
-        let stopWait: ((error: Error) => void) | null = null;
-        // A dead route can be known before the wait promise below exists
-        // (while ICE is still gathering, or the answer code is being built).
-        // With no rejecter to hand it to yet, the failure is held here so the
-        // wait fails fast instead of riding out the full timeout.
-        let earlyConnectionFailure: Error | null = null;
-
-        // Decrypted chunks land in the receive sink as they arrive. A cancel
-        // during its creation cannot see it through sinkRef yet, so discard it
-        // here instead of leaving its scratch storage orphaned.
-        const sink = await createAdaptiveAppendSink(fileSize);
-        if (abandoned()) {
-          void sink.discard();
-          return null;
-        }
-        sinkRef.current = sink;
-
-        // Streaming receiver: decrypts each chunk into the sink as it arrives
-        // (inflating deflated payloads in between) and resolves once DONE
-        // arrives and all chunks authenticate.
-        const receiver = createTransferReceiver(
-          keys.key,
-          contentEncoding,
-          sink,
-          {
-            estimatedBytes: fileSize,
-            onProgress: (current, total) =>
-              setState((s) => ({ ...s, progress: { current, total } })),
-          },
-        );
-
-        const rtc = new WebRTCConnection(
-          getWebRTCConfig(),
-          (signal) => {
-            // Collect signals (answer + candidates)
-            if (signal.type === 'answer') {
-              answerSDP = { type: 'answer', sdp: signal.sdp };
-              if (answerSDPResolver) {
-                answerSDPResolver();
-              }
-            } else if (signal.type === 'candidate' && signal.candidate) {
-              iceCandidates.push(new RTCIceCandidate(signal.candidate));
-            }
-          },
-          (channel) => {
-            // Data channel opened; the idle watchdog covers the receiving
-            // stage from here on.
-            channel.subscribe(receiver.onMessage);
-            receiver.start();
-            openChannel = channel;
-            if (dataChannelResolver) {
-              dataChannelResolver(channel);
-            }
-          },
-          (connectionState) => {
-            // A dead route is known long before the connection timeout; the
-            // relay fallback starts from it right away. If it fails before the
-            // wait promise is set up, record it so that promise can reject at
-            // once rather than waiting out the timeout.
-            if (
-              connectionState === 'failed' ||
-              connectionState === 'disconnected'
-            ) {
-              const error = new P2PConnectionError('Connection failed');
-              if (connectionFailedRejecter) connectionFailedRejecter(error);
-              else earlyConnectionFailure ??= error;
-            }
-          },
-        );
-
-        // Everything this attempt owns goes at once, so the next one starts
-        // from nothing. The sink is only reachable through sinkRef while this
-        // attempt is the current one.
-        const dispose = () => {
-          receiver.dispose();
-          rtc.close();
-          if (rtcRef.current === rtc) rtcRef.current = null;
-          if (sinkRef.current === sink) discardSink();
-          else void sink.discard();
-        };
-
-        if (abandoned()) {
-          dispose();
-          return null;
-        }
-        rtcRef.current = rtc;
-
-        // Handle offer signal
-        await rtc.handleSignal({ type: 'offer', sdp: offerPayload.sdp });
-
-        // Add ICE candidates from offer
-        for (const candidateStr of offerPayload.candidates) {
-          await rtc.handleSignal({
-            type: 'candidate',
-            candidate: {
-              candidate: candidateStr,
-              sdpMid: '0',
-              sdpMLineIndex: 0,
-            },
-          });
-        }
-
-        if (abandoned()) {
-          dispose();
-          return null;
-        }
-
-        // Wait for answer SDP to be generated
-        setState({
-          status: 'generating_answer',
-          message: 'Generating answer...',
-        });
-
-        await new Promise<void>((resolve) => {
-          if (answerSDP) {
-            resolve();
-          } else {
-            answerSDPResolver = resolve;
-            // Timeout after 10 seconds
-            setTimeout(resolve, 10000);
-          }
-        });
-
-        if (abandoned()) {
-          dispose();
-          return null;
-        }
-
-        // Wait for ICE gathering to complete
-        setState({
-          status: 'generating_answer',
-          message: 'Gathering network info...',
-        });
-        const iceGatheringComplete = await rtc.waitForIceGatheringComplete(
-          ICE_GATHER_TIMEOUT_MS,
-        );
-        if (!iceGatheringComplete) {
-          console.warn(
-            'ICE gathering timed out while generating answer; continuing with available candidates',
-          );
-        }
-        setState({
-          status: 'generating_answer',
-          message: iceGatheringComplete
-            ? 'Preparing response code...'
-            : 'Network probe timed out. Preparing response code with available routes...',
-        });
-
-        if (abandoned()) {
-          dispose();
-          return null;
-        }
-
-        // Validate answerSDP is available
-        if (!answerSDP) {
-          dispose();
-          throw new Error(
-            'Failed to generate answer SDP: Answer was not created by WebRTC connection',
-          );
-        }
-        latestAnswerSDP = answerSDP;
-
-        // Generate answer with our public key
-        const answerBinary = await generateMutualAnswerBinary(
-          answerSDP,
-          iceCandidates,
-          keys.publicKeyBytes,
-          keys.signAnswer,
-        );
-
-        if (abandoned()) {
-          dispose();
-          return null;
-        }
-
-        // Wait for the data channel to open. When no direct route exists and
-        // the offer named relays, the file comes through them instead;
-        // without relays, or past the relay size cap, the failure stands.
-        const opened = new Promise<DuplexChannel>((resolve, reject) => {
-          // A failure that landed before this promise existed is not lost.
-          if (earlyConnectionFailure) {
-            reject(earlyConnectionFailure);
-            return;
-          }
-          // The sender caps its own direct attempt at 20s once a fallback is
-          // available, and its clock starts when it takes the response in.
-          // This side has no such clock: the response is still on screen
-          // being handed over by a human, and nothing can connect until that
-          // is done. Capping the wait here would give up on a route that was
-          // never tried, and publishing this side's `hello` would then talk
-          // the sender out of the direct route too. A route that really is
-          // dead reports itself through `connectionState` long before the
-          // backstop below.
-          const timeout = setTimeout(() => {
-            reject(new P2PConnectionError('Connection timeout'));
-          }, CODE_CONNECTION_TIMEOUT_MS);
-
-          dataChannelResolver = (channel) => {
-            clearTimeout(timeout);
-            resolve(channel);
-          };
-          connectionFailedRejecter = (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          };
-          stopWait = (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          };
-
-          // Check if already open
-          if (openChannel) {
-            clearTimeout(timeout);
-            resolve(openChannel);
-          }
-        });
-        // The caller awaits this a tick later; keep a rejection that already
-        // landed from being reported as unhandled in between.
-        void opened.catch(() => {});
-
-        return {
-          receiver,
-          answerBinary,
-          opened,
-          stop: (error) => stopWait?.(error),
-          dispose,
-        };
+      const report = (update: Parameters<typeof setState>[0]) => {
+        if (!abandoned()) setState(update);
       };
 
       /**
@@ -793,264 +352,60 @@ export function useCodeReceive(): UseCodeReceiveReturn {
        * strand both sides. Nothing has begun either, so a progress bar would
        * claim otherwise.
        */
-      const holdResponse = (
-        held: HeldResponse | null,
-      ): (TransferState & CodeReceiveState) | null =>
-        held
-          ? {
-              status: 'showing_answer',
-              message: held.simulated
-                ? SIMULATED_HOLDING_MESSAGE
-                : `${anonymous ? TOR_FALLBACK_MESSAGE : RELAY_FALLBACK_MESSAGE}. ${HOLDING_SUFFIX}`,
-              answerData: held.answerData,
-              contentType: 'file',
-              fileMetadata,
-              // The switch is only offered while there is still a direct
-              // route to drop; one that died on its own leaves nothing to
-              // simulate.
-              relayFallbackAvailable: held.simulated,
-              simulateNoDirect: held.simulated,
-              directRouteDead: !held.simulated,
-              anonymousFallback: anonymous,
-            }
-          : null;
+      const holdResponse = (held: HeldResponse) => (torStatus: string) =>
+        report({
+          status: 'showing_answer',
+          message: held.simulated
+            ? SIMULATED_HOLDING_MESSAGE
+            : `${fallbackMessage(offer)}. ${HOLDING_SUFFIX}`,
+          answerData: held.answerData,
+          contentType: 'file',
+          fileMetadata,
+          // The switch is only offered while there is still a direct route to
+          // drop; one that died on its own leaves nothing to simulate.
+          relayFallbackAvailable: held.simulated,
+          simulateNoDirect: held.simulated,
+          directRouteDead: !held.simulated,
+          anonymousFallback: anonymous,
+          ...(torStatus ? { torStatus } : {}),
+        });
 
       /**
-       * The relay data path. `held` is set while the response is still on
-       * screen — a simulated stint, or a route that died before the sender
-       * took the code in. The fetch then waits behind the response until the
-       * sender turns up on the control channel, rather than announcing a
-       * transfer that has not begun.
-       *
-       * Returns 'switched' when the simulation switch went back off while the
-       * fetch was still waiting; the caller rebuilds the direct route.
+       * The fallback, held behind the response page until the sender turns
+       * up on the control channel. Returns 'switched' when the simulation
+       * switch went back off while it was still waiting.
        */
-      const runRelayTransfer = async (
-        relays: string[],
-        held: HeldResponse | null,
+      const runFallback = async (
+        held: HeldResponse,
         switchedBack: () => boolean,
       ): Promise<'completed' | 'switched'> => {
-        const pool = createTransferPool();
-        relayPoolRef.current = pool;
-        let lastStats: TransferState['stats'];
-        const relayState = {
-          contentType: 'file' as const,
-          fileMetadata,
-          currentRelays: relays,
-        };
-        const holding = holdResponse(held);
-        setState(
-          holding ?? {
-            status: 'fetching',
-            message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
-            progress: { current: 0, total: fileSize },
-            ...relayState,
+        const outcome = await receiveOverFallback({
+          offer,
+          keys,
+          transport,
+          torProgress,
+          hold: holdResponse(held),
+          poolHolder: relayPoolRef,
+          switchedBack,
+          isCancelled: abandoned,
+          report,
+        });
+        if (outcome === 'switched') return 'switched';
+        if (!outcome || abandoned()) return 'completed';
+        setReceivedContent(outcome.content);
+        setState({
+          status: 'complete',
+          message: outcome.message,
+          contentType: 'file',
+          fileMetadata: {
+            fileName: outcome.content.fileName,
+            fileSize: outcome.content.fileSize,
+            mimeType: outcome.content.mimeType,
           },
-        );
-        let data: Uint8Array;
-        try {
-          const session = await deriveRelaySession(keys.sharedSecretKey, salt);
-          data = await receiveFileLive(session, relays, {
-            pool,
-            isCancelled: () => abandoned() || switchedBack(),
-            since: Math.floor(offerPayload.createdAt / 1000),
-            expiresAt: Math.floor(
-              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
-            ),
-            // While the response is still on screen the sender has nothing
-            // to answer with yet, so its silence must not time the fetch out
-            // from under the code that is being handed over.
-            awaitingHandover: held !== null,
-            onProgress: (p) => {
-              if (abandoned() || switchedBack()) return;
-              lastStats = p.stats;
-              // Nothing from the sender yet on a simulated stint: hold the
-              // response page instead of showing a progress bar for a
-              // transfer the sender has not started.
-              if (holding && !p.manifest) {
-                setState(holding);
-                return;
-              }
-              const total = p.manifest?.fileSize ?? fileSize;
-              const chunkBytes = Math.ceil(total / Math.max(p.chunksTotal, 1));
-              setState({
-                status: 'fetching',
-                message: !p.manifest
-                  ? `${RELAY_FALLBACK_MESSAGE}. Waiting for the sender...`
-                  : p.chunksDone === p.chunksTotal
-                    ? 'All pieces received — verifying...'
-                    : `Receiving pieces through relays... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
-                progress: {
-                  current: Math.min(p.chunksDone * chunkBytes, total),
-                  total,
-                },
-                ...relayState,
-                stats: p.stats,
-              });
-            },
-          });
-        } catch (relayError) {
-          if (relayError instanceof NostrFileCancelledError) {
-            return switchedBack() ? 'switched' : 'completed';
-          }
-          throw relayError;
-        } finally {
-          if (relayPoolRef.current === pool) relayPoolRef.current = null;
-          pool.destroy();
-        }
-        if (abandoned()) return 'completed';
-        setReceivedContent({
-          contentType: 'file',
-          data: new Blob([data as BlobPart], {
-            type: mimeType || 'application/octet-stream',
-          }),
-          fileName,
-          fileSize: data.length,
-          mimeType,
-        });
-        setState({
-          status: 'complete',
-          message: 'File received through Nostr relays!',
-          contentType: 'file',
-          fileMetadata: { fileName, fileSize: data.length, mimeType },
-          stats: lastStats,
+          stats: outcome.stats,
         });
         return 'completed';
       };
-
-      /**
-       * The anonymous relay data path: the same session, an encrypted control
-       * channel on the onion relay pool, and the file over the sender's onion
-       * service rather than off storage relays.
-       *
-       * `held` holds the response page for the same reason it does on the
-       * clearnet path — the sender has not taken the code in yet, so until it
-       * announces an address there is nothing to report but a page that is
-       * waiting.
-       */
-      const runAnonymousTransfer = async (
-        transport: AnonymousSignalingTransport,
-        relays: string[],
-        held: HeldResponse | null,
-        switchedBack: () => boolean,
-      ): Promise<'completed' | 'switched'> => {
-        const pool = createTransferPool({
-          websocketImplementation: transport.websocketImplementation,
-          connectionTimeoutMs: ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
-        });
-        relayPoolRef.current = pool;
-        const relayState = {
-          contentType: 'file' as const,
-          fileMetadata,
-          currentRelays: relays,
-        };
-        const holding = holdResponse(held);
-        // Set once the sender has announced its service, which is the first
-        // moment anything is happening that the response page could report.
-        let senderPresent = holding === null;
-        const report = (message: string) => {
-          if (abandoned() || switchedBack()) return;
-          if (!senderPresent && holding) {
-            setState({ ...holding, torStatus });
-            return;
-          }
-          setState({ status: 'fetching', message, ...relayState });
-        };
-
-        report(
-          `${TOR_FALLBACK_MESSAGE}. ${torStatus || 'Starting the Tor client...'}`,
-        );
-        const session = await deriveRelaySession(keys.sharedSecretKey, salt);
-        let payload: Blob;
-        let received: { fileName: string; fileSize: number; mimeType: string };
-        try {
-          reportTorStatus = (message) =>
-            report(`${TOR_FALLBACK_MESSAGE}. ${message}`);
-          let client: Awaited<ReturnType<typeof transport.torClient>>;
-          try {
-            client = await transport.torClient();
-          } finally {
-            reportTorStatus = null;
-          }
-          if (switchedBack()) return 'switched';
-          if (abandoned()) return 'completed';
-          const receipt = await receiveOverAnonymousRelay({
-            client,
-            pool,
-            relays,
-            session,
-            since: Math.floor(offerPayload.createdAt / 1000),
-            expiresAt: Math.floor(
-              (offerPayload.createdAt + TRANSFER_EXPIRATION_MS) / 1000,
-            ),
-            password: await deriveOnionPassword(keys.sharedSecretKey, salt),
-            expected: {
-              contentType: 'file',
-              fileName,
-              fileSize,
-              contentEncoding,
-              mimeType,
-            } satisfies TransferMetadata,
-            isCancelled: () => abandoned() || switchedBack(),
-            onAnnounced: () => {
-              senderPresent = true;
-            },
-            onStatus: (message) =>
-              report(`${TOR_FALLBACK_MESSAGE}. ${message}`),
-            onProgress: (current, total) => {
-              if (abandoned() || switchedBack()) return;
-              setState({
-                status: 'fetching',
-                message: 'Receiving the file over Tor...',
-                progress: { current, total },
-                ...relayState,
-              });
-            },
-          });
-          payload = receipt.payload;
-          received = {
-            fileName: receipt.metadata.fileName,
-            fileSize: payload.size,
-            mimeType: receipt.metadata.mimeType,
-          };
-        } catch (error) {
-          if (switchedBack()) return 'switched';
-          if (abandoned()) return 'completed';
-          throw error;
-        } finally {
-          // Nothing downstream took ownership: the control key was derived
-          // from these, and the content key came out of the handshake.
-          wipeBufferSource(session.keyBytes);
-          if (relayPoolRef.current === pool) relayPoolRef.current = null;
-          pool.destroy();
-        }
-
-        if (abandoned()) return 'completed';
-        setReceivedContent({
-          contentType: 'file',
-          data: payload,
-          fileName: received.fileName,
-          fileSize: received.fileSize,
-          mimeType: received.mimeType,
-        });
-        setState({
-          status: 'complete',
-          message: 'File received through Tor!',
-          contentType: 'file',
-          fileMetadata: received,
-        });
-        return 'completed';
-      };
-
-      /** Whichever fallback this offer asked for. */
-      const runFallbackTransfer = (
-        relays: string[],
-        held: HeldResponse | null,
-        switchedBack: () => boolean,
-      ): Promise<'completed' | 'switched'> =>
-        transport
-          ? runAnonymousTransfer(transport, relays, held, switchedBack)
-          : runRelayTransfer(relays, held, switchedBack);
 
       let simulate = false;
       let connected: { attempt: DirectAttempt; channel: DuplexChannel } | null =
@@ -1060,9 +415,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         if (abandoned()) return;
 
         // The switch, armed for this stint only. Flipping it ends the stint
-        // in progress; the loop then builds the other kind. It is offered at
-        // all only where the relay fallback could carry the file, since
-        // otherwise a dead route just fails the transfer.
+        // in progress; the loop then builds the other kind.
         let switchedTo: boolean | null = null;
         let endStint: ((error: Error) => void) | null = null;
         simulateNoDirectRef.current = simulate;
@@ -1075,8 +428,25 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           : null;
 
         if (!simulate) {
-          const attempt = await buildDirectAttempt();
+          // This side has no short clock: the response is still on screen
+          // being handed over by a human, and nothing can connect until that
+          // is done. Capping the wait would give up on a route that was never
+          // tried, and this side's `hello` would then talk the sender out of
+          // the direct route too. A route that really is dead reports itself
+          // through its connection state long before the backstop.
+          const attempt = await buildDirectAttempt({
+            offer,
+            keys,
+            sinkHolder: sinkRef,
+            rtcHolder: rtcRef,
+            connectionTimeoutMs: CODE_CONNECTION_TIMEOUT_MS,
+            isCancelled: abandoned,
+            report,
+            onProgress: (current, total) =>
+              setState((s) => ({ ...s, progress: { current, total } })),
+          });
           if (!attempt) return;
+          latestAnswerSDP = attempt.answerSDP;
           if (switchedTo !== null) {
             attempt.dispose();
             simulate = switchedTo;
@@ -1093,7 +463,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             relayFallbackAvailable: simulationRelays !== null,
             simulateNoDirect: false,
             anonymousFallback: anonymous,
-            torStatus,
+            torStatus: torProgress.latest(),
           });
           try {
             channel = await attempt.opened;
@@ -1105,31 +475,26 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             }
             if (
               !(error instanceof P2PConnectionError) ||
-              !fallbackRelays ||
+              !offer.fallbackRelays ||
               abandoned()
             ) {
               throw error;
             }
-            if (fileSize > SLOW_TRANSPORT_MAX_BYTES) {
-              throw new P2PConnectionError(
-                `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through ${anonymous ? 'Tor' : 'Nostr'} either.`,
-              );
-            }
+            if (!simulationRelays) throw unrelayableError(offer, error);
             // The direct route died on its own; there is nothing left for the
             // switch to simulate. The response is still on screen and still
             // the only way this transfer starts — the sender cannot reach the
             // fallback without it — so it is held there until the sender
-            // turns up on the control channel rather than being replaced by
-            // the fallback's own progress.
+            // turns up on the control channel.
             switchRef.current = null;
-            await runFallbackTransfer(
-              fallbackRelays,
+            await runFallback(
               { answerData: attempt.answerBinary, simulated: false },
               () => false,
             );
             return;
           }
           switchRef.current = null;
+          channelRef.current = channel;
           connected = { attempt, channel };
           break;
         }
@@ -1150,8 +515,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           simulate = switchedTo;
           continue;
         }
-        const outcome = await runFallbackTransfer(
-          simulationRelays,
+        const outcome = await runFallback(
           { answerData: answerBinary, simulated: true },
           () => switchedTo !== null,
         );
@@ -1162,7 +526,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           // hello out of the backlog and give up on the direct route before
           // it had a chance — so the next attempt starts from new key
           // material, which puts it in a relay session of its own.
-          keys = await deriveAnswerKeys();
+          keys = await deriveAnswerKeys(offer);
           simulate = false;
           continue;
         }
@@ -1171,8 +535,6 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
       switchRef.current = null;
       if (!connected || abandoned()) return;
-      const { attempt, channel } = connected;
-      const { receiver } = attempt;
 
       setState({
         status: 'receiving',
@@ -1183,59 +545,25 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         progress: { current: 0, total: fileSize },
       });
 
-      // Wait for the streaming receiver to finish, racing cancellation. The
-      // receiver decrypts, authenticates and writes chunks to the sink as they
-      // arrive and resolves with the sealed payload. A stalled stream is
-      // aborted by the receiver's own idle watchdog (see
-      // createTransferReceiver).
-      const receivedData = await new Promise<Blob>((resolve, reject) => {
-        const checkInterval = setInterval(() => {
-          if (abandoned()) {
-            clearInterval(checkInterval);
-            receiver.dispose();
-            reject(new Error('Cancelled'));
-          }
-        }, 500);
-
-        receiver.done
-          .then((data) => {
-            clearInterval(checkInterval);
-            resolve(data);
-          })
-          .catch((err) => {
-            clearInterval(checkInterval);
-            reject(err);
-          });
+      const payload = await finishDirectReceive({
+        attempt: connected.attempt,
+        rtcHolder: rtcRef,
+        isCancelled: abandoned,
       });
+      if (!payload || abandoned()) return;
 
-      if (abandoned()) return;
-
-      // Acknowledge only after all chunks authenticate and reassemble. The
-      // file is whole either way, so a lost ACK is the sender's problem to
-      // report, not a reason to discard what arrived.
-      try {
-        await channel.sendText(ACK);
-      } catch (error) {
-        console.error('ACK send error', error);
-      }
-
-      // Set received content
       setReceivedContent({
         contentType: 'file',
-        data: receivedData,
-        fileName: fileName!,
-        fileSize: receivedData.size,
-        mimeType: mimeType!,
+        data: payload,
+        fileName,
+        fileSize: payload.size,
+        mimeType,
       });
       setState({
         status: 'complete',
         message: 'File received (P2P)!',
         contentType: 'file',
-        fileMetadata: {
-          fileName: fileName!,
-          fileSize: receivedData.size,
-          mimeType: mimeType!,
-        },
+        fileMetadata: { fileName, fileSize: payload.size, mimeType },
       });
     } catch (error) {
       // Nothing downloadable survives a failed transfer; drop its storage
@@ -1260,6 +588,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         const transport = transportRef.current;
         transportRef.current = null;
         transport?.close();
+        channelRef.current = null;
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;

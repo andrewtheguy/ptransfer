@@ -209,6 +209,42 @@ describe('createDataChannelDuplex', () => {
     expect(seen).toEqual([]);
   });
 
+  it('sends at once ahead of sends waiting on backpressure', async () => {
+    const { dcA, a, b } = duplexPair(4);
+    const received = collect(b, 3);
+
+    dcA.hold();
+    const first = a.sendBinary(new Uint8Array(8));
+    const queued = a.sendBinary(new Uint8Array(8));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(a.sendNow('urgent')).toBe(true);
+    dcA.release();
+    await Promise.all([first, queued]);
+
+    expect(
+      (await received).map((m) => (typeof m === 'string' ? m : 'bin')),
+    ).toEqual(['bin', 'urgent', 'bin']);
+  });
+
+  it('reports a send-now on a closed or failed channel as not sent', () => {
+    const closed = duplexPair();
+    closed.a.close();
+    expect(closed.a.sendNow('late')).toBe(false);
+
+    const failed = duplexPair();
+    failed.dcA.fail();
+    expect(failed.a.sendNow('late')).toBe(false);
+    expect(failed.dcA.sent).toHaveLength(0);
+  });
+
+  it('tells a late onEnd listener how the channel ended', async () => {
+    const { dcB, b } = duplexPair();
+    dcB.fail();
+    const heard: string[] = [];
+    b.onEnd((reason) => heard.push(reason));
+    expect(heard).toEqual(['error']);
+  });
+
   it('fails sends once the channel is closed', async () => {
     const { a } = duplexPair();
     a.close();

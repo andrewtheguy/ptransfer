@@ -4,9 +4,9 @@
  * Once a WebRTC data channel opens, neither side is the sender or the
  * receiver of the channel itself: both may send and both may listen, at any
  * time. The file transfer (`lib/p2p-transfer.ts`) is one client of it —
- * chunks and `DONE` one way, `ACK` the other — and anything else the two
- * peers need to say to each other once connected rides the same channel
- * beside it.
+ * chunks and control messages one way, acknowledgments and the receiver's
+ * verdict the other — and anything else the two peers need to say to each
+ * other once connected rides the same channel beside it.
  *
  * Messages keep the text/binary distinction the data channel gives natively,
  * and arrive reliably and in order: whoever creates the underlying channel
@@ -44,6 +44,13 @@ export interface DuplexChannel {
    */
   sendText: (text: string) => Promise<void>;
   /**
+   * Send one text message at once, ahead of anything queued behind
+   * backpressure, and report whether it went out. Only for a message after
+   * which nothing else matters — a transfer's `abort` on the way out — since
+   * it may overtake sends made before it.
+   */
+  sendNow: (text: string) => boolean;
+  /**
    * Hand every incoming message to `listener` until the returned function is
    * called. Every current subscriber sees every message.
    */
@@ -65,9 +72,17 @@ export interface DuplexChannel {
     purpose: string,
     clockStart?: Promise<unknown>,
   ) => Promise<ChannelMessage>;
+  /**
+   * Call `listener` once if the channel closes or errors, until the returned
+   * function is called. A channel that has already ended calls it at once.
+   */
+  onEnd: (listener: (reason: ChannelEndReason) => void) => () => void;
   /** Close the channel. Pending waits reject; later sends fail. */
   close: () => void;
 }
+
+/** Why a channel can no longer carry messages. */
+export type ChannelEndReason = 'closed' | 'error';
 
 /**
  * Send-buffer ceiling. A send waits while the data channel's buffered amount
@@ -96,8 +111,10 @@ export function createDataChannelDuplex(
   dc.bufferedAmountLowThreshold = backpressureThreshold;
 
   const listeners = new Set<ChannelListener>();
-  /** Pending waits, told when the channel can no longer answer them. */
-  const enders = new Set<(reason: 'closed' | 'error') => void>();
+  /** Told once when the channel can no longer carry messages. */
+  const enders = new Set<(reason: ChannelEndReason) => void>();
+  /** Set once the channel has ended, so a late `onEnd` still hears it. */
+  let endedWith: ChannelEndReason | null = null;
   let closedLocally = false;
   // Set by an 'error' event. A browser may still report the channel open for
   // a moment after one, but nothing sent then can be relied on to arrive.
@@ -123,8 +140,11 @@ export function createDataChannelDuplex(
       }
     }
   });
-  const end = (reason: 'closed' | 'error') => {
+  const end = (reason: ChannelEndReason) => {
+    if (endedWith !== null) return;
+    endedWith = reason;
     for (const ender of Array.from(enders)) ender(reason);
+    enders.clear();
   };
   dc.addEventListener('close', () => end('closed'));
   dc.addEventListener('error', (event) => {
@@ -181,6 +201,16 @@ export function createDataChannelDuplex(
     return sent;
   };
 
+  const sendNow = (text: string): boolean => {
+    if (!isOpen()) return false;
+    try {
+      dc.send(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const subscribe = (listener: ChannelListener) => {
     listeners.add(listener);
     return () => {
@@ -221,7 +251,7 @@ export function createDataChannelDuplex(
       });
       // A close or error means the awaited message can never arrive, so fail
       // at once instead of waiting out the timeout.
-      const onEnd = (reason: 'closed' | 'error') => {
+      const onEnd = (reason: ChannelEndReason) => {
         settle(() =>
           reject(
             new Error(
@@ -248,6 +278,17 @@ export function createDataChannelDuplex(
       }
     });
 
+  const onEnd: DuplexChannel['onEnd'] = (listener) => {
+    if (endedWith !== null) {
+      listener(endedWith);
+      return () => {};
+    }
+    enders.add(listener);
+    return () => {
+      enders.delete(listener);
+    };
+  };
+
   const close = () => {
     if (closedLocally) return;
     closedLocally = true;
@@ -265,8 +306,10 @@ export function createDataChannelDuplex(
   return {
     sendBinary: enqueue,
     sendText: enqueue,
+    sendNow,
     subscribe,
     waitFor,
+    onEnd,
     close,
   };
 }

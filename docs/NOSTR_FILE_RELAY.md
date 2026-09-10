@@ -1,8 +1,12 @@
 # Nostr File Relay Architecture
 
 The Nostr file relay is the **ordinary Code Exchange data-path fallback** — the stand-in
-for TURN. The sender can select the experimental Tor-backed fallback instead; that variant
-is documented in [CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental).
+for TURN. It serves PIN Exchange too, which carries a Code Exchange offer and answer over
+its sealed handshake ([INTEROP_PROTOCOL.md §4.8](INTEROP_PROTOCOL.md#48-carried-codes)):
+whatever carried the offer, a `relays` list in it selects this fallback. The sender can
+select the experimental Tor-backed fallback instead; that variant is documented in
+[CODE_EXCHANGE.md](CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental), and it is
+the one an anonymous PIN's offer always asks for.
 Within ordinary Code Exchange, when a direct WebRTC connection between the two devices
 cannot be established, an eligible encrypted file (up to 100 MiB) automatically attempts
 delivery through public Nostr relays. There is no separate action after connection failure,
@@ -466,11 +470,13 @@ sequenceDiagram
 | `src/lib/nostr-file/upload-live.ts`, `download-live.ts`, `control.ts` | Transfer engines + control channel (manifest is the first control message) |
 | `src/lib/nostr-file/fetch.ts` | Relay chunk fetching (expiry check, filter batching) |
 | `src/lib/nostr-file/sync.ts` | `Deferred`/`Signal` async helpers |
-| `src/hooks/use-code-send.ts`, `use-code-receive.ts` | Code Exchange hooks; each starts the relay engine when its direct WebRTC connection fails |
-| `src/hooks/nostr-relay-source.ts` | Source materialization / progress estimation |
+| `src/lib/code-exchange/send.ts`, `receive.ts` | The Code Exchange session both exchange methods run; each side starts the relay engine when its direct WebRTC connection fails |
+| `src/lib/code-exchange/relay-source.ts` | Source materialization / progress estimation |
 
-The relay engine is started from the Code Exchange hooks the moment a direct connection
-fails (see `use-code-send.ts` / `use-code-receive.ts`). Tests are colocated
+The relay engine is started by the Code Exchange session the moment a direct connection
+fails (see `src/lib/code-exchange/`), whether the Code Exchange or the PIN Exchange hooks
+are driving it. A PIN Exchange sender starts its relay preparation when the transfer
+starts, behind the PIN on screen, rather than when an offer is built. Tests are colocated
 (`src/lib/nostr-file/*.test.ts`) and run against the injectable in-memory relay network in
 `mock-pool.ts`. They are split into two vitest projects. `bun run test` runs the `unit`
 project only (~6s). `live.test.ts` is the `integration` project: it drives whole transfers

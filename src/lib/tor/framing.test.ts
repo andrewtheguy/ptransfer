@@ -13,7 +13,7 @@ describe('TorFramedStream', () => {
     const [a, b] = pair();
 
     await a.sendBinary(new Uint8Array([0, 1, 99, 104, 117, 110, 107]));
-    await a.sendText('DONE:1:2');
+    await a.sendText('{"t":"end","chunks":1,"bytes":2}');
 
     const binary = await b.receive();
     expect(binary?.isString).toBe(false);
@@ -23,7 +23,9 @@ describe('TorFramedStream', () => {
 
     const text = await b.receive();
     expect(text?.isString).toBe(true);
-    expect(new TextDecoder().decode(text?.data)).toBe('DONE:1:2');
+    expect(new TextDecoder().decode(text?.data)).toBe(
+      '{"t":"end","chunks":1,"bytes":2}',
+    );
   });
 
   it('reassembles a frame split across reads', async () => {
@@ -113,27 +115,6 @@ describe('TorFramedStream', () => {
     await expect(b.receiveText()).rejects.toThrow(/closed the connection/);
   });
 
-  it('returns from waitForClose when the peer hangs up', async () => {
-    const [a, b] = pair();
-    await a.sendText('ACK');
-
-    const waiting = a.waitForClose(5_000);
-    expect(await b.receive()).not.toBeNull();
-    await b.close();
-
-    // The close is the receipt for `ACK`, so it is the success case.
-    await expect(waiting).resolves.toBeUndefined();
-  });
-
-  it('fails waitForClose when the peer never hangs up', async () => {
-    // A peer holding the stream open past the linger timeout never
-    // acknowledged the last frame, and saying otherwise would report a
-    // delivery that may not have happened.
-    const [a] = pair();
-    await a.sendText('ACK');
-    await expect(a.waitForClose(20)).rejects.toThrow(/did not close/);
-  });
-
   it('treats a read failure as the end of the conversation', async () => {
     // A peer that has already torn its circuit down answers a read with an
     // error rather than an end of stream; over Tor that is the same event.
@@ -149,8 +130,7 @@ describe('TorFramedStream', () => {
     };
     const framed = new TorFramedStream(stream);
 
-    // The close is still the receipt for the last frame sent.
-    await expect(framed.waitForClose(5_000)).resolves.toBeUndefined();
+    expect(await framed.receive()).toBeNull();
     expect(await framed.receive()).toBeNull();
     // The stream is not read again once it has ended.
     expect(reads).toBe(1);

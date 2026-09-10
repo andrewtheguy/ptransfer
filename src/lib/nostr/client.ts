@@ -5,10 +5,9 @@ import {
   verifyEvent,
 } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
-import type { TorBridge } from '@/lib/tor/client';
 import {
   ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
-  AnonymousSignalingTransport,
+  type AnonymousSignalingTransport,
 } from './anonymous-transport';
 import { normalizeOnionRelayUrl, normalizeRelayUrl } from './relays';
 
@@ -49,20 +48,16 @@ class SignalingPool extends AbstractSimplePool {
   }
 }
 
-/** Anonymous signaling: carry this client's relay sockets through Tor. */
-export interface AnonymousSignalingOptions {
-  /** Which Snowflake bridge this tab reaches the Tor network through. */
-  bridge: TorBridge;
-  /** Progress while Tor bootstraps, which is the slow part of a cold start. */
-  onStatus?: (message: string) => void;
-}
-
 export interface NostrClientOptions {
   /**
    * Present when this client's relays are onion services reached through the
    * browser Tor client. Absent for ordinary clearnet signaling.
+   *
+   * The transport stays the caller's: the same Tor client also carries a
+   * PIN Exchange transfer's Tor fallback when the direct route fails, and two
+   * clients would mean two bootstraps. Closing this client leaves it running.
    */
-  anonymous?: AnonymousSignalingOptions;
+  anonymousTransport?: AnonymousSignalingTransport;
 }
 
 export class NostrClient {
@@ -70,7 +65,7 @@ export class NostrClient {
   private relays: string[];
   private subscriptions: Map<string, { close: () => void }>;
   private connectionReady: Promise<void>;
-  private anonymousTransport: AnonymousSignalingTransport | null;
+  private readonly anonymousTransport: AnonymousSignalingTransport | null;
   /**
    * The two modes accept disjoint relay URLs: ordinary signaling only clearnet
    * `wss://`, anonymous signaling only `ws://` onion services. A URL from the
@@ -81,10 +76,8 @@ export class NostrClient {
   private readonly normalizeRelay: (raw: string) => string | null;
 
   constructor(relays: string[], options: NostrClientOptions = {}) {
-    const anonymous = options.anonymous;
-    this.anonymousTransport = anonymous
-      ? new AnonymousSignalingTransport(anonymous)
-      : null;
+    const anonymous = options.anonymousTransport;
+    this.anonymousTransport = anonymous ?? null;
     this.normalizeRelay = anonymous
       ? normalizeOnionRelayUrl
       : normalizeRelayUrl;
@@ -259,8 +252,6 @@ export class NostrClient {
     }
     this.subscriptions.clear();
     this.pool.close(this.relays);
-    this.anonymousTransport?.close();
-    this.anonymousTransport = null;
   }
 
   /**

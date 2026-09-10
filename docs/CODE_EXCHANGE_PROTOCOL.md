@@ -5,6 +5,12 @@ a **code**; a person carries it to the receiving side, which answers with a
 **response code** that the same person carries back. No relay sees either one,
 and the sender's own act of taking the response in is what admits a receiver.
 
+The same two codes also run inside PIN Exchange, which carries them over its
+SPAKE2-sealed Nostr channel instead of a person's hand
+([INTEROP_PROTOCOL.md §4.8](./INTEROP_PROTOCOL.md#48-carried-codes)). Everything
+this document specifies holds there unchanged; only the carriage differs, and
+§6 says what that changes.
+
 This document is the **normative specification** for that mode, and it is what
 the two implementations agree with each other on:
 
@@ -21,9 +27,9 @@ This is a cross-implementation interoperability contract, versioned separately
 from [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md), whose
 `INTEROP_PROTOCOL_VERSION` covers PIN Exchange and the shared data-channel
 layer. Changes here do not move that version. What Code Exchange **does** share
-with it is §7 of that document — the 128 KiB chunk framing, `DONE`, and `ACK`
-that every direct transfer runs once a data channel is open — and that part is
-governed there, not here.
+with it is §7 of that document — the 128 KiB chunk framing, flow control,
+completion, and abort that every direct transfer runs once a data channel is
+open — and that part is governed there, not here.
 
 ## Changing this document
 
@@ -148,7 +154,7 @@ Rules both sides enforce:
   file is `deflate-raw`, a generated ZIP is `identity`. Any other value is
   rejected.
 - `fileSize` is a progress hint, never a bound. The authoritative wire count is
-  `DONE`.
+  the transfer's `end`.
 
 **TTL.** `TRANSFER_EXPIRATION_MS` is 3 600 000 (1 hour). The receiver refuses
 an offer older than that. The sender enforces the same bound against **its own
@@ -170,8 +176,10 @@ below, with the **offer's `salt`** as the HKDF-SHA256 salt.
 | Onion password | `ptransfer-code-exchange:v1:onion-password` | 32 bytes → §5.3 |
 
 ECDH by itself authenticates nobody. What authenticates this exchange is the
-path the offer took: a code handed over by a person, and a response the sender
-took in itself.
+path the codes took: a code handed over by a person, and a response the sender
+took in itself — or, when PIN Exchange carries them, the PAKE session they are
+sealed under, which the sender does not seal anything under until its
+operator has typed the receiver's confirmation code.
 
 ### 3.1 Transcript digests
 
@@ -218,21 +226,22 @@ outright rather than surfacing later as a connection that never opens.
 
 It does not raise the bound the mode already has: whoever captured the offer
 can produce a valid response of their own. The sender's own scan or paste is
-what selects the recipient, exactly as typing the short code does in PIN
-Exchange.
+what selects the recipient, exactly as typing the confirmation code does when
+PIN Exchange carries the codes.
 
 ## 4. The direct transfer
 
 The sender creates the data channel; the receiver answers. Both then run the
 shared transfer layer of
-[INTEROP_PROTOCOL.md §7](./INTEROP_PROTOCOL.md#7-data-channel-transfer)
+[INTEROP_PROTOCOL.md §7](./INTEROP_PROTOCOL.md#7-transfer)
 unchanged — ordered and reliable, 128 KiB AES-256-GCM chunks under the content
-key, `DONE:<chunks>:<bytes>`, then `ACK` — with the wire encoding of §6 there.
-Nothing about that layer is specific to how the two sides met.
+key within the window the receiver's acknowledgments open, then `end` answered
+by the receiver's `done` — with the wire encoding of §6 there. Nothing about
+that layer is specific to how the two sides met.
 
 ICE is STUN-only in both implementations; no TURN is configured. Candidates are
-gathered before a code is shown rather than trickled, because there is no
-channel to trickle them over.
+gathered before a code is made rather than trickled, because a code is carried
+whole — by hand, or as one sealed message.
 
 ## 5. The anonymous fallback
 
@@ -329,10 +338,12 @@ The Tor transfer mode hands a person two values. Neither is handed over here:
 
 **The ordering is the security property.** The sender cannot reach the shared
 secret before it holds the receiver's public key, which exists only inside a
-response the sender took in itself. Until then there is nothing published, no
-address to announce, and no password that would open the handshake. A captured
-offer still yields a response an attacker can build on their own key, and the
-sender still publishes only to the response it accepted and verified.
+response the sender took in itself — or, carried by PIN Exchange, one sealed
+under the session its operator vouched for. Until then there is nothing
+published, no address to announce, and no password that would open the
+handshake. A captured offer still yields a response an attacker can build on
+their own key, and the sender still publishes only to the response it accepted
+and verified.
 
 ### 5.4 Bounds
 
@@ -362,10 +373,20 @@ How a code reaches the other device is not part of this contract. What is:
   reading either QR back is not, for want of a camera. So an answer reaches a
   CLI as text however its offer travelled.
 
+- **PIN Exchange** carries each code whole, sealed under its PAKE session's
+  signals key, as specified in
+  [INTEROP_PROTOCOL.md §4.8](./INTEROP_PROTOCOL.md#48-carried-codes). There the
+  seal takes the place of the person's hand, and the confirmation code the
+  place of the sender's own scan or paste. That carriage adds two checks this
+  contract does not make — the offer must describe the file the PIN handshake
+  confirmed, and its fallback must match the PIN's kind — and changes nothing
+  here.
+
 Because the offer digest of §3.1 covers the container bytes and every carriage
 delivers them unmodified — copy/paste is base64 of exactly them, the chunked QR
-path reassembles them under a CRC-32 — the two sides agree on the same digest
-whichever way the code travelled.
+path reassembles them under a CRC-32, and PIN Exchange seals them byte for
+byte — the two sides agree on the same digest whichever way the code
+travelled.
 
 ## 7. Constants
 
@@ -387,7 +408,9 @@ whichever way the code travelled.
 Timeouts are local policy rather than contract. For reference, the reference
 implementation gives a direct attempt 20 s when a fallback is available and
 120 s when it is not, and a receiver 120 s either way, since its wait starts
-before the sender has even seen the response.
+before the sender has even seen the response. When PIN Exchange carries the
+codes, the answer reaches the sender within seconds, so its receiver waits
+30 s with a fallback and 120 s without.
 
 ## 8. Test vectors
 

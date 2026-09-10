@@ -246,18 +246,24 @@ would.
 
 Whoever sends the last message of the conversation waits (up to 30 seconds) for
 the peer to close before tearing the stream down: over Tor the close is the
-delivery receipt for that final frame. Its absence after the receiver's `ACK` is
-reported but is not a transfer failure — by then the file is written and
-verified, and only the sender's knowledge of that is in doubt.
+delivery receipt for that final frame. Its absence after the receiver's `done`
+is reported but is not a transfer failure — by then the file is written and
+verified; the receiver just cannot confirm that its `done` reached the sender.
+
+The stream carries both directions at once once the handshake is over: the
+receiver acknowledges chunks while the sender is still sending them. Writes
+are whole frames and are never interleaved.
 
 ## Transfer
 
-Above the framing each implementation runs the same transfer code path it uses
+Above the framing each implementation runs the same transfer protocol it uses
 over a WebRTC data channel: 128 KiB AES-256-GCM chunks with the chunk index as
-additional authenticated data, a `DONE:<chunks>:<bytes>` trailer, and an `ACK`
-once every chunk has authenticated and been written. A single file is deflated
-on the wire and restored on receipt; a generated ZIP travels as-is. See
-[`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md) for that layer.
+additional authenticated data, sent within the window the receiver's `ack`s
+open, an `end` with the chunk and byte counts, and the receiver's `done` once
+every chunk has authenticated and been written — or an `abort` from either
+side, with its reason. A single file is deflated on the wire and restored on
+receipt; a generated ZIP travels as-is. See
+[`INTEROP_PROTOCOL.md` §7](./INTEROP_PROTOCOL.md#7-transfer) for that layer.
 
 ## Limits
 
