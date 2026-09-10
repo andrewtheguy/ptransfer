@@ -19,6 +19,7 @@ import {
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
 import { wipeBufferSource } from '@/lib/crypto/memory';
+import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferMetadata } from '@/lib/nostr';
@@ -486,6 +487,12 @@ export function useCodeSend(): UseCodeSendReturn {
         const iceCandidates: RTCIceCandidate[] = [];
         let offerSDP: RTCSessionDescriptionInit | null = null;
 
+        // Settles whenever the channel opens, even before anything waits on
+        // it; waitForDataChannel races it against a dead route.
+        let announceChannel!: (channel: DuplexChannel) => void;
+        const channelOpened = new Promise<DuplexChannel>((resolve) => {
+          announceChannel = resolve;
+        });
         const rtc = new WebRTCConnection(
           getWebRTCConfig(),
           (signal) => {
@@ -496,12 +503,7 @@ export function useCodeSend(): UseCodeSendReturn {
               iceCandidates.push(new RTCIceCandidate(signal.candidate));
             }
           },
-          () => {
-            // Data channel opened - will be handled later
-          },
-          () => {
-            // Message received - will be handled later
-          },
+          (channel) => announceChannel(channel),
         );
 
         rtcRef.current = rtc;
@@ -771,9 +773,11 @@ export function useCodeSend(): UseCodeSendReturn {
             },
           );
         }
+        let channel: DuplexChannel;
         try {
-          await waitForDataChannel(
+          channel = await waitForDataChannel(
             rtc,
+            channelOpened,
             fallbackRelays !== null
               ? RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS
               : CODE_CONNECTION_TIMEOUT_MS,
@@ -827,7 +831,7 @@ export function useCodeSend(): UseCodeSendReturn {
 
         // Send data in encrypted chunks and wait for the receiver's ACK.
         await sendFileOverTransport(
-          createDataChannelTransport(rtc),
+          createDataChannelTransport(channel),
           key,
           content,
           {
@@ -1068,27 +1072,25 @@ export function useCodeSend(): UseCodeSendReturn {
         }
 
         /**
-         * Resolve when the data channel opens; reject on ICE failure, on
+         * Resolve with the channel once it opens; reject on ICE failure, on
          * the timeout, or as soon as `receiverGaveUp` settles (the receiver
          * has reported over the relays that no direct route exists).
          */
         async function waitForDataChannel(
           rtc: WebRTCConnection,
+          channelOpened: Promise<DuplexChannel>,
           timeoutMs: number,
           receiverGaveUp: Promise<void> | null,
-        ) {
-          await new Promise<void>((resolve, reject) => {
-            const pc = rtc.getPeerConnection();
-            const dc = rtc.getDataChannel();
-            const timeout = setTimeout(() => {
-              cleanup();
+        ): Promise<DuplexChannel> {
+          const pc = rtc.getPeerConnection();
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          let onStateChange: (() => void) | undefined;
+          const dead = new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => {
               reject(new P2PConnectionError('Connection timeout'));
             }, timeoutMs);
-            let settled = false;
             receiverGaveUp?.then(
               () => {
-                if (settled) return;
-                cleanup();
                 reject(
                   new P2PConnectionError(
                     'The receiver reports no direct connection is possible',
@@ -1100,41 +1102,25 @@ export function useCodeSend(): UseCodeSendReturn {
                 // ICE failure and the connection timeout remain authoritative.
               },
             );
-
-            const cleanup = () => {
-              settled = true;
-              clearTimeout(timeout);
-              pc.onconnectionstatechange = null;
-              if (dc) {
-                dc.onopen = null;
-              }
-            };
-
-            const checkConnection = () => {
-              if (pc.connectionState === 'connected') {
-                const currentDc = rtc.getDataChannel();
-                if (currentDc && currentDc.readyState === 'open') {
-                  cleanup();
-                  resolve();
-                }
-              } else if (
+            onStateChange = () => {
+              if (
                 pc.connectionState === 'failed' ||
                 pc.connectionState === 'disconnected'
               ) {
-                cleanup();
                 reject(new P2PConnectionError('Connection failed'));
               }
             };
-
-            pc.onconnectionstatechange = checkConnection;
-            if (dc) {
-              dc.onopen = () => {
-                cleanup();
-                resolve();
-              };
-            }
-            checkConnection();
+            pc.addEventListener('connectionstatechange', onStateChange);
+            onStateChange();
           });
+          try {
+            return await Promise.race([channelOpened, dead]);
+          } finally {
+            clearTimeout(timeout);
+            if (onStateChange) {
+              pc.removeEventListener('connectionstatechange', onStateChange);
+            }
+          }
         }
       } catch (error) {
         if (!cancelledRef.current) {

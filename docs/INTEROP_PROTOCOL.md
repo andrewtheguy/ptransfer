@@ -742,7 +742,7 @@ web side. Changing either digest is a protocol bump, never an accident.
 | Transcript hashes | [`src/lib/nostr/transcript.ts`](../src/lib/nostr/transcript.ts) |
 | Handshake choreography | [`src/hooks/use-pin-send.ts`](../src/hooks/use-pin-send.ts), [`use-pin-receive.ts`](../src/hooks/use-pin-receive.ts) |
 | Wire encoding | [`src/lib/transfer-source.ts`](../src/lib/transfer-source.ts) |
-| Data-channel protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts) |
+| Data-channel protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts), over the channel in [`src/lib/duplex-channel.ts`](../src/lib/duplex-channel.ts) |
 
 Design rationale for all of the above — why a PAKE, why the PIN is split, what
 the confirmation code does and does not cover, the threat model — is in

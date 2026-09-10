@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
+import { createDataChannelDuplex, type DuplexChannel } from './duplex-channel';
 import {
   ACK,
   createDataChannelTransport,
@@ -13,7 +15,6 @@ import {
   type TransferSource,
   type WireEncoding,
 } from './transfer-source';
-import type { WebRTCConnection } from './webrtc';
 
 let opfs: OpfsMock;
 
@@ -55,9 +56,21 @@ async function encryptAll(
 }
 
 /**
- * Wire a sender directly into a receiver: every encrypted chunk and the DONE
- * control string are fed to the receiver as they are produced, and the
- * receiver's completion is answered with the ACK the sender waits for.
+ * Two ends of one duplex channel, the sender's and the receiver's, over an
+ * in-memory data channel pair.
+ */
+function channelPair(): [DuplexChannel, DuplexChannel] {
+  const [senderEnd, receiverEnd] = fakeDataChannelPair();
+  return [
+    createDataChannelDuplex(senderEnd),
+    createDataChannelDuplex(receiverEnd),
+  ];
+}
+
+/**
+ * Run a whole transfer over a duplex channel pair: the receiving end feeds
+ * every message to the receiver and answers its completion with the ACK the
+ * sender waits for, as the receive hooks do.
  */
 async function roundTrip(
   source: TransferSource,
@@ -68,30 +81,13 @@ async function roundTrip(
   const receiver = createTransferReceiver(key, encoding, sink, {
     estimatedBytes: source.estimatedSize,
   });
+  const [senderChannel, receiverChannel] = channelPair();
+  receiverChannel.subscribe(receiver.onMessage);
   receiver.start();
-
-  const channel = Object.assign(new EventTarget(), {
-    readyState: 'open' as RTCDataChannelState,
-  }) as unknown as RTCDataChannel;
-  const rtc = {
-    async sendWithBackpressure(data: Uint8Array) {
-      receiver.onMessage(data.slice().buffer as ArrayBuffer);
-    },
-    send(data: string) {
-      receiver.onMessage(data);
-      receiver.done
-        .then(() => {
-          channel.dispatchEvent(new MessageEvent('message', { data: ACK }));
-        })
-        .catch(() => {});
-    },
-    getDataChannel() {
-      return channel;
-    },
-  } as unknown as WebRTCConnection;
+  receiver.done.then(() => receiverChannel.sendText(ACK)).catch(() => {});
 
   const wireBytes = await sendFileOverTransport(
-    createDataChannelTransport(rtc),
+    createDataChannelTransport(senderChannel),
     key,
     source,
   );
@@ -130,31 +126,23 @@ describe('sendFileOverTransport', () => {
         }),
     };
 
-    const channel = Object.assign(new EventTarget(), {
-      readyState: 'open' as RTCDataChannelState,
-    }) as unknown as RTCDataChannel;
+    const [senderChannel, receiverChannel] = channelPair();
     let firstChunkSent!: () => void;
     const firstChunk = new Promise<void>((resolve) => {
       firstChunkSent = resolve;
     });
     const controls: string[] = [];
-    const rtc = {
-      async sendWithBackpressure() {
+    receiverChannel.subscribe((message) => {
+      if (typeof message !== 'string') {
         firstChunkSent();
-      },
-      send(data: string) {
-        controls.push(data);
-        queueMicrotask(() => {
-          channel.dispatchEvent(new MessageEvent('message', { data: ACK }));
-        });
-      },
-      getDataChannel() {
-        return channel;
-      },
-    } as unknown as WebRTCConnection;
+        return;
+      }
+      controls.push(message);
+      void receiverChannel.sendText(ACK);
+    });
 
     const sending = sendFileOverTransport(
-      createDataChannelTransport(rtc),
+      createDataChannelTransport(senderChannel),
       key,
       source,
     );
@@ -164,6 +152,59 @@ describe('sendFileOverTransport', () => {
 
     await expect(sending).resolves.toBe(ENCRYPTION_CHUNK_SIZE + 3);
     expect(controls).toEqual([`DONE:2:${ENCRYPTION_CHUNK_SIZE + 3}`]);
+  });
+
+  it('completes while both peers exchange other text messages over the same channel', async () => {
+    const key = await makeKey();
+    const data = makePlaintext(ENCRYPTION_CHUNK_SIZE * 3 + 17);
+    const source: TransferSource = {
+      name: 'bundle.zip',
+      type: 'application/zip',
+      size: data.length,
+      estimatedSize: data.length,
+      projectedWireBytes: data.length,
+      precompressed: true,
+      stream: () => new Blob([data as BlobPart]).stream(),
+    };
+    const sink = await createAdaptiveAppendSink(data.length);
+    const receiver = createTransferReceiver(key, 'identity', sink);
+    const [senderChannel, receiverChannel] = channelPair();
+
+    // The receiving peer talks back on every chunk, and the sending peer
+    // talks too; neither side's file-transfer client may trip over it.
+    const heardBySender: string[] = [];
+    const heardByReceiver: string[] = [];
+    senderChannel.subscribe((message) => {
+      if (typeof message === 'string') heardBySender.push(message);
+    });
+    receiverChannel.subscribe((message) => {
+      receiver.onMessage(message);
+      if (typeof message === 'string') {
+        heardByReceiver.push(message);
+      } else {
+        void receiverChannel.sendText(`seen:${heardByReceiver.length}`);
+      }
+    });
+    receiver.start();
+    receiver.done.then(() => receiverChannel.sendText(ACK)).catch(() => {});
+
+    const transport = createDataChannelTransport(senderChannel);
+    const chatty = {
+      ...transport,
+      sendBinary: async (chunk: Uint8Array) => {
+        await transport.sendBinary(chunk);
+        await senderChannel.sendText('sender-note');
+      },
+    };
+
+    const wireBytes = await sendFileOverTransport(chatty, key, source);
+    const blob = await receiver.done;
+
+    expect(wireBytes).toBe(data.length);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
+    expect(heardBySender.filter((m) => m.startsWith('seen:'))).toHaveLength(4);
+    expect(heardBySender.at(-1)).toBe(ACK);
+    expect(heardByReceiver.filter((m) => m === 'sender-note')).toHaveLength(4);
   });
 
   it('deflates a single-file source on the wire and the receiver restores it', async () => {

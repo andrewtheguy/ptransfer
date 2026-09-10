@@ -28,8 +28,12 @@
  * count.
  *
  * The transport is abstracted behind `TransferTransport` (sending) and the
- * push-fed receiver below. A WebRTC data channel is message-oriented natively;
- * a Tor stream is made so by the framing in `lib/tor/framing.ts`. Both must be
+ * push-fed receiver below. Over WebRTC both halves are clients of the
+ * bidirectional `DuplexChannel` (`lib/duplex-channel.ts`), which may carry
+ * other text messages beside them: the receiver ignores every text message
+ * but `DONE`, and the sender's ACK wait every message but `ACK`. Binary
+ * messages toward a receiver are all content chunks. A Tor stream is made
+ * message-oriented by the framing in `lib/tor/framing.ts`. Both must be
  * reliable and ordered: every payload appends in arrival order and only the
  * final chunk may be short, so a transport that reorders or drops messages
  * breaks the transfer rather than degrading it.
@@ -44,6 +48,7 @@ import {
   MAX_MESSAGE_SIZE,
   parseChunkMessage,
 } from '@/lib/crypto';
+import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { type AppendSink, createInflatingAppendSink } from '@/lib/scratch-sink';
 import {
@@ -51,7 +56,6 @@ import {
   type WireEncoding,
   wireEncodingFor,
 } from '@/lib/transfer-source';
-import type { WebRTCConnection } from '@/lib/webrtc';
 
 /**
  * Control-message tokens exchanged over the transport. `DONE` is the sender's
@@ -356,71 +360,26 @@ function withStallTimeout<T>(
   });
 }
 
-/** The WebRTC data channel as a `TransferTransport`. */
+/**
+ * The file-sending half of a WebRTC data channel as a `TransferTransport`.
+ *
+ * The channel is duplex and this is only one of its clients: the ACK wait
+ * listens beside whatever else is subscribed, and takes nothing from it.
+ */
 export function createDataChannelTransport(
-  rtc: WebRTCConnection,
+  channel: DuplexChannel,
 ): TransferTransport {
   return {
-    sendBinary: (data) => rtc.sendWithBackpressure(data),
-    sendText: async (text) => rtc.send(text),
-    waitForAck: () => waitForAckMessage(rtc),
+    sendBinary: (data) => channel.sendBinary(data),
+    sendText: (text) => channel.sendText(text),
+    waitForAck: async () => {
+      await channel.waitFor(
+        (message) => message === ACK,
+        ACK_TIMEOUT_MS,
+        'acknowledgment',
+      );
+    },
   };
-}
-
-function waitForAckMessage(rtc: WebRTCConnection): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const dc = rtc.getDataChannel();
-    if (!dc) {
-      reject(new Error('Data channel unavailable'));
-      return;
-    }
-    if (dc.readyState !== 'open') {
-      reject(new Error('Data channel closed before acknowledgment'));
-      return;
-    }
-
-    let settled = false;
-    const cleanup = () => {
-      dc.removeEventListener('message', onMessage);
-      dc.removeEventListener('close', onClose);
-      dc.removeEventListener('error', onError);
-      clearTimeout(timeout);
-    };
-    const onMessage = (event: MessageEvent) => {
-      if (event.data === ACK) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      }
-    };
-    // A close/error means the ACK can never arrive, so fail immediately instead
-    // of waiting out ACK_TIMEOUT_MS.
-    const onClose = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error('Data channel closed before acknowledgment'));
-    };
-    const onError = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error('Data channel error while waiting for acknowledgment'));
-    };
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error('Timeout waiting for acknowledgment'));
-    }, ACK_TIMEOUT_MS);
-
-    // addEventListener (not .onmessage) so this coexists with the connection's
-    // own message handler.
-    dc.addEventListener('message', onMessage);
-    dc.addEventListener('close', onClose);
-    dc.addEventListener('error', onError);
-  });
 }
 
 /**
