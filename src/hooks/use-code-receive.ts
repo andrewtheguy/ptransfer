@@ -1210,8 +1210,14 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
       if (abandoned()) return;
 
-      // Acknowledge only after all chunks authenticate and reassemble.
-      await channel.sendText(ACK);
+      // Acknowledge only after all chunks authenticate and reassemble. The
+      // file is whole either way, so a lost ACK is the sender's problem to
+      // report, not a reason to discard what arrived.
+      try {
+        await channel.sendText(ACK);
+      } catch (error) {
+        console.error('ACK send error', error);
+      }
 
       // Set received content
       setReceivedContent({

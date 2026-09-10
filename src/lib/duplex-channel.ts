@@ -31,9 +31,17 @@ export interface DuplexChannel {
    * Send one binary message. Sends leave in call order, and each one resolves
    * only once the channel has room for more, so a producer that awaits every
    * send is paced by the peer.
+   *
+   * There is no timeout of its own: while the channel stays open and the
+   * peer stops draining it, a send (and every send queued behind it) stays
+   * pending indefinitely. It fails only when the channel closes or errors. A
+   * caller that needs a bound races it, as the transfer's stall watchdog does.
    */
   sendBinary: (data: Uint8Array) => Promise<void>;
-  /** Send one text message, in call order with every other send. */
+  /**
+   * Send one text message, in call order with every other send. Waits on
+   * backpressure like `sendBinary`, with the same lack of a timeout.
+   */
   sendText: (text: string) => Promise<void>;
   /**
    * Hand every incoming message to `listener` until the returned function is
@@ -85,9 +93,15 @@ export function createDataChannelDuplex(
   /** Pending waits, told when the channel can no longer answer them. */
   const enders = new Set<(reason: 'closed' | 'error') => void>();
   let closedLocally = false;
+  // Set by an 'error' event. A browser may still report the channel open for
+  // a moment after one, but nothing sent then can be relied on to arrive.
+  let failed = false;
   let sendChain: Promise<void> = Promise.resolve();
 
-  const isOpen = () => !closedLocally && dc.readyState === 'open';
+  const isOpen = () => !closedLocally && !failed && dc.readyState === 'open';
+  /** Why a send cannot go out, once `isOpen()` says it cannot. */
+  const notOpenError = () =>
+    new Error(failed ? 'Data channel failed' : 'Data channel not open');
 
   dc.addEventListener('message', (event: MessageEvent) => {
     if (closedLocally) return;
@@ -109,6 +123,9 @@ export function createDataChannelDuplex(
   dc.addEventListener('close', () => end('closed'));
   dc.addEventListener('error', (event) => {
     console.error('DataChannel error:', event);
+    // Terminal before the waits are told, so nothing sent from their
+    // rejection handlers slips through.
+    failed = true;
     end('error');
   });
 
@@ -131,9 +148,10 @@ export function createDataChannelDuplex(
     });
 
   const transmit = async (data: string | Uint8Array) => {
-    if (!isOpen()) throw new Error('Data channel not open');
+    if (!isOpen()) throw notOpenError();
     while (dc.bufferedAmount > backpressureThreshold) {
       await waitForDrain();
+      if (failed) throw notOpenError();
       if (!isOpen()) {
         throw new Error('Data channel closed before send completed');
       }
@@ -167,7 +185,13 @@ export function createDataChannelDuplex(
   const waitFor: DuplexChannel['waitFor'] = (accept, timeoutMs, purpose) =>
     new Promise<ChannelMessage>((resolve, reject) => {
       if (!isOpen()) {
-        reject(new Error(`Data channel closed before ${purpose}`));
+        reject(
+          new Error(
+            failed
+              ? `Data channel error while waiting for ${purpose}`
+              : `Data channel closed before ${purpose}`,
+          ),
+        );
         return;
       }
 

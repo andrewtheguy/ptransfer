@@ -182,6 +182,34 @@ describe('createDataChannelDuplex', () => {
     );
   });
 
+  it('fails sends and waits after a channel error even while it still reports open', async () => {
+    const { dcA, a } = duplexPair();
+    dcA.fail();
+    expect(dcA.readyState).toBe('open');
+
+    await expect(a.sendText('late')).rejects.toThrow('Data channel failed');
+    await expect(a.sendBinary(new Uint8Array(1))).rejects.toThrow(
+      'Data channel failed',
+    );
+    await expect(a.waitFor(() => true, 1000, 'acknowledgment')).rejects.toThrow(
+      'Data channel error while waiting for acknowledgment',
+    );
+    expect(dcA.sent).toHaveLength(0);
+  });
+
+  it('fails a send waiting on backpressure when the channel errors under it', async () => {
+    const { dcA, a } = duplexPair(4);
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    const waiting = a.sendBinary(new Uint8Array(8));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    dcA.fail();
+
+    await expect(waiting).rejects.toThrow('Data channel failed');
+    expect(dcA.sent).toHaveLength(1);
+  });
+
   it('reports a failed send to its caller without stalling the sends behind it', async () => {
     const { dcA, a, b } = duplexPair();
     const received = collect(b, 1);
