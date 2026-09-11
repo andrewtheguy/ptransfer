@@ -40,8 +40,9 @@ import { UsageError } from '../usage';
 const USAGE = `usage: ptransfer receive --onion <address> [options]
 
 Connect to the onion service a sender published and receive its file into
-the current directory, under the name the sender gave it. The one-time
-password is read from standard input: typed at a prompt, or piped in.
+the current directory, under the name the sender gave it; several files or a
+folder arrive as one ZIP. The one-time password is read from standard input:
+typed at a prompt, or piped in.
 
 options:
   --onion <host.onion>     the address the sender showed; a :<port> is

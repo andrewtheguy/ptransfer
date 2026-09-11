@@ -30,8 +30,8 @@ CLI by construction. What the CLI adds is what a process has and a page does
 not — files, a cache directory, and plain HTTP to the Tor directory
 authorities, which turns the minutes-long browser bootstrap into seconds.
 
-Today it sends and receives a single file over a Tor onion service, the tab's
-Tor Onion Service mode run from the same code:
+Today it sends and receives files and folders over a Tor onion service, the
+tab's Tor Onion Service mode run from the same code:
 
 ```bash
 # sender: prints an .onion address and a one-time password, then waits
@@ -42,10 +42,17 @@ bun run cli send --tor ./report.pdf
 bun run cli receive --onion <address>.onion
 ```
 
+`send --tor` takes any number of files and folders. One file is sent as
+itself; several, or a folder, go as one ZIP generated while it is sent — the
+tab's own archive code — with each folder's contents under the folder's name,
+so `send --tor ./photos ./notes.txt` arrives as `files_<timestamp>.zip`
+holding `photos/…` and `notes.txt`. Symbolic links inside a folder, and other
+files that are not regular files, are left out and named on the way.
+
 The password is read from standard input rather than a flag, so it stays out of
 shell history and the process list. The receiver never overwrites a file; if
 the name is taken it declines, and the sender keeps waiting for another try.
-Folders, a choice of destination, and the other modes follow; see
+A choice of destination and the other modes follow; see
 [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 It also carries a live self-check of the Tor path:

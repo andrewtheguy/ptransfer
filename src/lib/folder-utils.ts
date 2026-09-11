@@ -2,7 +2,32 @@ import { type FlateError, Zip, ZipPassThrough } from 'fflate';
 import { deflateUpperBound, type TransferSource } from './transfer-source';
 
 /**
- * ZIP entry compressed with the browser's native CompressionStream.
+ * One file as it goes into a generated ZIP, whatever holds it: a file the
+ * tab's picker returned, or a file on disk the CLI walked to. This module
+ * builds the archive from these alone, so both hosts send the same bytes.
+ */
+export interface ZipEntry {
+  /**
+   * Where the file sits in the archive, `/`-separated. A path with a folder
+   * in it, like `photos/2026/a.jpg`, keeps that folder when unpacked.
+   */
+  path: string;
+  size: number;
+  /** Modification time, in milliseconds since the epoch. */
+  lastModified: number;
+  stream: () => ReadableStream<Uint8Array>;
+}
+
+/** "Version made by" host 3, APPNOTE 4.4.2.2. */
+const ZIP_ORIGIN_UNIX = 3;
+/**
+ * External attributes of a Unix-made entry: the `st_mode` in the high 16
+ * bits, here a regular file readable by all and writable by its owner.
+ */
+const ZIP_REGULAR_FILE_ATTRS = (0o100644 << 16) >>> 0;
+
+/**
+ * ZIP entry compressed with the native CompressionStream.
  *
  * fflate's streaming deflate (ZipDeflate) emits invalid back-references on
  * some inputs, producing archives whose entry data cannot be inflated even
@@ -25,6 +50,13 @@ class ZipNativeDeflate extends ZipPassThrough {
     super(filename);
     // Written into the local header at zip.add() time, so set before adding.
     this.compression = 8;
+    // Made on Unix, as an ordinary file. fflate's default origin is MS-DOS,
+    // and Info-ZIP's unzip — what a Linux system unpacks with — reads the
+    // name of an MS-DOS entry as code page 437 even when the entry is flagged
+    // UTF-8, so every non-ASCII name came out mangled. A picked file has no
+    // mode to carry, so every entry gets the same one.
+    this.os = ZIP_ORIGIN_UNIX;
+    this.attrs = ZIP_REGULAR_FILE_ATTRS;
     const deflater = new CompressionStream('deflate-raw');
     this.deflateWriter = deflater.writable.getWriter();
     this.flushed = this.pump(deflater.readable);
@@ -48,7 +80,7 @@ class ZipNativeDeflate extends ZipPassThrough {
 
   protected process(chunk: Uint8Array, final: boolean): void {
     // Rejections propagate through the deflater's readable into pump().
-    // File-stream chunks are always backed by a plain ArrayBuffer.
+    // Source-stream chunks are always backed by a plain ArrayBuffer.
     void this.deflateWriter
       .write(chunk as Uint8Array<ArrayBuffer>)
       .catch(() => {});
@@ -76,57 +108,37 @@ const ZIP_TRAILER_BYTES = 128;
  * its share of the ZIP's bookkeeping — which is what makes a selection of many
  * tiny files cost far more on the wire than the sum of its file sizes.
  */
-export function zipWireUpperBound(files: readonly File[]): number {
+export function zipWireUpperBound(entries: readonly ZipEntry[]): number {
   let total = ZIP_TRAILER_BYTES;
-  for (const file of files) {
-    const path = file.webkitRelativePath || file.name;
+  for (const entry of entries) {
     total +=
-      deflateUpperBound(file.size) +
+      deflateUpperBound(entry.size) +
       ZIP_PER_ENTRY_BYTES +
-      2 * new TextEncoder().encode(path).length;
+      2 * new TextEncoder().encode(entry.path).length;
   }
   return total;
 }
 
 /**
- * The wire bound for a selection, before it has been turned into a source:
- * a lone loose file is deflated, anything else becomes a ZIP. Lets a picker
- * refuse a selection without building the source first.
- */
-export function projectedWireBytesFor(
-  files: readonly File[],
-  willZip: boolean,
-): number {
-  if (willZip) return zipWireUpperBound(files);
-  return files[0] ? deflateUpperBound(files[0].size) : 0;
-}
-
-/**
- * Check if folder selection is supported by the browser
- */
-export const supportsFolderSelection =
-  typeof HTMLInputElement !== 'undefined' &&
-  'webkitdirectory' in HTMLInputElement.prototype;
-
-/**
  * Create a ZIP transfer source without generating the archive up front.
- * Works with both folder selection (webkitdirectory) and multi-file selection.
+ * Works with both folder selection and multi-file selection.
  *
  * Opening the source starts archive generation: entries are deflated with the
- * browser's native CompressionStream and each ZIP output chunk is handed
- * directly to the transfer consumer. The TransformStream writer supplies
- * backpressure, so neither the selected files nor the generated archive are
- * materialized.
+ * native CompressionStream and each ZIP output chunk is handed directly to
+ * the transfer consumer. The TransformStream writer supplies backpressure, so
+ * neither the selected files nor the generated archive are materialized.
  *
- * @param files - Selected files; `webkitRelativePath` (when set) becomes the
- *   entry path, preserving folder structure
+ * @param entries - The files, each under the path it takes in the archive
  * @param archiveName - Name for the ZIP file (without .zip extension)
  */
 export function createZipTransferSource(
-  files: readonly File[],
+  entries: readonly ZipEntry[],
   archiveName: string,
 ): TransferSource {
-  const totalInputBytes = files.reduce((total, file) => total + file.size, 0);
+  const totalInputBytes = entries.reduce(
+    (total, entry) => total + entry.size,
+    0,
+  );
   return {
     name: `${archiveName}.zip`,
     type: 'application/zip',
@@ -136,19 +148,21 @@ export function createZipTransferSource(
     estimatedSize: totalInputBytes,
     // Not the input total: every entry carries a header pair and its path, so
     // a selection of many tiny files occupies far more than its file sizes.
-    projectedWireBytes: zipWireUpperBound(files),
+    projectedWireBytes: zipWireUpperBound(entries),
     // The entries are deflated below, so the transfer pipeline must not
     // compress this payload again (the no-recompress rule).
     precompressed: true,
-    stream: () => createZipStream(files),
+    stream: () => createZipStream(entries),
   };
 }
 
-function createZipStream(files: readonly File[]): ReadableStream<Uint8Array> {
+function createZipStream(
+  entries: readonly ZipEntry[],
+): ReadableStream<Uint8Array> {
   const transform = new TransformStream<Uint8Array, Uint8Array>();
   const writer = transform.writable.getWriter();
 
-  void writeZip(files, writer).then(
+  void writeZip(entries, writer).then(
     () => writer.close(),
     (error: unknown) => writer.abort(error).catch(() => {}),
   );
@@ -156,19 +170,34 @@ function createZipStream(files: readonly File[]): ReadableStream<Uint8Array> {
   return transform.readable;
 }
 
+/**
+ * `lastModified` moved into the range a ZIP header can record. The header
+ * stores a local date with the year counted from 1980 in seven bits, and
+ * fflate throws outright for anything outside it. Plenty of real files are
+ * dated 1970 — a Nix store, a reproducible build — and must not fail a
+ * transfer mid-stream.
+ */
+export function zipMtime(lastModified: number): number {
+  const earliest = new Date(1980, 0, 1).getTime();
+  const latest = new Date(2099, 11, 31, 23, 59, 58).getTime();
+  return Math.min(Math.max(lastModified, earliest), latest);
+}
+
 async function writeZip(
-  files: readonly File[],
+  entries: readonly ZipEntry[],
   writer: WritableStreamDefaultWriter<Uint8Array>,
 ): Promise<void> {
   let failure: Error | null = null;
   let pending: Promise<void> = Promise.resolve();
-  let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  // Only ever cancelled from outside. Under Bun, `getReader()` returns a
+  // reader type that the global `ReadableStreamDefaultReader` does not match.
+  let activeReader: { cancel(reason?: unknown): Promise<void> } | null = null;
   let activeEntry: ZipNativeDeflate | null = null;
 
   const ended = new Promise<void>((resolve, reject) => {
     // Cancelling the transfer's reader errors the TransformStream writable.
-    // Propagate that cancellation into whichever picker file is currently
-    // being read so ZIP production cannot remain blocked on file I/O.
+    // Propagate that cancellation into whichever file is currently being
+    // read so ZIP production cannot remain blocked on file I/O.
     void writer.closed.catch((streamError: unknown) => {
       if (failure) return;
       failure =
@@ -209,11 +238,9 @@ async function writeZip(
     });
 
     void (async () => {
-      for (const file of files) {
-        // webkitRelativePath is set for folder selection, empty for multi-file
-        const path = file.webkitRelativePath || file.name;
-        const entry = new ZipNativeDeflate(path);
-        entry.mtime = file.lastModified;
+      for (const file of entries) {
+        const entry = new ZipNativeDeflate(file.path);
+        entry.mtime = zipMtime(file.lastModified);
         zip.add(entry);
         activeEntry = entry;
 
@@ -271,17 +298,17 @@ export function archiveTimestamp(date: Date = new Date()): string {
 }
 
 /**
- * Base name for the ZIP of a mixed selection: the folder name when every file
- * came from the same selected folder (webkitRelativePath is
+ * Base name for the ZIP of a selection: the folder name when every entry
+ * sits in the same top-level folder (its path is
  * "folderName/subfolder/file.txt"), otherwise 'files'.
  */
-export function getArchiveBaseName(files: readonly File[]): string {
-  if (files.length === 0) return 'files';
-  const topFolder = files[0].webkitRelativePath.split('/')[0];
-  if (
-    topFolder &&
-    files.every((f) => f.webkitRelativePath.split('/')[0] === topFolder)
-  ) {
+export function getArchiveBaseName(entries: readonly ZipEntry[]): string {
+  const topFolderOf = (entry: ZipEntry) => {
+    const slash = entry.path.indexOf('/');
+    return slash > 0 ? entry.path.slice(0, slash) : null;
+  };
+  const topFolder = entries[0] ? topFolderOf(entries[0]) : null;
+  if (topFolder && entries.every((entry) => topFolderOf(entry) === topFolder)) {
     return topFolder;
   }
   return 'files';

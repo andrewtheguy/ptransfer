@@ -3,20 +3,28 @@ import { describe, expect, it } from 'vitest';
 import {
   archiveTimestamp,
   createZipTransferSource,
-  projectedWireBytesFor,
+  getArchiveBaseName,
+  type ZipEntry,
+  zipMtime,
   zipWireUpperBound,
 } from './folder-utils';
-import { deflateUpperBound } from './transfer-source';
+import { pickedZipEntries } from './picked-files';
 
-function fileOf(name: string, size: number, path?: string): File {
-  const file = new File([new Uint8Array(size)], name);
-  if (path) {
-    Object.defineProperty(file, 'webkitRelativePath', { value: path });
-  }
-  return file;
+/** An entry of `size` zero bytes, stored under `path`. */
+function entryOf(path: string, size: number, lastModified = 0): ZipEntry {
+  return {
+    path,
+    size,
+    lastModified,
+    stream: () => new Blob([new Uint8Array(size)]).stream(),
+  };
 }
 
 interface CentralEntry {
+  /** The host the entry says it was made on, APPNOTE 4.4.2.2. */
+  madeOn: number;
+  flags: number;
+  externalAttrs: number;
   crc: number;
   method: number;
   compressedSize: number;
@@ -61,6 +69,9 @@ function readCentralEntries(archive: Uint8Array): Map<string, CentralEntry> {
       archive.subarray(offset + 46, offset + 46 + nameLength),
     );
     entries.set(name, {
+      madeOn: view.getUint8(offset + 5),
+      flags: view.getUint16(offset + 8, true),
+      externalAttrs: view.getUint32(offset + 38, true),
       method: view.getUint16(offset + 10, true),
       crc: view.getUint32(offset + 16, true),
       compressedSize: view.getUint32(offset + 20, true),
@@ -153,7 +164,7 @@ describe('createZipTransferSource', () => {
       new File([big as BlobPart], 'big.bin'),
     ];
 
-    const source = createZipTransferSource(files, 'bundle');
+    const source = createZipTransferSource(pickedZipEntries(files), 'bundle');
     expect(source.name).toBe('bundle.zip');
     expect(source.type).toBe('application/zip');
     expect(source.size).toBeNull();
@@ -188,7 +199,10 @@ describe('createZipTransferSource', () => {
         }),
     });
 
-    const reader = createZipTransferSource([first, second], 'bundle')
+    const reader = createZipTransferSource(
+      pickedZipEntries([first, second]),
+      'bundle',
+    )
       .stream()
       .getReader();
     const firstOutput = await reader.read();
@@ -211,7 +225,10 @@ describe('createZipTransferSource', () => {
       return new File([data as BlobPart], name);
     });
 
-    const reader = createZipTransferSource(files, 'many-small-files')
+    const reader = createZipTransferSource(
+      pickedZipEntries(files),
+      'many-small-files',
+    )
       .stream()
       .getReader();
     const chunks: Uint8Array[] = [];
@@ -256,7 +273,7 @@ describe('createZipTransferSource', () => {
     const files = [new File([emfPrefix as BlobPart], 'image.emf')];
 
     const archive = await readAll(
-      createZipTransferSource(files, 'emf').stream(),
+      createZipTransferSource(pickedZipEntries(files), 'emf').stream(),
     );
     await expectDeflatedEntriesWithValidCrc(archive, {
       'image.emf': emfPrefix,
@@ -270,9 +287,36 @@ describe('createZipTransferSource', () => {
       value: 'folder/sub/a.txt',
     });
 
-    const source = createZipTransferSource([file], 'folder');
+    const source = createZipTransferSource(pickedZipEntries([file]), 'folder');
     const entries = unzipSync(await readAll(source.stream()));
     expect(Object.keys(entries)).toEqual(['folder/sub/a.txt']);
+  });
+
+  it('marks every entry as a Unix file, so unzip honours a UTF-8 name', async () => {
+    // Info-ZIP's unzip decodes an MS-DOS-made entry's name as code page 437,
+    // whatever its UTF-8 flag says.
+    const archive = await readAll(
+      createZipTransferSource(
+        [entryOf('ünï/cødé.txt', 2), entryOf('plain.txt', 2)],
+        'names',
+      ).stream(),
+    );
+    const entries = readCentralEntries(archive);
+    for (const entry of entries.values()) {
+      expect(entry.madeOn).toBe(3);
+      expect(entry.externalAttrs >>> 16).toBe(0o100644);
+    }
+    expect(entries.get('ünï/cødé.txt')?.flags).toBe(0x0808);
+    expect(Object.keys(unzipSync(archive)).sort()).toEqual([
+      'plain.txt',
+      'ünï/cødé.txt',
+    ]);
+  });
+
+  it('stores a file dated before 1980, which a ZIP header cannot record', async () => {
+    const source = createZipTransferSource([entryOf('epoch.txt', 3, 0)], 'old');
+    const entries = unzipSync(await readAll(source.stream()));
+    expect(entries['epoch.txt']).toEqual(new Uint8Array(3));
   });
 
   it('produces a valid empty archive for no files', async () => {
@@ -293,35 +337,53 @@ describe('archiveTimestamp', () => {
   });
 });
 
+describe('zipMtime', () => {
+  it('keeps a time a ZIP header can record', () => {
+    const time = new Date(2026, 6, 13, 9, 5, 7).getTime();
+    expect(zipMtime(time)).toBe(time);
+  });
+
+  it('moves a time outside 1980-2099 to the nearest end', () => {
+    expect(new Date(zipMtime(0)).getFullYear()).toBe(1980);
+    expect(new Date(zipMtime(Date.UTC(2150, 0))).getFullYear()).toBe(2099);
+  });
+});
+
+describe('getArchiveBaseName', () => {
+  it('names the archive after the one folder every entry is in', () => {
+    const entries = [entryOf('photos/a.jpg', 1), entryOf('photos/x/b.jpg', 1)];
+    expect(getArchiveBaseName(entries)).toBe('photos');
+  });
+
+  it("is 'files' for loose files, several folders, or nothing", () => {
+    expect(getArchiveBaseName([entryOf('a.txt', 1)])).toBe('files');
+    expect(
+      getArchiveBaseName([entryOf('photos/a.jpg', 1), entryOf('b.txt', 1)]),
+    ).toBe('files');
+    expect(
+      getArchiveBaseName([entryOf('photos/a.jpg', 1), entryOf('docs/b', 1)]),
+    ).toBe('files');
+    expect(getArchiveBaseName([])).toBe('files');
+  });
+});
+
 describe('zipWireUpperBound', () => {
   it('charges every entry for its headers and its path, twice', () => {
     // 500 one-byte files are 500 bytes of input and orders of magnitude more
     // on the wire — the case an input-size check cannot see.
-    const files = Array.from({ length: 500 }, (_, i) =>
-      fileOf(`entry-${i}.txt`, 1),
+    const entries = Array.from({ length: 500 }, (_, i) =>
+      entryOf(`entry-${i}.txt`, 1),
     );
-    const inputBytes = files.reduce((total, f) => total + f.size, 0);
+    const inputBytes = entries.reduce((total, e) => total + e.size, 0);
 
     expect(inputBytes).toBe(500);
-    expect(zipWireUpperBound(files)).toBeGreaterThan(100 * inputBytes);
+    expect(zipWireUpperBound(entries)).toBeGreaterThan(100 * inputBytes);
   });
 
   it('counts the entry path, so nesting costs more than a flat name', () => {
-    const flat = [fileOf('a.txt', 10)];
-    const nested = [fileOf('a.txt', 10, 'deeply/nested/folder/path/a.txt')];
+    const flat = [entryOf('a.txt', 10)];
+    const nested = [entryOf('deeply/nested/folder/path/a.txt', 10)];
 
     expect(zipWireUpperBound(nested)).toBeGreaterThan(zipWireUpperBound(flat));
-  });
-});
-
-describe('projectedWireBytesFor', () => {
-  it('follows the flow: one loose file deflates, anything else zips', () => {
-    const one = [fileOf('a.bin', 1000)];
-    expect(projectedWireBytesFor(one, false)).toBe(deflateUpperBound(1000));
-    expect(projectedWireBytesFor(one, true)).toBe(zipWireUpperBound(one));
-  });
-
-  it('is zero for an empty selection rather than throwing', () => {
-    expect(projectedWireBytesFor([], false)).toBe(0);
   });
 });

@@ -21,24 +21,27 @@ import {
   TOR_OPTIONS_USAGE,
   torOptionsFrom,
 } from '../tor/bootstrap';
-import { openFileSource } from '../transfer/files';
+import { openSelection } from '../transfer/selection';
 import { UsageError } from '../usage';
 
 /**
- * `ptransfer send --tor <file>`: publish an ephemeral v3 onion service that
- * serves one file, and print the address and one-time password the receiver
- * needs. The counterpart of the tab's `useTorSend`: the same accept loop, the
- * same bounds, with the terminal for a screen.
+ * `ptransfer send --tor <path>...`: publish an ephemeral v3 onion service
+ * that serves the given files and folders, and print the address and
+ * one-time password the receiver needs. The counterpart of the tab's
+ * `useTorSend`: the same accept loop, the same bounds, the same ZIP for more
+ * than one file, with the terminal for a screen.
  *
  * The address and password go to standard output, one per line, so a script
  * can take them; everything else goes to standard error.
  */
 
-const USAGE = `usage: ptransfer send --tor <file> [options]
+const USAGE = `usage: ptransfer send --tor <path>... [options]
 
-Publish an onion service that serves one file, and print the address and the
-one-time password the receiver needs. The service answers until a receiver
-takes the file, or for ${TOR_WAIT_TIMEOUT_MS / 60000} minutes.
+Publish an onion service that serves the given files and folders, and print
+the address and the one-time password the receiver needs. One file is sent as
+itself; several, or a folder, go as one ZIP that keeps each folder's structure
+under its name. The service answers until a receiver takes the transfer, or
+for ${TOR_WAIT_TIMEOUT_MS / 60000} minutes.
 
 options:
   --tor                    send over a Tor onion service (the only mode so far)
@@ -46,6 +49,13 @@ ${TOR_OPTIONS_USAGE}
   -v, --verbose            show the Tor client's own log lines
   -h, --help
 `;
+
+/** How many left-out paths are named before the rest are only counted. */
+const SKIPPED_SHOWN = 5;
+
+function count(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 export async function send(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -65,14 +75,33 @@ export async function send(argv: string[]): Promise<number> {
   if (!values.tor) {
     throw new UsageError('Choose a mode: --tor is the only one so far');
   }
-  if (positionals.length !== 1) {
-    throw new UsageError('Give exactly one file to send');
+  if (positionals.length === 0) {
+    throw new UsageError('Give at least one file or folder to send');
   }
   const torOptions = torOptionsFrom(values);
   routeDiagnostics(values.verbose);
   const say = (line: string) => process.stderr.write(`${line}\n`);
 
-  const content = await openFileSource(positionals[0]);
+  const {
+    source: content,
+    fileCount,
+    skipped,
+  } = await openSelection(positionals);
+  if (skipped.length > 0) {
+    const shown = skipped.slice(0, SKIPPED_SHOWN);
+    const more = skipped.length - shown.length;
+    say(
+      `Leaving out ${count(skipped.length, 'symbolic link or special file', 'symbolic links or special files')}, which the ZIP does not carry:`,
+    );
+    for (const path of shown) say(`  ${path}`);
+    if (more > 0) say(`  and ${more} more`);
+  }
+  // Only the multiple file/folder flow is precompressed: it is a ZIP.
+  if (content.precompressed) {
+    say(
+      `Sending ${count(fileCount, 'file', 'files')} (${formatFileSize(content.estimatedSize)}) as ${content.name}`,
+    );
+  }
   const fileMetadata = {
     fileName: content.name,
     fileSize: content.estimatedSize,
