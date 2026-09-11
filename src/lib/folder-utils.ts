@@ -62,7 +62,9 @@ class ZipNativeDeflate extends ZipPassThrough {
     this.flushed = this.pump(deflater.readable);
   }
 
-  private async pump(readable: ReadableStream<Uint8Array>): Promise<void> {
+  private async pump(
+    readable: ReadableStream<Uint8Array<ArrayBuffer>>,
+  ): Promise<void> {
     const reader = readable.getReader();
     try {
       while (true) {
@@ -78,12 +80,11 @@ class ZipNativeDeflate extends ZipPassThrough {
     }
   }
 
-  protected process(chunk: Uint8Array, final: boolean): void {
+  protected process(chunk: Uint8Array<ArrayBuffer>, final: boolean): void {
     // Rejections propagate through the deflater's readable into pump().
-    // Source-stream chunks are always backed by a plain ArrayBuffer.
-    void this.deflateWriter
-      .write(chunk as Uint8Array<ArrayBuffer>)
-      .catch(() => {});
+    // fflate types the chunk from an untyped push(); source-stream chunks are
+    // always backed by a plain ArrayBuffer.
+    void this.deflateWriter.write(chunk).catch(() => {});
     if (final) void this.deflateWriter.close().catch(() => {});
   }
 
