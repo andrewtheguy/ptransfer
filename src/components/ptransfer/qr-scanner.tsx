@@ -273,11 +273,10 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
             {Math.round((collectedCount / totalChunks) * 100)}%)
           </p>
           <div className="flex flex-wrap justify-center gap-1.5">
-            {Array.from({ length: totalChunks ?? 0 }, (_, i) => {
+            {Array.from({ length: totalChunks ?? 0 }, (_, i) => i).map((i) => {
               const received = collectedIndices.has(i);
               return (
                 <div
-                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed-position chunk grid; index IS the identity
                   key={i}
                   className={`w-7 h-7 rounded text-xs font-medium flex items-center justify-center transition-colors ${
                     received

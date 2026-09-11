@@ -74,11 +74,9 @@ export function ReceiveChunkedPage() {
       // the hook's job, and it has a state to report the failure in.
       const parsed = parseMutualPayload(chunkState.assembledPayload);
       if (parsed && isAnonymousOffer(parsed)) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: transition page step when chunk collection completes
         setStep('bridge');
         return;
       }
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: transition page step when chunk collection completes
       setStep('transferring');
       startReceive({ bridge: DEFAULT_TOR_BRIDGE });
     }
@@ -187,11 +185,10 @@ export function ReceiveChunkedPage() {
               {total > 1 && (
                 <>
                   <div className="flex flex-wrap justify-center gap-1.5">
-                    {Array.from({ length: total }, (_, i) => {
+                    {Array.from({ length: total }, (_, i) => i).map((i) => {
                       const received = chunkState.collectedIndices.has(i);
                       return (
                         <div
-                          // biome-ignore lint/suspicious/noArrayIndexKey: fixed-position chunk grid; index IS the identity
                           key={i}
                           className={`w-7 h-7 rounded text-xs font-medium flex items-center justify-center transition-colors ${
                             received

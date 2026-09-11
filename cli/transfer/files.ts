@@ -153,8 +153,8 @@ const PART_SUFFIX_BYTES = 14;
  */
 export function safeFileName(name: string): string {
   const segment = name.split('/').pop() ?? '';
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are exactly what is being stripped
-  const cleaned = segment.replace(/[\x00-\x1f\x7f]/g, '').trim();
+  // Every control character, C1 included: U+009B alone is a terminal escape.
+  const cleaned = segment.replace(/\p{Cc}/gu, '').trim();
   if (cleaned === '' || cleaned === '.' || cleaned === '..') return 'received';
   return fitName(cleaned, NAME_MAX_BYTES);
 }

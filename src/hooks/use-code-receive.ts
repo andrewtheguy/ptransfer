@@ -245,358 +245,369 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     step.resolve(read);
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: doReceive is defined below and only invoked at call time; references stable refs/setState
-  const startReceive = useCallback((options: CodeReceiveOptions) => {
-    // Guard against concurrent invocations
-    if (receivingRef.current) return;
-    receivingRef.current = true;
-    cancelledRef.current = false;
-    setReceivedContent(null);
-    // The previous transfer's payload (if any) is gone from the UI now.
-    discardSink();
-
-    // Start the receive flow
-    void doReceive(options.bridge);
-  }, []);
-
-  const doReceive = async (bridge: TorBridge) => {
-    const run = ++runRef.current;
-    // Cancelled, or superseded by a receive started after the cancel — in
-    // either case this closure must stop and leave the shared refs alone.
-    const abandoned = () => cancelledRef.current || runRef.current !== run;
-    try {
-      setState({
-        status: 'waiting_for_offer',
-        message: "Scan or paste the sender's code",
-      });
-
-      const offerStep = createPendingStep<ReadOffer>();
-      offerStepRef.current = offerStep;
-      const offer: AcceptedOffer = acceptOffer(await offerStep.promise);
-      if (abandoned()) return;
-
-      const anonymous = offer.fallback === 'anonymous';
-      const { fileName, fileSize, mimeType } = offer.metadata;
-      const fileMetadata = { fileName, fileSize, mimeType };
-
-      // The slow part, started the moment the offer is taken in rather than
-      // once the direct route is known to be dead — a bootstrap is minutes,
-      // and by then the sender is already waiting. It runs behind the direct
-      // attempt and is closed with the transfer, used or not.
-      const torProgress = createTorProgress();
-      let transport: AnonymousSignalingTransport | null = null;
-      if (anonymous) {
-        transport = new AnonymousSignalingTransport({
-          bridge,
-          onStatus: (message) => {
-            console.info('[tor] Code Exchange fallback:', message);
-            torProgress.push(message);
-            if (abandoned()) return;
-            // Only ever an addition to the response page. Every other state
-            // this flow sets is written whole, so a stale line cannot outlive
-            // the step it belonged to.
-            setState((current) =>
-              current.status === 'showing_answer'
-                ? { ...current, torStatus: message }
-                : current,
-            );
-          },
-        });
-        transportRef.current = transport;
-      }
-
-      setState({ status: 'generating_answer', message: 'Generating keys...' });
-      let keys = await deriveAnswerKeys(offer);
-      if (abandoned()) return;
-
-      // ------------------------------------------------------------------
-      // The response page. It alternates between a real direct attempt and a
-      // simulated dead route for as long as the switch is flipped, and ends
-      // when one of the two takes over the transfer.
-      //
-      // A direct attempt owns a peer connection, a streaming receiver and a
-      // receive sink. Simulating a dead route throws all three away and hands
-      // the sender the last answer SDP with an empty candidate list: the
-      // sender then has nothing to connect to, and with the peer connection
-      // gone there is no agent left here to answer a connectivity check
-      // either — which is what makes the simulation hold rather than the two
-      // sides still finding each other peer-reflexively. Switching back
-      // builds a fresh attempt, so the response changes on every flip and the
-      // sender has to be handed the current one.
-      // ------------------------------------------------------------------
-
-      // The relays the simulation may hand the file to: the switch is offered
-      // only where the fallback could carry the file, since otherwise
-      // simulating a dead route would kill a working direct connection and
-      // leave both sides with nowhere to go.
-      const simulationRelays = eligibleFallbackRelays(offer);
-
-      // The SDP of the most recent attempt, which the simulated response
-      // reuses. Its ICE credentials belong to a closed connection by then,
-      // which does not matter: nothing will ever answer it.
-      let latestAnswerSDP: RTCSessionDescriptionInit | null = null;
-
-      const report = (update: Parameters<typeof setState>[0]) => {
-        if (!abandoned()) setState(update);
-      };
-
-      /**
-       * The response page as it stays while a fallback runs behind it: the
-       * sender has not taken the code in yet, so the code is still the only
-       * thing this transfer is waiting on and taking it off screen would
-       * strand both sides. Nothing has begun either, so a progress bar would
-       * claim otherwise.
-       */
-      const holdResponse = (held: HeldResponse) => (torStatus: string) =>
-        report({
-          status: 'showing_answer',
-          message: held.simulated
-            ? SIMULATED_HOLDING_MESSAGE
-            : `${fallbackMessage(offer)}. ${HOLDING_SUFFIX}`,
-          answerData: held.answerData,
-          contentType: 'file',
-          fileMetadata,
-          // The switch is only offered while there is still a direct route to
-          // drop; one that died on its own leaves nothing to simulate.
-          relayFallbackAvailable: held.simulated,
-          simulateNoDirect: held.simulated,
-          directRouteDead: !held.simulated,
-          anonymousFallback: anonymous,
-          ...(torStatus ? { torStatus } : {}),
-        });
-
-      /**
-       * The fallback, held behind the response page until the sender turns
-       * up on the control channel. Returns 'switched' when the simulation
-       * switch went back off while it was still waiting.
-       */
-      const runFallback = async (
-        held: HeldResponse,
-        switchedBack: () => boolean,
-      ): Promise<'completed' | 'switched'> => {
-        const outcome = await receiveOverFallback({
-          offer,
-          keys,
-          transport,
-          torProgress,
-          hold: holdResponse(held),
-          poolHolder: relayPoolRef,
-          switchedBack,
-          isCancelled: abandoned,
-          report,
-        });
-        if (outcome === 'switched') return 'switched';
-        if (!outcome) return 'completed';
-        if (abandoned()) {
-          void outcome.sink?.discard();
-          return 'completed';
-        }
-        // Held like a direct receive's sink: a reset or the next receive
-        // discards it. The direct attempt was disposed before the fallback
-        // ran, so there is no other sink in the ref to lose.
-        sinkRef.current = outcome.sink ?? null;
-        setReceivedContent(outcome.content);
+  const doReceive = useCallback(
+    async (bridge: TorBridge) => {
+      const run = ++runRef.current;
+      // Cancelled, or superseded by a receive started after the cancel — in
+      // either case this closure must stop and leave the shared refs alone.
+      const abandoned = () => cancelledRef.current || runRef.current !== run;
+      try {
         setState({
-          status: 'complete',
-          message: outcome.message,
-          contentType: 'file',
-          fileMetadata: {
-            fileName: outcome.content.fileName,
-            fileSize: outcome.content.fileSize,
-            mimeType: outcome.content.mimeType,
-          },
-          stats: outcome.stats,
+          status: 'waiting_for_offer',
+          message: "Scan or paste the sender's code",
         });
-        return 'completed';
-      };
 
-      let simulate = false;
-      let connected: { attempt: DirectAttempt; channel: DuplexChannel } | null =
-        null;
-
-      for (;;) {
+        const offerStep = createPendingStep<ReadOffer>();
+        offerStepRef.current = offerStep;
+        const offer: AcceptedOffer = acceptOffer(await offerStep.promise);
         if (abandoned()) return;
 
-        // The switch, armed for this stint only. Flipping it ends the stint
-        // in progress; the loop then builds the other kind.
-        let switchedTo: boolean | null = null;
-        let endStint: ((error: Error) => void) | null = null;
-        simulateNoDirectRef.current = simulate;
-        switchRef.current = simulationRelays
-          ? (next) => {
-              if (next === simulate || switchedTo !== null) return;
-              switchedTo = next;
-              endStint?.(new SimulationSwitched());
-            }
-          : null;
+        const anonymous = offer.fallback === 'anonymous';
+        const { fileName, fileSize, mimeType } = offer.metadata;
+        const fileMetadata = { fileName, fileSize, mimeType };
 
-        if (!simulate) {
-          // This side has no short clock: the response is still on screen
-          // being handed over by a human, and nothing can connect until that
-          // is done. Capping the wait would give up on a route that was never
-          // tried, and this side's `hello` would then talk the sender out of
-          // the direct route too. A route that really is dead reports itself
-          // through its connection state long before the backstop.
-          const attempt = await buildDirectAttempt({
+        // The slow part, started the moment the offer is taken in rather than
+        // once the direct route is known to be dead — a bootstrap is minutes,
+        // and by then the sender is already waiting. It runs behind the direct
+        // attempt and is closed with the transfer, used or not.
+        const torProgress = createTorProgress();
+        let transport: AnonymousSignalingTransport | null = null;
+        if (anonymous) {
+          transport = new AnonymousSignalingTransport({
+            bridge,
+            onStatus: (message) => {
+              console.info('[tor] Code Exchange fallback:', message);
+              torProgress.push(message);
+              if (abandoned()) return;
+              // Only ever an addition to the response page. Every other state
+              // this flow sets is written whole, so a stale line cannot outlive
+              // the step it belonged to.
+              setState((current) =>
+                current.status === 'showing_answer'
+                  ? { ...current, torStatus: message }
+                  : current,
+              );
+            },
+          });
+          transportRef.current = transport;
+        }
+
+        setState({
+          status: 'generating_answer',
+          message: 'Generating keys...',
+        });
+        let keys = await deriveAnswerKeys(offer);
+        if (abandoned()) return;
+
+        // ------------------------------------------------------------------
+        // The response page. It alternates between a real direct attempt and a
+        // simulated dead route for as long as the switch is flipped, and ends
+        // when one of the two takes over the transfer.
+        //
+        // A direct attempt owns a peer connection, a streaming receiver and a
+        // receive sink. Simulating a dead route throws all three away and hands
+        // the sender the last answer SDP with an empty candidate list: the
+        // sender then has nothing to connect to, and with the peer connection
+        // gone there is no agent left here to answer a connectivity check
+        // either — which is what makes the simulation hold rather than the two
+        // sides still finding each other peer-reflexively. Switching back
+        // builds a fresh attempt, so the response changes on every flip and the
+        // sender has to be handed the current one.
+        // ------------------------------------------------------------------
+
+        // The relays the simulation may hand the file to: the switch is offered
+        // only where the fallback could carry the file, since otherwise
+        // simulating a dead route would kill a working direct connection and
+        // leave both sides with nowhere to go.
+        const simulationRelays = eligibleFallbackRelays(offer);
+
+        // The SDP of the most recent attempt, which the simulated response
+        // reuses. Its ICE credentials belong to a closed connection by then,
+        // which does not matter: nothing will ever answer it.
+        let latestAnswerSDP: RTCSessionDescriptionInit | null = null;
+
+        const report = (update: Parameters<typeof setState>[0]) => {
+          if (!abandoned()) setState(update);
+        };
+
+        /**
+         * The response page as it stays while a fallback runs behind it: the
+         * sender has not taken the code in yet, so the code is still the only
+         * thing this transfer is waiting on and taking it off screen would
+         * strand both sides. Nothing has begun either, so a progress bar would
+         * claim otherwise.
+         */
+        const holdResponse = (held: HeldResponse) => (torStatus: string) =>
+          report({
+            status: 'showing_answer',
+            message: held.simulated
+              ? SIMULATED_HOLDING_MESSAGE
+              : `${fallbackMessage(offer)}. ${HOLDING_SUFFIX}`,
+            answerData: held.answerData,
+            contentType: 'file',
+            fileMetadata,
+            // The switch is only offered while there is still a direct route to
+            // drop; one that died on its own leaves nothing to simulate.
+            relayFallbackAvailable: held.simulated,
+            simulateNoDirect: held.simulated,
+            directRouteDead: !held.simulated,
+            anonymousFallback: anonymous,
+            ...(torStatus ? { torStatus } : {}),
+          });
+
+        /**
+         * The fallback, held behind the response page until the sender turns
+         * up on the control channel. Returns 'switched' when the simulation
+         * switch went back off while it was still waiting.
+         */
+        const runFallback = async (
+          held: HeldResponse,
+          switchedBack: () => boolean,
+        ): Promise<'completed' | 'switched'> => {
+          const outcome = await receiveOverFallback({
             offer,
             keys,
-            sinkHolder: sinkRef,
-            rtcHolder: rtcRef,
-            connectionTimeoutMs: CODE_CONNECTION_TIMEOUT_MS,
+            transport,
+            torProgress,
+            hold: holdResponse(held),
+            poolHolder: relayPoolRef,
+            switchedBack,
             isCancelled: abandoned,
             report,
-            onProgress: (current, total) =>
-              setState((s) => ({ ...s, progress: { current, total } })),
           });
-          if (!attempt) return;
-          latestAnswerSDP = attempt.answerSDP;
+          if (outcome === 'switched') return 'switched';
+          if (!outcome) return 'completed';
+          if (abandoned()) {
+            void outcome.sink?.discard();
+            return 'completed';
+          }
+          // Held like a direct receive's sink: a reset or the next receive
+          // discards it. The direct attempt was disposed before the fallback
+          // ran, so there is no other sink in the ref to lose.
+          sinkRef.current = outcome.sink ?? null;
+          setReceivedContent(outcome.content);
+          setState({
+            status: 'complete',
+            message: outcome.message,
+            contentType: 'file',
+            fileMetadata: {
+              fileName: outcome.content.fileName,
+              fileSize: outcome.content.fileSize,
+              mimeType: outcome.content.mimeType,
+            },
+            stats: outcome.stats,
+          });
+          return 'completed';
+        };
+
+        let simulate = false;
+        let connected: {
+          attempt: DirectAttempt;
+          channel: DuplexChannel;
+        } | null = null;
+
+        for (;;) {
+          if (abandoned()) return;
+
+          // The switch, armed for this stint only. Flipping it ends the stint
+          // in progress; the loop then builds the other kind.
+          let switchedTo: boolean | null = null;
+          let endStint: ((error: Error) => void) | null = null;
+          simulateNoDirectRef.current = simulate;
+          switchRef.current = simulationRelays
+            ? (next) => {
+                if (next === simulate || switchedTo !== null) return;
+                switchedTo = next;
+                endStint?.(new SimulationSwitched());
+              }
+            : null;
+
+          if (!simulate) {
+            // This side has no short clock: the response is still on screen
+            // being handed over by a human, and nothing can connect until that
+            // is done. Capping the wait would give up on a route that was never
+            // tried, and this side's `hello` would then talk the sender out of
+            // the direct route too. A route that really is dead reports itself
+            // through its connection state long before the backstop.
+            const attempt = await buildDirectAttempt({
+              offer,
+              keys,
+              sinkHolder: sinkRef,
+              rtcHolder: rtcRef,
+              connectionTimeoutMs: CODE_CONNECTION_TIMEOUT_MS,
+              isCancelled: abandoned,
+              report,
+              onProgress: (current, total) =>
+                setState((s) => ({ ...s, progress: { current, total } })),
+            });
+            if (!attempt) return;
+            latestAnswerSDP = attempt.answerSDP;
+            if (switchedTo !== null) {
+              attempt.dispose();
+              simulate = switchedTo;
+              continue;
+            }
+            endStint = attempt.stop;
+            let channel: DuplexChannel;
+            setState({
+              status: 'showing_answer',
+              message: 'Show this to sender and wait for connection',
+              answerData: attempt.answerBinary,
+              contentType: 'file',
+              fileMetadata,
+              relayFallbackAvailable: simulationRelays !== null,
+              simulateNoDirect: false,
+              anonymousFallback: anonymous,
+              torStatus: torProgress.latest(),
+            });
+            try {
+              channel = await attempt.opened;
+            } catch (error) {
+              attempt.dispose();
+              if (error instanceof SimulationSwitched) {
+                simulate = true;
+                continue;
+              }
+              if (
+                !(error instanceof P2PConnectionError) ||
+                !offer.fallbackRelays ||
+                abandoned()
+              ) {
+                throw error;
+              }
+              if (!simulationRelays) throw unrelayableError(offer, error);
+              // The direct route died on its own; there is nothing left for the
+              // switch to simulate. The response is still on screen and still
+              // the only way this transfer starts — the sender cannot reach the
+              // fallback without it — so it is held there until the sender
+              // turns up on the control channel.
+              switchRef.current = null;
+              await runFallback(
+                { answerData: attempt.answerBinary, simulated: false },
+                () => false,
+              );
+              return;
+            }
+            switchRef.current = null;
+            connected = { attempt, channel };
+            break;
+          }
+
+          // Simulated: no peer connection at all. The response reuses the SDP
+          // of the attempt just torn down, with its candidates left out.
+          if (!latestAnswerSDP || !simulationRelays) {
+            throw new Error('Cannot simulate a dead route before an answer');
+          }
+          const answerBinary = await generateMutualAnswerBinary(
+            latestAnswerSDP,
+            [],
+            keys.publicKeyBytes,
+            keys.signAnswer,
+          );
+          if (abandoned()) return;
           if (switchedTo !== null) {
-            attempt.dispose();
             simulate = switchedTo;
             continue;
           }
-          endStint = attempt.stop;
-          let channel: DuplexChannel;
-          setState({
-            status: 'showing_answer',
-            message: 'Show this to sender and wait for connection',
-            answerData: attempt.answerBinary,
-            contentType: 'file',
-            fileMetadata,
-            relayFallbackAvailable: simulationRelays !== null,
-            simulateNoDirect: false,
-            anonymousFallback: anonymous,
-            torStatus: torProgress.latest(),
-          });
-          try {
-            channel = await attempt.opened;
-          } catch (error) {
-            attempt.dispose();
-            if (error instanceof SimulationSwitched) {
-              simulate = true;
-              continue;
-            }
-            if (
-              !(error instanceof P2PConnectionError) ||
-              !offer.fallbackRelays ||
-              abandoned()
-            ) {
-              throw error;
-            }
-            if (!simulationRelays) throw unrelayableError(offer, error);
-            // The direct route died on its own; there is nothing left for the
-            // switch to simulate. The response is still on screen and still
-            // the only way this transfer starts — the sender cannot reach the
-            // fallback without it — so it is held there until the sender
-            // turns up on the control channel.
-            switchRef.current = null;
-            await runFallback(
-              { answerData: attempt.answerBinary, simulated: false },
-              () => false,
-            );
-            return;
+          const outcome = await runFallback(
+            { answerData: answerBinary, simulated: true },
+            () => switchedTo !== null,
+          );
+          if (outcome === 'switched') {
+            // That stint left this side's `hello` on the control relays, and a
+            // relay keeps it for the rest of the exchange. A sender handed a
+            // response built on the same shared secret would read that stale
+            // hello out of the backlog and give up on the direct route before
+            // it had a chance — so the next attempt starts from new key
+            // material, which puts it in a relay session of its own.
+            keys = await deriveAnswerKeys(offer);
+            simulate = false;
+            continue;
           }
-          switchRef.current = null;
-          connected = { attempt, channel };
-          break;
+          return;
         }
 
-        // Simulated: no peer connection at all. The response reuses the SDP
-        // of the attempt just torn down, with its candidates left out.
-        if (!latestAnswerSDP || !simulationRelays) {
-          throw new Error('Cannot simulate a dead route before an answer');
-        }
-        const answerBinary = await generateMutualAnswerBinary(
-          latestAnswerSDP,
-          [],
-          keys.publicKeyBytes,
-          keys.signAnswer,
-        );
-        if (abandoned()) return;
-        if (switchedTo !== null) {
-          simulate = switchedTo;
-          continue;
-        }
-        const outcome = await runFallback(
-          { answerData: answerBinary, simulated: true },
-          () => switchedTo !== null,
-        );
-        if (outcome === 'switched') {
-          // That stint left this side's `hello` on the control relays, and a
-          // relay keeps it for the rest of the exchange. A sender handed a
-          // response built on the same shared secret would read that stale
-          // hello out of the backlog and give up on the direct route before
-          // it had a chance — so the next attempt starts from new key
-          // material, which puts it in a relay session of its own.
-          keys = await deriveAnswerKeys(offer);
-          simulate = false;
-          continue;
-        }
-        return;
-      }
-
-      switchRef.current = null;
-      if (!connected || abandoned()) return;
-
-      setState({
-        status: 'receiving',
-        message: 'Receiving file...',
-        contentType: 'file',
-        fileMetadata,
-        useWebRTC: true,
-        progress: { current: 0, total: fileSize },
-      });
-
-      const payload = await finishDirectReceive({
-        attempt: connected.attempt,
-        rtcHolder: rtcRef,
-        isCancelled: abandoned,
-      });
-      if (!payload || abandoned()) return;
-
-      setReceivedContent({
-        contentType: 'file',
-        data: payload,
-        fileName,
-        fileSize: payload.size,
-        mimeType,
-      });
-      setState({
-        status: 'complete',
-        message: 'File received (P2P)!',
-        contentType: 'file',
-        fileMetadata: { fileName, fileSize: payload.size, mimeType },
-      });
-    } catch (error) {
-      // Nothing downloadable survives a failed transfer; drop its storage
-      // — unless a newer run owns the sink by now.
-      if (!abandoned()) {
-        discardSink();
-        setState((prevState) => ({
-          ...prevState,
-          status: 'error',
-          message: error instanceof Error ? error.message : 'Failed to receive',
-          connectionFailed: error instanceof P2PConnectionError,
-        }));
-      }
-    } finally {
-      // A superseded run's refs already belong to the newer receive.
-      if (runRef.current === run) {
-        receivingRef.current = false;
-        offerStepRef.current = null;
         switchRef.current = null;
-        // A transfer that connected directly bootstrapped a Tor client it
-        // never used; it goes with the transfer either way.
-        const transport = transportRef.current;
-        transportRef.current = null;
-        transport?.close();
-        if (rtcRef.current) {
-          rtcRef.current.close();
-          rtcRef.current = null;
+        if (!connected || abandoned()) return;
+
+        setState({
+          status: 'receiving',
+          message: 'Receiving file...',
+          contentType: 'file',
+          fileMetadata,
+          useWebRTC: true,
+          progress: { current: 0, total: fileSize },
+        });
+
+        const payload = await finishDirectReceive({
+          attempt: connected.attempt,
+          rtcHolder: rtcRef,
+          isCancelled: abandoned,
+        });
+        if (!payload || abandoned()) return;
+
+        setReceivedContent({
+          contentType: 'file',
+          data: payload,
+          fileName,
+          fileSize: payload.size,
+          mimeType,
+        });
+        setState({
+          status: 'complete',
+          message: 'File received (P2P)!',
+          contentType: 'file',
+          fileMetadata: { fileName, fileSize: payload.size, mimeType },
+        });
+      } catch (error) {
+        // Nothing downloadable survives a failed transfer; drop its storage
+        // — unless a newer run owns the sink by now.
+        if (!abandoned()) {
+          discardSink();
+          setState((prevState) => ({
+            ...prevState,
+            status: 'error',
+            message:
+              error instanceof Error ? error.message : 'Failed to receive',
+            connectionFailed: error instanceof P2PConnectionError,
+          }));
+        }
+      } finally {
+        // A superseded run's refs already belong to the newer receive.
+        if (runRef.current === run) {
+          receivingRef.current = false;
+          offerStepRef.current = null;
+          switchRef.current = null;
+          // A transfer that connected directly bootstrapped a Tor client it
+          // never used; it goes with the transfer either way.
+          const transport = transportRef.current;
+          transportRef.current = null;
+          transport?.close();
+          if (rtcRef.current) {
+            rtcRef.current.close();
+            rtcRef.current = null;
+          }
         }
       }
-    }
-  };
+    },
+    [discardSink],
+  );
+
+  const startReceive = useCallback(
+    (options: CodeReceiveOptions) => {
+      // Guard against concurrent invocations
+      if (receivingRef.current) return;
+      receivingRef.current = true;
+      cancelledRef.current = false;
+      setReceivedContent(null);
+      // The previous transfer's payload (if any) is gone from the UI now.
+      discardSink();
+
+      // Start the receive flow
+      void doReceive(options.bridge);
+    },
+    [discardSink, doReceive],
+  );
 
   return {
     state,

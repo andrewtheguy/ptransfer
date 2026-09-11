@@ -321,7 +321,7 @@ export function useQRScanner(options: UseQRScannerOptions) {
   // Restart camera when facingMode or preferLowRes changes
   const facingModeRef = useRef(facingMode);
   const preferLowResRef = useRef(preferLowRes);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — only react to facingMode/preferLowRes changes; switchCamera identity changes with them and would cause duplicate runs
+  // The refs make it a no-op when only switchCamera's identity changed.
   useEffect(() => {
     const facingModeChanged = facingModeRef.current !== facingMode;
     const preferLowResChanged = preferLowResRef.current !== preferLowRes;
@@ -335,7 +335,7 @@ export function useQRScanner(options: UseQRScannerOptions) {
 
     facingModeRef.current = facingMode;
     preferLowResRef.current = preferLowRes;
-  }, [facingMode, preferLowRes]);
+  }, [facingMode, preferLowRes, switchCamera]);
 
   // Cleanup on unmount
   useEffect(() => {
