@@ -1,5 +1,5 @@
 import { ENCRYPTED_CHUNK_OVERHEAD, ENCRYPTION_CHUNK_SIZE } from '@/lib/crypto';
-import type { OnionStream } from './webtor';
+import type { OnionStream } from './webtor-api';
 
 /**
  * Message framing over a Tor stream.

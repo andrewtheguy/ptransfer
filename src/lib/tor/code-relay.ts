@@ -1,3 +1,4 @@
+import type { AppendSink } from '@/lib/append-sink';
 import { uint8ArrayToBase64 } from '@/lib/base64';
 import { wipeBufferSource } from '@/lib/crypto/memory';
 import { formatFileSize } from '@/lib/file-utils';
@@ -10,6 +11,7 @@ import {
 } from '@/lib/nostr-file/control';
 import type { NostrFilePool } from '@/lib/nostr-file/pool';
 import type { RelaySession } from '@/lib/nostr-file/session';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorClientHandshake, sendReady } from './handshake';
@@ -273,6 +275,8 @@ function firstMismatch(
 export interface AnonymousRelayReceipt {
   payload: Blob;
   metadata: TransferMetadata;
+  /** The storage behind `payload`, for the caller to discard when done. */
+  sink: AppendSink;
 }
 
 /**
@@ -348,10 +352,12 @@ export async function receiveOverAnonymousRelay(
 
     onStatus('Receiving the file over Tor...');
     await sendReady(framed);
+    const sink = await createAdaptiveAppendSink(metadata.fileSize);
     const payload = await receiveFileOverTor(
       framed,
       keys.contentKey,
       metadata.contentEncoding,
+      sink,
       {
         estimatedBytes: metadata.fileSize,
         isCancelled,
@@ -359,7 +365,7 @@ export async function receiveOverAnonymousRelay(
       },
     );
 
-    return { payload, metadata };
+    return { payload, metadata, sink };
   } finally {
     channel.close();
     await framed?.close();

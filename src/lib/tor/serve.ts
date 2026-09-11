@@ -1,9 +1,9 @@
-import type { TransferMetadata, TransferState } from '@/lib/nostr';
+import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorServiceHandshake } from './handshake';
 import { sendFileOverTor } from './transfer';
-import type { OnionService } from './webtor';
+import type { OnionService } from './webtor-api';
 
 /**
  * Answering an onion service's clients until one of them takes the file.

@@ -1,3 +1,4 @@
+import type { AppendSink } from '@/lib/append-sink';
 import {
   type AnswerConfirmationSigner,
   computeOfferTranscriptHash,
@@ -35,7 +36,7 @@ import {
   createTransferReceiver,
   type TransferReceiver,
 } from '@/lib/p2p-transfer';
-import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import {
   deriveOnionPassword,
   receiveOverAnonymousRelay,
@@ -550,6 +551,8 @@ export interface FallbackReceipt {
   content: ReceivedContent;
   message: string;
   stats?: NostrFileTransferStats;
+  /** The storage behind `content.data`, when it has any, for the caller to discard. */
+  sink?: AppendSink;
 }
 
 export interface FallbackReceiveOptions {
@@ -729,6 +732,7 @@ async function receiveOverTorFallback(
   });
   opts.poolHolder.current = pool;
   let payload: Blob;
+  let sink: AppendSink;
   let received: FileMetadata;
   try {
     // From here until the client is up, its progress is the transfer's only
@@ -769,6 +773,7 @@ async function receiveOverTorFallback(
       },
     });
     payload = receipt.payload;
+    sink = receipt.sink;
     received = {
       fileName: receipt.metadata.fileName,
       fileSize: payload.size,
@@ -786,7 +791,12 @@ async function receiveOverTorFallback(
     pool.destroy();
   }
 
-  if (isCancelled()) return null;
+  // A cancel that lands after the last frame leaves a payload nobody will
+  // read, so its scratch file goes now rather than at the next sweep.
+  if (isCancelled()) {
+    await sink.discard();
+    return null;
+  }
   return {
     content: {
       contentType: 'file',
@@ -796,5 +806,6 @@ async function receiveOverTorFallback(
       mimeType: received.mimeType,
     },
     message: 'File received through Tor!',
+    sink,
   };
 }

@@ -1,4 +1,9 @@
+import { receive } from './commands/receive';
+import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
+import { routeDiagnostics } from './diagnostics';
+import { INTERRUPTED_STATUS, InterruptedError } from './interrupt';
+import { UsageError } from './usage';
 
 /**
  * The pTransfer command line, on Bun.
@@ -14,16 +19,22 @@ import { torTest } from './commands/tor-test';
 const USAGE = `usage: ptransfer <command> [options]
 
 commands:
+  send       publish an onion service that serves one file
+  receive    take the file an onion service is serving
   tor-test   bootstrap Tor, publish an onion service, and connect back to it
 
 Run a command with --help for its options.
 `;
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
+  send,
+  receive,
   'tor-test': torTest,
 };
 
 async function main(argv: string[]): Promise<number> {
+  // Quiet until a command has read its own --verbose.
+  routeDiagnostics(false);
   const [command, ...rest] = argv;
   if (
     !command ||
@@ -45,8 +56,13 @@ async function main(argv: string[]): Promise<number> {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (error: unknown) => {
+    if (error instanceof InterruptedError) process.exit(INTERRUPTED_STATUS);
+    if (error instanceof UsageError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(2);
+    }
     process.stderr.write(
-      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+      `${error instanceof Error ? error.message : String(error)}\n`,
     );
     process.exit(1);
   },

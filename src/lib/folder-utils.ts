@@ -1,5 +1,5 @@
 import { type FlateError, Zip, ZipPassThrough } from 'fflate';
-import { type TransferSource, zipWireUpperBound } from './transfer-source';
+import { deflateUpperBound, type TransferSource } from './transfer-source';
 
 /**
  * ZIP entry compressed with the browser's native CompressionStream.
@@ -59,6 +59,46 @@ class ZipNativeDeflate extends ZipPassThrough {
   terminate(): void {
     void this.deflateWriter.abort().catch(() => {});
   }
+}
+
+/**
+ * What one ZIP entry costs beyond its own bytes: a local file header, a
+ * streaming data descriptor, and a central directory record, plus zip64 extra
+ * fields. The entry path is stored twice, so it is counted separately.
+ */
+const ZIP_PER_ENTRY_BYTES = 160;
+/** End-of-central-directory, plus the zip64 records that may precede it. */
+const ZIP_TRAILER_BYTES = 128;
+
+/**
+ * An upper bound on the archive a selection will produce. Every entry is
+ * deflated individually, so each contributes its own deflate bound as well as
+ * its share of the ZIP's bookkeeping — which is what makes a selection of many
+ * tiny files cost far more on the wire than the sum of its file sizes.
+ */
+export function zipWireUpperBound(files: readonly File[]): number {
+  let total = ZIP_TRAILER_BYTES;
+  for (const file of files) {
+    const path = file.webkitRelativePath || file.name;
+    total +=
+      deflateUpperBound(file.size) +
+      ZIP_PER_ENTRY_BYTES +
+      2 * new TextEncoder().encode(path).length;
+  }
+  return total;
+}
+
+/**
+ * The wire bound for a selection, before it has been turned into a source:
+ * a lone loose file is deflated, anything else becomes a ZIP. Lets a picker
+ * refuse a selection without building the source first.
+ */
+export function projectedWireBytesFor(
+  files: readonly File[],
+  willZip: boolean,
+): number {
+  if (willZip) return zipWireUpperBound(files);
+  return files[0] ? deflateUpperBound(files[0].size) : 0;
 }
 
 /**

@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
-import {
-  type ChannelMessage,
-  createDataChannelDuplex,
-  type DuplexChannel,
-} from './duplex-channel';
+import { createDataChannelDuplex } from './data-channel';
+import type { ChannelMessage, DuplexChannel } from './duplex-channel';
 
 function duplexPair(threshold?: number) {
   const [dcA, dcB] = fakeDataChannelPair();

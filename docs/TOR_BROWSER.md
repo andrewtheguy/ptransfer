@@ -104,7 +104,11 @@ diagnosable failure and a silent one.
 | `src/lib/tor/handshake.ts` | The spec's handshake frames and key schedule |
 | `src/lib/tor/framing.ts` | `TorFramedStream` — `[kind][length][payload]` over the stream |
 | `src/lib/tor/transfer.ts` | The size caps, and `createTorLink`: the framed stream as the link the shared transfer protocol runs on |
-| `src/hooks/use-tor-send.ts`, `use-tor-receive.ts` | The accept loop, its bounds, and the UI state |
+| `src/lib/tor/serve.ts` | `serveUntilSent` — the sender's accept loop and its bounds, run by both hosts |
+| `src/hooks/use-tor-send.ts`, `use-tor-receive.ts` | The tab's sender and receiver, and their UI state |
+| `cli/tor/bootstrap.ts` | The CLI's bootstrap: the cached or freshly fetched directory, then the client |
+| `cli/commands/send.ts`, `receive.ts` | `send --tor` and `receive --onion`, the terminal's sender and receiver |
+| `cli/transfer/files.ts` | A file on disk as a transfer source, and the part-file sink that never overwrites |
 
 Above the framing, `sendFileOverLink` and `createTransferReceiver` in
 `src/lib/p2p-transfer.ts` are the identical code the WebRTC path runs — one
@@ -117,12 +121,12 @@ serializes its frame writes.
 ## Testing it
 
 `bun run test:live:tor:web` runs a transfer between two browser tabs over real
-circuits — one publishes a service, the other connects to it — and
-`bun run cli tor-test` is the CLI's own live self-check: it fetches the
-directory, bootstraps, fetches a page from a real onion service (the Tor
-Project's site unless `--url` names another), publishes an onion service, and
-connects back to it.
-Both need the network.
+circuits — one publishes a service, the other connects to it —
+`bun run test:live:tor:cli` does the same between a `send --tor` and a
+`receive --onion` process, and `bun run cli tor-test` is the CLI's own live
+self-check: it fetches the directory, bootstraps, fetches a page from a real
+onion service (the Tor Project's site unless `--url` names another), publishes
+an onion service, and connects back to it. All three need the network.
 
 ```bash
 # a local Snowflake bridge, so the directory download is local
@@ -130,6 +134,7 @@ cd ../webtor-rs && scripts/local-bridge/bridge.sh start
 
 cd ../ptransfer
 eval "$(../webtor-rs/scripts/local-bridge/bridge.sh env)" && bun run test:live:tor:web
+eval "$(../webtor-rs/scripts/local-bridge/bridge.sh env)" && bun run test:live:tor:cli
 ```
 
 Without a local bridge it still works, on the public one, and takes

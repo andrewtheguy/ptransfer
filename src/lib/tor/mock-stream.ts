@@ -1,4 +1,4 @@
-import type { OnionStream } from './webtor';
+import type { OnionStream } from './webtor-api';
 
 /**
  * An in-memory pair of `OnionStream`s wired to each other, for exercising the

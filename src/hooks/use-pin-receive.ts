@@ -1,5 +1,6 @@
 import type { Event } from 'nostr-tools';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppendSink } from '@/lib/append-sink';
 import {
   acceptOffer,
   buildDirectAttempt,
@@ -56,7 +57,6 @@ import {
 } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
-import type { AppendSink } from '@/lib/scratch-sink';
 import type { TorBridge } from '@/lib/tor/client';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import type { WebRTCConnection } from '@/lib/webrtc';
@@ -191,6 +191,10 @@ export function usePinReceive(): UsePinReceiveReturn {
     discardSink();
     setReceivedContent(null);
   }, [cancel, discardSink]);
+
+  // Navigating away ends the transfer and drops a completed payload: nothing
+  // reaches this hook once it is gone, so neither can be read again.
+  useEffect(() => () => reset(), [reset]);
 
   const receive = useCallback(
     async (pinMaterial: PinKeyMaterial, options: PinReceiveOptions) => {
@@ -990,7 +994,15 @@ export function usePinReceive(): UsePinReceiveReturn {
               if (!abandoned()) setState(update);
             },
           });
-          if (!receipt || receipt === 'switched' || abandoned()) return;
+          if (!receipt || receipt === 'switched') return;
+          if (abandoned()) {
+            void receipt.sink?.discard();
+            return;
+          }
+          // Held like a direct receive's sink: a reset, the next receive, or
+          // unmounting discards it. The direct attempt was disposed above, so
+          // there is no other sink in the ref to lose.
+          sinkRef.current = receipt.sink ?? null;
           setReceivedContent(receipt.content);
           setState({
             status: 'complete',

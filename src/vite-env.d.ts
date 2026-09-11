@@ -17,3 +17,15 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/**
+ * V8's `captureStackTrace`, present in Chrome and absent elsewhere. The
+ * browser build declares it optional here; Bun's own types already declare it
+ * for the CLI, which is why `src/lib/errors.ts` does not.
+ */
+interface ErrorConstructor {
+  captureStackTrace?(
+    targetObject: object,
+    constructorOpt?: NewableFunction,
+  ): void;
+}

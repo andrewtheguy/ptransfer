@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { installOpfsMock, type OpfsMock } from '../../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE } from '../crypto';
 import { P2PConnectionError } from '../errors';
+import { createAdaptiveAppendSink } from '../scratch-sink';
 import type { TransferSource } from '../transfer-source';
 import { TorFramedStream } from './framing';
 import { createOnionStreamPair } from './mock-stream';
@@ -97,7 +98,8 @@ describe('Tor transfer', () => {
       },
     );
     // As the hooks do: the file is whole, so the stream goes.
-    const receiving = receiveFileOverTor(client, contentKey, 'identity', {
+    const sink = await createAdaptiveAppendSink(data.length);
+    const receiving = receiveFileOverTor(client, contentKey, 'identity', sink, {
       estimatedBytes: data.length,
     }).then(async (payload) => {
       await client.close();
@@ -129,7 +131,8 @@ describe('Tor transfer', () => {
     };
 
     const sending = sendFileOverTor(service, contentKey, source);
-    const receiving = receiveFileOverTor(client, contentKey, 'identity', {
+    const sink = await createAdaptiveAppendSink(0);
+    const receiving = receiveFileOverTor(client, contentKey, 'identity', sink, {
       onProgress: () => {
         cancelled = true;
       },

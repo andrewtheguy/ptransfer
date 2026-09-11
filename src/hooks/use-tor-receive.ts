@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import {
   bootstrapTorClient,
   closeTorClient,
@@ -52,6 +54,15 @@ export function useTorReceive(): UseTorReceiveReturn {
   const receivingRef = useRef(false);
   const clientRef = useRef<WebtorClient | null>(null);
   const framedRef = useRef<TorFramedStream | null>(null);
+  // Storage behind the received payload, which receivedContent.data reads
+  // from until a reset or the next receive drops it.
+  const sinkRef = useRef<AppendSink | null>(null);
+
+  const discardSink = useCallback(() => {
+    const sink = sinkRef.current;
+    sinkRef.current = null;
+    if (sink) void sink.discard();
+  }, []);
 
   // Everything this owns is taken and cleared before the first await.
   // `receive` releases its guard before tearing down, so a Receive Another can
@@ -74,17 +85,21 @@ export function useTorReceive(): UseTorReceiveReturn {
 
   const reset = useCallback(() => {
     cancelledRef.current = true;
+    discardSink();
     setReceivedContent(null);
     setState({ status: 'idle' });
     void teardown();
-  }, [teardown]);
+  }, [teardown, discardSink]);
 
+  // Navigating away ends the transfer and drops a completed payload: nothing
+  // reaches this hook once it is gone, so neither can be read again.
   useEffect(
     () => () => {
       cancelledRef.current = true;
+      discardSink();
       void teardown();
     },
-    [teardown],
+    [teardown, discardSink],
   );
 
   const receive = useCallback(
@@ -93,6 +108,8 @@ export function useTorReceive(): UseTorReceiveReturn {
       receivingRef.current = true;
       cancelledRef.current = false;
       setReceivedContent(null);
+      // The previous transfer's payload (if any) is gone from the UI now.
+      discardSink();
 
       try {
         // Both inputs are checked before the bootstrap, which otherwise spends
@@ -156,10 +173,12 @@ export function useTorReceive(): UseTorReceiveReturn {
         });
 
         await sendReady(framed);
+        const sink = await createAdaptiveAppendSink(metadata.fileSize);
         const payload = await receiveFileOverTor(
           framed,
           keys.contentKey,
           metadata.contentEncoding,
+          sink,
           {
             estimatedBytes: metadata.fileSize,
             isCancelled: () => cancelledRef.current,
@@ -177,8 +196,13 @@ export function useTorReceive(): UseTorReceiveReturn {
         // Cancelling between the last frame and this point still means the
         // user asked for nothing: publishing the payload here would hand back
         // a file — and a 'complete' state — after `cancel()` reset the UI.
-        if (cancelledRef.current) return;
+        // Nothing else will read the payload, so its scratch file goes now.
+        if (cancelledRef.current) {
+          await sink.discard();
+          return;
+        }
 
+        sinkRef.current = sink;
         setReceivedContent({
           contentType: 'file',
           data: payload,
@@ -208,7 +232,7 @@ export function useTorReceive(): UseTorReceiveReturn {
         await teardown();
       }
     },
-    [teardown],
+    [teardown, discardSink],
   );
 
   return { state, receivedContent, receive, cancel, reset };

@@ -22,14 +22,32 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Command line
 
-The same code is headed for the terminal. `cli/` is a Bun application that imports
+The same code runs in a terminal. `cli/` is a Bun application that imports
 the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
 are the ones the browser tab runs, so a change to the app is a change to the
 CLI by construction. What the CLI adds is what a process has and a page does
 not — files, a cache directory, and plain HTTP to the Tor directory
 authorities, which turns the minutes-long browser bootstrap into seconds.
 
-Today it carries one command, a live self-check of the Tor path:
+Today it sends and receives a single file over a Tor onion service, the tab's
+Tor Onion Service mode run from the same code:
+
+```bash
+# sender: prints an .onion address and a one-time password, then waits
+bun run cli send --tor ./report.pdf
+
+# receiver: asks for the password (or reads it from a pipe) and saves
+# report.pdf in the current directory
+bun run cli receive --onion <address>.onion
+```
+
+The password is read from standard input rather than a flag, so it stays out of
+shell history and the process list. The receiver never overwrites a file; if
+the name is taken it declines, and the sender keeps waiting for another try.
+Folders, a choice of destination, and the other modes follow; see
+[docs/ROADMAP.md](./docs/ROADMAP.md).
+
+It also carries a live self-check of the Tor path:
 
 ```bash
 bun run cli tor-test
@@ -40,8 +58,8 @@ cached under the platform's per-user cache directory while that still
 describes the network, bootstraps the Tor client over the Snowflake websocket
 bridge, fetches a page from the Tor Project's onion site (`--url` picks
 another), publishes a v3 onion service of its own, connects back to it through
-the network, and prints how long each step took. Transfers from the terminal follow; see
-[docs/ROADMAP.md](./docs/ROADMAP.md).
+the network, and prints how long each step took. `send` and `receive` bootstrap
+the same way, from the same cache.
 
 ## Browser Requirements
 

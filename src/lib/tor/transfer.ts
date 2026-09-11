@@ -1,3 +1,4 @@
+import type { AppendSink } from '@/lib/append-sink';
 import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import type {
   ChannelEndReason,
@@ -10,7 +11,6 @@ import {
   sendFileOverLink,
   type TransferLink,
 } from '@/lib/p2p-transfer';
-import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TransferSource, WireEncoding } from '@/lib/transfer-source';
 import { LINGER_TIMEOUT_MS, type TorFramedStream } from './framing';
 
@@ -214,17 +214,19 @@ export interface TorReceiveOptions {
 }
 
 /**
- * Receive a payload from an authenticated Tor stream. Resolves once the
- * sender's `end` has checked out against everything stored; the caller then
- * closes the stream, which is what tells the sender it may let go.
+ * Receive a payload from an authenticated Tor stream into `sink`, which is
+ * the host's: the browser tab's scratch storage or the CLI's destination
+ * file. Resolves once the sender's `end` has checked out against everything
+ * stored; the caller then closes the stream, which is what tells the sender
+ * it may let go. A failed transfer discards the sink.
  */
 export async function receiveFileOverTor(
   framed: TorFramedStream,
   contentKey: CryptoKey,
   encoding: WireEncoding,
+  sink: AppendSink,
   opts: TorReceiveOptions = {},
 ): Promise<Blob> {
-  const sink = await createAdaptiveAppendSink(opts.estimatedBytes ?? 0);
   const receiver = createTransferReceiver(contentKey, encoding, sink, {
     onProgress: opts.onProgress,
     estimatedBytes: opts.estimatedBytes,

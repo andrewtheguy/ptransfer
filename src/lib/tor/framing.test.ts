@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_FRAME_BYTES, TorFramedStream } from './framing';
 import { createOnionStreamPair } from './mock-stream';
-import type { OnionStream } from './webtor';
+import type { OnionStream } from './webtor-api';
 
 function pair(): [TorFramedStream, TorFramedStream] {
   const [a, b] = createOnionStreamPair();

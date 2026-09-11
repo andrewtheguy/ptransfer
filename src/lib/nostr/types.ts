@@ -186,12 +186,3 @@ export interface ConfirmPayload {
 
 // Re-export shared received-content types
 export type { ReceivedContent, ReceivedFile } from '../types';
-
-// WebRTC Signaling
-export type SignalingType = 'offer' | 'answer' | 'candidate';
-
-export interface SignalingPayload {
-  type: SignalingType;
-  sdp?: string;
-  candidate?: RTCIceCandidateInit;
-}

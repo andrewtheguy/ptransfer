@@ -10,11 +10,8 @@ import {
   getPinLocator,
   wipeBufferSource,
 } from '@/lib/crypto';
-import {
-  downloadFile,
-  formatFileSize,
-  getMimeTypeDescription,
-} from '@/lib/file-utils';
+import { downloadFile } from '@/lib/download-file';
+import { formatFileSize, getMimeTypeDescription } from '@/lib/file-utils';
 import type { ReceiveInput as ReceiveInputValue } from '@/lib/receive-input';
 import { extractOnionFromUrl, extractPinFromUrl } from '@/lib/receive-link';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';

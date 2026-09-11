@@ -1,7 +1,5 @@
-import {
-  createDataChannelDuplex,
-  type DuplexChannel,
-} from '@/lib/duplex-channel';
+import { createDataChannelDuplex } from '@/lib/data-channel';
+import type { DuplexChannel } from '@/lib/duplex-channel';
 
 export type WebRTCSignal =
   | { type: 'offer'; sdp: string }

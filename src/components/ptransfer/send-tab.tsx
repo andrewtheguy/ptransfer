@@ -24,14 +24,16 @@ import type { TransferMode } from '@/contexts/send-context';
 import { useSend } from '@/contexts/send-context';
 import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
-import { supportsFolderSelection } from '@/lib/folder-utils';
+import {
+  projectedWireBytesFor,
+  supportsFolderSelection,
+} from '@/lib/folder-utils';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import {
   TOR_MAX_TRANSFER_BYTES,
   TOR_MAX_WIRE_BYTES,
   TOR_SUGGESTED_MAX_BYTES,
 } from '@/lib/tor/transfer';
-import { projectedWireBytesFor } from '@/lib/transfer-source';
 import { TorBridgeChoice } from './tor-bridge-choice';
 
 // Extend input element to include webkitdirectory attribute
