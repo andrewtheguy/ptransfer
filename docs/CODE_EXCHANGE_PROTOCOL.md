@@ -12,10 +12,9 @@ this document specifies holds there unchanged; only the carriage differs, and
 §6 says what that changes.
 
 This document is the **wire specification** for that mode. The browser tab
-runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
-transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
-implementation; where the code and this document disagree, this document is
-what the code is meant to do. The user-facing guide to the
+runs it from `src/lib`, and the CLI in `cli/` runs the same code, so there is
+one implementation; where the code and this document disagree, this document
+is what the code is meant to do. The user-facing guide to the
 same mode is [CODE_EXCHANGE.md](./CODE_EXCHANGE.md).
 
 What Code Exchange shares with [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md)
@@ -352,9 +351,9 @@ How a code reaches the other device is not part of this contract. What is:
 - **QR** is browser-only today: the offer is chunked across URL QR codes and
   the answer is a single binary QR. The chunking, its CRC-32, and the URL form
   are specified in [ARCHITECTURE.md](./ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts).
-  The CLI will carry the same container as text through the copy/paste half;
-  a terminal has no camera to read either QR back with, so an answer will
-  reach it as text however its offer travelled.
+  The CLI carries the same container as text through the copy/paste half; a
+  terminal has no camera to read either QR back with, so an answer reaches it
+  as text however its offer travelled.
 
 - **PIN Exchange** carries each code whole, sealed under its PAKE session's
   signals key, as specified in

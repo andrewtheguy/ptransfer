@@ -11,7 +11,6 @@ import {
 } from '@/lib/nostr-file/control';
 import type { NostrFilePool } from '@/lib/nostr-file/pool';
 import type { RelaySession } from '@/lib/nostr-file/session';
-import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorClientHandshake, sendReady } from './handshake';
@@ -22,7 +21,7 @@ import {
 } from './onion-address';
 import { serveUntilSent } from './serve';
 import { receiveFileOverTor, TOR_MAX_TRANSFER_BYTES } from './transfer';
-import type { OnionService, WebtorClient } from './webtor';
+import type { OnionService, WebtorClient } from './webtor-api';
 
 /**
  * Code Exchange's anonymous relay fallback: the rendezvous that lets two pages
@@ -249,6 +248,8 @@ export interface AnonymousRelayReceiveOptions extends ChannelContext {
    * descriptions of different files mean one of them is not this transfer.
    */
   expected: TransferMetadata;
+  /** Where the file is written as it arrives, once the handshake agrees. */
+  createSink: (metadata: TransferMetadata) => Promise<AppendSink>;
 }
 
 /**
@@ -352,7 +353,7 @@ export async function receiveOverAnonymousRelay(
 
     onStatus('Receiving the file over Tor...');
     await sendReady(framed);
-    const sink = await createAdaptiveAppendSink(metadata.fileSize);
+    const sink = await options.createSink(metadata);
     const payload = await receiveFileOverTor(
       framed,
       keys.contentKey,

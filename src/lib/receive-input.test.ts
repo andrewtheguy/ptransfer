@@ -16,13 +16,7 @@ const mockOffer: RTCSessionDescriptionInit = {
   type: 'offer',
   sdp: 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 1 RTP/AVP 111\r\nc=IN IP4 127.0.0.1',
 };
-const mockCandidates: RTCIceCandidate[] = [
-  {
-    candidate: 'candidate:1 1 UDP 123 127.0.0.1 12345 typ host',
-    sdpMid: '0',
-    sdpMLineIndex: 0,
-  } as RTCIceCandidate,
-];
+const mockCandidates = ['candidate:1 1 UDP 123 127.0.0.1 12345 typ host'];
 
 function buildOfferBinary(): Uint8Array {
   const publicKey = new Uint8Array(65).fill(1);

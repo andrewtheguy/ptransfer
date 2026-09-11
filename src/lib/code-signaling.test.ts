@@ -29,13 +29,7 @@ describe('Code Exchange Signaling Utils', () => {
     type: 'offer',
     sdp: 'v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 1 RTP/AVP 111\r\nc=IN IP4 127.0.0.1',
   };
-  const mockCandidates: RTCIceCandidate[] = [
-    {
-      candidate: 'candidate:1 1 UDP 123 127.0.0.1 12345 typ host',
-      sdpMid: '0',
-      sdpMLineIndex: 0,
-    } as RTCIceCandidate,
-  ];
+  const mockCandidates = ['candidate:1 1 UDP 123 127.0.0.1 12345 typ host'];
   const mockPublicKey = new Uint8Array(65).fill(1);
   mockPublicKey[0] = 4; // Uncompressed point prefix
   const mockSalt = new Uint8Array(16).fill(2);
@@ -69,7 +63,7 @@ describe('Code Exchange Signaling Utils', () => {
     expect(parsed?.type).toBe('offer');
     expect(parsed?.sdp).toBe(mockOffer.sdp);
     expect(parsed?.candidates).toHaveLength(1);
-    expect(parsed?.candidates[0]).toBe(mockCandidates[0].candidate);
+    expect(parsed?.candidates[0]).toBe(mockCandidates[0]);
     expect(parsed?.fileName).toBe(metadata.fileName);
     expect(parsed?.contentEncoding).toBe(metadata.contentEncoding);
     expect(parsed?.publicKey).toEqual(Array.from(mockPublicKey));
@@ -404,9 +398,7 @@ describe('answer confirmation tag', () => {
   const offer: RTCSessionDescriptionInit = { type: 'offer', sdp: 'v=0' };
   const salt = new Uint8Array(16).fill(2);
   const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'v=0\r\na' };
-  const iceCandidates = [
-    { candidate: 'candidate:1 1 UDP 123 10.0.0.1 5000 typ host' },
-  ] as RTCIceCandidate[];
+  const iceCandidates = ['candidate:1 1 UDP 123 10.0.0.1 5000 typ host'];
 
   /** The offer bytes a sender would show, for a fresh sender keypair. */
   async function makeOffer(fileName = 'test.txt') {
@@ -426,7 +418,7 @@ describe('answer confirmation tag', () => {
   /** What the receiver does: agree on a key, then sign the answer it sends. */
   async function makeAnswer(
     offerBinary: Uint8Array,
-    candidates: RTCIceCandidate[] = [],
+    candidates: string[] = [],
   ) {
     const parsed = parseMutualPayload(offerBinary) as SignalingPayload;
     const receiverKeys = await generateECDHKeyPair();

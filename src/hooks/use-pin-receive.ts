@@ -1,6 +1,7 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppendSink } from '@/lib/append-sink';
+import { BROWSER_EXCHANGE_HOST } from '@/lib/code-exchange/browser-host';
 import {
   acceptOffer,
   buildDirectAttempt,
@@ -58,6 +59,7 @@ import {
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient } from '@/lib/tor/client';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
@@ -297,14 +299,15 @@ export function usePinReceive(): UsePinReceiveReturn {
         const torProgress = createTorProgress();
         let bootstrapOnScreen = true;
         if (options.anonymous) {
+          const onStatus = (message: string) => {
+            torProgress.push(message);
+            if (bootstrapOnScreen && !abandoned()) {
+              setState({ status: 'connecting', message });
+            }
+          };
           transport = new AnonymousSignalingTransport({
-            bridge: options.bridge,
-            onStatus: (message) => {
-              torProgress.push(message);
-              if (bootstrapOnScreen && !abandoned()) {
-                setState({ status: 'connecting', message });
-              }
-            },
+            bootstrap: () =>
+              bootstrapTorClient({ bridge: options.bridge, onStatus }),
           });
         }
         client = createNostrClient(
@@ -951,6 +954,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         const attempt = await buildDirectAttempt({
           offer,
           keys,
+          host: BROWSER_EXCHANGE_HOST,
           sinkHolder: sinkRef,
           rtcHolder,
           connectionTimeoutMs: fallbackRelays
@@ -993,6 +997,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           const receipt = await receiveOverFallback({
             offer,
             keys,
+            host: BROWSER_EXCHANGE_HOST,
             transport,
             torProgress,
             hold: null,

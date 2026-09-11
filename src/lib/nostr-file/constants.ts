@@ -161,7 +161,10 @@ export const RELAY_SESSION_INFO = 'ptransfer-nostr-file:v1:session';
 export const CONTROL_MESSAGE_MAX_BYTES = 256 * 1024;
 
 export const RELAY_CACHE_DATABASE_NAME = 'ptransfer:nostr-file:relay-cache';
-export const RELAY_CACHE_DATABASE_VERSION = 2;
+// The relay cache's format, wherever it is kept: the tab's IndexedDB database
+// version and the version field of the CLI's file. A cache of another version
+// is discarded whole, never migrated — it is disposable.
+export const RELAY_CACHE_VERSION = 2;
 export const RELAY_CACHE_STATE_STORE = 'relay-pool-state';
 export const RELAY_CACHE_HEALTH_STORE = 'relay-health';
 // Lifetime of a discovery or a failed verdict. A healthy relay is exempt and

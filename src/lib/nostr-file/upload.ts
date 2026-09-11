@@ -16,7 +16,6 @@ import {
 import type { NostrFilePool } from './pool';
 import {
   canonicalUrls,
-  createIndexedDbRelayPool,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
@@ -509,14 +508,15 @@ export function prepareStorageRelays(
      * DEFAULT_RELAYS.
      */
     seeds?: string[];
-    storage?: RelayPoolStorage;
+    /** The relay cache the sweep behind the ring keeps up to date. */
+    storage: RelayPoolStorage;
     relayOverride?: string[];
     signal?: AbortSignal;
     isCancelled?: () => boolean;
     onProgress?: (p: UploadProgress) => void;
   },
 ): PreparedStorageRelays {
-  const storage = opts.storage ?? createIndexedDbRelayPool();
+  const { storage } = opts;
   const stats = opts.stats ?? createTransferStats('sender');
   const isCancelled = () =>
     opts.signal?.aborted === true || opts.isCancelled?.() === true;

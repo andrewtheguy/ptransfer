@@ -408,7 +408,8 @@ export function estimatePayloadSize(payload: SignalingPayload): number {
  */
 export function generateMutualOfferBinary(
   offer: RTCSessionDescriptionInit,
-  candidates: RTCIceCandidate[],
+  /** Every gathered ICE candidate, as its SDP `candidate:` line. */
+  candidates: string[],
   metadata: {
     createdAt: number;
     fileName: string;
@@ -429,7 +430,7 @@ export function generateMutualOfferBinary(
   const payload: SignalingPayload = {
     type: 'offer',
     sdp: offer.sdp || '',
-    candidates: candidates.map((c) => c.candidate),
+    candidates: [...candidates],
     createdAt: metadata.createdAt,
     fileName: metadata.fileName,
     fileSize: metadata.fileSize,
@@ -467,7 +468,8 @@ export type AnswerConfirmationSigner = (
  */
 export async function generateMutualAnswerBinary(
   answer: RTCSessionDescriptionInit,
-  candidates: RTCIceCandidate[],
+  /** Every gathered ICE candidate, as its SDP `candidate:` line. */
+  candidates: string[],
   publicKey: Uint8Array, // ECDH public key (65 bytes)
   sign: AnswerConfirmationSigner,
   createdAt: number = Date.now(),
@@ -475,7 +477,7 @@ export async function generateMutualAnswerBinary(
   const payload: SignalingPayload = {
     type: 'answer',
     sdp: answer.sdp || '',
-    candidates: candidates.map((c) => c.candidate),
+    candidates: [...candidates],
     createdAt,
     publicKey: Array.from(publicKey),
   };

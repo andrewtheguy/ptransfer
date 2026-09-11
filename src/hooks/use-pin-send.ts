@@ -1,5 +1,6 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { BROWSER_EXCHANGE_HOST } from '@/lib/code-exchange/browser-host';
 import { hangUp } from '@/lib/code-exchange/hang-up';
 import {
   completeSend,
@@ -63,6 +64,7 @@ import {
 } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient } from '@/lib/tor/client';
 import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
@@ -314,14 +316,15 @@ export function usePinSend(): UsePinSendReturn {
         // progress is the page's.
         let bootstrapOnScreen = true;
         if (options.anonymous) {
+          const onStatus = (message: string) => {
+            torProgress.push(message);
+            if (bootstrapOnScreen && !abandoned()) {
+              setState({ status: 'connecting', message });
+            }
+          };
           transport = new AnonymousSignalingTransport({
-            bridge: options.bridge,
-            onStatus: (message) => {
-              torProgress.push(message);
-              if (bootstrapOnScreen && !abandoned()) {
-                setState({ status: 'connecting', message });
-              }
-            },
+            bootstrap: () =>
+              bootstrapTorClient({ bridge: options.bridge, onStatus }),
           });
         }
 
@@ -341,6 +344,7 @@ export function usePinSend(): UsePinSendReturn {
           : 'relay';
         fallback = startSenderFallback({
           kind: fallbackKind,
+          host: BROWSER_EXCHANGE_HOST,
           transport,
           isCancelled: abandoned,
         });
@@ -790,6 +794,7 @@ export function usePinSend(): UsePinSendReturn {
         let offerOnScreen = false;
         const offerBuild = createSenderOffer({
           metadata,
+          host: BROWSER_EXCHANGE_HOST,
           fallback: preparedFallback,
           isCancelled: abandoned,
           report: (update) => {

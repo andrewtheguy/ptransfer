@@ -27,7 +27,6 @@ import {
 } from '@/lib/nostr/anonymous-transport';
 import { ANONYMOUS_SIGNALING_RELAYS } from '@/lib/nostr/relays';
 import { watchForReceiverHello } from '@/lib/nostr-file/hello-watch';
-import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-pool';
 import {
   deriveRelaySession,
   type RelaySession,
@@ -54,6 +53,7 @@ import type { TransferSource } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 import { lingerAfterSend } from './hang-up';
+import type { ExchangeHost } from './host';
 import { chunkBytesEstimate, readSourceFully } from './relay-source';
 import type { TorProgress } from './tor-progress';
 
@@ -154,6 +154,8 @@ export interface SenderFallback {
 
 export function startSenderFallback(opts: {
   kind: SendFallbackKind;
+  /** Where the clearnet fallback's relay cache lives. */
+  host: ExchangeHost;
   /** Required for the anonymous fallback; ignored otherwise. */
   transport?: AnonymousSignalingTransport | null;
   isCancelled: () => boolean;
@@ -198,7 +200,7 @@ export function startSenderFallback(opts: {
     // no fallback.
     const relayPool = createTransferPool();
     pool = relayPool;
-    const storage = createIndexedDbRelayPool();
+    const storage = opts.host.relayStorage();
     const setPhase = (next: RelayResolvePhase) => {
       phase = next;
       resolveListener?.(next);
@@ -295,6 +297,8 @@ export interface SenderOffer {
  */
 export async function createSenderOffer(opts: {
   metadata: TransferMetadata;
+  /** What the peer connection is built on. */
+  host: ExchangeHost;
   fallback: SenderFallback;
   isCancelled: () => boolean;
   report: (update: SendReport) => void;
@@ -310,21 +314,22 @@ export async function createSenderOffer(opts: {
   if (isCancelled()) return null;
 
   report({ status: 'generating_offer', message: 'Creating P2P offer...' });
-  const iceCandidates: RTCIceCandidate[] = [];
+  const iceCandidates: string[] = [];
   let offerSDP: RTCSessionDescriptionInit | null = null;
   let announceChannel!: (channel: DuplexChannel) => void;
   const channelOpened = new Promise<DuplexChannel>((resolve) => {
     announceChannel = resolve;
   });
   const rtc = new WebRTCConnection(
+    opts.host.peerConnection,
     getWebRTCConfig(),
     (signal) => {
       // Collected rather than trickled: there is nothing to trickle them
       // over, so the offer carries every candidate gathered below.
       if (signal.type === 'offer') {
         offerSDP = { type: 'offer', sdp: signal.sdp };
-      } else if (signal.type === 'candidate' && signal.candidate) {
-        iceCandidates.push(new RTCIceCandidate(signal.candidate));
+      } else if (signal.type === 'candidate' && signal.candidate?.candidate) {
+        iceCandidates.push(signal.candidate.candidate);
       }
     },
     (channel) => announceChannel(channel),
@@ -428,6 +433,44 @@ export function readAnswer(answerBinary: Uint8Array): SignalingPayload {
   return parsed;
 }
 
+/**
+ * Whether `answer` carries a confirmation tag for this offer. The tag is
+ * keyed by the shared secret and bound to both this offer and the answer's
+ * own contents, so only a peer that read this offer and completed the same
+ * agreement can produce one, and only for the answer it actually sent: an
+ * answer meant for another transfer, a replayed answer, and one whose SDP or
+ * candidates were altered on the way back all fail here instead of surfacing
+ * later as a connection that never opens.
+ */
+async function confirmsAnswer(
+  offer: SenderOffer,
+  answer: SignalingPayload,
+  sharedSecretKey: CryptoKey,
+): Promise<boolean> {
+  const expected = await deriveAnswerConfirmation(sharedSecretKey, offer.salt, {
+    offerTranscriptHash: await computeOfferTranscriptHash(offer.offerBinary),
+    answerTranscriptHash: await computeAnswerTranscriptHash(answer),
+  });
+  const presented = decodeAnswerConfirmation(answer.confirm);
+  return presented !== null && constantTimeEqualBytes(presented, expected);
+}
+
+/**
+ * Whether `answer`, parsed by `readAnswer`, is a response to this offer.
+ * `completeSend` refuses one that is not; a host that would rather ask for
+ * the response again than end the transfer checks here first.
+ */
+export async function answersOffer(
+  offer: SenderOffer,
+  answer: SignalingPayload,
+): Promise<boolean> {
+  const sharedSecretKey = await deriveSharedSecretKey(
+    offer.privateKey,
+    new Uint8Array(answer.publicKey),
+  );
+  return await confirmsAnswer(offer, answer, sharedSecretKey);
+}
+
 const CODE_CONNECTION_TIMEOUT_MS = 120000;
 // When a fallback is available, the direct attempt is capped well below the
 // full timeout: the offerer keeps real candidates to try against the
@@ -485,26 +528,8 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     new Uint8Array(answer.publicKey),
   );
 
-  // Key confirmation before anything in the answer is acted on. The tag is
-  // keyed by the shared secret just derived and bound to both this offer and
-  // the answer's own contents, so only a peer that read this offer and
-  // completed the same agreement can produce one, and only for the answer it
-  // actually sent: an answer meant for another transfer, a replayed answer,
-  // and one whose SDP or candidates were altered on the way back all fail
-  // here instead of surfacing later as a connection that never opens.
-  const expectedConfirmation = await deriveAnswerConfirmation(
-    sharedSecretKey,
-    salt,
-    {
-      offerTranscriptHash: await computeOfferTranscriptHash(offer.offerBinary),
-      answerTranscriptHash: await computeAnswerTranscriptHash(answer),
-    },
-  );
-  const presentedConfirmation = decodeAnswerConfirmation(answer.confirm);
-  if (
-    !presentedConfirmation ||
-    !constantTimeEqualBytes(presentedConfirmation, expectedConfirmation)
-  ) {
+  // Key confirmation before anything in the answer is acted on.
+  if (!(await confirmsAnswer(offer, answer, sharedSecretKey))) {
     throw new Error(opts.answerMismatchMessage);
   }
 

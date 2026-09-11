@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { judgeDescription } from '@/lib/tor/directory-policy';
 import type { DirectoryDescription } from '@/lib/tor/webtor-api';
+import { defaultCacheDir } from '../cache-dir';
 
 /**
  * The Tor directory seed on disk, under the user's cache directory.
@@ -18,20 +18,6 @@ import type { DirectoryDescription } from '@/lib/tor/webtor-api';
  */
 
 const SEED_FILE = 'tor-directory.json';
-
-/**
- * Where this system keeps a user's caches: `~/Library/Caches` on macOS, the
- * XDG cache directory everywhere else. The XDG base directory spec has a
- * relative `XDG_CACHE_HOME` ignored.
- */
-export function defaultCacheDir(): string {
-  const home = homedir();
-  if (process.platform === 'darwin') {
-    return join(home, 'Library', 'Caches', 'ptransfer');
-  }
-  const xdg = process.env.XDG_CACHE_HOME;
-  return join(xdg && isAbsolute(xdg) ? xdg : join(home, '.cache'), 'ptransfer');
-}
 
 export interface DirectoryStore {
   /** The stored seed, if there is one and it still describes the network. */

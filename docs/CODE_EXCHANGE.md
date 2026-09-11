@@ -3,12 +3,12 @@
 This guide is intentionally high-level and user-focused.
 For protocol internals, signaling payload format, and implementation details, see [Architecture](ARCHITECTURE.md).
 
-The browser tab runs Code Exchange from `src/lib`, and the CLI in `cli/` will
-run the same code once its transfer commands land ([ROADMAP.md](ROADMAP.md));
-either side of a transfer will then be a tab or a terminal. Only the *way* a
-code is carried will differ, because a terminal has no camera — the CLI will copy and
-paste text where the browser also offers QR. The wire specification is
-[CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md).
+The browser tab runs Code Exchange from `src/lib`, and so does the CLI in
+`cli/` (`ptransfer send --code` and `ptransfer receive --code`), so either side
+of a transfer can be a tab or a terminal. Only the *way* a code is carried
+differs, because a terminal has no camera — the CLI copies and pastes text
+where the browser also offers QR; see [From a terminal](#from-a-terminal). The
+wire specification is [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md).
 
 Two fallbacks exist: the **ordinary relay fallback** over public Nostr relays,
 and the **anonymous signaling and relay** option. A
@@ -301,9 +301,41 @@ checked (see
 As everywhere else in Code Exchange, the offer remains the secret for the whole
 transfer, and the sender's own scan or paste remains the gate.
 
+## From a terminal
+
+The CLI runs the same exchange with the codes as text: the same text the tab's
+**Copy Data** gives and its **Paste** tab takes, so a tab and a terminal can be
+the two ends of one transfer, either way round.
+
+```bash
+ptransfer send --code ./report.pdf    # prints the code, then asks for the response
+ptransfer receive --code              # asks for the code, then prints the response
+```
+
+- **The code a command prints goes to standard output**, one line, so it can be
+  copied or piped on; its instructions and progress go to standard error.
+- **A code is read from standard input**: pasted at a prompt, where it is taken
+  as soon as it is whole — wrapped over several lines or not — or piped in.
+  Pressing Enter on an empty line gives up on text that did not form a code and
+  asks again. A code never goes on the command line, which would leave it in
+  shell history and the process list.
+- **The sender only acts on a response to its own code.** A response that does
+  not match is refused with the same check the tab makes, and the sender asks
+  for the response again rather than ending the transfer.
+- **The fallback is the sender's to choose**, as in the tab: `send --code
+  --anonymous` asks for the Tor fallback, and a receiver handed such a code
+  starts Tor itself, over the bridge its own `--bridge` names.
+- **The file is saved under the sender's name** in the current directory or the
+  folder `--out` names, and never over an existing file: a receiver whose name
+  is taken refuses before it answers.
+- **Testing the fallback**: `receive --code --simulate-no-direct` is the
+  command-line counterpart of **Simulate no direct connection** — it answers
+  with none of its network routes, so the file takes the fallback the code
+  names.
+
 ## Tips
 
-- **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them. The CLI will have copy/paste only, and that half is enough to transfer with a browser on the other end
+- **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them. The CLI has copy/paste only, and that half is enough to transfer with a browser on the other end
 - **Order doesn't matter (QR)**: Multi-QR offer codes can be scanned in any order
 - **Duplicates are fine (QR)**: Scanning the same QR code twice won't cause issues
 - **Copy/paste fallback**: If cameras aren't available, use **Copy Data** on the sending side and

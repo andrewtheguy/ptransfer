@@ -16,11 +16,7 @@ import {
   HEALTH_CHECK_PROBE_BYTES,
   HEALTH_CHECK_TARGET_COUNT,
   HEALTH_CHECK_TIMEOUT_MS,
-  RELAY_CACHE_DATABASE_NAME,
-  RELAY_CACHE_DATABASE_VERSION,
-  RELAY_CACHE_HEALTH_STORE,
   RELAY_CACHE_MAX_ENTRIES,
-  RELAY_CACHE_STATE_STORE,
   RELAY_CANDIDATE_TTL_MS,
 } from './constants';
 import { buildProbeEvent } from './events';
@@ -60,7 +56,11 @@ export interface CachedRelay {
   supportsStorage: boolean;
 }
 
-/** Injected persistence so node tests never touch IndexedDB. */
+/**
+ * Where the relay cache persists: IndexedDB in the browser tab
+ * (`relay-cache-idb.ts`), a file in the CLI. Best effort on every side — a
+ * read that fails is an empty cache, and a write that fails is dropped.
+ */
 export interface RelayPoolStorage {
   getState(): Promise<RelayPoolState | null>;
   setState(state: RelayPoolState): Promise<void>;
@@ -68,51 +68,8 @@ export interface RelayPoolStorage {
   setRelayHealth(relays: CachedRelay[]): Promise<void>;
 }
 
-const RELAY_POOL_STATE_KEY = 'current';
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function transactionDone(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
-  });
-}
-
-function openRelayCache(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(
-      RELAY_CACHE_DATABASE_NAME,
-      RELAY_CACHE_DATABASE_VERSION,
-    );
-    request.onupgradeneeded = (event) => {
-      const database = request.result;
-      // The relay cache is disposable. A database-version change always
-      // resets it to the current schema instead of migrating or retaining
-      // stores from an older version.
-      if (event.oldVersion !== 0) {
-        for (const storeName of Array.from(database.objectStoreNames)) {
-          database.deleteObjectStore(storeName);
-        }
-      }
-      database.createObjectStore(RELAY_CACHE_STATE_STORE);
-      database.createObjectStore(RELAY_CACHE_HEALTH_STORE, {
-        keyPath: 'url',
-      });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('Relay cache upgrade blocked'));
-  });
-}
-
-function parseRelayPoolState(value: unknown): RelayPoolState | null {
+/** A stored state, or null when it is not one. */
+export function parseRelayPoolState(value: unknown): RelayPoolState | null {
   if (!value || typeof value !== 'object') return null;
   const state = value as Record<string, unknown>;
   if (
@@ -140,7 +97,8 @@ function validNullableTimestamp(value: unknown): value is number | null {
   );
 }
 
-function parseRelayHealth(value: unknown): CachedRelay[] {
+/** Stored health entries, keeping only the well-formed ones. */
+export function parseRelayHealth(value: unknown): CachedRelay[] {
   if (!Array.isArray(value)) return [];
   const byUrl = new Map<string, CachedRelay>();
   for (const entry of value) {
@@ -257,97 +215,22 @@ export function canonicalUrls(urls: string[]): string[] {
   ];
 }
 
-export function createIndexedDbRelayPool(): RelayPoolStorage {
-  return {
-    async getState() {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_STATE_STORE,
-          'readonly',
-        );
-        const value = await requestResult(
-          transaction
-            .objectStore(RELAY_CACHE_STATE_STORE)
-            .get(RELAY_POOL_STATE_KEY),
-        );
-        await transactionDone(transaction);
-        return parseRelayPoolState(value);
-      } catch {
-        return null;
-      } finally {
-        database?.close();
-      }
-    },
-    async setState(state) {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_STATE_STORE,
-          'readwrite',
-        );
-        const candidates = [
-          ...new Set(
-            state.candidates
-              .map(normalizeRelayUrl)
-              .filter((url): url is string => url !== null),
-          ),
-        ];
-        transaction
-          .objectStore(RELAY_CACHE_STATE_STORE)
-          .put({ ...state, candidates }, RELAY_POOL_STATE_KEY);
-        await transactionDone(transaction);
-      } catch {
-        // Cache persistence never prevents a transfer.
-      } finally {
-        database?.close();
-      }
-    },
-    async getRelayHealth() {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_HEALTH_STORE,
-          'readonly',
-        );
-        const value = await requestResult(
-          transaction.objectStore(RELAY_CACHE_HEALTH_STORE).getAll(),
-        );
-        await transactionDone(transaction);
-        return parseRelayHealth(value);
-      } catch {
-        return [];
-      } finally {
-        database?.close();
-      }
-    },
-    async setRelayHealth(relays) {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_HEALTH_STORE,
-          'readwrite',
-        );
-        const store = transaction.objectStore(RELAY_CACHE_HEALTH_STORE);
-        store.clear();
-        const byUrl = new Map<string, CachedRelay>();
-        for (const relay of relays) {
-          const url = normalizeRelayUrl(relay.url);
-          if (url) byUrl.set(url, { ...relay, url });
-        }
-        for (const relay of byUrl.values()) store.put(relay);
-        await transactionDone(transaction);
-      } catch {
-        // Cache persistence never prevents a transfer.
-      } finally {
-        database?.close();
-      }
-    },
-  };
+/** A state as storage keeps it: its candidates canonical and deduped. */
+export function storedRelayPoolState(state: RelayPoolState): RelayPoolState {
+  return { ...state, candidates: canonicalUrls(state.candidates) };
+}
+
+/**
+ * Health entries as storage keeps them: one per canonical URL, the last one
+ * given for a URL winning.
+ */
+export function storedRelayHealth(relays: CachedRelay[]): CachedRelay[] {
+  const byUrl = new Map<string, CachedRelay>();
+  for (const relay of relays) {
+    const url = normalizeRelayUrl(relay.url);
+    if (url) byUrl.set(url, { ...relay, url });
+  }
+  return [...byUrl.values()];
 }
 
 /**

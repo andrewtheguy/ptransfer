@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The seam is `@/lib/tor/client`: bootstrapping, directory seeding, and the
- * bridge choice are that module's job and are tested there. What is left here
- * is the only thing this file adds — a browser `WebSocket` built on top of an
- * onion stream, which `nostr-tools` drives without knowing the difference.
+ * The seam is the `bootstrap` the host hands in: bootstrapping, directory
+ * seeding, and the bridge choice are the host's job and are tested there.
+ * What is left here is the only thing this file adds — a browser `WebSocket`
+ * built on top of an onion stream, which `nostr-tools` drives without knowing
+ * the difference.
  */
 const torMocks = vi.hoisted(() => {
   const sent: string[] = [];
@@ -36,6 +37,7 @@ const torMocks = vi.hoisted(() => {
     close: closeSocket,
   };
   const client = {
+    fetch: vi.fn(),
     connectStream: vi.fn(),
     connectWebSocket: vi.fn(async () => socket),
     publishOnionService: vi.fn(),
@@ -56,12 +58,10 @@ const torMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@/lib/tor/client', () => ({
-  bootstrapTorClient: torMocks.bootstrap,
-  closeTorClient: torMocks.closeClient,
-}));
-
 import { AnonymousSignalingTransport } from './anonymous-transport';
+
+const newTransport = () =>
+  new AnonymousSignalingTransport({ bootstrap: torMocks.bootstrap });
 
 const RELAY =
   'ws://oxtrdevav64z64yb7x6rjg4ntzqjhedm5b5zjqulugknhzr46ny2qbad.onion';
@@ -74,7 +74,7 @@ describe('AnonymousSignalingTransport', () => {
   });
 
   it('adapts the onion socket to the browser WebSocket event API', async () => {
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     await transport.waitUntilReady();
 
     const socket = new transport.websocketImplementation(RELAY);
@@ -104,13 +104,12 @@ describe('AnonymousSignalingTransport', () => {
     await vi.waitFor(() => expect(torMocks.closeClient).toHaveBeenCalled());
   });
 
-  it('passes the chosen bridge straight through to the bootstrap', async () => {
-    const transport = new AnonymousSignalingTransport({ bridge: 'webrtc' });
+  it('bootstraps once, at construction', async () => {
+    const transport = newTransport();
     await transport.waitUntilReady();
+    await transport.torClient();
 
-    expect(torMocks.bootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({ bridge: 'webrtc' }),
-    );
+    expect(torMocks.bootstrap).toHaveBeenCalledOnce();
     transport.close();
   });
 
@@ -124,7 +123,7 @@ describe('AnonymousSignalingTransport', () => {
           rejectConnect = reject;
         }),
     );
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     await transport.waitUntilReady();
 
     const socket = new transport.websocketImplementation(RELAY);
@@ -158,7 +157,7 @@ describe('AnonymousSignalingTransport', () => {
   });
 
   it('rejects non-text Nostr messages', async () => {
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     await transport.waitUntilReady();
     const socket = new transport.websocketImplementation(RELAY);
     await new Promise<void>((resolve) =>
@@ -180,7 +179,7 @@ describe('AnonymousSignalingTransport', () => {
       type: 'binary' as const,
       bytes: new Uint8Array([1, 2, 3]),
     }));
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     await transport.waitUntilReady();
 
     const socket = new transport.websocketImplementation(RELAY);
@@ -208,7 +207,7 @@ describe('AnonymousSignalingTransport', () => {
     // finally woke it, a replacement transfer could own the hook's refs, and
     // the stale run's cleanup would close that transfer's client.
     torMocks.bootstrap.mockImplementationOnce(() => new Promise(() => {}));
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     const failure = expect(transport.waitUntilReady()).rejects.toThrow(
       'Anonymous signaling was cancelled',
     );
@@ -223,9 +222,7 @@ describe('AnonymousSignalingTransport', () => {
     vi.useFakeTimers();
     try {
       torMocks.bootstrap.mockImplementationOnce(() => new Promise(() => {}));
-      const transport = new AnonymousSignalingTransport({
-        bridge: 'websocket',
-      });
+      const transport = newTransport();
       const failure = expect(transport.waitUntilReady()).rejects.toThrow(
         'Anonymous signaling could not reach the Tor network within 5 minutes',
       );
@@ -248,7 +245,7 @@ describe('AnonymousSignalingTransport', () => {
           finishBootstrap = resolve;
         }),
     );
-    const transport = new AnonymousSignalingTransport({ bridge: 'websocket' });
+    const transport = newTransport();
     const failure = expect(transport.waitUntilReady()).rejects.toThrow(
       'Anonymous signaling was cancelled',
     );

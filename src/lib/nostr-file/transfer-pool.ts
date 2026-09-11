@@ -46,10 +46,12 @@ export function createTransferPool(
   let destroyed = false;
   const Base = options.websocketImplementation ?? WebSocket;
 
+  // nostr-tools opens a relay with its URL and nothing else, which is also
+  // the one signature the browser's WebSocket and Bun's have in common.
   class TrackedWebSocket extends Base {
-    constructor(url: string | URL, protocols?: string | string[]) {
+    constructor(url: string | URL) {
       if (destroyed) throw new Error('Transfer pool destroyed');
-      super(url, protocols);
+      super(url);
       sockets.add(this);
       this.addEventListener('close', () => sockets.delete(this));
     }

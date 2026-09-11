@@ -12,9 +12,9 @@ import {
   UPLOAD_RELAY_COUNT,
 } from './constants';
 import { createMockPool, SEED_RELAYS } from './mock-pool';
+import { createIndexedDbRelayPool } from './relay-cache-idb';
 import {
   type CachedRelay,
-  createIndexedDbRelayPool,
   discoverAllRelayCandidates,
   discoverRelayCandidates,
   getRelayCandidates,

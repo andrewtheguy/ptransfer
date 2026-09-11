@@ -81,9 +81,18 @@ no portability layer in between:
      bridge choices the tab offers. The `webrtc` bridge runs on
      node-datachannel's `RTCPeerConnection`, handed to the Tor client as its
      `rtcPeerConnection` option and loaded only when that bridge is chosen.
-3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
-   node-datachannel, with the Nostr file relay as the fallback; codes are
-   carried as text, since a terminal has no camera.
+3. **Code Exchange and PIN Exchange** over a WebRTC data channel supplied by
+   node-datachannel, with the Nostr file relay as the fallback.
+   - **3a** (done): `send --code <path>...` prints the offer as text and reads
+     the response from standard input; `receive --code` reads the offer and
+     prints the response, and `--simulate-no-direct` stands in for the tab's
+     switch of that name. Codes are carried as text, since a terminal has no
+     camera, and are the same text the tab copies and pastes, so either end can
+     be a tab. Both fallbacks run: the Nostr file relay, with the relay cache in
+     `relay-cache.json`, and with `--anonymous` the Tor one. The engine in
+     `src/lib/code-exchange` takes what differs per host as an `ExchangeHost`.
+   - **3b**: PIN Exchange, which carries the same codes over its sealed Nostr
+     channel.
 4. **An OpenTUI terminal UI** — `@opentui/core` with its React bindings,
    `@opentui/react`, so the screens are React like the tab's — and one binary
    per release target from `bun build --compile`.
@@ -136,6 +145,10 @@ Open items, in no particular order:
 - The node-datachannel build plugin rewrites the package's own loader, so it
   breaks when a release changes that loader. A static per-target entry point
   in node-datachannel itself would make the plugin unnecessary.
+- `RelayPoolStorage` is a get and a set, so two CLIs sending at once can each
+  write back a relay cache without the other's latest verdicts. The retired
+  Rust CLI took an advisory lock around a read-modify-write; the interface
+  would need an `update` for the file store to do the same.
 
 ## Backlog (Future Considerations)
 

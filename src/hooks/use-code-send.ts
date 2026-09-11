@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BROWSER_EXCHANGE_HOST } from '@/lib/code-exchange/browser-host';
 import { hangUp } from '@/lib/code-exchange/hang-up';
 import {
   completeSend,
@@ -19,6 +20,7 @@ import { P2PConnectionError } from '@/lib/errors';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { NostrFileTransferStats } from '@/lib/nostr-file/stats';
 import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient } from '@/lib/tor/client';
 import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
@@ -218,17 +220,19 @@ export function useCodeSend(): UseCodeSendReturn {
         const torProgress = createTorProgress();
         let transport: AnonymousSignalingTransport | null = null;
         if (anonymous) {
+          const onStatus = (message: string) => {
+            console.info('[tor] Code Exchange fallback:', message);
+            torProgress.push(message);
+          };
           transport = new AnonymousSignalingTransport({
-            bridge: options.bridge,
-            onStatus: (message) => {
-              console.info('[tor] Code Exchange fallback:', message);
-              torProgress.push(message);
-            },
+            bootstrap: () =>
+              bootstrapTorClient({ bridge: options.bridge, onStatus }),
           });
           transportRef.current = transport;
         }
         const fallback = startSenderFallback({
           kind: anonymous ? 'anonymous' : 'relay',
+          host: BROWSER_EXCHANGE_HOST,
           transport,
           isCancelled,
         });
@@ -257,6 +261,7 @@ export function useCodeSend(): UseCodeSendReturn {
 
         const offer = await createSenderOffer({
           metadata,
+          host: BROWSER_EXCHANGE_HOST,
           fallback,
           isCancelled,
           report,

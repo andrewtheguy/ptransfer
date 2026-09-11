@@ -24,11 +24,10 @@ also fail later if too few storage relays work or the selected relays do not del
 pieces.
 
 This document is the architecture reference and the wire specification for
-this path, which the browser tab runs from `src/lib` and the CLI in `cli/` will
-run from the same code once its transfer commands land ([ROADMAP.md](ROADMAP.md)) —
-it will keep the same relay-health records in a file under the user's
-cache directory rather than IndexedDB. Nothing on the wire depends on the cache
-either way: it changes which candidates are tried first, never what is
+this path, which the browser tab runs from `src/lib` and the CLI in `cli/` runs
+from the same code — keeping the same relay-health records in
+`relay-cache.json` under the user's cache directory rather than IndexedDB.
+Nothing on the wire depends on the cache either way: it changes which candidates are tried first, never what is
 published or how it is read back. An offer names no relays when its sender could not
 prove enough of them, or when it is an anonymous offer, and then there is no
 clearnet fallback for that transfer. For the user-facing guide see
@@ -104,15 +103,17 @@ relay* below covers what happens then.
    `src/lib/nostr/relays.ts`). The seeds are only queried, never candidates themselves:
    `DEFAULT_RELAYS` is the signaling pool and never carries chunks, so a failed discovery
    fails the transfer with the not-enough-relays error rather than degrading to the
-   seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached in
-   IndexedDB for seven days. Fresh discovery is merged with the valid cache on every run, so
+   seeds. Candidates are capped (`DISCOVERY_CANDIDATE_CAP` = 150) and cached —
+   in IndexedDB in the tab, in `relay-cache.json` in the CLI — for seven days. Fresh discovery is merged with the valid cache on every run, so
    new candidates are learned without discarding cached fallbacks. Every candidate has a
    canonical-URL-keyed `relay-health` record containing its discovery/check/success
    timestamps, latest RTT, consecutive failures, and proven control/storage
    capabilities. Relays that passed a probe are kept for as long as they keep passing — a healthy
    entry never expires, only failures and unprobed listings do — and lead later runs
-   by RTT, but are always probed again before receiving file chunks. Cache schema changes
-   reset IndexedDB and recreate only the current stores; cached data is never migrated.
+   by RTT, but are always probed again before receiving file chunks. A change of
+   `RELAY_CACHE_VERSION` resets the cache on both hosts — IndexedDB recreates only
+   the current stores, the CLI ignores a file of another version — and cached data
+   is never migrated.
 2. **Health-check candidates** with a real write→read round trip per relay: a
    production-shaped probe event through the full codec at the full chunk size
    (`HEALTH_CHECK_PROBE_BYTES` = 48 KiB), read back and byte-compared. A relay with a
@@ -464,7 +465,8 @@ sequenceDiagram
 | `src/lib/nostr-file/codec.ts`, `z85.ts` | Whole-payload deflate + chunk content pipeline (AES-256-GCM → Z85) |
 | `src/lib/nostr-file/events.ts` | Chunk/probe event construction and fetch filters |
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
-| `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection |
+| `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection; the relay cache's records and `RelayPoolStorage` |
+| `src/lib/nostr-file/relay-cache-idb.ts`, `cli/code/relay-store.ts` | The relay cache in IndexedDB (tab) and in a file (CLI) |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
 | `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
 | `src/lib/nostr-file/upload.ts` | Publish-with-retry, control/storage relay resolution, and background storage preparation |
