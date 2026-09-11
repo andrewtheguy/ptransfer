@@ -1,49 +1,25 @@
-# pTransfer Interoperable Protocol
+# pTransfer Protocol: PIN Exchange and the Transfer Layer
 
-**Interop protocol version: `6`**
+This document specifies the wire protocol for PIN Exchange and the transfer
+layer every mode shares once a transport is open. The browser tab and the CLI
+in `cli/` both run it from the same code in `src/lib`, so there is one
+implementation and this is its specification: where the code and this document
+disagree, this document is what the code is meant to do.
 
-This document is the normative wire contract between pTransfer implementations.
-The web app is the reference implementation; `ptransfer-cli` is the other
-implementation today. The version above is mirrored by
-[`src/lib/protocol.ts`](../src/lib/protocol.ts) (`INTEROP_PROTOCOL_VERSION`) and
-by `package.metadata.ptransfer-protocol-version` in the CLI's `Cargo.toml`. A
-unit test keeps this document and the constant in step.
-
-## Versioning
-
-A single monotonically increasing integer, deliberately **not** the app's
-version. The app bumps its patch version for any breaking change, and most of
-those land in parts of the app no other implementation speaks; a version that
-moved on every release would say nothing about interoperability.
-
-- Bump it when **anything specified in this document** changes.
-- Leave it alone otherwise, however large the app release — including for an
-  edit to this file that only clarifies what was already specified. *Changing
-  this document* below draws that line.
-
-The version never travels on the wire. There is no negotiation, no capability
-exchange, and no compatibility shim: it is a **build-time coordination value**,
-not a runtime check. Two implementations agree by declaring the same number, and
-the CLI interoperability test compares the two declarations before spending a
-transfer proving it.
-
-Do not rely on a mismatch announcing itself. Some are self-detecting: a changed
-domain separator or transcript field list lands the two sides on different keys
-or digests, so the PAKE seals refuse to open and the confirmation codes
-disagree, and a changed event kind means the receiver simply never finds the
-rendezvous. Others are not detected at all. Rotation windows, bucket counts,
-guessing budgets, timeouts, size limits, and the NIP-40 expiration formula are
-agreed *only* by both sides implementing this document; nothing in the handshake
-covers them, and a peer that quietly widened `PIN_ACTIVE_BUCKETS` would weaken
-every transfer without a single seal noticing. Matching the declared version is
-what rules that out.
-
-What each earlier version changed is this file's git history, and is not
-restated here.
+There is no protocol version separate from the app's. Two peers running
+different app versions are not guaranteed to interoperate — the app bumps its
+patch version for any breaking change, and that is the only version there is.
+Some divergences announce themselves: a changed domain separator or transcript
+field list lands the two sides on different keys or digests, so the PAKE seals
+refuse to open and the confirmation codes disagree, and a changed event kind
+means the receiver simply never finds the rendezvous. Others — rotation
+windows, bucket counts, guessing budgets, timeouts, size limits, the NIP-40
+expiration formula — are agreed only by both sides running the same code, which
+is why the values here are constants and not negotiated.
 
 ## Scope
 
-**In scope — an implementation MUST match all of this:**
+**In scope — what this document fixes:**
 
 - PIN Exchange signaling over Nostr: the rendezvous / claim / confirm handshake,
   the PIN and its SPAKE2 password-authenticated key exchange, the key schedule,
@@ -52,15 +28,12 @@ restated here.
 - The shared transfer layer that runs once a transport is open: wire
   encoding, chunk framing, flow control, completion, and abort (§6–§7).
 
-**Outside this document and its version — none of this may be implemented
-against this document.** Some of it is web-internal, and no other
-implementation should carry it at all; the rest are cross-implementation modes
-governed by separate specifications and version boundaries:
+**Outside this document.** Some of it is host-specific and observable by no
+peer; the rest are modes specified by their own documents:
 
 - **Code Exchange** (the PT01 offer/answer, its ECDH key agreement, its answer
-  confirmation tag, and its anonymous Tor fallback), a cross-implementation
-  mode with its own contract in
-  [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md), versioned separately.
+  confirmation tag, and its anonymous Tor fallback), a mode with its own
+  specification in [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md).
   PIN Exchange carries its two codes (§4.8), so a PIN Exchange session runs
   that contract from the offer on — key schedule, direct attempt, and
   fallbacks — and it governs all of it. What is fixed here is only how the
@@ -74,50 +47,26 @@ governed by separate specifications and version boundaries:
   whether a person carried that offer or a PIN session did. It is governed by
   its own document rather than by this one.
 - **Anonymous signaling** ([ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md)):
-  an experimental PIN Exchange option — implemented by the web app and by
-  `ptransfer-cli` — that carries this same handshake to a disjoint pool of
+  an experimental PIN Exchange option that carries this same handshake to a
+  disjoint pool of
   onion-service relays through a Tor client, and announces itself by minting a
   longer PIN. The handshake on the wire is identical; the transport and the PIN
   length are not. It stays outside this document while the relay pool is
   unmonitored and the option is experimental, and it is specified in its own
-  interoperability contract, the way the Tor onion transfer mode is. Its
-  offers ask for Code Exchange's Tor fallback rather than the clearnet one
-  (§4.8). An
-  implementation that does not implement it MUST reject a PIN that is not
-  exactly `PIN_LENGTH` characters (§1) rather than attempt it — the relay
-  pool such a PIN names is not in this document, so a transfer could not
-  succeed anyway.
-- The **Tor onion transfer mode**, a cross-implementation transport governed
-  and versioned separately by [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
+  document, the way the Tor onion transfer mode is. Its offers ask for Code
+  Exchange's Tor fallback rather than the clearnet one (§4.8). Under this
+  document alone a PIN that is not exactly `PIN_LENGTH` characters (§1) is
+  rejected rather than attempted — the relay pool such a PIN names is not in
+  this document, so a transfer could not succeed anyway.
+- The **Tor onion transfer mode**, a transport specified separately by
+  [TOR_TRANSPORT.md](TOR_TRANSPORT.md).
 - Storage strategy (in-memory vs OPFS scratch), relay health probing and
   caching, UI, timeouts that are purely local resource bounds, and anything
   else that is not observable by the peer.
 
-Where this document and [ARCHITECTURE.md](ARCHITECTURE.md) disagree about the
-interoperable subset, this document wins; ARCHITECTURE.md carries the design
+Where this document and [ARCHITECTURE.md](ARCHITECTURE.md) disagree about
+anything in scope here, this document wins; ARCHITECTURE.md carries the design
 rationale and the browser-only parts.
-
-## Changing this document
-
-This repository is where the shared specification lives. Another implementation
-implements *against* this file rather than keeping a copy of it, so editing this
-file is not by itself a change to that implementation. What decides whether the
-other side has work to do is the version at the top, and nothing else:
-
-| An edit that… | The version | What another implementation must do |
-|---|---|---|
-| changes a value, rule, or byte layout in §1–§9 | bump it | implement the change; until it does, the two declare different versions and are not expected to transfer |
-| writes down a rule that was already true and already implemented — a clarification, a worked example, a test vector pinning existing behaviour | leave it | nothing |
-| touches §10, the rationale, the prose, or a link | leave it | nothing |
-
-Exactly one thing is duplicated across the two repositories, and it is that
-integer: `INTEROP_PROTOCOL_VERSION` in [`src/lib/protocol.ts`](../src/lib/protocol.ts)
-here, `package.metadata.ptransfer-protocol-version` in the CLI's `Cargo.toml`
-there. A unit test in this repo keeps the number in this document and the number
-in the constant in step, and the CLI interoperability test compares the two
-declarations before spending a transfer proving them. Nothing else — no prose,
-no table, no section of this document — is expected to exist in a second copy
-anywhere.
 
 ## Notation
 
@@ -137,12 +86,9 @@ anywhere.
 
 - **Length**: exactly 12 characters, ungrouped, case-sensitive. A PIN of any
   other length MUST be rejected. (A 16-character variant exists, minted by the
-  anonymous-signaling option both current implementations ship; it selects a
-  relay pool outside this document. Rejecting it is the correct behavior for an
-  implementation of this document alone, rather than a limitation. An
-  implementation that also implements
-  [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md) accepts that length under
-  that document, never this one.)
+  anonymous-signaling option; it selects a relay pool outside this document
+  and is accepted under [ANONYMOUS_SIGNALING.md](ANONYMOUS_SIGNALING.md), never
+  this one.)
 - **Alphabet** (`PIN_CHARSET`, 55 characters — letters and digits with the
   ambiguous `0`, `1`, `I`, `O`, `i`, `l`, `o` removed):
 
@@ -371,7 +317,7 @@ doing so for as long as the relay serves it. Anchoring to the bucket bounds
 `created_at` and derives the `#h` tag from the same clock reading, so a clock
 skewed far enough to fail this test has already skewed the hint out of the set
 the receiver queries. A rendezvous that lands outside the window is not a
-rotated PIN — implementations SHOULD NOT report a future-dated one as expired.
+rotated PIN — a receiver SHOULD NOT report a future-dated one as expired.
 
 Candidates are considered newest first, at most one per `transferId`, and at
 most `MAX_CLAIM_CANDIDATES` (8) are claimed. The `#h` query uses `limit: 50` to
@@ -604,8 +550,8 @@ entry by entry and is never recompressed. Either way the final wire length is
 unknown during signaling, which is why `fileSize` is only a hint and `end`
 carries the authoritative count.
 
-Whether a ZIP's entries are stored or deflated is an implementation choice and
-not part of this contract; only the outer `contentEncoding` is.
+Whether a ZIP's entries are stored or deflated is the archiver's choice and
+not part of this document; only the outer `contentEncoding` is.
 
 Receivers MUST bound inflate **output** at `MAX_MESSAGE_SIZE` and abort beyond
 it, as a decompression-bomb guard.
@@ -629,8 +575,8 @@ recover otherwise: an unordered channel still delivers every message, but SCTP
 hands each one up as soon as it reassembles, so a single retransmit lets a
 later chunk overtake an earlier one and the peer rejects the index. Nothing on
 the wire announces the setting, and a loopback or lossless path never reveals
-it, so an implementation whose WebRTC binding defaults differently can pass
-every local test and corrupt every real transfer.
+it, so a host whose WebRTC binding defaults differently can pass every local
+test and corrupt every real transfer.
 
 Both directions are used throughout. The receiver tells the sender what it has
 stored as it stores it, the sender never runs more than a window ahead of
@@ -695,8 +641,8 @@ Every **text** message the transfer sends is one JSON object, its type in `t`:
   `i ≥ stored + TRANSFER_WINDOW_CHUNKS`, where `stored` is the last count it
   acknowledged.
 - The sender MUST abort on an `ack` whose count exceeds the chunks it sent.
-- A sender also applies the transport's own backpressure (the reference
-  implementation drains a data channel at a 1 MiB `bufferedAmountLowThreshold`).
+- A sender also applies the transport's own backpressure (a data channel is
+  drained at a 1 MiB `bufferedAmountLowThreshold`).
 
 ### 7.4 Completion
 
@@ -805,9 +751,9 @@ first.
 
 ## 9. Test vectors
 
-Frozen digests for the two canonicalizations in §4.4 and §4.7. An
-implementation that reproduces both has its field order, version labels, JSON
-escaping, and encodings right — which is most of what silently diverges.
+Frozen digests for the two canonicalizations in §4.4 and §4.7. Code that
+reproduces both has its field order, version labels, JSON escaping, and
+encodings right — which is most of what silently diverges.
 
 ### 9.1 Rendezvous transcript hash
 
@@ -847,14 +793,14 @@ d71c5d4c12479dfb7e1e4f7c9fd169cddd73206e8c369d49a98f7b726a025f84
 ```
 
 Both vectors are pinned in
-[`src/lib/nostr/transcript.test.ts`](../src/lib/nostr/transcript.test.ts) on the
-web side. Changing either digest is a protocol bump, never an accident.
+[`src/lib/nostr/transcript.test.ts`](../src/lib/nostr/transcript.test.ts).
+Changing either digest is a breaking change, never an accident.
 
 ---
 
-## 10. Reference implementation
+## 10. Where the code is
 
-| Section | Web source |
+| Section | Source |
 |---|---|
 | PIN, hint, transfer id | [`src/lib/crypto/pin.ts`](../src/lib/crypto/pin.ts), [`constants.ts`](../src/lib/crypto/constants.ts) |
 | SPAKE2 | [`src/lib/crypto/spake2.ts`](../src/lib/crypto/spake2.ts) |

@@ -10,7 +10,7 @@ import {
 } from './transcript-vectors';
 import type { RendezvousPayload, TransferMetadata } from './types';
 
-// The frozen vectors live in transcript-vectors.ts because the interop spec
+// The frozen vectors live in transcript-vectors.ts because the protocol spec
 // publishes them too; see the note there.
 const SALT = VECTOR_SALT;
 const payload: RendezvousPayload = RENDEZVOUS_VECTOR.payload;

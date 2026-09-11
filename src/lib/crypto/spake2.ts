@@ -174,8 +174,6 @@ export interface PakeIdentities {
  * transfer identity, and fixed role labels keep the two ends apart. Binding
  * the address is what stops a peer that proxies the handshake through to a
  * *different* onion service from sharing a root with either side.
- *
- * Matches ptransfer-cli's `PakeIdentities::tor`.
  */
 export function torPakeIdentities(onion: string): PakeIdentities {
   return {

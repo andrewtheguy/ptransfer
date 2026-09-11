@@ -23,17 +23,16 @@ named no relays or the file is over the 100 MiB cap — the fallback is unavaila
 also fail later if too few storage relays work or the selected relays do not deliver the
 pieces.
 
-This document is the architecture reference, and the contract the two
-implementations meet on: the web app and `ptransfer-cli` both carry this path,
-in both directions, along with the caching around it — the CLI keeps the same
-relay-health records in a file under the user's cache directory and runs the
-same background sweep behind a transfer. Nothing on the wire depends on the
-cache either way: it changes which candidates are tried first, never what is
+This document is the architecture reference and the wire specification for
+this path, which the browser tab and the CLI in `cli/` run from the same code —
+the CLI will keep the same relay-health records in a file under the user's
+cache directory rather than IndexedDB. Nothing on the wire depends on the cache
+either way: it changes which candidates are tried first, never what is
 published or how it is read back. An offer names no relays when its sender could not
 prove enough of them, or when it is an anonymous offer, and then there is no
 clearnet fallback for that transfer. For the user-facing guide see
-[CODE_EXCHANGE.md](CODE_EXCHANGE.md); for the wire contract the two
-implementations share see
+[CODE_EXCHANGE.md](CODE_EXCHANGE.md); for the wire specification of the
+exchange that selects it see
 [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md); for how this mode fits
 into the rest of the app see [ARCHITECTURE.md](ARCHITECTURE.md). All code lives in
 [`src/lib/nostr-file/`](../src/lib/nostr-file/) (see the [code map](#code-map) at the end).
@@ -312,7 +311,7 @@ mid-transfer as well, and it is asymmetric — the sender owns the set:
    It proves no relays of its own and never promotes; it only demotes, on its own
    publish record, so it stops feeding a relay its acknowledgements keep dying on.
 
-An implementation that ignores `ctl` still interoperates: demotion never goes below
+A peer that ignores `ctl` still works with one that sends it: demotion never goes below
 `MIN_CONTROL_RELAYS` and neither side stops listening on a relay it once held, so the
 two publish sets always overlap. It simply forfeits the replacement and rides out the
 transfer on what is left of the offer's set.

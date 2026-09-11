@@ -3,12 +3,9 @@
 // Live Tor web-to-web test: one pTransfer tab publishes a v3 onion service and
 // another fetches it, over real circuits.
 //
-// The CLI interop test covers each half of this against ptransfer-cli — a page
-// serving a descriptor the CLI can fetch, and a page fetching one the CLI
-// published — but never the two halves against each other. This is that
-// pairing, and it runs two *separate browsers* by default, because that is how
-// the mode is actually used: the peers do not share a profile, a directory
-// cache, or a Tor client.
+// It runs two *separate browsers* by default, because that is how the mode is
+// actually used: the peers do not share a profile, a directory cache, or a Tor
+// client.
 //
 //   bun run test:live:tor:web
 //

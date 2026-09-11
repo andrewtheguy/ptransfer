@@ -9,7 +9,6 @@ import {
   RENDEZVOUS_VECTOR,
   VECTOR_SALT,
 } from './nostr/transcript-vectors';
-import { INTEROP_PROTOCOL_VERSION } from './protocol';
 
 /** The `## 9. Test vectors` section, split into its `### 9.x` subsections. */
 function vectorSubsections(): string[] {
@@ -34,30 +33,10 @@ function documentedDigest(section: string): string {
   return block[1];
 }
 
-describe('interop protocol version', () => {
-  it('is a bare monotonic integer', () => {
-    expect(INTEROP_PROTOCOL_VERSION).toMatch(/^[1-9][0-9]*$/);
-  });
-
-  // The spec document is what another implementation reads; the constant is
-  // what its build pins. A bump that lands in only one of the two is the
-  // failure this guards against.
-  it('matches the version declared by docs/INTEROP_PROTOCOL.md', () => {
-    const declared = spec.match(
-      /^\*\*Interop protocol version: `([^`]+)`\*\*$/m,
-    );
-
-    expect(declared, 'spec is missing its version declaration line').not.toBe(
-      null,
-    );
-    expect(declared?.[1]).toBe(INTEROP_PROTOCOL_VERSION);
-  });
-});
-
-// Another implementation checks its canonicalization against the vectors the
-// spec publishes, so a documented input that does not actually produce its
-// documented digest is worse than publishing nothing: it sends someone hunting
-// a bug in working code. Recompute both from the spec's own inputs with the
+// The spec publishes these vectors as the known answers a reader checks the
+// canonicalization against, so a documented input that does not actually
+// produce its documented digest is worse than publishing nothing: it sends
+// someone hunting a bug in working code. Recompute both from the spec's own inputs with the
 // production helpers rather than searching the text for digests, which would
 // pass just as happily with a mangled input or the two digests swapped.
 describe('published transcript vectors', () => {

@@ -10,7 +10,7 @@ import type { OnionService } from './webtor';
  *
  * Split out of `useTorSend` for a reason worth stating: the wait deadline
  * lives in the accept loop and must never end up wrapping a transfer — it once
- * did, on the CLI side, and the only way to hold that line is to drive this
+ * did, in an earlier implementation, and the only way to hold that line is to drive this
  * loop without a Tor client behind it. `OnionService` is an interface, so a
  * test supplies its own.
  */

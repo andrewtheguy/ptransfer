@@ -84,7 +84,7 @@ export function SendTab() {
   // transport's either way.
   const usesTorTransport = transferMode === 'tor' || anonymousRelayActive;
   // The Tor transport's ceiling is far lower than the app's, and it is the
-  // receiver's rule too — a CLI receiver refuses a larger offer outright — so
+  // receiver's rule too — the receiver refuses a larger offer outright — so
   // it is enforced on the selection rather than discovered mid-transfer. For
   // the anonymous fallback that means before a code is handed over: a sender
   // that only found out afterwards would have spent the whole exchange to
@@ -158,7 +158,7 @@ export function SendTab() {
   const torModeDescription =
     'Carry a `.onion` address and a one-time password. Your browser tab publishes a Tor hidden service and the file travels inside Tor — no pTransfer relay and no direct connection between the two networks. Tor infrastructure sees only its slice of transport metadata, not file plaintext or the content key; the descriptor remains retrievable by anyone holding the address until it expires. Slower, capped at 100 MiB, and best kept small — a circuit is slow and there is no resume.';
   const torModeHowItWorksDescription =
-    'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run, and the receiver can be this app or ptransfer-cli.';
+    'This tab generates the service identity, establishes its own introduction points and publishes a signed descriptor, then answers the stream the receiver opens. The address authenticates the service; the password authenticates the receiver through the same SPAKE2 exchange PIN mode uses, and the file is encrypted again inside the circuit. Bootstrapping Tor in a browser takes a while on a first run.';
   const anonymousSignalingHowItWorksDescription =
     'The handshake travels through Tor to onion-service relays, so no Nostr relay learns your IP address, and it is authenticated by the same SPAKE2 exchange your PIN drives. Bootstrapping Tor in the browser takes a while on a first run, and the onion relay pool is small and unmonitored, so this fails more often than ordinary PIN Exchange. File data still goes over a direct encrypted WebRTC connection when one can be made, which Tor does not cover; if none can, an encrypted file up to 100 MiB goes through a Tor onion service this tab publishes rather than public relays.';
   const anonymousRelayHowItWorksDescription =

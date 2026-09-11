@@ -6,14 +6,12 @@ import {
   Send,
   Share2,
   Shield,
-  Terminal,
   Zap,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Hero } from '@/components/hero';
 import { SectionContainer } from '@/components/section-container';
 import { Button } from '@/components/ui/button';
-import { PTRANSFER_CLI_URL } from '@/lib/constants';
 
 const STEPS = [
   {
@@ -130,43 +128,6 @@ export function HomePage() {
           >
             Learn how it stays secure →
           </Link>
-        </div>
-      </SectionContainer>
-
-      {/* Companion CLI */}
-      <SectionContainer>
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 rounded-2xl border border-dashed bg-muted/30 p-6 sm:flex-row sm:items-center sm:gap-6">
-          <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <Terminal className="h-5 w-5" />
-          </div>
-          <div className="flex-1">
-            <h3 className="text-base font-semibold">
-              Working in a terminal? Use ptransfer-cli
-            </h3>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              The companion command-line app speaks the same protocol, so either
-              end of a transfer can be a browser tab or the CLI — handy for a
-              server with no browser. PIN Exchange, Code Exchange and Tor Onion
-              Service all work across both; the CLI carries Code Exchange's
-              codes as text rather than QR.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-4 text-sm">
-              <a
-                href={PTRANSFER_CLI_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-primary hover:underline"
-              >
-                Get ptransfer-cli →
-              </a>
-              <Link
-                to="/about"
-                className="font-medium text-primary hover:underline"
-              >
-                How it interoperates →
-              </Link>
-            </div>
-          </div>
         </div>
       </SectionContainer>
 

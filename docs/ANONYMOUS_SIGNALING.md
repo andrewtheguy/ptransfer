@@ -10,40 +10,27 @@ Code Exchange session an anonymous PIN carries asks for that mode's Tor
 fallback rather than its clearnet one. A direct connection is still WebRTC, so
 the option does not make the transfer as a whole anonymous.
 
-Both implementations ship it, and either side of a transfer may be a browser tab
-or `ptransfer-cli`. This document is the shared specification: the PIN lengths,
-the relay pool, and the URLs a socket may be opened to are the same on both
-sides, and are what make them interoperate. How each side *reaches* Tor is not
-shared and does not have to be — the browser uses its bundled Tor integration,
-while the CLI reaches Tor through its own implementation — and the two only
-ever meet at the relay, inside Tor. It stays outside
-[INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md); see *Interoperability* below.
+The browser tab and the CLI in `cli/` run it from the same code in `src/lib`,
+so either side of a transfer may be a tab or a terminal, and this document is
+the specification of what that code does on the wire. Three things here are
+what the two sides have to agree on, and a peer that runs a different app
+version can only fail closed on them:
 
-## Changing this document
-
-This repository is where this specification lives; the CLI implements against
-it rather than keeping a copy, so editing this file is not by itself a change to
-the CLI. Three things here bind the two implementations — the same three listed
-under *Interoperability* below:
-
-- the two PIN lengths and their layouts,
+- the two PIN lengths and their layouts — a length neither side mints is
+  refused by the length-and-checksum test rather than guessed at;
 - `ANONYMOUS_SIGNALING_RELAYS`: that pool, and nothing else, for an anonymous
-  PIN,
+  PIN — a pool that drifts apart costs connections rather than secrecy, since
+  the two simply never meet on a relay;
 - and the rule that a socket for one may be opened only to
   `ws://<v3 address>.onion`.
 
-There is no version to move here, and none is needed. Every way the two sides
-could drift apart on that list fails closed and says so: a length neither side
-mints is refused by the length-and-checksum test rather than guessed at, and a
-pool that drifts apart costs connections rather than secrecy — the two simply
-never meet on a relay. Compare the Tor transfer mode, whose frames do carry a
-version, and PIN Exchange, whose rotation windows and budgets can diverge
-silently and so need one.
-
-Everything else below — how each side reaches Tor, the timeouts, the bridge
-question, the privacy discussion, where the code lives — is implementation
-detail on one side or the other. Rewording it, or following one implementation's
-code as it moves, asks nothing of the other.
+There is no version to move here, and none is needed; compare the Tor transfer
+mode, whose frames do carry one. Everything else below — how Tor is reached,
+the timeouts, the bridge question, the privacy discussion, where the code
+lives — is host detail, and the option stays outside
+[INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md) while the relay pool is
+unmonitored and the option is experimental. An anonymous PIN's offer asks for
+Code Exchange's Tor fallback or none (that document's §4.8).
 
 ## The PIN carries the mode
 
@@ -123,11 +110,6 @@ fragmentation and control frames, and caps a Nostr message at 1 MiB. Binary
 frames are a protocol error rather than a silent drop: Nostr has no use for
 them.
 
-The CLI reaches the same onion relay pool through its own Tor client. Its
-internal libraries and layout are deliberately documented in the CLI repository
-rather than in this shared specification. The event, subscription, publication,
-signature, SPAKE2, and encryption behavior remains the same on both sides.
-
 In the browser, one Tor client is shared by every relay socket in a session, but
 each socket is its own rendezvous — a descriptor fetch from an HSDir, an
 introduction circuit, and a rendezvous circuit — which is why the pool is kept
@@ -137,8 +119,8 @@ Browser timeouts differ from the clearnet path: a relay socket gets 180 seconds
 to open, and the wait is for a relay to *really* connect (`Promise.any` over
 `ensureRelay`) rather than giving sockets a fixed head start, because a fixed
 wait would hand every publish to a pool with nothing open. The browser bootstrap
-itself additionally gets 5 minutes. CLI timing remains an implementation detail
-documented in its own repository.
+itself additionally gets 5 minutes. The CLI runs the same code with the same
+timeouts.
 
 ## Reusing the browser Tor integration
 
@@ -150,11 +132,11 @@ pTransfer's bridge UI, IndexedDB persistence, stricter directory-seed freshness
 rule, and local development overrides are documented in
 [TOR_BROWSER.md](./TOR_BROWSER.md).
 
-Bridges are a browser concern only; non-browser implementations handle their own
-Tor entry and do not take part in this choice. Both *web* sides expose
-webtor-rs's two Snowflake choices through
-`src/components/ptransfer/tor-bridge-choice.tsx`, independently — every peer
-meets every other inside Tor, so the choices need not match.
+The CLI uses the same webtor-wasm client under Bun, with the websocket bridge;
+the webrtc bridge is browser-only for now. A *web* side exposes webtor-rs's two
+Snowflake choices through `src/components/ptransfer/tor-bridge-choice.tsx`,
+independently of its peer — every peer meets every other inside Tor, so the
+choices need not match.
 
 The sender picks it in **Advanced options** on the send tab, next to the switch.
 The receiver is asked once its PIN turns out to be an anonymous one, before any
@@ -218,11 +200,6 @@ tells nobody anything they could not have learned by watching the transfer.
 | `src/components/ptransfer/anonymous-receive-form.tsx` | The receiver's bridge question |
 | `src/components/ptransfer/tor-bridge-choice.tsx` | The bridge radio group, shared with the Tor mode |
 
-The table above is this repository only. `ptransfer-cli` reaches the same three
-normative points — PIN classification, the relay pool, and the onion-only socket
-rule — through its own implementation, whose internal layout is documented in
-its own repository rather than here.
-
 ## No additional backend
 
 pTransfer remains a static site. The application hosts the generated WASM and
@@ -230,24 +207,3 @@ JavaScript glue alongside its other assets. Runtime dependencies are the public
 Snowflake bridge and broker infrastructure, the Tor directory and onion-service
 infrastructure, and the onion relays; pTransfer operates no
 anonymous-signaling proxy of its own.
-
-## Interoperability
-
-Anonymous signaling is **not** part of
-[INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md), and this document is where it is
-specified instead — the same arrangement the Tor onion transfer mode has in
-[TOR_TRANSPORT.md](./TOR_TRANSPORT.md). It stays outside that document, and its
-version, while the relay pool is unmonitored and the option is experimental —
-not because the two implementations disagree: a browser tab and `ptransfer-cli`
-interoperate in both directions today.
-
-What that means for a third implementation: `INTEROP_PROTOCOL.md` specifies the
-12-character PIN, and an implementation of that document alone must reject a PIN
-of any other length rather than guess at what the extra characters mean.
-Implementing this document is what makes the 16-character length meaningful, and
-it takes three things and no more — mint and classify a PIN at
-`ANONYMOUS_PIN_LENGTH`, use `ANONYMOUS_SIGNALING_RELAYS` for it and nothing
-else, and refuse to open a socket for it to anything but
-`ws://<v3 address>.onion`. Everything else is the handshake `INTEROP_PROTOCOL.md`
-already specifies, unchanged — including the rule, in its §4.8, that an
-anonymous PIN session's offer asks for the Tor fallback or none.

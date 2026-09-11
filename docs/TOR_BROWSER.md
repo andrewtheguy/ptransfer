@@ -1,9 +1,11 @@
 # pTransfer Browser Tor Integration
 
-How this app implements [TOR_TRANSPORT.md](./TOR_TRANSPORT.md). The spec is
-shared with [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) and
-either side of a transfer may be a browser tab or the CLI. This document covers
-only pTransfer's browser-side adapter and policy.
+How this app implements [TOR_TRANSPORT.md](./TOR_TRANSPORT.md) in a page. The
+CLI in `cli/` uses the same Tor client under Bun and the same `src/lib/tor`
+handshake, framing, and transfer code; what differs is the host side — its
+WASM loader and disk cache live in `cli/tor/`, while the directory freshness
+rule both hosts apply is shared from `src/lib/tor/directory-policy.ts`. This
+document covers the browser-side adapter and policy.
 
 ## Ownership boundary
 
@@ -46,7 +48,8 @@ webtor-rs defines the contents, versioning, and cryptographic validation of
 IndexedDB through `src/lib/tor/directory-cache.ts`, or loads a deployment-time
 snapshot from `/tor-directory.json`. Before passing either value back to
 webtor-rs, pTransfer applies a stricter freshness rule that is specific to this
-application.
+application (`judgeDescription` in `src/lib/tor/directory-policy.ts`, which the
+CLI's disk cache applies too).
 
 What gets persisted is whatever webtor-rs downloads, as it downloads it:
 `onDirectoryChange` hands over each new directory, including the refreshes a
@@ -92,7 +95,10 @@ diagnosable failure and a silent one.
 
 | Module | What it does |
 | --- | --- |
-| `src/lib/tor/webtor.ts`, `client.ts` | Loading the WASM client and bootstrapping it |
+| `src/lib/tor/webtor-api.ts` | The typed surface of the WASM client, shared by both hosts' loaders |
+| `src/lib/tor/webtor.ts`, `client.ts` | Loading the WASM client in a page and bootstrapping it |
+| `src/lib/tor/directory-policy.ts` | The directory freshness rule both hosts apply |
+| `cli/tor/webtor.ts`, `directory-fetch.ts`, `directory-store.ts` | The CLI's loader, its plain-HTTP directory download, and its disk cache |
 | `src/lib/tor/directory-cache.ts` | The IndexedDB consensus/microdescriptor seed |
 | `src/lib/tor/onion-address.ts` | Parsing, canonicalizing, and checksum-verifying the address |
 | `src/lib/tor/handshake.ts` | The spec's handshake frames and key schedule |
@@ -109,23 +115,22 @@ loop and `TorFramedStream` serializes its frame writes.
 
 ## Testing it
 
-`bun run test:live:tor` runs both directions against ptransfer-cli over real
-circuits — the CLI publishes a service the page downloads from, then the page
-publishes one the CLI fetches — so a failure names the side that is wrong.
+`bun run test:live:tor:web` runs a transfer between two browser tabs over real
+circuits — one publishes a service, the other connects to it — and
+`bun run cli tor-test` is the CLI's own live self-check: it fetches the
+directory, bootstraps, publishes an onion service, and connects back to it.
+Both need the network.
 
 ```bash
-# the CLI
-cd ../ptransfer-cli && cargo build --release
-
 # a local Snowflake bridge, so the directory download is local
 cd ../webtor-rs && scripts/local-bridge/bridge.sh start
 
 cd ../ptransfer
-eval "$(../webtor-rs/scripts/local-bridge/bridge.sh env)" && bun run test:live:tor
+eval "$(../webtor-rs/scripts/local-bridge/bridge.sh env)" && bun run test:live:tor:web
 ```
 
-`ONLY=cli-to-web` or `ONLY=web-to-cli` runs one leg. Without a local bridge it
-still works, on the public one, and takes considerably longer.
+Without a local bridge it still works, on the public one, and takes
+considerably longer.
 
 For manual testing, the same two variables reach the app as
 `VITE_TOR_BRIDGE_URL` and `VITE_TOR_BRIDGE_FINGERPRINT` (both or neither — a URL

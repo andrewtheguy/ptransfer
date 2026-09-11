@@ -16,8 +16,8 @@ import type { OnionStream } from './webtor';
  * length is capped at one full encrypted chunk, so a peer cannot make this
  * side allocate more than the transfer itself would.
  *
- * Byte-for-byte the framing ptransfer-cli's `src/tor/wire.rs` implements; it
- * is what makes the two implementations interoperable over a raw onion stream.
+ * This is the framing docs/TOR_TRANSPORT.md specifies for a raw onion stream;
+ * both ends of a transfer speak it byte for byte.
  */
 
 const HEADER_LENGTH = 5;
@@ -195,8 +195,8 @@ export class TorFramedStream {
    * END cell, and a peer that has already torn its circuit down by the time
    * this side reads produces a read *failure* instead — "Stream not connected"
    * — which is the same event reported differently. So any read failure is
-   * taken as the end of the conversation, exactly as ptransfer-cli's
-   * `is_disconnect` does; what that end means is the caller's to decide, and
+   * taken as the end of the conversation; what that end means is the
+   * caller's to decide, and
    * every caller here already distinguishes a close between frames from one in
    * the middle of a transfer.
    */

@@ -6,7 +6,7 @@ import {
   TOR_DEFAULT_PORT,
 } from './onion-address';
 
-/** A real address printed by ptransfer-cli, so the checksum is genuine. */
+/** A real v3 address, so the checksum is genuine. */
 const ONION = 'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion';
 /** The Tor Project's own v3 address, as a second independent vector. */
 const OTHER = 'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion';

@@ -19,8 +19,8 @@ import type { WireEncoding } from '@/lib/transfer-source';
 import type { TorFramedStream } from './framing';
 
 /**
- * Password-authenticated handshake for the Tor onion transport, the exact
- * protocol ptransfer-cli's `src/tor/handshake.rs` speaks.
+ * Password-authenticated handshake for the Tor onion transport, as specified
+ * in docs/TOR_TRANSPORT.md.
  *
  * The connecting side arrives holding exactly two things — the `.onion`
  * address and the password the sending side showed — and the handshake turns
@@ -52,8 +52,8 @@ import type { TorFramedStream } from './framing';
 
 /**
  * Version of this handshake. Bumped with any change to the frames below; a
- * mismatch is refused rather than negotiated, and it must move in lockstep
- * with ptransfer-cli's `TOR_HANDSHAKE_VERSION`.
+ * mismatch is refused rather than negotiated, so two app versions that differ
+ * on the frames fail closed.
  */
 export const TOR_HANDSHAKE_VERSION = 1;
 

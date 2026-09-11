@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { judgeDescription } from './directory-cache';
-import type { DirectoryDescription } from './webtor';
+import { judgeDescription } from './directory-policy';
+import type { DirectoryDescription } from './webtor-api';
 
 /**
  * A description shaped the way webtor produces one: periods a day long that

@@ -10,9 +10,8 @@ import type { RendezvousPayload, TransferMetadata } from './types';
  * change a deliberate protocol bump rather than an accident.
  *
  * They live here rather than inside a test file because the spec publishes them
- * for other implementations to check their canonicalization against, and a
- * vector that has quietly drifted from the one this app computes is worse than
- * no vector at all. One definition, checked from both directions.
+ * as the known answers for this canonicalization, and a vector that has quietly
+ * drifted from the one this app computes is worse than no vector at all. One definition, checked from both directions.
  */
 
 /** HKDF salt for the rendezvous vector. */

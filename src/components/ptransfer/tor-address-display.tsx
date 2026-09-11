@@ -115,7 +115,7 @@ interface CopyableValueProps {
   label: string;
   value: string;
   secret?: boolean;
-  /** Handle for the live interop test, which reads the pair off the page. */
+  /** Handle for the live test, which reads the pair off the page. */
   testId: string;
 }
 
