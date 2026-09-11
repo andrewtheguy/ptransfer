@@ -29,8 +29,9 @@ export const TOR_OPTIONS = {
 
 /** Their help text, for a command's usage. */
 export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached directory and download a fresh one
-  --cache-dir <path>       where to keep the directory seed (default: the
-                           platform's per-user cache directory)
+  --cache-dir <path>       where to keep the directory seed (default:
+                           ~/Library/Caches/ptransfer on macOS, otherwise
+                           $XDG_CACHE_HOME/ptransfer or ~/.cache/ptransfer)
   --bridge-url <ws://...>  a Snowflake bridge to use instead of the public one;
                            requires --bridge-fingerprint
   --bridge-fingerprint <hex>`;

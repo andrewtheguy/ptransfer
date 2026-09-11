@@ -22,7 +22,8 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Command line
 
-The same code runs in a terminal. `cli/` is a Bun application that imports
+The same code runs in a terminal on Linux and macOS; there is no Windows
+build (WSL counts as Linux). `cli/` is a Bun application that imports
 the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
 are the ones the browser tab runs, so a change to the app is a change to the
 CLI by construction. What the CLI adds is what a process has and a page does
@@ -54,9 +55,9 @@ bun run cli tor-test
 ```
 
 It downloads the Tor directory from the authorities, or reuses the copy it
-cached under the platform's per-user cache directory while that still
-describes the network, bootstraps the Tor client over the Snowflake websocket
-bridge, fetches a page from the Tor Project's onion site (`--url` picks
+cached in `~/.cache/ptransfer` (under `$XDG_CACHE_HOME` if set, and
+`~/Library/Caches` on macOS) while that still describes the network,
+bootstraps the Tor client over the Snowflake websocket bridge, fetches a page from the Tor Project's onion site (`--url` picks
 another), publishes a v3 onion service of its own, connects back to it through
 the network, and prints how long each step took. `send` and `receive` bootstrap
 the same way, from the same cache.

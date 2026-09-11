@@ -21,7 +21,7 @@ else in this document describes browser-app behavior.
 The CLI's platform seam is small: a WebRTC peer connection, file and cache
 storage in place of OPFS and IndexedDB, and a Tor directory download over
 plain HTTP that a page cannot make. It runs the same webtor-wasm Tor client
-under Bun. What it ships today is Tor send and receive of a single file and a
+under Bun, on Linux and macOS only. What it ships today is Tor send and receive of a single file and a
 Tor self-check; the other modes are on the [roadmap](ROADMAP.md).
 
 ## Core Principles

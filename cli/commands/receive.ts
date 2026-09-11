@@ -13,7 +13,7 @@ import { parseOnionAddress } from '@/lib/tor/onion-address';
 import { receiveFileOverTor, TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
 import type { WebtorClient } from '@/lib/tor/webtor-api';
 import { routeDiagnostics } from '../diagnostics';
-import { INTERRUPTED_STATUS, onInterrupt } from '../interrupt';
+import { onInterrupt } from '../interrupt';
 import { createProgressLine } from '../progress';
 import { readSecret } from '../secret';
 import {
@@ -84,7 +84,8 @@ export async function receive(argv: string[]): Promise<number> {
   }
   const say = (line: string) => process.stderr.write(`${line}\n`);
 
-  let cancelled = false;
+  // The status of the signal that stopped the command, once one has.
+  let interrupted: number | null = null;
   let client: WebtorClient | null = null;
   let framed: TorFramedStream | null = null;
   // Held here rather than left to receiveFileOverTor, which owns it only once
@@ -102,8 +103,8 @@ export async function receive(argv: string[]): Promise<number> {
     await abandonedSink?.discard().catch(() => undefined);
     await closeTor(closingClient);
   };
-  const uninstall = onInterrupt(() => {
-    cancelled = true;
+  const uninstall = onInterrupt((status) => {
+    interrupted = status;
     return teardown();
   });
   const progress = createProgressLine('Receiving');
@@ -159,7 +160,7 @@ export async function receive(argv: string[]): Promise<number> {
       fileSink,
       {
         estimatedBytes: metadata.fileSize,
-        isCancelled: () => cancelled,
+        isCancelled: () => interrupted !== null,
         onProgress: (current, total) => progress.update(current, total),
       },
     );
@@ -171,7 +172,7 @@ export async function receive(argv: string[]): Promise<number> {
     return 0;
   } catch (error) {
     progress.done();
-    if (cancelled) return INTERRUPTED_STATUS;
+    if (interrupted !== null) return interrupted;
     throw error;
   } finally {
     uninstall();

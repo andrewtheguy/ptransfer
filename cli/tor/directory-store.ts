@@ -1,12 +1,11 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { judgeDescription } from '@/lib/tor/directory-policy';
 import type { DirectoryDescription } from '@/lib/tor/webtor-api';
 
 /**
- * The Tor directory seed on disk, under the platform's per-user cache
- * directory.
+ * The Tor directory seed on disk, under the user's cache directory.
  *
  * The browser tab keeps the same string in IndexedDB; the CLI keeps it in a
  * file. What decides whether a stored seed is still worth using is the same
@@ -20,24 +19,18 @@ import type { DirectoryDescription } from '@/lib/tor/webtor-api';
 
 const SEED_FILE = 'tor-directory.json';
 
-/** Where this platform keeps a user's caches. */
+/**
+ * Where this system keeps a user's caches: `~/Library/Caches` on macOS, the
+ * XDG cache directory everywhere else. The XDG base directory spec has a
+ * relative `XDG_CACHE_HOME` ignored.
+ */
 export function defaultCacheDir(): string {
   const home = homedir();
-  switch (process.platform) {
-    case 'darwin':
-      return join(home, 'Library', 'Caches', 'ptransfer');
-    case 'win32':
-      return join(
-        process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'),
-        'ptransfer',
-        'cache',
-      );
-    default:
-      return join(
-        process.env.XDG_CACHE_HOME || join(home, '.cache'),
-        'ptransfer',
-      );
+  if (process.platform === 'darwin') {
+    return join(home, 'Library', 'Caches', 'ptransfer');
   }
+  const xdg = process.env.XDG_CACHE_HOME;
+  return join(xdg && isAbsolute(xdg) ? xdg : join(home, '.cache'), 'ptransfer');
 }
 
 export interface DirectoryStore {

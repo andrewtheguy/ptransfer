@@ -12,7 +12,7 @@ import {
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor-api';
 import { wireEncodingFor } from '@/lib/transfer-source';
 import { routeDiagnostics } from '../diagnostics';
-import { INTERRUPTED_STATUS, onInterrupt } from '../interrupt';
+import { onInterrupt } from '../interrupt';
 import { createProgressLine } from '../progress';
 import {
   bootstrapTor,
@@ -94,7 +94,8 @@ export async function send(argv: string[]): Promise<number> {
     );
   }
 
-  let cancelled = false;
+  // The status of the signal that stopped the command, once one has.
+  let interrupted: number | null = null;
   let client: WebtorClient | null = null;
   let service: OnionService | null = null;
   const teardown = async () => {
@@ -105,8 +106,8 @@ export async function send(argv: string[]): Promise<number> {
     await closingService?.close().catch(() => undefined);
     await closeTor(closingClient);
   };
-  const uninstall = onInterrupt(() => {
-    cancelled = true;
+  const uninstall = onInterrupt((status) => {
+    interrupted = status;
     return teardown();
   });
 
@@ -160,7 +161,7 @@ export async function send(argv: string[]): Promise<number> {
       metadata,
       content,
       fileMetadata,
-      isCancelled: () => cancelled,
+      isCancelled: () => interrupted !== null,
       setState,
     });
     progress.done();
@@ -168,7 +169,7 @@ export async function send(argv: string[]): Promise<number> {
     return 0;
   } catch (error) {
     progress.done();
-    if (cancelled) return INTERRUPTED_STATUS;
+    if (interrupted !== null) return interrupted;
     throw error;
   } finally {
     uninstall();

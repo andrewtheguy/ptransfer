@@ -3,11 +3,12 @@ import {
   type FileHandle,
   link,
   open,
+  rename,
   rm,
   stat,
   unlink,
 } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
@@ -53,17 +54,46 @@ function mimeTypeOf(path: string): string {
   return sniffed || 'application/octet-stream';
 }
 
+/** The longest file name Linux and macOS file systems take, in bytes. */
+const NAME_MAX_BYTES = 255;
+/** What a part file adds to its destination's name: `.<8 hex>.part`. */
+const PART_SUFFIX_BYTES = 14;
+
 /**
  * The name a received file is saved under: the sender's, reduced to one
  * path segment with nothing in it a file name cannot hold. A sender chose it,
  * so it is not trusted to stay in the directory it was given.
+ *
+ * `/` is the only separator a Unix path has; a backslash is an ordinary
+ * character in a file name here, and is kept.
  */
 export function safeFileName(name: string): string {
-  const segment = name.split(/[\\/]/).pop() ?? '';
+  const segment = name.split('/').pop() ?? '';
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are exactly what is being stripped
   const cleaned = segment.replace(/[\x00-\x1f\x7f]/g, '').trim();
   if (cleaned === '' || cleaned === '.' || cleaned === '..') return 'received';
-  return cleaned;
+  return fitName(cleaned, NAME_MAX_BYTES);
+}
+
+/**
+ * `name` cut to at most `limit` bytes of UTF-8, at a character boundary,
+ * keeping a short extension. A sender's system may allow longer names than
+ * this one — 255 UTF-16 units is up to 765 bytes — and a name the file
+ * system refuses would fail the transfer only after the handshake.
+ */
+function fitName(name: string, limit: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(name).length <= limit) return name;
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : '';
+  let fitted = '';
+  let used = encoder.encode(extension).length;
+  for (const char of name.slice(0, name.length - extension.length)) {
+    used += encoder.encode(char).length;
+    if (used > limit) break;
+    fitted += char;
+  }
+  return fitted + extension;
 }
 
 /**
@@ -77,7 +107,15 @@ export function safeFileName(name: string): string {
  */
 export async function createFileSink(destination: string): Promise<AppendSink> {
   await refuseExisting(destination);
-  const partial = `${destination}.${crypto.randomUUID().slice(0, 8)}.part`;
+  // The part file's name fits wherever the destination's does.
+  const stem = fitName(
+    basename(destination),
+    NAME_MAX_BYTES - PART_SUFFIX_BYTES,
+  );
+  const partial = join(
+    dirname(destination),
+    `${stem}.${crypto.randomUUID().slice(0, 8)}.part`,
+  );
   // Exclusive: two receivers in one directory get two part files, never one.
   let handle: FileHandle | null = await open(partial, 'wx');
   let chain: Promise<unknown> = Promise.resolve();
@@ -132,11 +170,23 @@ async function refuseExisting(path: string): Promise<void> {
 }
 
 /**
+ * What `link` fails with on a file system that has no hard links: FAT and
+ * exFAT, which most USB sticks are, and some network mounts. Linux says
+ * EPERM, macOS ENOTSUP.
+ */
+const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
+
+/**
  * Give the part file the destination's name without ever replacing a file
  * that got there first. A check followed by a rename leaves a window in which
  * another process's file appears and is replaced; `link` refuses an existing
  * name with EEXIST in the same step that would create it. The part file's
  * own name goes once the destination has the data.
+ *
+ * Where there are no hard links, the name is claimed with an exclusive
+ * create instead, which refuses an existing file the same way, and the part
+ * file is renamed over that empty claim — its own file, so nothing of anyone
+ * else's is replaced, and nothing is copied.
  */
 async function installWithoutReplacing(
   partial: string,
@@ -145,10 +195,33 @@ async function installWithoutReplacing(
   try {
     await link(partial, destination);
   } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') throw new Error(`${destination} already exists`);
+    if (!code || !NO_HARD_LINKS.has(code)) throw error;
+    await renameOverClaim(partial, destination);
+    return;
+  }
+  await unlink(partial);
+}
+
+async function renameOverClaim(
+  partial: string,
+  destination: string,
+): Promise<void> {
+  let claim: FileHandle;
+  try {
+    claim = await open(destination, 'wx');
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new Error(`${destination} already exists`);
     }
     throw error;
   }
-  await unlink(partial);
+  try {
+    await claim.close();
+    await rename(partial, destination);
+  } catch (error) {
+    await rm(destination, { force: true });
+    throw error;
+  }
 }
