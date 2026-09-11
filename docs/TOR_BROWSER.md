@@ -157,7 +157,7 @@ is released means pointing at its build directory for a while, which
 cd ../webtor-rs && bun run build
 
 cd ../ptransfer
-bun run webtor:local     # -> file:../webtor-rs/webtor-wasm/pkg
+bun run webtor:local     # -> file:../webtor-rs/crates/webtor-wasm/pkg
 bun run webtor:status    # which of the two is installed now
 bun run webtor:released  # -> the tarball for webtor-rs's current version
 ```
