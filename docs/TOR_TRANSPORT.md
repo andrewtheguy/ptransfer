@@ -185,7 +185,10 @@ bad password and malformed handshake are deliberately not distinguished.
 The service keeps waiting afterwards — the address and password are untouched
 by a failed connection, so the real receiver can still come back. A receiver
 that authenticates and then declines (`cancel`, e.g. a destination conflict) is
-not a failure either and leaves the service waiting the same way.
+not a failure either and leaves the service waiting the same way. A payload that
+cannot be read as it was chosen — a file that changed on the sender's side —
+is different: every later receiver would meet it too, so the sender sends
+`abort` with a reason that names no local path, and stops waiting.
 
 ### Bounds
 

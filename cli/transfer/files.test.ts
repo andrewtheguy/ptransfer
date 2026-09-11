@@ -19,7 +19,7 @@ import { createOnionStreamPair } from '@/lib/tor/mock-stream';
 import { serveUntilSent } from '@/lib/tor/serve';
 import { receiveFileOverTor } from '@/lib/tor/transfer';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
-import { wireEncodingFor } from '@/lib/transfer-source';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import {
   createFileSink,
   destinationFolder,
@@ -258,64 +258,100 @@ function oneStreamService(stream: OnionStream): OnionService {
   };
 }
 
-describe('a file on disk to a file on disk', () => {
-  it('goes through the service loop, the handshake, and the framed stream', async () => {
-    const sourcePath = join(dir, 'photo.bin');
-    const data = new Uint8Array(300_000);
-    for (let i = 0; i < data.length; i++) data[i] = (i * 31 + 7) % 251;
-    await writeFile(sourcePath, data);
-    const content = await openFileSource(sourcePath);
-    const metadata: TransferMetadata = {
-      contentType: 'file',
-      fileName: content.name,
-      fileSize: content.estimatedSize,
-      contentEncoding: wireEncodingFor(content),
-      mimeType: content.type,
-    };
-    const [serviceSide, clientSide] = createOnionStreamPair();
+/**
+ * `content` served by the service loop, over a mock onion stream, to a
+ * receiver saving it at `destination`.
+ */
+function serveToFile(content: TransferSource, destination: string) {
+  const metadata: TransferMetadata = {
+    contentType: 'file',
+    fileName: content.name,
+    fileSize: content.estimatedSize,
+    contentEncoding: wireEncodingFor(content),
+    mimeType: content.type,
+  };
+  const [serviceSide, clientSide] = createOnionStreamPair();
 
-    const serving = serveUntilSent({
-      service: oneStreamService(serviceSide),
-      onion: ONION,
-      password: PASSWORD,
-      metadata,
-      content,
-      fileMetadata: {
-        fileName: metadata.fileName,
-        fileSize: metadata.fileSize,
-        mimeType: metadata.mimeType,
-      },
-      isCancelled: () => false,
-      setState: () => {},
-    });
+  const serving = serveUntilSent({
+    service: oneStreamService(serviceSide),
+    onion: ONION,
+    password: PASSWORD,
+    metadata,
+    content,
+    fileMetadata: {
+      fileName: metadata.fileName,
+      fileSize: metadata.fileSize,
+      mimeType: metadata.mimeType,
+    },
+    isCancelled: () => false,
+    setState: () => {},
+  });
 
-    const destination = join(dir, 'received', 'photo.bin');
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(join(dir, 'received'));
-    const receiving = (async () => {
-      const framed = new TorFramedStream(clientSide);
-      const { keys, metadata: offered } = await runTorClientHandshake(
-        framed,
-        PASSWORD,
-        ONION,
-      );
-      expect(offered.fileName).toBe('photo.bin');
-      const sink = await createFileSink(destination);
-      await sendReady(framed);
-      const payload = await receiveFileOverTor(
+  const receiving = (async () => {
+    const framed = new TorFramedStream(clientSide);
+    const { keys, metadata: offered } = await runTorClientHandshake(
+      framed,
+      PASSWORD,
+      ONION,
+    );
+    expect(offered.fileName).toBe(content.name);
+    const sink = await createFileSink(destination);
+    await sendReady(framed);
+    try {
+      return await receiveFileOverTor(
         framed,
         keys.contentKey,
         offered.contentEncoding,
         sink,
         { estimatedBytes: offered.fileSize },
       );
+    } finally {
       await framed.close();
-      return payload;
-    })();
+    }
+  })();
+  return { serving, receiving };
+}
+
+describe('a file on disk to a file on disk', () => {
+  it('goes through the service loop, the handshake, and the framed stream', async () => {
+    const sourcePath = join(dir, 'photo.bin');
+    const data = new Uint8Array(300_000);
+    for (let i = 0; i < data.length; i++) data[i] = (i * 31 + 7) % 251;
+    await writeFile(sourcePath, data);
+    await mkdir(join(dir, 'received'));
+    const destination = join(dir, 'received', 'photo.bin');
+
+    const { serving, receiving } = serveToFile(
+      await openFileSource(sourcePath),
+      destination,
+    );
 
     const [, payload] = await Promise.all([serving, receiving]);
     expect(payload.size).toBe(data.length);
     expect(new Uint8Array(await readFile(destination))).toEqual(data);
     expect(await readdir(join(dir, 'received'))).toEqual(['photo.bin']);
+  });
+
+  it('stops waiting once the file has changed, and does not tell the receiver where it is', async () => {
+    const sourcePath = join(dir, 'photo.bin');
+    await writeFile(sourcePath, 'as chosen');
+    const content = await openFileSource(sourcePath);
+    await writeFile(sourcePath, 'changed since, and longer');
+
+    // The service would hand out no second connection: a sender that went
+    // back to waiting would hang here instead of failing.
+    const { serving, receiving } = serveToFile(content, join(dir, 'got.bin'));
+
+    await expect(serving).rejects.toThrow(
+      `${sourcePath} changed after it was chosen`,
+    );
+    const refused = await receiving.then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(refused?.message).toBe(
+      "The sender stopped the transfer: A file being sent changed on the sender's side",
+    );
+    expect(await readdir(dir)).toEqual(['photo.bin']);
   });
 });

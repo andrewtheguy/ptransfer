@@ -1,5 +1,13 @@
 import type { Dirent, Stats } from 'node:fs';
-import { access, constants, readdir, stat } from 'node:fs/promises';
+import {
+  access,
+  constants,
+  type FileHandle,
+  open,
+  readdir,
+  realpath,
+  stat,
+} from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import {
   archiveTimestamp,
@@ -78,9 +86,9 @@ async function collectEntries(
     }
     named.set(name, path);
     if (info.isFile()) {
-      entries.push(await diskEntry(path, name, info, true));
+      entries.push(await namedEntry(path, name, info));
     } else if (info.isDirectory()) {
-      await walk(path, name, entries, skipped);
+      await walk(path, await realPathOf(path), name, entries, skipped);
     } else {
       throw new Error(`Not a regular file or folder: ${path}`);
     }
@@ -91,8 +99,16 @@ async function collectEntries(
   return { entries, skipped };
 }
 
+/**
+ * The files under `folder`, which the walk reached at `real`: the path it
+ * has when no link is followed. A folder is read, and a file taken, only while
+ * its real path is still the one reached through the chosen folder, so a
+ * folder swapped for a link while the walk is elsewhere cannot bring files
+ * from outside into the archive.
+ */
 async function walk(
   folder: string,
+  real: string,
   prefix: string,
   entries: ZipEntry[],
   skipped: string[],
@@ -107,13 +123,13 @@ async function walk(
   children.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   for (const child of children) {
     const path = join(folder, child.name);
+    const realChild = join(real, child.name);
     const inArchive = `${prefix}/${child.name}`;
     if (child.isDirectory()) {
-      await walk(path, inArchive, entries, skipped);
+      await expectRealPath(path, realChild);
+      await walk(path, realChild, inArchive, entries, skipped);
     } else if (child.isFile()) {
-      entries.push(
-        await diskEntry(path, inArchive, await statPath(path), false),
-      );
+      entries.push(await walkedEntry(path, realChild, inArchive));
     } else {
       skipped.push(path);
     }
@@ -121,25 +137,62 @@ async function walk(
 }
 
 /**
- * A file on disk as a ZIP entry. It is checked for readability now: the
- * archive is only generated once a receiver has connected, and a file that
- * cannot be read would fail the transfer after a Tor bootstrap and a
- * handshake, where there is no resume.
- *
- * `followLink` is for a path named on the command line; a file found in a
- * folder walk is opened only if it is still not a symbolic link.
+ * A file named on the command line as a ZIP entry. It is checked for
+ * readability now: the archive is only generated once a receiver has
+ * connected, and a file that cannot be read would fail the transfer after a
+ * Tor bootstrap and a handshake, where there is no resume. Someone named it,
+ * so a symbolic link to it is followed.
  */
-async function diskEntry(
+async function namedEntry(
   path: string,
   inArchive: string,
   info: Stats,
-  followLink: boolean,
 ): Promise<ZipEntry> {
   try {
     await access(path, constants.R_OK);
   } catch {
     throw new Error(`Cannot read ${path}`);
   }
+  return diskEntry(path, inArchive, info, true);
+}
+
+/**
+ * A file the walk found at `real` as a ZIP entry. Opening it is the
+ * readability check, and pins what is recorded to the file opened: not a
+ * link, and, checked once it is open, still inside the chosen folder.
+ */
+async function walkedEntry(
+  path: string,
+  real: string,
+  inArchive: string,
+): Promise<ZipEntry> {
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP' || code === 'ENOENT') throw changedWhileRead(path);
+    throw new Error(`Cannot read ${path}`);
+  }
+  let info: Stats;
+  try {
+    info = await handle.stat();
+  } catch {
+    throw new Error(`Cannot read ${path}`);
+  } finally {
+    await handle.close();
+  }
+  await expectRealPath(path, real);
+  if (!info.isFile()) throw changedWhileRead(path);
+  return diskEntry(path, inArchive, info, false);
+}
+
+function diskEntry(
+  path: string,
+  inArchive: string,
+  info: Stats,
+  followLink: boolean,
+): ZipEntry {
   return {
     path: inArchive,
     size: info.size,
@@ -148,6 +201,23 @@ async function diskEntry(
     // leaves the service waiting, and the next one gets the whole archive.
     stream: () => chosenFileStream(path, info, followLink),
   };
+}
+
+/** Throws unless `path`, followed through any link, ends up at `expected`. */
+async function expectRealPath(path: string, expected: string): Promise<void> {
+  if ((await realPathOf(path)) !== expected) throw changedWhileRead(path);
+}
+
+async function realPathOf(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    throw new Error(`Cannot read ${path}`);
+  }
+}
+
+function changedWhileRead(path: string): Error {
+  return new Error(`${path} changed while its folder was read; send it again`);
 }
 
 async function statPath(path: string): Promise<Stats> {

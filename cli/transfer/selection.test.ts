@@ -11,8 +11,26 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unzipSync } from 'fflate';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openSelection } from './selection';
+
+/** Runs after each folder the walk lists, to change the tree under it. */
+const afterListing = vi.hoisted(() => ({
+  hook: null as ((folder: string) => Promise<void>) | null,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readdir = actual.readdir as (...args: unknown[]) => Promise<unknown>;
+  return {
+    ...actual,
+    readdir: async (...args: unknown[]) => {
+      const listed = await readdir(...args);
+      await afterListing.hook?.(String(args[0]));
+      return listed;
+    },
+  };
+});
 
 let dir: string;
 
@@ -21,6 +39,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  afterListing.hook = null;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -131,6 +150,38 @@ describe('openSelection', () => {
       'album/2026/a.jpg',
       'album/b.jpg',
     ]);
+  });
+
+  /**
+   * Once the walk has listed `listed`, `photos/2026` becomes a link to a
+   * folder outside `photos` holding an `a.jpg` of its own.
+   */
+  async function swapAfterListing(photos: string, listed: string) {
+    const outside = join(dir, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'a.jpg'), 'secret');
+    afterListing.hook = async (folder) => {
+      if (folder !== listed) return;
+      afterListing.hook = null;
+      await rename(join(photos, '2026'), join(dir, 'moved'));
+      await symlink(outside, join(photos, '2026'));
+    };
+  }
+
+  it('refuses a folder swapped for a link after its parent was listed', async () => {
+    const { photos } = await tree();
+    await swapAfterListing(photos, photos);
+    await expect(openSelection([photos])).rejects.toThrow(
+      `${join(photos, '2026')} changed while its folder was read`,
+    );
+  });
+
+  it('refuses a file reached through a folder swapped for a link', async () => {
+    const { photos } = await tree();
+    await swapAfterListing(photos, join(photos, '2026'));
+    await expect(openSelection([photos])).rejects.toThrow(
+      `${join(photos, '2026', 'a.jpg')} changed while its folder was read`,
+    );
   });
 
   it('refuses two paths that would share a name in the archive', async () => {

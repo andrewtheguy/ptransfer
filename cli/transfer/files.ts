@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AppendSink } from '@/lib/append-sink';
+import { SourceError } from '@/lib/errors';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
 
 /**
@@ -49,7 +50,8 @@ const READ_CHUNK_BYTES = 64 * 1024;
  * a receiver has connected, and again for the next one, so it is opened
  * again each time and refused if it has changed since: another file in its
  * place, a symbolic link where `followLink` says none may be, or a different
- * length — none of which should go out under what was chosen.
+ * length — none of which should go out under what was chosen. Either failure
+ * is a `SourceError`: the receiver is told without the path.
  */
 export function chosenFileStream(
   path: string,
@@ -57,7 +59,15 @@ export function chosenFileStream(
   followLink: boolean,
 ): ReadableStream<Uint8Array> {
   const changed = () =>
-    new Error(`${path} changed after it was chosen; send it again`);
+    new SourceError(
+      `${path} changed after it was chosen; send it again`,
+      "A file being sent changed on the sender's side",
+    );
+  const unreadable = () =>
+    new SourceError(
+      `Cannot read ${path}`,
+      'The sender could not read a file being sent',
+    );
   let handle: FileHandle | null = null;
   let read = 0;
   const close = async () => {
@@ -75,11 +85,11 @@ export function chosenFileStream(
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ELOOP' || code === 'ENOENT') throw changed();
-        throw new Error(`Cannot read ${path}`);
+        throw unreadable();
       }
       const now = await handle.stat().catch(async () => {
         await close();
-        throw new Error(`Cannot read ${path}`);
+        throw unreadable();
       });
       if (
         !now.isFile() ||
@@ -110,7 +120,7 @@ export function chosenFileStream(
         controller.enqueue(buffer.subarray(0, bytesRead));
       } catch (error) {
         await close();
-        throw error instanceof Error ? error : new Error(`Cannot read ${path}`);
+        throw error instanceof SourceError ? error : unreadable();
       }
     },
     cancel: close,

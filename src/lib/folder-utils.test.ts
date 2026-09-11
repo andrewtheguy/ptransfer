@@ -356,6 +356,18 @@ describe('createZipTransferSource', () => {
     ).toThrow('Two files would both be a/notes.txt in the ZIP');
   });
 
+  it.each([
+    ['photos/a\\b.txt', 'photos/a/b.txt'],
+    ['photos/a/b.txt', 'photos\\a\\.\\b.txt'],
+    ['a\\\\b.txt', 'a/b.txt'],
+  ])('refuses %j and %j, which Windows unpacks to one file', (first, second) => {
+    expect(() =>
+      createZipTransferSource([entryOf(first, 1), entryOf(second, 1)], 'x'),
+    ).toThrow(
+      `${first} and ${second} would be one file when the ZIP is unpacked on Windows`,
+    );
+  });
+
   it('keeps a backslash in a Unix file name that stays inside the folder', async () => {
     const source = createZipTransferSource(
       [entryOf('photos/a\\b.txt', 1), entryOf('c\\.\\d.txt', 1)],

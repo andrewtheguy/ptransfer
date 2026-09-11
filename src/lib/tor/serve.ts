@@ -1,3 +1,4 @@
+import { SourceError } from '@/lib/errors';
 import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
@@ -62,6 +63,7 @@ export interface ServeOptions {
  * both just a connection that did not deliver the file: the address and
  * password are untouched either way, so the receiver can come back, and the
  * failure count bounds a stranger who found the address from hammering it.
+ * A payload that cannot be read (a `SourceError`) ends the wait instead.
  */
 export async function serveUntilSent(options: ServeOptions): Promise<void> {
   const { service, fileMetadata, isCancelled, setState } = options;
@@ -103,6 +105,9 @@ export async function serveUntilSent(options: ServeOptions): Promise<void> {
     try {
       delivered = await serveConnection(framed, options);
     } catch (error) {
+      // The payload itself failed, not the connection: every later receiver
+      // would meet the same failure, so there is nothing left to wait for.
+      if (error instanceof SourceError) throw error;
       failures += 1;
       console.warn('[tor] A connection failed:', error);
       if (failures >= TOR_MAX_FAILED_HANDSHAKES) {

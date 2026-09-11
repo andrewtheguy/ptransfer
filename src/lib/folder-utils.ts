@@ -142,19 +142,38 @@ function unsafeEntryPath(path: string): string | null {
 }
 
 /**
+ * The file a safe entry path unpacks to where a backslash also separates:
+ * `a\b.txt`, `a/b.txt` and `a\.\b.txt` are all `a/b.txt` to Windows.
+ */
+function windowsUnpackedPath(path: string): string {
+  return path
+    .split(/[/\\]/)
+    .filter((part) => part !== '' && part !== '.')
+    .join('/');
+}
+
+/**
  * Throws unless every entry path stays inside the folder it is unpacked into
- * and no two entries share one, which would unpack on top of each other.
- * Checked when the source is made, before anything is sent.
+ * and no two entries unpack to one file, even on Windows, where the second
+ * would land on top of the first. Checked when the source is made, before
+ * anything is sent.
  */
 function checkEntryPaths(entries: readonly ZipEntry[]): void {
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   for (const { path } of entries) {
     const problem = unsafeEntryPath(path);
     if (problem) throw new Error(`Cannot put ${path} in a ZIP: ${problem}`);
-    if (seen.has(path)) {
+    const unpacked = windowsUnpackedPath(path);
+    const clash = seen.get(unpacked);
+    if (clash === path) {
       throw new Error(`Two files would both be ${path} in the ZIP`);
     }
-    seen.add(path);
+    if (clash !== undefined) {
+      throw new Error(
+        `${clash} and ${path} would be one file when the ZIP is unpacked on Windows`,
+      );
+    }
+    seen.set(unpacked, path);
   }
 }
 
