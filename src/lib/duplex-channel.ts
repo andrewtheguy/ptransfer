@@ -122,11 +122,6 @@ export function createDataChannelDuplex(
    * ones still waiting, it says how many have left — what `flush` waits on.
    */
   let sentBytes = 0;
-  /**
-   * Bytes `sendNow` put ahead of the queue. A flush discounts the ones sent
-   * after it took its mark, which leave in place of the sends it waits on.
-   */
-  let aheadBytes = 0;
 
   const isOpen = () => !closedLocally && !failed && dc.readyState === 'open';
   /** Why a send cannot go out, once `isOpen()` says it cannot. */
@@ -214,9 +209,7 @@ export function createDataChannelDuplex(
     if (!isOpen()) return false;
     try {
       dc.send(text);
-      const length = utf8Length(text);
-      sentBytes += length;
-      aheadBytes += length;
+      sentBytes += utf8Length(text);
       return true;
     } catch {
       return false;
@@ -232,24 +225,22 @@ export function createDataChannelDuplex(
 
   const flush = (): Promise<void> => {
     let mark = 0;
-    let aheadAtMark = 0;
     // Takes its place in the send queue: a send waits its turn behind
     // backpressure before `dc.send` sees it, so the mark is read once every
     // send made before this call has been handed to the channel — or failed
     // and told its caller — and before any made after it.
     const marked = sendChain.then(() => {
       mark = sentBytes;
-      aheadAtMark = aheadBytes;
     });
     sendChain = marked;
     return marked.then(
       () =>
         new Promise<void>((resolve, reject) => {
           // Bytes leave in order, so the ones sent by the mark are out once
-          // this many have left in all — less what `sendNow` has put ahead
-          // of them since, which leaves in their place.
-          const left = () =>
-            sentBytes - dc.bufferedAmount - (aheadBytes - aheadAtMark);
+          // this many have left in all. Whatever is sent after the mark —
+          // queued or by `sendNow`, which only jumps the queue and not the
+          // channel's buffer — sits behind them and is not waited for.
+          const left = () => sentBytes - dc.bufferedAmount;
           let settled = false;
           const settle = (outcome: () => void) => {
             if (settled) return;

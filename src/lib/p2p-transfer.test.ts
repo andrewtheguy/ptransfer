@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
@@ -26,6 +26,19 @@ import {
   type TransferSource,
   type WireEncoding,
 } from './transfer-source';
+
+/** How many chunks the receiver has decrypted, over every test. */
+const decrypts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('./crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./crypto')>();
+  return {
+    ...actual,
+    decryptChunk: (...args: Parameters<typeof actual.decryptChunk>) => {
+      decrypts.count++;
+      return actual.decryptChunk(...args);
+    },
+  };
+});
 
 let opfs: OpfsMock;
 
@@ -721,6 +734,36 @@ describe('createTransferReceiver', () => {
     );
     expect(peer.listeners()).toBe(0);
     sink.open();
+    await inner.discard();
+  });
+
+  it('decrypts nothing still queued once it has given up', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 3;
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE * 2,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    peer.deliver(messages[0]);
+    peer.deliver(messages[1]);
+    // The first chunk is decrypted and waiting on the write; the second is
+    // queued behind it.
+    await tick();
+    const before = decrypts.count;
+    peer.deliver(messages[2]);
+    await expect(receiver.done).rejects.toThrow(
+      'Storage could not keep up with the connection',
+    );
+
+    sink.open();
+    await tick();
+
+    expect(decrypts.count).toBe(before);
     await inner.discard();
   });
 

@@ -733,6 +733,9 @@ export function createTransferReceiver(
     }
 
     const processChunk = async () => {
+      // Once the transfer has failed, what is still queued behind the write in
+      // progress is dropped unread rather than decrypted for nothing.
+      if (settled) return;
       let decryptedChunk: Uint8Array;
       try {
         decryptedChunk = await decryptChunk(key, encryptedData, chunkIndex);

@@ -52,10 +52,14 @@ export class FakeDataChannel extends EventTarget {
     this.held = true;
   }
 
-  /** Deliver everything held, and resume delivering as sends happen. */
-  release() {
-    this.held = false;
-    this.flush();
+  /**
+   * Deliver everything held, and resume delivering as sends happen — or,
+   * given `count`, deliver only that many of the held messages and stay
+   * held for the rest.
+   */
+  release(count?: number) {
+    if (count === undefined) this.held = false;
+    this.flush(count);
   }
 
   close() {
@@ -76,9 +80,8 @@ export class FakeDataChannel extends EventTarget {
     this.dispatchEvent(new Event('error'));
   }
 
-  private flush() {
-    const messages = this.queue;
-    this.queue = [];
+  private flush(count = Number.POSITIVE_INFINITY) {
+    const messages = this.queue.splice(0, count);
     for (const message of messages) {
       setTimeout(() => {
         const wasAbove = this.bufferedAmount > this.bufferedAmountLowThreshold;

@@ -241,6 +241,27 @@ describe('createDataChannelDuplex', () => {
     expect(dcA.bufferedAmount).toBe(0);
   });
 
+  it('does not wait in flush for a send-now made after its turn', async () => {
+    const { dcA, a } = duplexPair(4);
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    let flushed = false;
+    const flushing = a.flush().then(() => {
+      flushed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(a.sendNow('late')).toBe(true);
+
+    // The bytes the flush covers leave; the later ones stay behind them.
+    dcA.release(1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(dcA.bufferedAmount).toBe(4);
+    expect(flushed).toBe(true);
+    await flushing;
+    dcA.release();
+  });
+
   it('rejects flush when the channel closes under a send still queued', async () => {
     const { dcA, a } = duplexPair(4);
     dcA.hold();
