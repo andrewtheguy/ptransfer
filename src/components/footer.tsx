@@ -5,6 +5,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { APP_VERSION, GIT_COMMIT_HASH } from '@/lib/app-version';
+import { PROTOCOL_VERSION } from '@/lib/protocol-version';
 
 interface FooterLabelProps {
   shortLabel: string;
@@ -72,9 +73,11 @@ export function Footer() {
             align="center"
             className="max-w-[280px] p-2 text-xs leading-relaxed"
           >
-            Compatibility is not guaranteed across pTransfer versions. Sender
-            and receiver should use the same app version.
-            <div className="mt-1 text-muted-foreground">{`v${APP_VERSION} (${GIT_COMMIT_HASH})`}</div>
+            Sender and receiver need the same protocol version. Apps and CLIs of
+            different releases work together when it matches.
+            <div className="mt-1 text-muted-foreground">
+              {`Protocol ${PROTOCOL_VERSION} · v${APP_VERSION} (${GIT_COMMIT_HASH})`}
+            </div>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

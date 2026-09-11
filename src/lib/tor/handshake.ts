@@ -51,9 +51,9 @@ import type { TorFramedStream } from './framing';
  */
 
 /**
- * Version of this handshake. Bumped with any change to the frames below; a
- * mismatch is refused rather than negotiated, so two app versions that differ
- * on the frames fail closed.
+ * Version of this handshake. Bumped with any change to the frames below,
+ * together with `PROTOCOL_VERSION`; a mismatch is refused rather than
+ * negotiated, so two builds that differ on the frames fail closed.
  */
 export const TOR_HANDSHAKE_VERSION = 2;
 

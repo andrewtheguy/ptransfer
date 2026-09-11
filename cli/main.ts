@@ -1,3 +1,5 @@
+import { PROTOCOL_VERSION } from '@/lib/protocol-version';
+import packageMetadata from '../package.json';
 import { receive } from './commands/receive';
 import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
@@ -27,7 +29,8 @@ commands:
   receive    take what an onion service is serving
   tor-test   bootstrap Tor, publish an onion service, and connect back to it
 
-Run a command with --help for its options.
+Run a command with --help for its options, or ptransfer --version for the
+release and the protocol version; a peer needs the same protocol version.
 `;
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
@@ -54,6 +57,12 @@ async function main(argv: string[]): Promise<number> {
   ) {
     process.stdout.write(USAGE);
     return command ? 0 : 2;
+  }
+  if (command === '--version') {
+    process.stdout.write(
+      `ptransfer ${packageMetadata.version} (protocol ${PROTOCOL_VERSION})\n`,
+    );
+    return 0;
   }
   const run = COMMANDS[command];
   if (!run) {

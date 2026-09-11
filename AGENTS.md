@@ -2,14 +2,22 @@
 
 ## Compatibility and versioning
 
-- Strict no backward compatibility or legacy code path under any circumstances,
-  bump package version to signal breaking changes instead.
-- Always bump by patch version only for breaking changes, but only one bump per
-  branch.
+- Strict no backward compatibility or legacy code path under any circumstances;
+  bump a version to signal a breaking change instead. There are two, and they
+  move independently.
+- `PROTOCOL_VERSION` in `src/lib/protocol-version.ts` is the compatibility
+  version: two peers interoperate exactly when it matches. Bump it by one
+  whenever what goes on the wire changes (anything the protocol documents in
+  `docs/` specify), only once per branch, and never for anything else.
+- The `package.json` version is the release version of the web app and the
+  CLI and says nothing about compatibility. Bump it by patch only, once per
+  branch, for a breaking change that is not on the wire (a CLI flag or output,
+  stored data such as a cache format); a wire change alone does not bump it.
+  A release may bump it with no change of either kind.
 - Bump `TOR_HANDSHAKE_VERSION` in `src/lib/tor/handshake.ts` whenever the Tor
-  handshake frames specified in `docs/TOR_TRANSPORT.md` change, and leave it
-  alone otherwise; it travels on the wire and is refused on a mismatch. Nothing
-  else carries a protocol version.
+  handshake frames specified in `docs/TOR_TRANSPORT.md` change, together with
+  `PROTOCOL_VERSION`, and leave it alone otherwise; it travels on the wire and
+  is refused on a mismatch. No other version is sent on the wire.
 
 ## Layout
 
