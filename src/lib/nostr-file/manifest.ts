@@ -1,4 +1,5 @@
 import { SLOW_TRANSPORT_MAX_BYTES } from '../crypto/constants';
+import { deflateUpperBound } from '../transfer-source';
 import {
   NOSTR_FILE_EXPIRATION_SEC,
   NOSTR_FILE_MANIFEST_VERSION,
@@ -77,15 +78,16 @@ export function isValidNostrFileManifest(
 
   // 'none' chunks exactly the file bytes; 'deflate' output can exceed the
   // plaintext for incompressible input, but never by more than raw deflate's
-  // worst case (5 bytes of stored-block framing per 64 KiB, plus slack).
-  const maxDeflatedSize = m.fileSize + Math.ceil(m.fileSize / 65535) * 5 + 64;
+  // worst case. fflate stores incompressible input in blocks well under the
+  // 64 KiB a stored block may hold, so the bound is the one that counts a
+  // block per 16 KiB.
   if (
     typeof m.payloadSize !== 'number' ||
     !Number.isInteger(m.payloadSize) ||
     m.payloadSize <= 0 ||
     (m.compression === 'none'
       ? m.payloadSize !== m.fileSize
-      : m.payloadSize > maxDeflatedSize)
+      : m.payloadSize > deflateUpperBound(m.fileSize))
   ) {
     return false;
   }

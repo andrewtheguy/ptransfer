@@ -30,35 +30,60 @@ CLI by construction. What the CLI adds is what a process has and a page does
 not — files, a cache directory, and plain HTTP to the Tor directory
 authorities, which turns the minutes-long browser bootstrap into seconds.
 
-Today it sends and receives files and folders over a Tor onion service, the
-tab's Tor Onion Service mode run from the same code:
+Today it sends and receives files and folders by Code Exchange and over a Tor
+onion service, the tab's modes of the same names run from the same code. Code
+Exchange carries its codes as text — a terminal has no camera — which is also
+the text the tab's **Copy Data** gives and its **Paste** tab takes, so either
+end can be a tab:
+
+```bash
+# sender: prints a code for the receiver, then asks for their response
+bun run cli send --code ./report.pdf
+bun run cli send --code --anonymous ./report.pdf  # the Tor fallback instead
+
+# receiver: asks for the sender's code, prints a response to hand back, and
+# saves report.pdf in the current directory, or in the folder --out names
+bun run cli receive --code
+bun run cli receive --code --out ~/Downloads
+```
+
+The file goes over a direct WebRTC connection (node-datachannel's, under
+Bun). When none opens, a file up to 100 MiB takes the fallback the sender's
+code names: public Nostr relays, or with `--anonymous` Nostr relays run as
+onion services and a Tor onion service for the file. Codes are pasted at a
+prompt — whitespace and line wrapping are ignored — or piped in; either one is
+taken as soon as it is whole, so a script can drive both ends. The sender only
+acts on a response to its own code, and asks again for one that is not.
+`receive --code --simulate-no-direct` answers with no network routes, so a
+test can exercise the fallback without a hostile network.
 
 ```bash
 # sender: prints an .onion address and a one-time password, then waits
 bun run cli send --tor ./report.pdf
 
-# receiver: asks for the password (or reads it from a pipe) and saves
-# report.pdf in the current directory, or in the folder --out names
+# receiver: asks for the password (or reads it from a pipe)
 bun run cli receive --onion <address>.onion
 bun run cli receive --onion <address>.onion --out ~/Downloads
 ```
 
-`send --tor` takes any number of files and folders. One file is sent as
+`send` takes any number of files and folders. One file is sent as
 itself; several, or a folder, go as one ZIP generated while it is sent — the
 tab's own archive code — with each folder's contents under the folder's name,
-so `send --tor ./photos ./notes.txt` arrives as `files_<timestamp>.zip`
+so `send --code ./photos ./notes.txt` arrives as `files_<timestamp>.zip`
 holding `photos/…` and `notes.txt`. Symbolic links inside a folder, and other
 files that are not regular files, are left out and named on the way. Files are
 read only once a receiver connects; one that has been replaced or changed length
 since the command started stops the transfer rather than going out in its
 place.
 
-The password is read from standard input rather than a flag, so it stays out of
-shell history and the process list. The receiver never overwrites a file; if
-the name is taken it declines, and the sender keeps waiting for another try.
-The folder `--out` names must already exist; it is never created, so a typo
-fails instead of saving somewhere unexpected. The other modes follow; see
-[docs/ROADMAP.md](./docs/ROADMAP.md).
+Codes and passwords are read from standard input rather than a flag, so they
+stay out of shell history and the process list; what the other side needs
+goes to standard output, one line each, and everything else to standard error.
+The receiver never overwrites a file: a Code Exchange receiver refuses a name
+that is taken before it answers, and a Tor receiver declines, leaving the
+sender waiting for another try. The folder `--out` names must already exist;
+it is never created, so a typo fails instead of saving somewhere unexpected.
+PIN Exchange follows; see [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 It also carries a live self-check of the Tor path:
 
@@ -76,7 +101,10 @@ over a Snowflake bridge — the websocket one by default, or with
 same two the tab offers — fetches a page from the Tor Project's
 onion site (`--url` picks another), publishes a v3 onion service of its own, connects back to it through
 the network, and prints how long each step took. `send` and `receive` bootstrap
-the same way, from the same cache.
+the same way, from the same cache. A Code Exchange sender keeps the relay
+cache there too — what earlier transfers learned about which public Nostr
+relays work, the records the tab keeps in IndexedDB — in
+`relay-cache.json`.
 
 ## Browser Requirements
 

@@ -21,9 +21,14 @@ else in this document describes browser-app behavior.
 The CLI's platform seam is small: a WebRTC peer connection (node-datachannel,
 which the Tor client's Snowflake `webrtc` bridge runs on too), file and cache
 storage in place of OPFS and IndexedDB, and a Tor directory download over
-plain HTTP that a page cannot make. It runs the same webtor-wasm Tor client
-under Bun, on Linux and macOS only. What it ships today is Tor send and receive of a single file and a
-Tor self-check; the other modes are on the [roadmap](ROADMAP.md).
+plain HTTP that a page cannot make. For Code Exchange that seam is one
+object, the `ExchangeHost` of `src/lib/code-exchange/host.ts` — the peer
+connection class, the relay cache, and where a received file is written —
+which the tab fills in `browser-host.ts` and the CLI in `cli/code/host.ts`.
+It runs the same webtor-wasm Tor client under Bun, on Linux and macOS only.
+What it ships today is Code Exchange and Tor send and receive of files and
+folders, and a Tor self-check; PIN Exchange is on the
+[roadmap](ROADMAP.md).
 
 ## Core Principles
 
@@ -710,7 +715,7 @@ matches.
   are, unprobed ones probed) rather than discovered twice. Either way an uncapped
   sweep then probes the rest of the relay
   population for as long as the exchange lasts. No file byte is involved — this
-  warms the IndexedDB relay cache for every future transfer, and hands a failed
+  warms the relay cache for every future transfer, and hands a failed
   direct attempt its ring ready-made rather than starting discovery only after
   WebRTC has given up. Its abort
   signal is tied to the pool's teardown, and probes still in flight at that

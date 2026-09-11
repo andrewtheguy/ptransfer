@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppendSink } from '@/lib/append-sink';
+import { BROWSER_EXCHANGE_HOST } from '@/lib/code-exchange/browser-host';
 import {
   type AcceptedOffer,
   acceptOffer,
@@ -23,6 +24,7 @@ import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
 import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient } from '@/lib/tor/client';
 import type { ReceivedContent } from '@/lib/types';
 import type { WebRTCConnection } from '@/lib/webrtc';
 
@@ -273,21 +275,21 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         const torProgress = createTorProgress();
         let transport: AnonymousSignalingTransport | null = null;
         if (anonymous) {
+          const onStatus = (message: string) => {
+            console.info('[tor] Code Exchange fallback:', message);
+            torProgress.push(message);
+            if (abandoned()) return;
+            // Only ever an addition to the response page. Every other state
+            // this flow sets is written whole, so a stale line cannot outlive
+            // the step it belonged to.
+            setState((current) =>
+              current.status === 'showing_answer'
+                ? { ...current, torStatus: message }
+                : current,
+            );
+          };
           transport = new AnonymousSignalingTransport({
-            bridge,
-            onStatus: (message) => {
-              console.info('[tor] Code Exchange fallback:', message);
-              torProgress.push(message);
-              if (abandoned()) return;
-              // Only ever an addition to the response page. Every other state
-              // this flow sets is written whole, so a stale line cannot outlive
-              // the step it belonged to.
-              setState((current) =>
-                current.status === 'showing_answer'
-                  ? { ...current, torStatus: message }
-                  : current,
-              );
-            },
+            bootstrap: () => bootstrapTorClient({ bridge, onStatus }),
           });
           transportRef.current = transport;
         }
@@ -367,6 +369,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           const outcome = await receiveOverFallback({
             offer,
             keys,
+            host: BROWSER_EXCHANGE_HOST,
             transport,
             torProgress,
             hold: holdResponse(held),
@@ -432,6 +435,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             const attempt = await buildDirectAttempt({
               offer,
               keys,
+              host: BROWSER_EXCHANGE_HOST,
               sinkHolder: sinkRef,
               rtcHolder: rtcRef,
               connectionTimeoutMs: CODE_CONNECTION_TIMEOUT_MS,

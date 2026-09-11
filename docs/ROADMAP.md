@@ -41,8 +41,7 @@ A command-line host for the same `src/lib` code the browser tab runs, so a
 change to the web app is a change to the CLI by construction. It replaces the
 retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
 
-**Unix only.** The CLI runs on Linux (glibc and musl) and macOS, on x64 and
-arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux.
+**Unix only.** The CLI runs on Linux (glibc) and macOS, on x64 and arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux.
 Every piece is written for a Unix process directly, with no Windows branch and
 no portability layer in between:
 
@@ -58,9 +57,9 @@ no portability layer in between:
   `~/Library/Caches/ptransfer` on macOS.
 - **Terminal**: results on standard output, everything else on standard
   error, a password typed in raw mode or piped in, and ANSI escapes.
-- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`, their `-musl`
-  variants, `bun-darwin-x64` and `bun-darwin-arm64` — the platforms Bun,
-  OpenTUI and node-datachannel all ship prebuilt.
+- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`
+  and `bun-darwin-arm64` — the platforms Bun, OpenTUI and node-datachannel
+  all ship prebuilt.
 
 1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
    Bun-hosted loader for the same webtor-wasm Tor client, a directory
@@ -81,22 +80,33 @@ no portability layer in between:
      bridge choices the tab offers. The `webrtc` bridge runs on
      node-datachannel's `RTCPeerConnection`, handed to the Tor client as its
      `rtcPeerConnection` option and loaded only when that bridge is chosen.
-3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
-   node-datachannel, with the Nostr file relay as the fallback; codes are
-   carried as text, since a terminal has no camera.
+3. **Code Exchange and PIN Exchange** over a WebRTC data channel supplied by
+   node-datachannel, with the Nostr file relay as the fallback.
+   - **3a** (done): `send --code <path>...` prints the offer as text and reads
+     the response from standard input; `receive --code` reads the offer and
+     prints the response, and `--simulate-no-direct` stands in for the tab's
+     switch of that name. Codes are carried as text, since a terminal has no
+     camera, and are the same text the tab copies and pastes, so either end can
+     be a tab. Both fallbacks run: the Nostr file relay, with the relay cache in
+     `relay-cache.json` — changed under an `flock` on `relay-cache.lock`, as
+     the Rust CLI did, so concurrent senders keep each other's verdicts — and
+     with `--anonymous` the Tor one. The engine in
+     `src/lib/code-exchange` takes what differs per host as an `ExchangeHost`.
+   - **3b**: PIN Exchange, which carries the same codes over its sealed Nostr
+     channel.
 4. **An OpenTUI terminal UI** — `@opentui/core` with its React bindings,
    `@opentui/react`, so the screens are React like the tab's — and one binary
    per release target from `bun build --compile`.
    - The line-oriented interface of phases 2 and 3 stays for pipes and
      scripts; the terminal UI is what a command shows at a terminal.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
-     prebuilt package per target (`@opentui/core-<os>-<arch>[-musl]`). It
-     needs Bun, or Node 26.4 or later; the vitest unit project runs on an
-     older Node, so terminal UI components are tested under `bun test` with
-     OpenTUI's `testRender`, and the vitest-tested modules stay free of it.
+     prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
+     or Node 26.4 or later; the vitest unit project runs on an older Node, so
+     terminal UI components are tested under `bun test` with OpenTUI's
+     `testRender`, and the vitest-tested modules stay free of it.
    - The build is a `Bun.build` script, one run per target, that defines
-     `process.env.OPENTUI_LIBC` for the Linux targets and carries the
-     node-datachannel plugin described below. Cross-building needs every
+     `process.env.OPENTUI_LIBC` as `glibc` for the Linux targets and carries
+     the node-datachannel plugin described below. Cross-building needs every
      target's native packages installed on the build machine
      (`bun install --os=<os> --cpu=<cpu>`), or one build per target in CI.
 

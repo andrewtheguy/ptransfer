@@ -25,8 +25,8 @@ import { UsageError } from './usage';
 const USAGE = `usage: ptransfer <command> [options]
 
 commands:
-  send       publish an onion service that serves files and folders
-  receive    take what an onion service is serving
+  send       send files and folders, by Code Exchange or a Tor onion service
+  receive    receive what a sender is sending
   tor-test   bootstrap Tor, publish an onion service, and connect back to it
 
 Run a command with --help for its options, or ptransfer --version for the

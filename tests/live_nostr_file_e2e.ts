@@ -23,8 +23,7 @@ import { uint8ArrayToBase64 } from '../src/lib/nostr/events';
 import { sha256 } from '../src/lib/nostr-file/codec';
 import { receiveFileLive } from '../src/lib/nostr-file/download-live';
 import type {
-  CachedRelay,
-  RelayPoolState,
+  RelayCacheContents,
   RelayPoolStorage,
 } from '../src/lib/nostr-file/relay-pool';
 import type { RelaySession } from '../src/lib/nostr-file/session';
@@ -48,16 +47,14 @@ if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS <= 0) {
 }
 
 function memoryStorage(): RelayPoolStorage {
-  let state: RelayPoolState | null = null;
-  let relayHealth: CachedRelay[] = [];
+  let cache: RelayCacheContents = { state: null, relays: [] };
   return {
-    getState: async () => state,
-    setState: async (s) => {
-      state = s;
-    },
-    getRelayHealth: async () => relayHealth,
-    setRelayHealth: async (relays) => {
-      relayHealth = relays;
+    read: () => Promise.resolve(cache),
+    update(change) {
+      const next = { ...cache };
+      const result = change(next);
+      cache = next;
+      return Promise.resolve(result);
     },
   };
 }

@@ -10,7 +10,9 @@ import {
   TOR_SUGGESTED_MAX_BYTES,
 } from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor-api';
-import { wireEncodingFor } from '@/lib/transfer-source';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import { defaultCacheDir } from '../cache-dir';
+import { sendByCode } from '../code/send';
 import { routeDiagnostics } from '../diagnostics';
 import { onInterrupt } from '../interrupt';
 import { createProgressLine } from '../progress';
@@ -19,34 +21,52 @@ import {
   closeTor,
   TOR_OPTIONS,
   TOR_OPTIONS_USAGE,
+  type TorOptions,
   torOptionsFrom,
 } from '../tor/bootstrap';
 import { openSelection } from '../transfer/selection';
 import { UsageError } from '../usage';
 
 /**
- * `ptransfer send --tor <path>...`: publish an ephemeral v3 onion service
- * that serves the given files and folders, and print the address and
- * one-time password the receiver needs. The counterpart of the tab's
- * `useTorSend`: the same accept loop, the same bounds, the same ZIP for more
- * than one file, with the terminal for a screen.
+ * `ptransfer send (--code | --tor) <path>...`: send files and folders the way
+ * the tab's send tab does, in either of the modes a terminal can carry.
  *
- * The address and password go to standard output, one per line, so a script
- * can take them; everything else goes to standard error.
+ * - `--code` is Code Exchange (`../code/send.ts`): a code out, the receiver's
+ *   response back in, then a direct connection, or the fallback the code
+ *   names when none opens.
+ * - `--tor` publishes an ephemeral v3 onion service and prints the address
+ *   and one-time password the receiver needs — the counterpart of the tab's
+ *   `useTorSend`: the same accept loop, the same bounds.
+ *
+ * Either way one file goes as itself and anything more as one ZIP. What the
+ * receiver needs goes to standard output, one line each, so a script can take
+ * it; everything else goes to standard error.
  */
 
-const USAGE = `usage: ptransfer send --tor <path>... [options]
+const USAGE = `usage: ptransfer send --code <path>... [options]
+       ptransfer send --tor <path>... [options]
 
-Publish an onion service that serves the given files and folders, and print
-the address and the one-time password the receiver needs. One file is sent as
-itself; several, or a folder, go as one ZIP that keeps each folder's structure
-under its name. The service answers until a receiver takes the transfer, or
-for ${TOR_WAIT_TIMEOUT_MS / 60000} minutes.
+Send files and folders. One file is sent as itself; several, or a folder, go
+as one ZIP that keeps each folder's structure under its name.
+
+--code prints a code for the receiver to paste into the web app or into
+ptransfer receive --code, then reads the response they give back from standard
+input. The file then goes over a direct connection; when none opens, through
+public Nostr relays, or with --anonymous through Tor, for files up to
+100 MiB. The code is good for an hour.
+
+--tor publishes an onion service and prints the address and the one-time
+password the receiver needs. The service answers until a receiver takes the
+transfer, or for ${TOR_WAIT_TIMEOUT_MS / 60000} minutes.
 
 options:
-  --tor                    send over a Tor onion service (the only mode so far)
+  --code                   hand the receiver a code and take back theirs
+  --tor                    send over a Tor onion service
+  --anonymous              with --code: relay a file that finds no direct
+                           route through Tor rather than public Nostr relays;
+                           the Tor options below say how to reach it
 ${TOR_OPTIONS_USAGE}
-  -v, --verbose            show the Tor client's own log lines
+  -v, --verbose            show diagnostics and the Tor client's own log lines
   -h, --help
 `;
 
@@ -63,7 +83,9 @@ export async function send(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       ...TOR_OPTIONS,
+      code: { type: 'boolean', default: false },
       tor: { type: 'boolean', default: false },
+      anonymous: { type: 'boolean', default: false },
       verbose: { type: 'boolean', short: 'v', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -72,8 +94,11 @@ export async function send(argv: string[]): Promise<number> {
     process.stdout.write(USAGE);
     return 0;
   }
-  if (!values.tor) {
-    throw new UsageError('Choose a mode: --tor is the only one so far');
+  if (values.code === values.tor) {
+    throw new UsageError('Choose one mode: --code or --tor');
+  }
+  if (values.anonymous && !values.code) {
+    throw new UsageError('--anonymous goes with --code');
   }
   if (positionals.length === 0) {
     throw new UsageError('Give at least one file or folder to send');
@@ -102,6 +127,26 @@ export async function send(argv: string[]): Promise<number> {
       `Sending ${count(fileCount, 'file', 'files')} (${formatFileSize(content.estimatedSize)}) as ${content.name}`,
     );
   }
+  if (values.code) {
+    return await sendByCode({
+      content,
+      anonymous: values.anonymous,
+      torOptions,
+      cacheDir: torOptions.cacheDir ?? defaultCacheDir(),
+      verbose: values.verbose,
+      say,
+    });
+  }
+  return await sendOverTor(content, torOptions, values.verbose, say);
+}
+
+/** The Tor mode: an onion service, and its address and password to hand over. */
+async function sendOverTor(
+  content: TransferSource,
+  torOptions: TorOptions,
+  verbose: boolean,
+  say: (line: string) => void,
+): Promise<number> {
   const fileMetadata = {
     fileName: content.name,
     fileSize: content.estimatedSize,
@@ -157,7 +202,7 @@ export async function send(argv: string[]): Promise<number> {
   try {
     client = await bootstrapTor({
       ...torOptions,
-      verbose: values.verbose,
+      verbose,
       say,
     });
     say('Publishing the onion service...');

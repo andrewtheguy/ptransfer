@@ -10,9 +10,9 @@ import {
 } from '@/lib/tor/bridge';
 import type { DirectoryDescription, WebtorClient } from '@/lib/tor/webtor-api';
 import { UsageError } from '../usage';
+import { loadRtcPeerConnection } from '../webrtc';
 import { fetchDirectorySeed } from './directory-fetch';
 import { openDirectoryStore } from './directory-store';
-import { loadRtcPeerConnection } from './webrtc';
 import { loadWebtor } from './webtor';
 
 /**
@@ -42,9 +42,10 @@ export const TOR_OPTIONS = {
 
 /** Their help text, for a command's usage. */
 export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached directory and download a fresh one
-  --cache-dir <path>       where to keep the directory seed (default:
-                           ~/Library/Caches/ptransfer on macOS, otherwise
-                           $XDG_CACHE_HOME/ptransfer or ~/.cache/ptransfer)
+  --cache-dir <path>       where to keep the Tor directory and the relay cache
+                           (default: ~/Library/Caches/ptransfer on macOS,
+                           otherwise $XDG_CACHE_HOME/ptransfer or
+                           ~/.cache/ptransfer)
   --bridge <websocket|webrtc>
                            how to reach the Tor network (default ${DEFAULT_TOR_BRIDGE}):
                            websocket connects straight to one fixed Snowflake

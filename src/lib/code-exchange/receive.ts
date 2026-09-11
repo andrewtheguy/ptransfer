@@ -36,7 +36,6 @@ import {
   createTransferReceiver,
   type TransferReceiver,
 } from '@/lib/p2p-transfer';
-import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import {
   deriveOnionPassword,
   receiveOverAnonymousRelay,
@@ -44,6 +43,7 @@ import {
 import type { ReceivedContent } from '@/lib/types';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
+import type { ExchangeHost } from './host';
 import type { TorProgress } from './tor-progress';
 
 /**
@@ -278,6 +278,8 @@ export interface DirectAttempt {
 export async function buildDirectAttempt(opts: {
   offer: AcceptedOffer;
   keys: AnswerKeys;
+  /** What the peer connection is built on and the file is written to. */
+  host: ExchangeHost;
   /** Holds the attempt's sink while it is current, so a cancel can drop it. */
   sinkHolder: Holder<AppendSink>;
   /** Holds the attempt's peer connection while it is current. */
@@ -291,7 +293,7 @@ export async function buildDirectAttempt(opts: {
   const { offer, keys, sinkHolder, rtcHolder, isCancelled, report } = opts;
   report({ status: 'generating_answer', message: 'Creating P2P answer...' });
 
-  const iceCandidates: RTCIceCandidate[] = [];
+  const iceCandidates: string[] = [];
   let answerSDP: RTCSessionDescriptionInit | null = null;
   let answerSDPResolver: (() => void) | null = null;
   let dataChannelResolver: ((channel: DuplexChannel) => void) | null = null;
@@ -308,7 +310,7 @@ export async function buildDirectAttempt(opts: {
   // Decrypted chunks land in the receive sink as they arrive. A cancel during
   // its creation cannot see it through the holder yet, so discard it here
   // instead of leaving its scratch storage orphaned.
-  const sink = await createAdaptiveAppendSink(offer.metadata.fileSize);
+  const sink = await opts.host.createSink(offer.metadata);
   if (isCancelled()) {
     void sink.discard();
     return null;
@@ -329,14 +331,15 @@ export async function buildDirectAttempt(opts: {
   );
 
   const rtc = new WebRTCConnection(
+    opts.host.peerConnection,
     getWebRTCConfig(),
     (signal) => {
       // Collected rather than trickled; the answer carries them all.
       if (signal.type === 'answer') {
         answerSDP = { type: 'answer', sdp: signal.sdp };
         answerSDPResolver?.();
-      } else if (signal.type === 'candidate' && signal.candidate) {
-        iceCandidates.push(new RTCIceCandidate(signal.candidate));
+      } else if (signal.type === 'candidate' && signal.candidate?.candidate) {
+        iceCandidates.push(signal.candidate.candidate);
       }
     },
     (channel) => {
@@ -555,6 +558,8 @@ export interface FallbackReceipt {
 export interface FallbackReceiveOptions {
   offer: AcceptedOffer;
   keys: AnswerKeys;
+  /** What the Tor fallback writes the file to. */
+  host: ExchangeHost;
   /** The Tor client an anonymous offer's fallback runs on. */
   transport: AnonymousSignalingTransport | null;
   torProgress: TorProgress | null;
@@ -754,6 +759,7 @@ async function receiveOverTorFallback(
       expiresAt: Math.floor((offer.createdAt + TRANSFER_EXPIRATION_MS) / 1000),
       password: await deriveOnionPassword(keys.sharedSecretKey, offer.salt),
       expected: offer.metadata,
+      createSink: (metadata) => opts.host.createSink(metadata),
       isCancelled: stopped,
       onAnnounced: () => {
         senderPresent = true;

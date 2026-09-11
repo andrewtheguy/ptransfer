@@ -1,10 +1,7 @@
-import type { TorBridge } from '@/lib/tor/bridge';
-import { bootstrapTorClient, closeTorClient } from '@/lib/tor/client';
-import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor';
+import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor-api';
 
 /**
- * Anonymous signaling: the browser Tor client, dressed as a `WebSocket`
- * constructor so `nostr-tools` can carry the PIN Exchange handshake to onion
+ * Anonymous signaling: a Tor client, dressed as a `WebSocket` constructor so `nostr-tools` can carry the PIN Exchange handshake to onion
  * relays without knowing anything has changed underneath it.
  *
  * Everything above this file is untouched — the same events, subscriptions,
@@ -26,7 +23,7 @@ import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor';
  *
  * A cold start downloads the consensus and every HSDir microdescriptor one hop
  * from the bridge, which is minutes rather than seconds; a warm one seeded
- * from IndexedDB is quick. The budget covers the slow case, because failing at
+ * from a cached directory is quick. The budget covers the slow case, because failing at
  * four minutes on a path that would have worked at five just costs the user
  * the whole wait again.
  */
@@ -64,10 +61,21 @@ function errorMessage(error: unknown): string {
 }
 
 export interface AnonymousTransportOptions {
-  /** Which Snowflake bridge this tab reaches the Tor network through. */
-  bridge: TorBridge;
-  /** Progress for the UI while the client bootstraps. */
-  onStatus?: (message: string) => void;
+  /**
+   * Bootstrap the Tor client, over whichever bridge the user chose. The
+   * host's own: `bootstrapTorClient` in the browser tab, `bootstrapTor` in the
+   * CLI. The transport owns what it resolves with and closes it.
+   */
+  bootstrap: () => Promise<WebtorClient>;
+}
+
+/** Close a client, swallowing the failure — teardown has nothing to report. */
+async function closeTorClient(client: WebtorClient): Promise<void> {
+  try {
+    await client.close();
+  } catch (error) {
+    console.info('[tor] Failed to close the Tor client:', error);
+  }
 }
 
 /**
@@ -130,12 +138,7 @@ export class AnonymousSignalingTransport {
     });
 
     const bootstrap = (async () => {
-      const client = await withBootstrapDeadline(
-        bootstrapTorClient({
-          bridge: options.bridge,
-          onStatus: options.onStatus,
-        }),
-      );
+      const client = await withBootstrapDeadline(options.bootstrap());
       if (this.closed) {
         // Cancelled while this was still in flight: it holds circuits for a
         // session that has already reported itself finished.

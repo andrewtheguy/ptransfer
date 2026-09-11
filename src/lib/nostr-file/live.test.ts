@@ -21,7 +21,7 @@ import { buildChunkEvent } from './events';
 import type { NostrFileManifest } from './manifest';
 import { createMockPool, type MockPool, SEED_RELAYS } from './mock-pool';
 import type {
-  CachedRelay,
+  RelayCacheContents,
   RelayPoolState,
   RelayPoolStorage,
 } from './relay-pool';
@@ -70,18 +70,14 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 function memoryStorage(
   initial: RelayPoolState | null = null,
 ): RelayPoolStorage {
-  let state: RelayPoolState | null = initial;
-  let relayHealth: CachedRelay[] = [];
+  let cache: RelayCacheContents = { state: initial, relays: [] };
   return {
-    getState: async () => state,
-    setState: (s) => {
-      state = s;
-      return Promise.resolve();
-    },
-    getRelayHealth: async () => relayHealth,
-    setRelayHealth: (relays) => {
-      relayHealth = relays;
-      return Promise.resolve();
+    read: () => Promise.resolve(cache),
+    update(change) {
+      const next = { ...cache };
+      const result = change(next);
+      cache = next;
+      return Promise.resolve(result);
     },
   };
 }

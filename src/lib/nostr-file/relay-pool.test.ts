@@ -12,15 +12,16 @@ import {
   UPLOAD_RELAY_COUNT,
 } from './constants';
 import { createMockPool, SEED_RELAYS } from './mock-pool';
+import { createIndexedDbRelayPool } from './relay-cache-idb';
 import {
   type CachedRelay,
-  createIndexedDbRelayPool,
   discoverAllRelayCandidates,
   discoverRelayCandidates,
   getRelayCandidates,
   type HealthyRelay,
   healthCheckRelays,
   parseRelayCandidates,
+  type RelayCacheContents,
   type RelayPoolState,
   type RelayPoolStorage,
   saveRelayHealth,
@@ -60,15 +61,14 @@ function memoryStorage(
   const holder = {
     state: initial,
     relayHealth,
-    getState: async () => holder.state,
-    setState: (s: RelayPoolState) => {
-      holder.state = s;
-      return Promise.resolve();
-    },
-    getRelayHealth: async () => holder.relayHealth,
-    setRelayHealth: (relays: CachedRelay[]) => {
-      holder.relayHealth = relays;
-      return Promise.resolve();
+    read: () =>
+      Promise.resolve({ state: holder.state, relays: holder.relayHealth }),
+    update<T>(change: (cache: RelayCacheContents) => T): Promise<T> {
+      const cache = { state: holder.state, relays: holder.relayHealth };
+      const result = change(cache);
+      holder.state = cache.state;
+      holder.relayHealth = cache.relays;
+      return Promise.resolve(result);
     },
   };
   return holder;
@@ -97,26 +97,33 @@ function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
   const stores = [...initialStores];
   const deleted: string[] = [];
   const created: string[] = [];
-  const readRequest = {
-    result: undefined,
-    error: null,
-    onsuccess: null as Handler,
-    onerror: null as Handler,
+  // Every read succeeds with nothing; the transaction completes once the
+  // last of them has, as a task of its own the way IndexedDB fires it — after
+  // the microtasks that read the results have run.
+  let pending = 0;
+  const request = () => {
+    const readRequest = {
+      result: undefined,
+      error: null,
+      onsuccess: null as Handler,
+      onerror: null as Handler,
+    };
+    pending++;
+    queueMicrotask(() => {
+      readRequest.onsuccess?.(new Event('success'));
+      if (--pending === 0) {
+        setTimeout(() => transaction.oncomplete?.(new Event('complete')));
+      }
+    });
+    return readRequest as unknown as IDBRequest<unknown>;
   };
   const transaction = {
     error: null,
     oncomplete: null as Handler,
     onerror: null as Handler,
     onabort: null as Handler,
-    objectStore: () => ({
-      get: () => {
-        queueMicrotask(() => {
-          readRequest.onsuccess?.(new Event('success'));
-          queueMicrotask(() => transaction.oncomplete?.(new Event('complete')));
-        });
-        return readRequest as unknown as IDBRequest<unknown>;
-      },
-    }),
+    objectStore: () => ({ get: request, getAll: request }),
+    abort: vi.fn(),
   };
   const database = {
     objectStoreNames: stores,
@@ -150,14 +157,23 @@ function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
     }),
   });
 
-  return { stores, deleted, created, close: database.close };
+  return {
+    stores,
+    deleted,
+    created,
+    close: database.close,
+    abort: transaction.abort,
+  };
 }
 
 describe('IndexedDB relay cache schema', () => {
   it('creates the current stores for a new database', async () => {
     const database = mockRelayCacheUpgrade(0, []);
 
-    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+    await expect(createIndexedDbRelayPool().read()).resolves.toEqual({
+      state: null,
+      relays: [],
+    });
 
     expect(database.deleted).toEqual([]);
     expect(database.created).toEqual([
@@ -176,7 +192,10 @@ describe('IndexedDB relay cache schema', () => {
     ];
     const database = mockRelayCacheUpgrade(1, previousStores);
 
-    await expect(createIndexedDbRelayPool().getState()).resolves.toBeNull();
+    await expect(createIndexedDbRelayPool().read()).resolves.toEqual({
+      state: null,
+      relays: [],
+    });
 
     expect(database.deleted).toEqual(previousStores);
     expect(database.created).toEqual([
@@ -184,6 +203,20 @@ describe('IndexedDB relay cache schema', () => {
       RELAY_CACHE_HEALTH_STORE,
     ]);
     expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
+  it('abandons the transaction and closes when a change throws', async () => {
+    const database = mockRelayCacheUpgrade(0, []);
+    const failure = new Error('change failed');
+
+    await expect(
+      createIndexedDbRelayPool().update(() => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+
+    expect(database.abort).toHaveBeenCalledOnce();
     expect(database.close).toHaveBeenCalledOnce();
   });
 });

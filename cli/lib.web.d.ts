@@ -8,4 +8,8 @@
 
 type BufferSource = ArrayBufferView | ArrayBuffer;
 
+type BlobPart = Bun.BlobPart;
+
+type BinaryType = 'arraybuffer' | 'blob';
+
 type HkdfParams = import('node:crypto').webcrypto.HkdfParams;

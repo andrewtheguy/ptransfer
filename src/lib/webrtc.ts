@@ -7,6 +7,15 @@ export type WebRTCSignal =
   | { type: 'candidate'; candidate?: RTCIceCandidateInit | null };
 
 /**
+ * The `RTCPeerConnection` implementation a connection is built on. Taken from
+ * the host rather than the global scope, which only a browser has: the tab
+ * passes its own, the CLI passes node-datachannel's W3C polyfill.
+ */
+export type PeerConnectionClass = new (
+  configuration: RTCConfiguration,
+) => RTCPeerConnection;
+
+/**
  * One peer connection and its single data channel.
  *
  * This class owns connection setup — the offer/answer, ICE, and the channel's
@@ -23,7 +32,7 @@ export class WebRTCConnection {
   private onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
 
   private remoteDescriptionSet = false;
-  private candidateQueue: RTCIceCandidate[] = [];
+  private candidateQueue: RTCIceCandidateInit[] = [];
 
   /**
    * `onDataChannelOpen` runs from the channel's open event, before any message
@@ -31,20 +40,32 @@ export class WebRTCConnection {
    * there; see `DuplexChannel`.
    */
   constructor(
+    PeerConnection: PeerConnectionClass,
     config: RTCConfiguration,
     onSignal: (signal: WebRTCSignal) => void,
     onDataChannelOpen: (channel: DuplexChannel) => void,
     onConnectionStateChange?: (state: RTCPeerConnectionState) => void,
   ) {
-    this.pc = new RTCPeerConnection(config);
+    this.pc = new PeerConnection(config);
     this.onSignal = onSignal;
     this.onDataChannelOpen = onDataChannelOpen;
     this.onConnectionStateChange = onConnectionStateChange;
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('Generated ICE candidate:', event.candidate.candidate);
-        this.onSignal({ type: 'candidate', candidate: event.candidate });
+        // The candidate attribute without its `a=` line prefix, which is how
+        // a browser spells it and what a code carries. libdatachannel, under
+        // the CLI, keeps the prefix; a browser handed one may refuse it.
+        const candidate = event.candidate.candidate.replace(/^a=/, '');
+        console.log('Generated ICE candidate:', candidate);
+        this.onSignal({
+          type: 'candidate',
+          candidate: {
+            candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          },
+        });
       }
     };
 
@@ -111,9 +132,7 @@ export class WebRTCConnection {
           throw new Error('Invalid offer signal: SDP is missing');
         }
         console.log('Setting remote offer...');
-        await this.pc.setRemoteDescription(
-          new RTCSessionDescription({ type: 'offer', sdp: signal.sdp }),
-        );
+        await this.pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
         this.remoteDescriptionSet = true;
         await this.processQueue();
 
@@ -129,21 +148,14 @@ export class WebRTCConnection {
           throw new Error('Invalid answer signal: SDP is missing');
         }
         console.log('Setting remote answer...');
-        await this.pc.setRemoteDescription(
-          new RTCSessionDescription({ type: 'answer', sdp: signal.sdp }),
-        );
+        await this.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
         this.remoteDescriptionSet = true;
         await this.processQueue();
       } else if (signal.type === 'candidate') {
-        if (signal.candidate) {
-          let candidate: RTCIceCandidate;
-          try {
-            candidate = new RTCIceCandidate(signal.candidate);
-          } catch (e) {
-            console.warn('Ignoring invalid ICE candidate payload:', e);
-            return;
-          }
-
+        // A malformed candidate is refused by addIceCandidate, which ignores
+        // that one and keeps the rest.
+        if (signal.candidate?.candidate) {
+          const candidate = signal.candidate;
           if (this.remoteDescriptionSet && this.pc.remoteDescription) {
             console.log('Adding ICE candidate immediately');
             await this.addIceCandidateSafely(candidate, 'immediate');
@@ -260,7 +272,7 @@ export class WebRTCConnection {
   }
 
   private async addIceCandidateSafely(
-    candidate: RTCIceCandidate,
+    candidate: RTCIceCandidateInit,
     source: 'immediate' | 'buffered',
   ) {
     try {
