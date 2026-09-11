@@ -8,9 +8,7 @@ import { type FileHandle, open } from 'node:fs/promises';
  * `bun:ffi`. flock rather than a lock file created with O_EXCL because the
  * kernel owns it: a process that dies holding it — Ctrl-C mid-write, a crash
  * — releases it as it goes, so there is never a stale lock to detect and
- * break. Linux and macOS number the operations alike. On musl, `libc.so.6`
- * names the C library itself, which the dynamic linker hands back for any
- * name of that shape.
+ * break. Linux and macOS number the operations alike.
  */
 
 const LOCK_EX = 2;

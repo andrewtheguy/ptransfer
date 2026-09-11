@@ -41,8 +41,7 @@ A command-line host for the same `src/lib` code the browser tab runs, so a
 change to the web app is a change to the CLI by construction. It replaces the
 retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
 
-**Unix only.** The CLI runs on Linux (glibc and musl) and macOS, on x64 and
-arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux.
+**Unix only.** The CLI runs on Linux (glibc) and macOS, on x64 and arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux.
 Every piece is written for a Unix process directly, with no Windows branch and
 no portability layer in between:
 
@@ -58,9 +57,9 @@ no portability layer in between:
   `~/Library/Caches/ptransfer` on macOS.
 - **Terminal**: results on standard output, everything else on standard
   error, a password typed in raw mode or piped in, and ANSI escapes.
-- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`, their `-musl`
-  variants, `bun-darwin-x64` and `bun-darwin-arm64` — the platforms Bun,
-  OpenTUI and node-datachannel all ship prebuilt.
+- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`
+  and `bun-darwin-arm64` — the platforms Bun, OpenTUI and node-datachannel
+  all ship prebuilt.
 
 1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
    Bun-hosted loader for the same webtor-wasm Tor client, a directory
@@ -101,13 +100,13 @@ no portability layer in between:
    - The line-oriented interface of phases 2 and 3 stays for pipes and
      scripts; the terminal UI is what a command shows at a terminal.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
-     prebuilt package per target (`@opentui/core-<os>-<arch>[-musl]`). It
-     needs Bun, or Node 26.4 or later; the vitest unit project runs on an
-     older Node, so terminal UI components are tested under `bun test` with
-     OpenTUI's `testRender`, and the vitest-tested modules stay free of it.
+     prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
+     or Node 26.4 or later; the vitest unit project runs on an older Node, so
+     terminal UI components are tested under `bun test` with OpenTUI's
+     `testRender`, and the vitest-tested modules stay free of it.
    - The build is a `Bun.build` script, one run per target, that defines
-     `process.env.OPENTUI_LIBC` for the Linux targets and carries the
-     node-datachannel plugin described below. Cross-building needs every
+     `process.env.OPENTUI_LIBC` as `glibc` for the Linux targets and carries
+     the node-datachannel plugin described below. Cross-building needs every
      target's native packages installed on the build machine
      (`bun install --os=<os> --cpu=<cpu>`), or one build per target in CI.
 
