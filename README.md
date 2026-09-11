@@ -87,15 +87,20 @@ Support is feature-detected at runtime; on an unsupported browser, receiving a P
 
 ## Version Compatibility
 
-Compatibility between different app versions is not guaranteed. Sender and receiver should use
-the same app version for transfers.
+Sender and receiver need the same **protocol version**. It is separate from the
+release version: the web app and CLI releases can move on without it, and two
+releases on the same protocol version work together. The web app shows both in
+the footer's version menu; `ptransfer --version` prints both for the CLI.
+Between two protocol versions, compatibility is not guaranteed.
 
-The web app and the CLI in `cli/` are one codebase, so there is no protocol
-version between them beyond the package version. What goes on the wire is
-specified in `docs/` — PIN Exchange and the shared transfer layer in
+The web app and the CLI in `cli/` are one codebase, so they share one protocol
+version, `PROTOCOL_VERSION` in `src/lib/protocol-version.ts`, and it moves with
+any change to what goes on the wire. That is specified in `docs/` — PIN
+Exchange and the shared transfer layer in
 [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md), and each other mode in
-its own document — so that a change to it is a deliberate one. The Tor
-handshake alone carries a version of its own and refuses a mismatch.
+its own document — so that a change to it is a deliberate one. The protocol
+version itself is not sent; the Tor handshake alone carries a version of its
+own on the wire and refuses a mismatch.
 
 ## How It Works
 

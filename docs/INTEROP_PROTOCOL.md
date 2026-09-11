@@ -7,16 +7,18 @@ commands, and PIN Exchange once that lands ([ROADMAP.md](ROADMAP.md)), so
 there is one implementation and this is its specification: where the code and
 this document disagree, this document is what the code is meant to do.
 
-There is no protocol version separate from the app's. Two peers running
-different app versions are not guaranteed to interoperate — the app bumps its
-patch version for any breaking change, and that is the only version there is.
-Some divergences announce themselves: a changed domain separator or transcript
+The protocol version is `PROTOCOL_VERSION` in `src/lib/protocol-version.ts`,
+separate from the app's release version. Two peers on the same protocol version
+interoperate whatever releases they run; two on different ones are not
+guaranteed to. It is bumped for any change this document or another protocol
+document specifies, and it is not sent, so no peer checks it. Some
+divergences announce themselves: a changed domain separator or transcript
 field list lands the two sides on different keys or digests, so the PAKE seals
 refuse to open and the confirmation codes disagree, and a changed event kind
 means the receiver simply never finds the rendezvous. Others — rotation
 windows, bucket counts, guessing budgets, timeouts, size limits, the NIP-40
-expiration formula — are agreed only by both sides running the same code, which
-is why the values here are constants and not negotiated.
+expiration formula — are agreed only by both sides running the same protocol
+version, which is why the values here are constants and not negotiated.
 
 ## Scope
 

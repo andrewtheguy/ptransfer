@@ -23,8 +23,10 @@ is §7 of that document — the 128 KiB chunk framing, flow control, completion,
 and abort that every direct transfer runs once a data channel is open — and
 that part is specified there, not here.
 
-There is no version number in this mode, and none is needed: every way two app
-versions could drift apart fails closed and says so. The container's own
+There is no version number on the wire in this mode, and none is needed: every
+way two protocol versions (`PROTOCOL_VERSION`, see
+[INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md)) could drift apart fails closed
+and says so. The container's own
 version is its `PT01` magic, refused rather than negotiated, and a drift in the
 obfuscation seed or keystream reads as "that code is not from the last hour or
 two". A payload carrying the wrong field set is malformed, and both sides say

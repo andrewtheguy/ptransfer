@@ -11,10 +11,11 @@ and the CLI in `cli/` (`send --tor`, `receive --onion`) both run it from
 `src/lib`, so there is one implementation; where the code and this document
 disagree, this document is what the code is meant to do. The handshake carries
 its own version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
-frames, and a mismatch is **refused rather than negotiated**: two app versions
+frames, and a mismatch is **refused rather than negotiated**: two builds
 that differ on the frames fail closed at the first exchange instead of part way
-through a transfer. Bump it for any change to the frames. Everything else that
-could diverge between two app versions fails closed on its own — different
+through a transfer. Bump it for any change to the frames, together with the protocol version
+(`PROTOCOL_VERSION`, see [INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md)).
+Everything else that could diverge between two protocol versions fails closed on its own — different
 keys leave the seals unopenable, a different address form or port never
 connects, and a raised size bound on one side only produces refusals on the
 other.

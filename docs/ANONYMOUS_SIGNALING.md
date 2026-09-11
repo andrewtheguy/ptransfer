@@ -13,7 +13,7 @@ the option does not make the transfer as a whole anonymous.
 The browser tab runs it from `src/lib`, and the CLI in `cli/` will run the
 same code once its transfer commands land ([ROADMAP.md](ROADMAP.md)); this
 document is the specification of what that code does on the wire. Three things here are
-what the two sides have to agree on, and a peer that runs a different app
+what the two sides have to agree on, and a peer that runs a different protocol
 version can only fail closed on them:
 
 - the two PIN lengths and their layouts — a length neither side mints is
@@ -24,8 +24,8 @@ version can only fail closed on them:
 - and the rule that a socket for one may be opened only to
   `ws://<v3 address>.onion`.
 
-There is no version to move here, and none is needed; compare the Tor transfer
-mode, whose frames do carry one. Everything else below — how Tor is reached,
+There is no version on the wire here, and none is needed; compare the Tor
+transfer mode, whose frames do carry one. Everything else below — how Tor is reached,
 the timeouts, the bridge question, the privacy discussion, where the code
 lives — is host detail, and the option stays outside
 [INTEROP_PROTOCOL.md](./INTEROP_PROTOCOL.md) while the relay pool is
