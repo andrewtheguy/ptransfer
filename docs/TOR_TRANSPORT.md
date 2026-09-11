@@ -7,11 +7,10 @@ signaling relay, account, lookup hint, or anything the sender did not hand it
 directly; its Tor client still builds circuits through Tor relays.
 
 This document is the **wire specification** for that mode. The browser tab
-runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
-transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
-implementation; where the code and this document disagree, this document is
-what the code is meant to do. The handshake carries its own
-version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
+and the CLI in `cli/` (`send --tor`, `receive --onion`) both run it from
+`src/lib`, so there is one implementation; where the code and this document
+disagree, this document is what the code is meant to do. The handshake carries
+its own version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
 frames, and a mismatch is **refused rather than negotiated**: two app versions
 that differ on the frames fail closed at the first exchange instead of part way
 through a transfer. Bump it for any change to the frames. Everything else that

@@ -2,10 +2,10 @@
 
 This document specifies the wire protocol for PIN Exchange and the transfer
 layer every mode shares once a transport is open. The browser tab runs it
-from `src/lib`, and the CLI in `cli/` will run the same code once its transfer
-commands land ([ROADMAP.md](ROADMAP.md)), so there is one implementation and
-this is its specification: where the code and this document
-disagree, this document is what the code is meant to do.
+from `src/lib`. The CLI in `cli/` runs the same transfer layer under its Tor
+commands, and PIN Exchange once that lands ([ROADMAP.md](ROADMAP.md)), so
+there is one implementation and this is its specification: where the code and
+this document disagree, this document is what the code is meant to do.
 
 There is no protocol version separate from the app's. Two peers running
 different app versions are not guaranteed to interoperate — the app bumps its

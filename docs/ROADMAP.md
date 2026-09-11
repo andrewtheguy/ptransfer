@@ -47,6 +47,12 @@ retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
    `bun run cli tor-test` self-check that bootstraps, fetches a page from a
    public onion service, publishes an onion service, and connects back to it.
 2. **Tor send and receive** from the terminal over `src/lib/tor`.
+   - **2a** (done): `send --tor <file>` publishes an onion service for one
+     file and prints its address and password; `receive --onion <address>`
+     reads the password from standard input and saves the file in the current
+     directory under the sender's name, never overwriting.
+   - **2b**: folders sent as a ZIP, a choice of where the file lands, and the
+     bridge choices the tab offers.
 3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
    node-datachannel, with the Nostr file relay as the fallback; codes are
    carried as text, since a terminal has no camera.

@@ -34,6 +34,9 @@
   when those opt in tests are not expected to run.
 - `bun run cli tor-test` is a live check over the real Tor network. Run it
   after changing `cli/tor/` or the Tor bootstrap, not on every change.
+  `bun run test:live:tor:cli` sends a file between two CLI processes over the
+  same network; run it after changing `cli/commands/send.ts`, `receive.ts`, or
+  `cli/transfer/`.
 
 ## Dependencies
 

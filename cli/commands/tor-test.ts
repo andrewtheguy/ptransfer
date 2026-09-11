@@ -1,22 +1,20 @@
 import { parseArgs } from 'node:util';
-import type {
-  DirectoryDescription,
-  OnionService,
-  OnionStream,
-} from '@/lib/tor/webtor-api';
-import { fetchDirectorySeed } from '../tor/directory-fetch';
-import { openDirectoryStore } from '../tor/directory-store';
-import { loadWebtor } from '../tor/webtor';
+import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
+import { routeDiagnostics } from '../diagnostics';
+import {
+  bootstrapTor,
+  TOR_OPTIONS,
+  TOR_OPTIONS_USAGE,
+  torOptionsFrom,
+} from '../tor/bootstrap';
+import { UsageError } from '../usage';
 
 /**
  * `ptransfer tor-test`: prove the whole Tor path from this machine, end to
  * end, with nothing else involved.
  *
- * 1. Load the Tor client — the same wasm the browser tab runs.
- * 2. Get a directory: the seed cached from the last run if it still
- *    describes the network, otherwise a fresh one over plain HTTP from the
- *    authorities, which is the fast path a browser does not have.
- * 3. Bootstrap over the Snowflake bridge.
+ * 1. Bootstrap the way every Tor command does (`../tor/bootstrap.ts`): load
+ *    the client, get a directory, reach the network over the bridge.
  * 4. Fetch a page from a real onion service somebody else runs: the proof
  *    that a full rendezvous works against the network as it is, not only
  *    against this process.
@@ -37,12 +35,7 @@ options:
   --url <http://...onion/...>
                            the onion URL to fetch (default: the Tor Project's
                            site); --url none skips the fetch
-  --refresh-directory      ignore the cached directory and download a fresh one
-  --cache-dir <path>       where to keep the directory seed (default: the
-                           platform's per-user cache directory)
-  --bridge-url <ws://...>  a Snowflake bridge to use instead of the public one;
-                           requires --bridge-fingerprint
-  --bridge-fingerprint <hex>
+${TOR_OPTIONS_USAGE}
   --intro-points <n>       introduction points for the service (default 1)
   -h, --help
 `;
@@ -103,11 +96,8 @@ export async function torTest(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
+      ...TOR_OPTIONS,
       url: { type: 'string', default: DEFAULT_URL },
-      'refresh-directory': { type: 'boolean', default: false },
-      'cache-dir': { type: 'string' },
-      'bridge-url': { type: 'string' },
-      'bridge-fingerprint': { type: 'string' },
       'intro-points': { type: 'string', default: '1' },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -116,93 +106,29 @@ export async function torTest(argv: string[]): Promise<number> {
     process.stdout.write(USAGE);
     return 0;
   }
-  if (Boolean(values['bridge-url']) !== Boolean(values['bridge-fingerprint'])) {
-    process.stderr.write(
-      'Give --bridge-url and --bridge-fingerprint together, or neither\n',
-    );
-    return 2;
-  }
+  const torOptions = torOptionsFrom(values);
+  routeDiagnostics(true);
   const url = values.url === 'none' ? undefined : values.url;
   if (url && !/^http:\/\/[a-z2-7]{56}\.onion(?::\d+)?(?:\/|$)/i.test(url)) {
-    process.stderr.write(
-      '--url must be http://<v3 address>.onion/... (no TLS: the address is the key)\n',
+    throw new UsageError(
+      '--url must be http://<v3 address>.onion/... (no TLS: the address is the key)',
     );
-    return 2;
   }
   const introPoints = Number(values['intro-points']);
   if (!Number.isInteger(introPoints) || introPoints < 1 || introPoints > 6) {
-    process.stderr.write('--intro-points must be a whole number from 1 to 6\n');
-    return 2;
+    throw new UsageError('--intro-points must be a whole number from 1 to 6');
   }
 
   const say = (line: string) => process.stderr.write(`${line}\n`);
   const clock = new Stopwatch();
 
-  const { WebtorClient, describeDirectory } = await loadWebtor();
-  clock.lap('load the Tor client');
-
-  const store = openDirectoryStore(values['cache-dir']);
-  let seed = values['refresh-directory']
-    ? undefined
-    : await store.load(describeDirectory, (reason) =>
-        say(`Ignoring the cached directory: ${reason}`),
-      );
-  let directory: DirectoryDescription | undefined;
-  if (seed) {
-    directory = describeDirectory(seed);
-    say(`Using the cached directory in ${store.path}`);
-    clock.lap('read the cached directory');
-  } else {
-    try {
-      const fresh = await fetchDirectorySeed({ onProgress: say });
-      // Read it before keeping it: a seed the client cannot read is worth
-      // neither a file nor a bootstrap.
-      directory = describeDirectory(fresh);
-      seed = fresh;
-    } catch (error) {
-      // The fast path is a convenience: without a seed the client downloads
-      // the directory through the bridge itself, which is what a tab does.
-      seed = undefined;
-      say(
-        `Could not download the directory from the authorities: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      say(
-        'The client will download it through the bridge instead; expect minutes',
-      );
-    }
-    clock.lap('download the directory');
-    if (seed) {
-      const kept = await store.save(seed, (reason) =>
-        say(`Could not keep the directory: ${reason}`),
-      );
-      if (kept) say(`Kept the directory in ${store.path}`);
-    }
-  }
-
-  if (directory) {
-    say(
-      `Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
-        `${directory.validUntil.toISOString()}, onion time period ` +
-        `${directory.timePeriod}`,
-    );
-  }
-
-  const client = await WebtorClient.create({
-    bridge: 'websocket',
-    ...(values['bridge-url'] && values['bridge-fingerprint']
-      ? {
-          bridgeUrl: values['bridge-url'],
-          bridgeFingerprint: values['bridge-fingerprint'],
-        }
-      : {}),
-    ...(seed ? { directorySeed: seed } : {}),
-    onLog: (message, level) => say(`[webtor ${level}] ${message}`),
-    // A long-lived client refreshes its directory; keep what it downloads so
-    // the next run starts from it. A seed this side supplied is never handed
-    // back, so nothing here rewrites what it just read.
-    onDirectoryChange: (fresh) => void store.save(fresh),
+  // A self-check shows everything the client says.
+  const client = await bootstrapTor({
+    ...torOptions,
+    verbose: true,
+    say,
+    onLap: (label) => clock.lap(label),
   });
-  clock.lap('bootstrap');
 
   let service: OnionService | undefined;
   try {
