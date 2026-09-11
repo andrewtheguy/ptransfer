@@ -1,5 +1,12 @@
-import { createReadStream } from 'node:fs';
-import { type FileHandle, open, rename, rm, stat } from 'node:fs/promises';
+import { createReadStream, openAsBlob } from 'node:fs';
+import {
+  type FileHandle,
+  link,
+  open,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises';
 import { basename } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
@@ -65,8 +72,8 @@ export function safeFileName(name: string): string {
  * out, so a transfer that fails leaves no half-file under the real name.
  *
  * The destination must not exist when the sink is created or when it is
- * finished; it is never overwritten. The finished file is the payload, so a
- * finished sink has nothing to discard.
+ * finished; it is never overwritten, even by a file that appears in between.
+ * The finished file is the payload, so a finished sink has nothing to discard.
  */
 export async function createFileSink(destination: string): Promise<AppendSink> {
   await refuseExisting(destination);
@@ -97,10 +104,9 @@ export async function createFileSink(destination: string): Promise<AppendSink> {
         if (!handle) throw new Error('The destination file was discarded');
         await handle.close();
         handle = null;
-        await refuseExisting(destination);
-        await rename(partial, destination);
+        await installWithoutReplacing(partial, destination);
         finished = true;
-        return blobOf(destination);
+        return openAsBlob(destination);
       });
     },
     discard() {
@@ -125,47 +131,24 @@ async function refuseExisting(path: string): Promise<void> {
   throw new Error(`${path} already exists`);
 }
 
-/** The finished file, readable the way the sink contract promises. */
-async function blobOf(path: string): Promise<Blob> {
-  const { size } = await stat(path);
-  return new FileBlob(path, size);
-}
-
 /**
- * A Blob standing for a file on disk: it knows its size and reads the file
- * when asked, and holds none of it in memory meanwhile.
+ * Give the part file the destination's name without ever replacing a file
+ * that got there first. A check followed by a rename leaves a window in which
+ * another process's file appears and is replaced; `link` refuses an existing
+ * name with EEXIST in the same step that would create it. The part file's
+ * own name goes once the destination has the data.
  */
-class FileBlob extends Blob {
-  readonly #path: string;
-  readonly #size: number;
-
-  constructor(path: string, size: number) {
-    super([]);
-    this.#path = path;
-    this.#size = size;
-  }
-
-  override get size(): number {
-    return this.#size;
-  }
-
-  override stream(): ReadableStream<Uint8Array<ArrayBuffer>> {
-    return Readable.toWeb(createReadStream(this.#path)) as ReadableStream<
-      Uint8Array<ArrayBuffer>
-    >;
-  }
-
-  override async arrayBuffer(): Promise<ArrayBuffer> {
-    const parts: Uint8Array[] = [];
-    for await (const chunk of createReadStream(this.#path)) {
-      parts.push(chunk as Uint8Array);
+async function installWithoutReplacing(
+  partial: string,
+  destination: string,
+): Promise<void> {
+  try {
+    await link(partial, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(`${destination} already exists`);
     }
-    const out = new Uint8Array(this.#size);
-    let offset = 0;
-    for (const part of parts) {
-      out.set(part, offset);
-      offset += part.length;
-    }
-    return out.buffer;
+    throw error;
   }
+  await unlink(partial);
 }

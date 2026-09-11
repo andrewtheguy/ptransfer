@@ -6,6 +6,8 @@
  * with echo off; from a pipe or a file it is the first line.
  */
 
+import { InterruptedError } from './interrupt';
+
 export interface SecretInput extends NodeJS.ReadableStream {
   isTTY?: boolean;
   setRawMode?: (mode: boolean) => unknown;
@@ -49,7 +51,8 @@ function readAtTerminal(
   output: SecretOutput,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const setRawMode = input.setRawMode as (mode: boolean) => unknown;
+    // Called on the stream: a real TTY's setRawMode needs its `this`.
+    const setRawMode = (mode: boolean) => input.setRawMode?.(mode);
     let typed = '';
     const finish = (outcome: () => void) => {
       input.removeListener('data', onData);
@@ -66,7 +69,9 @@ function readAtTerminal(
           case '\n':
             finish(() => resolve(typed));
             return;
-          case '\u0003': // Ctrl-C
+          case '\u0003': // Ctrl-C, which raw mode delivers instead of SIGINT
+            finish(() => reject(new InterruptedError()));
+            return;
           case '\u0004': // Ctrl-D
             finish(() => reject(new Error('Cancelled')));
             return;

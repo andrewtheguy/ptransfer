@@ -87,6 +87,8 @@ describe('createFileSink', () => {
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3, 4, 5]),
     );
+    // Every read the Blob offers sees the file, not only the one used above.
+    expect(await blob.bytes()).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
     expect(new Uint8Array(await readFile(destination))).toEqual(
       new Uint8Array([1, 2, 3, 4, 5]),
     );

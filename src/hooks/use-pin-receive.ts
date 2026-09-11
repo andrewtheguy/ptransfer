@@ -994,7 +994,15 @@ export function usePinReceive(): UsePinReceiveReturn {
               if (!abandoned()) setState(update);
             },
           });
-          if (!receipt || receipt === 'switched' || abandoned()) return;
+          if (!receipt || receipt === 'switched') return;
+          if (abandoned()) {
+            void receipt.sink?.discard();
+            return;
+          }
+          // Held like a direct receive's sink: a reset, the next receive, or
+          // unmounting discards it. The direct attempt was disposed above, so
+          // there is no other sink in the ref to lose.
+          sinkRef.current = receipt.sink ?? null;
           setReceivedContent(receipt.content);
           setState({
             status: 'complete',

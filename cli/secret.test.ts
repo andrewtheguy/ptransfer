@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
+import { InterruptedError } from './interrupt';
 import { readSecret, type SecretInput } from './secret';
 
 function piped(...chunks: string[]): SecretInput {
@@ -42,7 +43,10 @@ describe('readSecret at a terminal', () => {
     };
     const modes: boolean[] = [];
     input.isTTY = true;
-    input.setRawMode = (mode: boolean) => {
+    // A method, as on a real TTY stream, that fails when called unbound.
+    input.setRawMode = function (this: unknown, mode: boolean) {
+      if (this !== input)
+        throw new Error('setRawMode called without its stream');
       modes.push(mode);
     };
     return { input, modes };
@@ -63,11 +67,17 @@ describe('readSecret at a terminal', () => {
     expect(output).toEqual(['Password: ', '\n']);
   });
 
-  it('gives up on Ctrl-C', async () => {
-    const { input, modes } = terminal();
-    const pending = readSecret('', input, { write: () => {} });
-    input.push('AB\u0003');
-    await expect(pending).rejects.toThrow('Cancelled');
-    expect(modes).toEqual([true, false]);
+  it('reports Ctrl-C as an interrupt, and Ctrl-D as giving up', async () => {
+    const first = terminal();
+    const interrupted = readSecret('', first.input, { write: () => {} });
+    first.input.push('AB\u0003');
+    await expect(interrupted).rejects.toBeInstanceOf(InterruptedError);
+    expect(first.modes).toEqual([true, false]);
+
+    const second = terminal();
+    const ended = readSecret('', second.input, { write: () => {} });
+    second.input.push('AB\u0004');
+    await expect(ended).rejects.toThrow('Cancelled');
+    expect(second.modes).toEqual([true, false]);
   });
 });

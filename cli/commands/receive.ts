@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import { TorFramedStream } from '@/lib/tor/framing';
@@ -86,12 +87,19 @@ export async function receive(argv: string[]): Promise<number> {
   let cancelled = false;
   let client: WebtorClient | null = null;
   let framed: TorFramedStream | null = null;
+  // Held here rather than left to receiveFileOverTor, which owns it only once
+  // it runs: a failure before that, or Ctrl-C, still removes the part file.
+  // A finished sink is the saved file and has nothing to discard.
+  let sink: AppendSink | null = null;
   const teardown = async () => {
     const closingStream = framed;
     const closingClient = client;
+    const abandonedSink = sink;
     framed = null;
     client = null;
+    sink = null;
     await closingStream?.close();
+    await abandonedSink?.discard().catch(() => undefined);
     await closeTor(closingClient);
   };
   const uninstall = onInterrupt(() => {
@@ -129,15 +137,16 @@ export async function receive(argv: string[]): Promise<number> {
     // declining leaves the service waiting, so this side can move the file
     // out of the way and come back.
     const destination = resolve(safeFileName(metadata.fileName));
-    let sink: Awaited<ReturnType<typeof createFileSink>>;
+    let fileSink: AppendSink;
     try {
-      sink = await createFileSink(destination);
+      fileSink = await createFileSink(destination);
     } catch (error) {
       await sendCancel(framed);
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}; move it aside and receive again — the sender is still waiting`,
       );
     }
+    sink = fileSink;
 
     say(
       `Receiving ${metadata.fileName} (${formatFileSize(metadata.fileSize)})...`,
@@ -147,7 +156,7 @@ export async function receive(argv: string[]): Promise<number> {
       framed,
       keys.contentKey,
       metadata.contentEncoding,
-      sink,
+      fileSink,
       {
         estimatedBytes: metadata.fileSize,
         isCancelled: () => cancelled,

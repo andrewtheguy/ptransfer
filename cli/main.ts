@@ -2,6 +2,7 @@ import { receive } from './commands/receive';
 import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
 import { routeDiagnostics } from './diagnostics';
+import { INTERRUPTED_STATUS, InterruptedError } from './interrupt';
 import { UsageError } from './usage';
 
 /**
@@ -55,6 +56,7 @@ async function main(argv: string[]): Promise<number> {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (error: unknown) => {
+    if (error instanceof InterruptedError) process.exit(INTERRUPTED_STATUS);
     if (error instanceof UsageError) {
       process.stderr.write(`${error.message}\n`);
       process.exit(2);

@@ -8,6 +8,17 @@ const TEARDOWN_GRACE_MS = 3000;
 
 export const INTERRUPTED_STATUS = 130;
 
+/**
+ * Ctrl-C that arrived as a keystroke rather than a signal — a prompt in raw
+ * mode reads it as input. The entry point exits with `INTERRUPTED_STATUS`.
+ */
+export class InterruptedError extends Error {
+  constructor() {
+    super('Interrupted');
+    this.name = 'InterruptedError';
+  }
+}
+
 export function onInterrupt(teardown: () => Promise<void>): () => void {
   const handler = () => {
     process.stderr.write('\nCancelling...\n');
