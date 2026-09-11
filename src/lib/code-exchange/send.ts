@@ -464,10 +464,17 @@ export async function answersOffer(
   offer: SenderOffer,
   answer: SignalingPayload,
 ): Promise<boolean> {
-  const sharedSecretKey = await deriveSharedSecretKey(
-    offer.privateKey,
-    new Uint8Array(answer.publicKey),
-  );
+  let sharedSecretKey: CryptoKey;
+  try {
+    sharedSecretKey = await deriveSharedSecretKey(
+      offer.privateKey,
+      new Uint8Array(answer.publicKey),
+    );
+  } catch {
+    // 65 bytes with the right prefix, but not a point on the curve: no
+    // agreement with this offer's key, so not a response to it.
+    return false;
+  }
   return await confirmsAnswer(offer, answer, sharedSecretKey);
 }
 

@@ -53,11 +53,22 @@ const DEFAULT_SCENARIOS = [
   'web-to-cli-relay',
   'cli-to-web-relay',
 ];
+const KNOWN_SCENARIOS = [...DEFAULT_SCENARIOS, 'web-to-cli-anonymous'];
 const SCENARIOS = new Set(
   (process.env.SCENARIOS ?? DEFAULT_SCENARIOS.join(','))
     .split(',')
     .map((s) => s.trim()),
 );
+// A typo or an empty list would otherwise run nothing and report a pass.
+const unknown = [...SCENARIOS].filter((s) => !KNOWN_SCENARIOS.includes(s));
+if (unknown.length > 0 || SCENARIOS.size === 0) {
+  throw new Error(
+    `SCENARIOS must name at least one of ${KNOWN_SCENARIOS.join(', ')}` +
+      (unknown.length > 0
+        ? `; unknown: ${unknown.map((s) => JSON.stringify(s)).join(', ')}`
+        : ''),
+  );
+}
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5 * 60_000);
 const REQUESTED_WEB_URL = new URL(
   process.env.PTRANSFER_WEB_URL ?? 'http://127.0.0.1:4173',

@@ -352,8 +352,16 @@ export async function receiveOverAnonymousRelay(
     }
 
     onStatus('Receiving the file over Tor...');
-    await sendReady(framed);
+    // Somewhere to put the file before the sender is told to start: a sink
+    // that cannot be made then fails the transfer before a byte is sent.
     const sink = await options.createSink(metadata);
+    try {
+      await sendReady(framed);
+    } catch (error) {
+      await sink.discard().catch(() => undefined);
+      throw error;
+    }
+    // From here receiveFileOverTor discards the sink on any failure.
     const payload = await receiveFileOverTor(
       framed,
       keys.contentKey,

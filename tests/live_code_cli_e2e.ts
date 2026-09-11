@@ -35,9 +35,18 @@ import {
   withTimeout,
 } from './support/live-harness.ts';
 
+const KNOWN_SCENARIOS = ['direct', 'folder', 'relay', 'anonymous'];
 const SCENARIOS = new Set(
   (process.env.SCENARIOS ?? 'direct,folder,relay').split(',').map((s) => s.trim()),
 );
+// A typo or an empty list would otherwise run nothing and report a pass.
+const unknown = [...SCENARIOS].filter((s) => !KNOWN_SCENARIOS.includes(s));
+if (unknown.length > 0 || SCENARIOS.size === 0) {
+  throw new Error(
+    `SCENARIOS must name at least one of ${KNOWN_SCENARIOS.join(', ')}` +
+      (unknown.length > 0 ? `; unknown: ${unknown.map((s) => JSON.stringify(s)).join(', ')}` : ''),
+  );
+}
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 8 * 60_000);
 const BRIDGE = process.env.BRIDGE ?? 'websocket';
 const VERBOSE = process.env.VERBOSE === '1' ? ['--verbose'] : [];

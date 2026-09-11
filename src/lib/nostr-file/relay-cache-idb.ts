@@ -58,9 +58,18 @@ function openRelayCache(): Promise<IDBDatabase> {
         keyPath: 'url',
       });
     };
-    request.onsuccess = () => resolve(request.result);
+    // A blocked open is given up on, but the request carries on and may still
+    // succeed once the other connection closes; nothing would close that one.
+    let blocked = false;
+    request.onsuccess = () => {
+      if (blocked) request.result.close();
+      else resolve(request.result);
+    };
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('Relay cache upgrade blocked'));
+    request.onblocked = () => {
+      blocked = true;
+      reject(new Error('Relay cache upgrade blocked'));
+    };
   });
 }
 
