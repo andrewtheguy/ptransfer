@@ -31,7 +31,16 @@ not — files, a cache directory, and plain HTTP to the Tor directory
 authorities, which turns the minutes-long browser bootstrap into seconds.
 
 Today it sends and receives files and folders by Code Exchange and over a Tor
-onion service, the tab's modes of the same names run from the same code. Code
+onion service, the tab's modes of the same names run from the same code.
+
+`bun run cli` with no command opens a terminal UI, which is the tab's own
+screens drawn in a terminal: pick files and folders in a browser, then one of
+the tab's three transfer modes; or paste what a sender gave you and let it
+work out which of the three it is. PIN Exchange is listed on both sides and
+says it is not here yet — see [docs/ROADMAP.md](./docs/ROADMAP.md).
+
+Every command below is the line-oriented interface instead, which is what a
+pipe and a script want and what stays out of the terminal UI's way. Code
 Exchange carries its codes as text — a terminal has no camera — which is also
 the text the tab's **Copy Data** gives and its **Paste** tab takes, so either
 end can be a tab:
@@ -83,7 +92,6 @@ The receiver never overwrites a file: a Code Exchange receiver refuses a name
 that is taken before it answers, and a Tor receiver declines, leaving the
 sender waiting for another try. The folder `--out` names must already exist;
 it is never created, so a typo fails instead of saving somewhere unexpected.
-PIN Exchange follows; see [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 It also carries a live self-check of the Tor path:
 

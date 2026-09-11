@@ -24,9 +24,8 @@ import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 import { onInterrupt } from '../interrupt';
 import { bootstrapTor, type TorOptions } from '../tor/bootstrap';
-import { readCode } from './code-input';
+import type { Presenter } from '../ui/presenter';
 import { createCliHost } from './host';
-import { createTransferOutput } from './output';
 
 /**
  * `ptransfer send --code <path>...`: Code Exchange from the terminal, the
@@ -53,13 +52,13 @@ export interface CodeSendOptions {
   torOptions: TorOptions;
   cacheDir: string;
   verbose: boolean;
-  say: (line: string) => void;
+  /** Where the offer is shown and the receiver's response comes back from. */
+  presenter: Presenter;
 }
 
 export async function sendByCode(options: CodeSendOptions): Promise<number> {
-  const { content, anonymous } = options;
-  const output = createTransferOutput('Sending', options.say);
-  const { say } = output;
+  const { content, anonymous, presenter } = options;
+  const say = (line: string) => presenter.say(line);
   const described = describeSendSource(content);
   if ('error' in described) throw new Error(described.error);
   const { metadata } = described;
@@ -113,13 +112,13 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
       (update.status === 'transferring' || update.status === 'uploading')
     ) {
       moving = true;
-      output.progress(update.progress.current, update.progress.total);
+      presenter.progress(update.progress.current, update.progress.total);
       return;
     }
     // The relay population is still being swept behind a relayed transfer;
     // once its bytes are moving, that is background the progress replaces.
     if (moving && update.status === 'discovering_relays') return;
-    output.status(update.message);
+    presenter.status(update.message);
   };
 
   try {
@@ -137,7 +136,7 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
             verbose: options.verbose,
             say: (line) => {
               torProgress.push(line);
-              if (options.verbose) output.status(`[tor] ${line}`);
+              if (options.verbose) presenter.status(`[tor] ${line}`);
             },
           }),
       });
@@ -173,7 +172,7 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     say('');
     say('Give the receiver this code:');
     say('');
-    process.stdout.write(`${generateMutualClipboardData(offer.offerBinary)}\n`);
+    presenter.hand(generateMutualClipboardData(offer.offerBinary));
     say('');
 
     // The response is judged by the session it answers, which ends an hour
@@ -189,13 +188,16 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     let answer: SignalingPayload;
     try {
       answer = await Promise.race([
-        readCode("Paste the receiver's response: ", async (container) => {
-          const parsed = readAnswer(container);
-          if (!(await answersOffer(offer, parsed))) {
-            throw new Error(ANSWER_MISMATCH);
-          }
-          return parsed;
-        }),
+        presenter.readCode(
+          "Paste the receiver's response: ",
+          async (container) => {
+            const parsed = readAnswer(container);
+            if (!(await answersOffer(offer, parsed))) {
+              throw new Error(ANSWER_MISMATCH);
+            }
+            return parsed;
+          },
+        ),
         expired,
       ]);
     } finally {
@@ -213,12 +215,12 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
       report,
       answerMismatchMessage: ANSWER_MISMATCH,
     });
-    output.done();
+    presenter.done();
     if (isCancelled()) return interrupted ?? 1;
     say(`Sent ${content.name}`);
     return 0;
   } catch (error) {
-    output.done();
+    presenter.done();
     if (interrupted !== null) return interrupted;
     throw error;
   } finally {

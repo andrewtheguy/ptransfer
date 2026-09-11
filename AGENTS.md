@@ -34,7 +34,11 @@
 - `cli/` is Unix only: Linux and macOS, never Windows. Use what a Unix process
   has — signals, atomic rename, the XDG directories, `/` as the only separator —
   directly, with no Windows branch. Its terminal UI is OpenTUI with the React
-  bindings. The scope and the release targets are in `docs/ROADMAP.md`.
+  bindings, in `cli/tui`, and `ptransfer` with no command opens it; every
+  command stays line-oriented, which is what pipes, scripts and the live tests
+  drive. What a transfer shows and asks for goes through the `Presenter` in
+  `cli/ui/presenter.ts`, so neither host's plumbing reaches the transfer code.
+  The scope and the release targets are in `docs/ROADMAP.md`.
 
 ## Checks to run
 
@@ -44,6 +48,10 @@
   library, which is what keeps browser-only code out of it.
 - This repo has slow opt in tests, don't run `bun test` directly on normal flow
   when those opt in tests are not expected to run.
+- `bun run test:tui` renders the terminal UI's screens under `bun test` with
+  OpenTUI's `testRender`. Run it after changing `cli/tui/`. Those files are
+  `*.tui.test.tsx` and the vitest run excludes them: OpenTUI loads a native
+  core over FFI and needs Bun or Node 26.4, which vitest here is not.
 - `bun run cli tor-test` is a live check over the real Tor network. Run it
   after changing `cli/tor/` or the Tor bootstrap, not on every change.
   `bun run test:live:tor:cli` sends a file between two CLI processes over the

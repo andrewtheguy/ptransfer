@@ -28,9 +28,8 @@ import type { WebRTCConnection } from '@/lib/webrtc';
 import { onInterrupt } from '../interrupt';
 import { bootstrapTor, type TorOptions } from '../tor/bootstrap';
 import { safeFileName } from '../transfer/files';
-import { readCode } from './code-input';
+import type { Presenter } from '../ui/presenter';
 import { type CliExchangeHost, createCliHost } from './host';
-import { createTransferOutput } from './output';
 
 /**
  * `ptransfer receive --code`: Code Exchange from the terminal, the
@@ -67,16 +66,17 @@ export interface CodeReceiveOptions {
   torOptions: TorOptions;
   cacheDir: string;
   verbose: boolean;
-  say: (line: string) => void;
+  /** Where the sender's code is asked for and the response is shown. */
+  presenter: Presenter;
 }
 
 export async function receiveByCode(
   options: CodeReceiveOptions,
 ): Promise<number> {
-  const output = createTransferOutput('Receiving', options.say);
-  const { say } = output;
+  const { presenter } = options;
+  const say = (line: string) => presenter.say(line);
 
-  const offer: AcceptedOffer = await readCode(
+  const offer: AcceptedOffer = await presenter.readCode(
     "Paste the sender's code: ",
     async (container) => acceptOffer(await readOffer(container)),
   );
@@ -116,12 +116,12 @@ export async function receiveByCode(
   });
 
   const show = (message: string) => {
-    if (!isCancelled()) output.status(message);
+    if (!isCancelled()) presenter.status(message);
   };
   const report = (update: ReceiveReport) => {
     if (isCancelled()) return;
     if (update.progress && update.status === 'fetching') {
-      output.progress(update.progress.current, update.progress.total);
+      presenter.progress(update.progress.current, update.progress.total);
       return;
     }
     show(update.message);
@@ -164,7 +164,7 @@ export async function receiveByCode(
       connectionTimeoutMs: CODE_CONNECTION_TIMEOUT_MS,
       isCancelled,
       report,
-      onProgress: (current, total) => output.progress(current, total),
+      onProgress: (current, total) => presenter.progress(current, total),
     });
     if (!attempt) return interrupted ?? 1;
 
@@ -185,7 +185,7 @@ export async function receiveByCode(
     say('');
     say('Give the sender this response:');
     say('');
-    process.stdout.write(`${generateMutualClipboardData(answerBinary)}\n`);
+    presenter.hand(generateMutualClipboardData(answerBinary));
     say('');
 
     // Held until the sender turns up on the fallback's control channel:
@@ -243,13 +243,13 @@ export async function receiveByCode(
     } else {
       saved = await savedFrom(await viaFallback(), host);
     }
-    output.done();
+    presenter.done();
     if (isCancelled()) return interrupted ?? 1;
     say(`Saved ${formatFileSize(saved)} to ${destination}`);
-    process.stdout.write(`${destination}\n`);
+    presenter.hand(destination);
     return 0;
   } catch (error) {
-    output.done();
+    presenter.done();
     if (interrupted !== null) return interrupted;
     throw error;
   } finally {
