@@ -5,6 +5,7 @@
     "includes": [
       "src/**/*.ts",
       "src/**/*.tsx",
+      "cli/**/*.ts",
       "scripts/**/*.ts",
       "vite.config.ts"
     ]

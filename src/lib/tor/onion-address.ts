@@ -1,8 +1,8 @@
 import { sha3_256 } from '@noble/hashes/sha3.js';
 
 /**
- * Parsing and validating v3 onion addresses, matching what ptransfer-cli's
- * `tor::split_address` accepts and how it spells what it accepted back.
+ * Parsing and validating v3 onion addresses, and spelling what was accepted
+ * back in the canonical form docs/TOR_TRANSPORT.md binds.
  *
  * The address is not merely a hostname here: both peers bind their SPAKE2
  * transcript to the exact `<host>.onion:<port>` string (see torPakeIdentities),
@@ -18,10 +18,9 @@ import { sha3_256 } from '@noble/hashes/sha3.js';
 
 /**
  * Virtual port both ends of a pTransfer onion transfer use. Onion services
- * have their own port space, so this collides with nothing, and it must match
- * ptransfer-cli's `tor::DEFAULT_PORT` — the port is part of the string the
- * handshake is bound to, so a peer that assumed a different one derives a
- * different SPAKE2 root and fails to authenticate.
+ * have their own port space, so this collides with nothing. The port is part
+ * of the string the handshake is bound to, so a peer that assumed a different
+ * one derives a different SPAKE2 root and fails to authenticate.
  */
 export const TOR_DEFAULT_PORT = 9735;
 
@@ -112,9 +111,9 @@ export interface OnionAddress {
   onion: string;
   /**
    * The same address as a human copies it: the port is dropped when it is the
-   * default, since that is the only one this app ever publishes on and
-   * ptransfer-cli assumes the same one. A non-default port is kept, so a
-   * `--port` address still round-trips through the box that echoes it back.
+   * default, since that is the only one this app ever publishes on. A
+   * non-default port is kept, so an address carrying an explicit port still
+   * round-trips through the box that echoes it back.
    */
   display: string;
 }
@@ -122,8 +121,8 @@ export interface OnionAddress {
 /**
  * Parse `<host>.onion` or `<host>.onion:<port>`, or null if it is neither.
  *
- * A port in the address wins over `defaultPort`, so the line ptransfer-cli
- * prints pastes in verbatim.
+ * A port in the address wins over `defaultPort`, so an address carrying an
+ * explicit port pastes in verbatim.
  */
 export function parseOnionAddress(
   address: string,

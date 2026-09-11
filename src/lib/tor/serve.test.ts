@@ -46,7 +46,7 @@ describe('serveUntilSent', () => {
   /**
    * The wait deadline bounds the wait, never a transfer.
    *
-   * A regression test with a specific history: on the CLI side the deadline
+   * A regression test with a specific history: in an earlier implementation the deadline
    * once raced the whole accept loop, so an authenticated transfer still
    * moving bytes was cancelled 30 minutes after the *wait* began. Here the
    * transfer itself runs past that deadline — its source yields a chunk every

@@ -11,52 +11,34 @@ SPAKE2-sealed Nostr channel instead of a person's hand
 this document specifies holds there unchanged; only the carriage differs, and
 §6 says what that changes.
 
-This document is the **normative specification** for that mode, and it is what
-the two implementations agree with each other on:
+This document is the **wire specification** for that mode. The browser tab
+runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
+transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
+implementation; where the code and this document disagree, this document is
+what the code is meant to do. The user-facing guide to the
+same mode is [CODE_EXCHANGE.md](./CODE_EXCHANGE.md).
 
-| Implementation | Where it lives |
-| --- | --- |
-| The browser tab | this repo — see [ARCHITECTURE.md](./ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts) |
-| `ptransfer-cli` | [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli)'s `code` subcommands — see that repo's `docs/ARCHITECTURE.md` |
+What Code Exchange shares with [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md)
+is §7 of that document — the 128 KiB chunk framing, flow control, completion,
+and abort that every direct transfer runs once a data channel is open — and
+that part is specified there, not here.
 
-Either side of a transfer may be a browser tab or the CLI. Where an
-implementation and this document disagree, this document wins. The
-user-facing guide to the same mode is [CODE_EXCHANGE.md](./CODE_EXCHANGE.md).
+There is no version number in this mode, and none is needed: every way two app
+versions could drift apart fails closed and says so. The container's own
+version is its `PT01` magic, refused rather than negotiated, and a drift in the
+obfuscation seed or keystream reads as "that code is not from the last hour or
+two". A payload carrying the wrong field set is malformed, and both sides say
+so. A divergence in the key schedule or either transcript digest (§3) lands the
+two sides on different keys, the confirmation tag mismatches, and the sender
+refuses the response. A divergence in the anonymous fallback's session
+derivation, control events, or messages (§5) means the two never meet on the
+control channel, or the onion handshake never authenticates. And each side
+enforces the 100 MiB fallback cap and its 1 MiB wire margin on what it
+accepts, so raising either alone only produces failures.
 
-This is a cross-implementation interoperability contract, versioned separately
-from [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md), whose
-`INTEROP_PROTOCOL_VERSION` covers PIN Exchange and the shared data-channel
-layer. Changes here do not move that version. What Code Exchange **does** share
-with it is §7 of that document — the 128 KiB chunk framing, flow control,
-completion, and abort that every direct transfer runs once a data channel is
-open — and that part is governed there, not here.
-
-## Changing this document
-
-This repository is where this specification lives; the CLI implements against
-it rather than restating it, so editing this file is not by itself a change to
-the CLI. What binds the two implementations is the short list below — the rest
-of this document is the reasoning around it, and rewording that costs the
-other side nothing.
-
-| What binds both sides | How a divergence surfaces |
-| --- | --- |
-| The PT01 container: magic, obfuscation seed and keystream, encoding pipeline | The container's own version is its `PT01` magic, refused rather than negotiated. A drift in the seed or keystream reads as "that code is not from the last hour or two". |
-| The payload fields and their offer-only / answer-only rules | A payload carrying the wrong field set is malformed, and both sides say so. |
-| The key schedule and both transcript digests (§3) | Nothing to bump: a divergence lands the two sides on different keys, the confirmation tag mismatches, and the sender refuses the response. |
-| The anonymous fallback's session derivation, control events, and messages (§5) | Nothing to bump: a divergence means the two never meet on the control channel, or the onion handshake never authenticates. |
-| The 100 MiB fallback cap and its 1 MiB wire margin | Nothing to bump: each side enforces the bound on what it accepts, so raising it alone only produces failures. |
-
-There is no coordination integer here, and none is needed. Every way the two
-sides could drift apart on that list fails closed and says so, which is why
-this mode is versioned like [ANONYMOUS_SIGNALING.md](./ANONYMOUS_SIGNALING.md)
-rather than like PIN Exchange, whose rotation windows and guessing budgets can
-diverge in silence.
-
-Everything outside that list is per-implementation detail. How a code is
-carried to the other device — a grid of QR codes and a camera in the browser,
-copy/paste text in both — is not part of this contract; see *Carrying the
-codes* below.
+How a code is carried to the other device — a grid of QR codes and a camera in
+the browser, copy/paste text anywhere — is not part of this document; see
+*Carrying the codes* below.
 
 ## 1. The PT01 container
 
@@ -147,8 +129,8 @@ Rules both sides enforce:
   fallbacks, and an offer carrying both would ask the receiver to choose.
 - An offer must describe what it is offering — `salt`, `fileName`, `fileSize`,
   `contentEncoding` — and a receiver refuses one that does not. Where it does
-  so is an implementation's own business: one checks the container, the other
-  checks as it acts on the fields, and no sender produces such an offer.
+  so is not fixed here — the container may be checked up front or as the
+  fields are acted on — and no sender produces such an offer.
 - `contentEncoding` follows the flow-based rule of
   [INTEROP_PROTOCOL.md §6](./INTEROP_PROTOCOL.md#6-wire-encoding): a single
   file is `deflate-raw`, a generated ZIP is `identity`. Any other value is
@@ -239,7 +221,7 @@ key within the window the receiver's acknowledgments open, then `end` answered
 by the receiver's `done` — with the wire encoding of §6 there. Nothing about
 that layer is specific to how the two sides met.
 
-ICE is STUN-only in both implementations; no TURN is configured. Candidates are
+ICE is STUN-only; no TURN is configured. Candidates are
 gathered before a code is made rather than trickled, because a code is carried
 whole — by hand, or as one sealed message.
 
@@ -258,13 +240,13 @@ v3 onion service the sender publishes, carried by the handshake and framing of
 relays, because that pool is a constant on both sides.
 
 The other fallback — the clearnet Nostr file relay an ordinary offer's `relays`
-list names — is carried by both implementations, and is specified in
+list names — is specified in
 [NOSTR_FILE_RELAY.md](./NOSTR_FILE_RELAY.md) rather than here: what this
 contract fixes about it is the `relays` field of §2 and its exclusivity with
 `anon`, and everything downstream of that — the derived session of §5.1, the
 control channel of §5.2, the manifest, the chunk events — belongs to that
-document. An implementation that does not carry it mints offers without a
-`relays` list, and a failed direct route ends such a transfer.
+document. An offer without a `relays` list has no clearnet fallback, and a
+failed direct route ends such a transfer.
 
 ### 5.1 The derived session
 
@@ -363,15 +345,14 @@ and verified.
 
 How a code reaches the other device is not part of this contract. What is:
 
-- **Copy/paste** is base64 of exactly the container bytes of §1, and both
-  implementations carry it. Whitespace and line wrapping around it are ignored.
+- **Copy/paste** is base64 of exactly the container bytes of §1. Whitespace
+  and line wrapping around it are ignored.
 - **QR** is browser-only today: the offer is chunked across URL QR codes and
   the answer is a single binary QR. The chunking, its CRC-32, and the URL form
   are specified in [ARCHITECTURE.md](./ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts).
-  `ptransfer-cli` carries the same container as text and interoperates through
-  the copy/paste half; drawing the offer grid in a terminal is on its roadmap,
-  reading either QR back is not, for want of a camera. So an answer reaches a
-  CLI as text however its offer travelled.
+  The CLI will carry the same container as text through the copy/paste half;
+  a terminal has no camera to read either QR back with, so an answer will
+  reach it as text however its offer travelled.
 
 - **PIN Exchange** carries each code whole, sealed under its PAKE session's
   signals key, as specified in
@@ -405,8 +386,8 @@ travelled.
 | Onion password | 32 bytes, base64 |
 | Fallback cap | 100 MiB input, +1 MiB wire margin |
 
-Timeouts are local policy rather than contract. For reference, the reference
-implementation gives a direct attempt 20 s when a fallback is available and
+Timeouts are local policy rather than part of the wire format. For reference,
+the code gives a direct attempt 20 s when a fallback is available and
 120 s when it is not, and a receiver 120 s either way, since its wait starts
 before the sender has even seen the response. When PIN Exchange carries the
 codes, the answer reaches the sender within seconds, so its receiver waits

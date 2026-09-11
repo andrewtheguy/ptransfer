@@ -3,16 +3,15 @@
 This guide is intentionally high-level and user-focused.
 For protocol internals, signaling payload format, and implementation details, see [Architecture](ARCHITECTURE.md).
 
-Both implementations ship Code Exchange, and either side of a transfer may be a
-browser tab or `ptransfer-cli`. The two carry the same codes; only the *way* a
-code is carried differs, because a terminal has no camera — the CLI copies and
-pastes text where the browser also offers QR. The wire contract they share is
-[CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md), versioned separately
-from [INTEROP_PROTOCOL.md](INTEROP_PROTOCOL.md), so changes to it do not move
-the interop protocol version.
+The browser tab runs Code Exchange from `src/lib`, and the CLI in `cli/` will
+run the same code once its transfer commands land ([ROADMAP.md](ROADMAP.md));
+either side of a transfer will then be a tab or a terminal. Only the *way* a
+code is carried will differ, because a terminal has no camera — the CLI will copy and
+paste text where the browser also offers QR. The wire specification is
+[CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md).
 
-Both fallbacks below are implemented by both: the **ordinary relay fallback**
-over public Nostr relays, and the **anonymous signaling and relay** option. A
+Two fallbacks exist: the **ordinary relay fallback** over public Nostr relays,
+and the **anonymous signaling and relay** option. A
 code that names no relays and carries no anonymous flag has neither, and a
 failed direct connection ends that transfer.
 
@@ -303,7 +302,7 @@ transfer, and the sender's own scan or paste remains the gate.
 
 ## Tips
 
-- **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them. `ptransfer-cli` has copy/paste only, and that half is enough to transfer with a browser on the other end
+- **QR and copy/paste are interchangeable**: Pick whichever is easier at each step; you can mix them. The CLI will have copy/paste only, and that half is enough to transfer with a browser on the other end
 - **Order doesn't matter (QR)**: Multi-QR offer codes can be scanned in any order
 - **Duplicates are fine (QR)**: Scanning the same QR code twice won't cause issues
 - **Copy/paste fallback**: If cameras aren't available, use **Copy Data** on the sending side and

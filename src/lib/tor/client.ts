@@ -1,10 +1,10 @@
 import { getStunUrls } from '@/lib/webrtc-config';
 import {
   describeSeed,
-  judgeDescription,
   loadDirectorySeed,
   saveDirectoryCache,
 } from './directory-cache';
+import { judgeDescription } from './directory-policy';
 import { loadWebtor, type WebtorClient } from './webtor';
 
 /**

@@ -36,11 +36,52 @@ behind it. Concretely:
 ### Custom Relay Configuration
 Allow users to specify their own preferred Nostr relays for signaling.
 
-### `ptransfer-cli`'s own roadmap
-Work that is specific to the CLI rather than to a contract both implementations
-follow — a relay-health cache between runs, and drawing a Code Exchange offer
-as a QR grid in a terminal — lives in that project's
-[`docs/ROADMAP.md`](https://github.com/andrewtheguy/ptransfer-cli/blob/main/docs/ROADMAP.md).
+### The CLI in `cli/`
+A command-line host for the same `src/lib` code the browser tab runs, so a
+change to the web app is a change to the CLI by construction. It replaces the
+retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
+
+1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
+   Bun-hosted loader for the same webtor-wasm Tor client, a directory
+   download over plain HTTP from the authorities with a disk cache, and a
+   `bun run cli tor-test` self-check that bootstraps, fetches a page from a
+   public onion service, publishes an onion service, and connects back to it.
+2. **Tor send and receive** from the terminal over `src/lib/tor`.
+3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
+   node-datachannel, with the Nostr file relay as the fallback; codes are
+   carried as text, since a terminal has no camera.
+4. **An Ink terminal UI**, and a single-binary build with `bun build --compile`
+   — whether the native WebRTC addon can be embedded in that binary is the
+   open question.
+
+Why a JavaScript CLI is viable at all, checked under Bun 1.4 before phase 1
+was built, so the later phases rest on something measured rather than assumed:
+
+- The slow browser bootstrap is a browser limitation, not a Tor one: a tab
+  cannot fetch the directory over plain HTTP, a process can. Plain HTTP to the
+  directory authorities' DirPorts, four requests in flight, assembles a ~38 MiB
+  seed in about 25 s; with that seed the unmodified webtor-wasm binary is
+  bootstrapped over the public websocket Snowflake bridge in about 3.5 s. A
+  cold `tor-test` runs in about 35 s end to end and a warm one, with the seed
+  cached on disk, in about 12–15 s. Performance is not a goal, which is why
+  Snowflake over websocket is acceptable and a native Arti stack is not on the
+  table.
+- `node-datachannel/polyfill` gives a working `RTCPeerConnection` under Bun,
+  so PIN Exchange and Code Exchange have a transport for phase 3.
+- Ink 7 with `@inkjs/ui` renders under Bun, so phase 4's terminal UI is React
+  in the stack the web app already uses.
+
+Open items, in no particular order:
+
+- `cli/tor/directory-fetch.ts` is a copy of webtor-rs's
+  `tests/tools/fetch-directory.ts`. It belongs in the webtor npm package, which
+  pTransfer is the only live customer of, so the two do not drift.
+- The fetcher reads from the directory authorities directly. Public directory
+  mirrors (fallback directories) should be preferred, with the authorities as
+  the last resort, so a fleet of CLIs does not load the nine authorities.
+- `bun build --compile` with the `node-datachannel` N-API addon is untested;
+  if it cannot embed the addon, phase 4 ships a Bun script plus a lockfile
+  instead of one binary.
 
 ## Backlog (Future Considerations)
 
@@ -55,8 +96,8 @@ Findings from research (August 2026):
 - **CORS is fully open** (verified live against ppng.io): preflight returns
   `access-control-allow-origin: *` with `GET, HEAD, POST, PUT, OPTIONS` and
   headers `Content-Type, Content-Disposition, X-Piping`, so browser `fetch()`
-  works from any origin with no proxy. Works browser ↔ browser and
-  browser ↔ CLI (plain HTTP on both sides).
+  works from any origin with no proxy. Works browser ↔ browser, and the CLI
+  would run the same code over plain HTTP.
 - **Rendezvous fits the existing PAKE**: derive a high-entropy path from the
   SPAKE2 shared secret (HKDF); the path is the only thing gating the stream,
   and the payload is E2E-encrypted before it touches the relay, so the relay
@@ -69,10 +110,9 @@ Findings from research (August 2026):
   general-purpose public piping infrastructure. It is also self-hostable if
   its goodwill or bandwidth tolerance for multi-GB transfers proves
   insufficient — there is no SLA.
-- **CLI support**: the CLI carries both of Code Exchange's data-path fallbacks
-  — the Nostr file relay and the anonymous Tor option — and is direct-only
-  everywhere else, PIN Exchange included, where it fails rather than relaying
-  file bytes. An HTTP file relay is not supported there.
+- **CLI support**: the CLI in `cli/` runs the same `src/lib` code, so it will
+  carry whatever fallbacks the web app carries, this one included once it
+  exists.
 - Alternatives considered: a self-hosted Magic Wormhole transit relay
   (WebSocket-capable upstream, blind token-matching pipe, but requires running
   a server); or a TURN server (least protocol work since transport is already

@@ -31,9 +31,9 @@ import { LINGER_TIMEOUT_MS, type TorFramedStream } from './framing';
  *
  * The same ceiling the Nostr file relay works under, for the same reasons —
  * see `SLOW_TRANSPORT_MAX_BYTES`. It is a hard limit rather than advice
- * because it is the *receiver's* rule too: ptransfer-cli refuses a larger
- * offer outright, so a sender that ignored it would only discover the
- * disagreement after a bootstrap and a handshake.
+ * because it is the *receiver's* rule too: a receiver refuses a larger offer
+ * outright, so a sender that ignored it would only discover the disagreement
+ * after a bootstrap and a handshake.
  */
 export const TOR_MAX_TRANSFER_BYTES = SLOW_TRANSPORT_MAX_BYTES;
 

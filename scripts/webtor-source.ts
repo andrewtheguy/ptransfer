@@ -26,8 +26,8 @@ import { fileURLToPath } from 'node:url';
 
 const PACKAGE = '@andrewtheguy/webtor-wasm';
 /** Where webtor-rs sits next to this repository, and what it builds into. */
-const LOCAL_PACKAGE = '../webtor-rs/webtor-wasm/pkg';
-const LOCAL_MANIFEST = '../webtor-rs/webtor-wasm/Cargo.toml';
+const LOCAL_PACKAGE = '../webtor-rs/crates/webtor-wasm/pkg';
+const LOCAL_MANIFEST = '../webtor-rs/crates/webtor-wasm/Cargo.toml';
 /** What the build has to have produced for the package to be installable. */
 const BUILD_OUTPUT = ['package.json', 'webtor_wasm.js', 'webtor_wasm_bg.wasm'];
 const BUILD_COMMAND = 'cd ../webtor-rs && bun run build';

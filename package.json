@@ -1,12 +1,13 @@
 {
   "name": "ptransfer",
   "private": true,
-  "version": "0.0.53",
+  "version": "0.0.54",
   "packageManager": "bun@1.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "cli": "bun cli/main.ts",
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
     "test": "bun run test:unit",
@@ -14,10 +15,7 @@
     "test:unit": "vitest run --project unit",
     "test:integration:nostr-file": "vitest run --project integration",
     "test:live": "bun run test:live:nostr-file && bun run test:live:web",
-    "test:live:code": "bun tests/live_code_cli_interop.ts",
-    "test:live:tor": "bun tests/live_tor_cli_interop.ts",
     "test:live:tor:web": "bun tests/live_tor_web_e2e.ts",
-    "test:live:webrtc": "bun tests/live_webrtc_cli_interop.ts",
     "webtor:status": "bun scripts/webtor-source.ts status",
     "webtor:local": "bun scripts/webtor-source.ts local",
     "webtor:released": "bun scripts/webtor-source.ts released",
@@ -27,7 +25,7 @@
   "dependencies": {
     "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
     "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
-    "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.18/andrewtheguy-webtor-wasm-0.0.1-alpha.18.tgz",
+    "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.23/andrewtheguy-webtor-wasm-0.0.1-alpha.23.tgz",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@radix-ui/react-collapsible": "^1.1.12",
@@ -52,6 +50,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
+    "@types/bun": "^1.4.2",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",

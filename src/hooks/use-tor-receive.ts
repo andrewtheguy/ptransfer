@@ -23,15 +23,12 @@ import type { ReceivedContent } from '@/lib/types';
  * already proves the *service* is the one the address names; the SPAKE2
  * handshake on top proves this client is the intended receiver, and produces
  * the content key in the same stroke.
- *
- * The sender may be another browser tab or ptransfer-cli's
- * `ptransfer tor send`.
  */
 
 export interface TorReceiveRequest {
   /**
    * `<address>.onion`, as the sender showed it. A `:<port>` is accepted and
-   * wins over the default, so an address from a `--port` CLI still connects.
+   * wins over the default, so an address carrying an explicit port still connects.
    */
   address: string;
   password: string;

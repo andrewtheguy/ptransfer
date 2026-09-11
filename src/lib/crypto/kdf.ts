@@ -121,9 +121,8 @@ export interface TorSessionKeys {
 }
 
 /**
- * Labels for the Tor onion transport. Its interoperability contract is
- * versioned separately from INTEROP_PROTOCOL_VERSION, so it derives under
- * labels of its own: a root that came out of a Tor handshake can never produce
+ * Labels for the Tor onion transport. Its handshake is separate from PIN
+ * Exchange's, so it derives under labels of its own: a root that came out of a Tor handshake can never produce
  * a key PIN Exchange would also produce, even though both roots are SPAKE2
  * transcripts over the same curve.
  */
@@ -136,8 +135,6 @@ const TOR_KEY_LABELS = {
 /**
  * Derive every key one Tor onion transfer uses from the SPAKE2 root returned
  * by finishPake and the salt the onion service generated for this connection.
- *
- * Matches ptransfer-cli's `PakeRoot::tor_session_keys`.
  */
 export async function deriveTorSessionKeys(
   sharedSecretKey: CryptoKey,

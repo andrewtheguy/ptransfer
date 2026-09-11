@@ -9,7 +9,7 @@ import { classifyReceiveText, looksLikePin } from './receive-input';
 import { buildOnionUrl, buildPinUrl } from './receive-link';
 
 const ORIGIN = 'https://ptransfer.example';
-/** A real address printed by ptransfer-cli, so the checksum is genuine. */
+/** A real v3 address, so the checksum is genuine. */
 const ONION = 'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion';
 
 const mockOffer: RTCSessionDescriptionInit = {

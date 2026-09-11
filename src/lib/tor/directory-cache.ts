@@ -13,9 +13,10 @@
  * older than it understands. So a tampered entry costs a download, never
  * correctness.
  *
- * Timeliness is not enough, though, and that is what `judgeDirectorySeed`
- * adds. Where an onion descriptor lives is derived from the consensus's own
- * `valid-after`, so a seed from before a time-period rotation places the whole
+ * Timeliness is not enough, though, and that is what `judgeDescription` in
+ * `./directory-policy.ts` adds — shared with the CLI's disk cache, since the
+ * rule is about the network and not about where a seed was kept. Where an
+ * onion descriptor lives is derived from the consensus's own `valid-after`, so a seed from before a time-period rotation places the whole
  * HSDir ring one period back: a service publishes to the current ring while a
  * client with such a seed asks the previous one, and every HSDir it tries
  * answers 404. The consensus is still valid at that point — it is just
@@ -23,7 +24,10 @@
  * has to be ours, and it applies to publishing and fetching alike.
  */
 
+import { judgeDescription, type SeedVerdict } from './directory-policy';
 import { type DirectoryDescription, loadWebtor } from './webtor';
+
+export { judgeDescription, type SeedVerdict } from './directory-policy';
 
 const DATABASE_NAME = 'ptransfer-tor';
 const DATABASE_VERSION = 1;
@@ -37,9 +41,6 @@ const CACHE_KEY = 'current';
  * life. See docs/TOR_BROWSER.md for how to build one while testing.
  */
 const SNAPSHOT_URL = '/tor-directory.json';
-
-/** A seed with less life than this left would expire during the bootstrap. */
-const MIN_REMAINING_MS = 10 * 60 * 1000;
 
 /**
  * Read the validity window and time period out of a directory, cached or
@@ -68,57 +69,6 @@ export async function describeSeed(
     // is about to say so much more clearly.
     return undefined;
   }
-}
-
-export interface SeedVerdict {
-  usable: boolean;
-  /** Why not, phrased to follow "Ignoring the cached directory:". */
-  reason?: string;
-}
-
-/**
- * Whether a directory still describes the network as it is now — both that
- * its consensus is live, and that it belongs to the onion-service time period
- * in force at `now`.
- *
- * The second half is the one that is easy to miss. A consensus stays valid for
- * three hours, but the period rotates on its own schedule, so a seed saved at
- * 11:00 UTC is still perfectly valid at 13:00 and still places the HSDir ring
- * where it was before noon. Seeding a client with it sends every descriptor
- * lookup to relays the service never uploaded to, and seeding a *service* with
- * it publishes where no current client will look.
- *
- * This rule is ours, not webtor's: webtor installs any seed whose consensus is
- * signed and timely, which is the right bar for a client that will download a
- * fresh directory anyway. A transfer wants both peers on one ring.
- */
-export function judgeDescription(
-  described: DirectoryDescription | undefined,
-  now: number = Date.now(),
-): SeedVerdict {
-  if (!described) {
-    return { usable: false, reason: 'it carries no readable consensus' };
-  }
-  const validAfter = described.validAfter.getTime();
-  const validUntil = described.validUntil.getTime();
-  if (now < validAfter) {
-    return { usable: false, reason: 'its consensus is not valid yet' };
-  }
-  if (now + MIN_REMAINING_MS > validUntil) {
-    return {
-      usable: false,
-      reason: `its consensus expires at ${described.validUntil.toISOString()}`,
-    };
-  }
-  if (described.timePeriod !== described.timePeriodAt(now)) {
-    return {
-      usable: false,
-      reason:
-        'its consensus is from a previous onion-service time period, which ' +
-        'would place every descriptor on the wrong HSDirs',
-    };
-  }
-  return { usable: true };
 }
 
 /** `judgeDescription` applied to a seed that has to be read first. */

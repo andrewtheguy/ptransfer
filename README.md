@@ -9,68 +9,39 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 - **100% Static - No Backend Required**: The entire app is a static site that can be hosted on any static hosting service (GitHub Pages, Netlify, Vercel, S3, etc.). No server-side code, no database, no backend infrastructure needed.
 - **Works offline**: No internet required after page load when using Code Exchange on same local network
 - **Three transfer modes**: PIN Exchange (default), Code Exchange, or Tor Onion Service — see [Transport Layer](#transport-layer)
-- **Tor Onion Service**: The sending tab publishes a v3 onion service of its own and mints a one-time password; the receiver needs only those two strings. No pTransfer or Nostr relay and no direct connection between the two networks; the path is Tor's own — a Snowflake bridge (which uses STUN only on the `webrtc` bridge), Tor relays, and the HSDirs carrying the descriptor. There is no pTransfer rendezvous record, though Tor's descriptor remains retrievable by anyone holding the onion address until it expires. Slower, capped at 100 MiB and best kept far smaller, and interoperable with [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli)'s `tor` subcommands. See [Tor Transport](./docs/TOR_TRANSPORT.md)
+- **Tor Onion Service**: The sending tab publishes a v3 onion service of its own and mints a one-time password; the receiver needs only those two strings. No pTransfer or Nostr relay and no direct connection between the two networks; the path is Tor's own — a Snowflake bridge (which uses STUN only on the `webrtc` bridge), Tor relays, and the HSDirs carrying the descriptor. There is no pTransfer rendezvous record, though Tor's descriptor remains retrievable by anyone holding the onion address until it expires. Slower, capped at 100 MiB and best kept far smaller. See [Tor Transport](./docs/TOR_TRANSPORT.md)
 - **Flexible signaling**: Nostr (default) or Code Exchange — you hand over the offer (QR/copy-paste) and the receiver hands the response back the same way; the response only enters the sender's page when the sender scans or pastes it. With internet, Code Exchange can connect across different networks when ICE finds a direct route; without internet, it can connect over the same local network.
 - **Rotating PIN pairing (Nostr)**: A case-sensitive 12-character PIN (letters and digits only) that rotates every 2 minutes locates the sender and drives a SPAKE2 password-authenticated key exchange; nothing published to relays can be used to guess the PIN offline
-- **Anonymous signaling (PIN Exchange, experimental)**: An advanced option on the send tab that carries the handshake through Tor, inside the browser, to Nostr relays run as onion services — so no Nostr relay sees either device's IP address. The PIN comes out 16 characters instead of 12, and that length is the whole signal: the receiver's page recognizes it and follows, with nothing to turn on and nothing to agree in advance. It starts slowly and fails more often. A direct file transfer is still a WebRTC connection; only when none can be made does the file go through Tor, over the same Tor fallback Code Exchange's anonymous option uses. Specified separately from `INTEROP_PROTOCOL.md`, but interoperable with [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli). See [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md)
-- **Anonymous signaling and relay (Code Exchange, experimental)**: A separate advanced option keeps Code Exchange's fallback off the clearnet. The offer and answer are still carried by hand and direct WebRTC is still tried first, but both sides prepare Tor in the background; if the direct route fails, onion-service Nostr relays carry the encrypted control channel and a temporary onion service published by the sender carries the file. Both devices need internet, the fallback remains capped at 100 MiB, and this browser/CLI-interoperable option is slower and less reliable than the ordinary public-relay fallback. See [Code Exchange](./docs/CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental)
+- **Anonymous signaling (PIN Exchange, experimental)**: An advanced option on the send tab that carries the handshake through Tor, inside the browser, to Nostr relays run as onion services — so no Nostr relay sees either device's IP address. The PIN comes out 16 characters instead of 12, and that length is the whole signal: the receiver's page recognizes it and follows, with nothing to turn on and nothing to agree in advance. It starts slowly and fails more often. A direct file transfer is still a WebRTC connection; only when none can be made does the file go through Tor, over the same Tor fallback Code Exchange's anonymous option uses. See [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md)
+- **Anonymous signaling and relay (Code Exchange, experimental)**: A separate advanced option keeps Code Exchange's fallback off the clearnet. The offer and answer are still carried by hand and direct WebRTC is still tried first, but both sides prepare Tor in the background; if the direct route fails, onion-service Nostr relays carry the encrypted control channel and a temporary onion service published by the sender carries the file. Both devices need internet, the fallback remains capped at 100 MiB, and this option is slower and less reliable than the ordinary public-relay fallback. See [Code Exchange](./docs/CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental)
 - **Confirmation code (Nostr)**: After entering the PIN, the receiver is shown an 8-character code the sender must type in before anything is sent — so someone who spots the PIN over your shoulder cannot quietly take the file
 - **File or folder transfer**: Send a file, or a ZIP archive created from multiple files/a folder. Everything is compressed behind the scenes: a single file is deflated during the transfer and restored on receipt, while multi-file/folder ZIP output (whose entries are already deflated) is never recompressed. The 2 GiB limit applies both to the selected input and to the encoded wire payload: a selection over 2 GiB is refused up front, while one very close to the limit can still fail during transfer if incompressible deflate output or ZIP headers push the wire payload over it. On the direct P2P path, the sender reads selected files lazily without scratch storage and receivers keep payloads up to 100 MiB in memory before spilling to OPFS. The ordinary Nostr fallback instead materializes payloads in memory. File-relay fallbacks and the Tor file transport are capped at 100 MiB. See [Browser Requirements](#browser-requirements)
 - **End-to-end encryption**: All transfers use AES-256-GCM encryption
 - **No accounts required**: Ephemeral keypairs generated per transfer
 - **PWA Support**: Install as a Progressive Web App for offline access
 
-## Companion CLI
+## Command line
 
-[ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) is the command-line
-companion: one native executable with no language runtime or package manager, and a full-screen TUI wizard
-when run with no arguments. It exists for the places a browser tab does not reach — a
-headless server, an SSH session, a machine where you would rather stay in the terminal.
+The same code is headed for the terminal. `cli/` is a Bun application that imports
+the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
+are the ones the browser tab runs, so a change to the app is a change to the
+CLI by construction. What the CLI adds is what a process has and a page does
+not — files, a cache directory, and plain HTTP to the Tor directory
+authorities, which turns the minutes-long browser bootstrap into seconds.
 
-It is not a separate protocol. Either end of a transfer may be a browser tab or the CLI:
-
-| Mode | Web | CLI | Notes |
-| --- | --- | --- | --- |
-| PIN Exchange | yes | yes | The interoperable default, governed by [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md) |
-| Anonymous signaling | yes | yes | PIN Exchange option, not a mode; specified in [docs/ANONYMOUS_SIGNALING.md](./docs/ANONYMOUS_SIGNALING.md) |
-| Tor Onion Service | yes | yes | `ptransfer tor send` / `ptransfer tor receive`; specified in [docs/TOR_TRANSPORT.md](./docs/TOR_TRANSPORT.md) |
-| Code Exchange | yes | yes | `ptransfer code send` / `ptransfer code receive`; specified in [docs/CODE_EXCHANGE_PROTOCOL.md](./docs/CODE_EXCHANGE_PROTOCOL.md) |
-| Nostr relay fallback | yes | yes | Ordinary Code Exchange fallback; specified in [docs/NOSTR_FILE_RELAY.md](./docs/NOSTR_FILE_RELAY.md) |
-| Code Exchange Tor fallback | yes | yes | Experimental Code Exchange option; specified by the Code Exchange and Tor contracts |
-
-Install it with the one-liners that repo publishes:
+Today it carries one command, a live self-check of the Tor path:
 
 ```bash
-# Linux and macOS
-curl -sSL https://andrewtheguy.github.io/ptransfer-cli/install.sh | bash
+bun run cli tor-test
 ```
 
-```powershell
-# Windows (beta; PowerShell 7 recommended)
-irm https://andrewtheguy.github.io/ptransfer-cli/install.ps1 | iex
-```
-
-Windows ships with every release but is not one of the tested platforms, so it
-is labelled beta there.
-
-This repo is the source of truth for everything the two share: PIN Exchange, Code
-Exchange and its two fallbacks, anonymous signaling, and the Tor onion transport are
-specified in `docs/` here, and the CLI implements against those documents rather than
-restating them. The top-level protocol specifications carry a *Changing this document*
-section naming exactly what binds another implementation and what is only rationale;
-the Nostr file-relay document specifies the clearnet fallback downstream of the Code
-Exchange contract. This web-first repository also owns documentation for browser-only
-features; the CLI's repository documents CLI-specific behavior and internals.
-
-For PIN Exchange, two implementations interoperate when they declare the same **interop
-protocol version** (see [Version Compatibility](#version-compatibility) below), whatever
-their app versions. The other cross-implementation modes have their own contracts and
-version boundaries. Three live interoperability commands run in this repo against a local
-`ptransfer-cli` build: `bun run test:live:webrtc` covers PIN Exchange over the public
-relays and a real data channel, in both directions and CLI to CLI;
-`bun run test:live:code` covers direct Code Exchange, its public-relay fallback, and its
-anonymous Tor fallback; and `bun run test:live:tor` covers both directions of the Tor
-onion mode. See [docs/TOR_BROWSER.md](./docs/TOR_BROWSER.md) for the browser Tor test setup.
+It downloads the Tor directory from the authorities, or reuses the copy it
+cached under the platform's per-user cache directory while that still
+describes the network, bootstraps the Tor client over the Snowflake websocket
+bridge, fetches a page from the Tor Project's onion site (`--url` picks
+another), publishes a v3 onion service of its own, connects back to it through
+the network, and prints how long each step took. Transfers from the terminal follow; see
+[docs/ROADMAP.md](./docs/ROADMAP.md).
 
 ## Browser Requirements
 
@@ -86,14 +57,12 @@ Support is feature-detected at runtime; on an unsupported browser, receiving a P
 Compatibility between different app versions is not guaranteed. Sender and receiver should use
 the same app version for transfers.
 
-Transfers with a **non-web implementation** — today [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) —
-are governed by a separate, deliberately narrower contract: the **interop protocol version**, declared in
-[`src/lib/protocol.ts`](./src/lib/protocol.ts) and specified in [docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md).
-It covers PIN Exchange — including how it carries a Code Exchange offer and answer — and the shared transfer layer
-only, and moves only when one of those changes. Code Exchange, anonymous signaling, and the Tor transport remain outside it because each has a separate
-cross-implementation contract and version boundary. For PIN Exchange, two implementations interoperate when they
-declare the same interop protocol version, whatever their app versions; using the same number alone does not claim
-support for those separately specified modes.
+The web app and the CLI in `cli/` are one codebase, so there is no protocol
+version between them beyond the package version. What goes on the wire is
+specified in `docs/` — PIN Exchange and the shared transfer layer in
+[docs/INTEROP_PROTOCOL.md](./docs/INTEROP_PROTOCOL.md), and each other mode in
+its own document — so that a change to it is a deliberate one. The Tor
+handshake alone carries a version of its own and refuses a mismatch.
 
 ## How It Works
 
@@ -179,8 +148,8 @@ If the app is served from a subpath, scanned Multi-QR links will point to the do
 When WebRTC succeeds, both WebRTC modes share the same **transfer protocol**, and it uses the data channel in both directions: content goes out in 128 KiB AES-256-GCM chunks, with the chunk index authenticated as AES-GCM additional data, while the receiver acknowledges each chunk it has stored and the sender never runs more than a 4 MiB window ahead of those acknowledgments. The sender ends with the chunk and byte counts, and the receiver answers with its verdict only after every chunk has authenticated and reassembled to that final length. Either side that gives up — cancelled, a chunk that fails authentication, a full disk — tells the other why, instead of leaving it to a timeout. The protocol has no separate whole-file checksum. Code Exchange's ordinary Nostr fallback is different: it uses 48 KiB payload chunks, an encrypted manifest/control channel, and a whole-file SHA-256 check. The Tor Onion Service mode and the anonymous Tor fallback run the same transfer protocol over a Tor framed stream rather than a WebRTC data channel.
 
 **Transfer modes** (sender chooses):
-- **PIN Exchange** (default): Requires internet. Decentralized Nostr relay signaling that carries a Code Exchange offer and answer for you, so devices can be on different networks and a failed direct connection falls back exactly as Code Exchange's does. An experimental advanced option, **anonymous signaling**, carries that signaling through Tor to onion-service relays instead, so no Nostr relay sees either device's IP address; the sender turns it on, the longer PIN it mints tells the receiving side to follow, and its fallback is the Tor one rather than public storage relays. Specified separately from `INTEROP_PROTOCOL.md` but interoperable with ptransfer-cli — either side may be a browser tab or the CLI. See [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md).
-- **Tor Onion Service**: Requires internet. The sending tab publishes a v3 onion service and mints a one-time password; the two peers meet at a rendezvous point inside the Tor network, so neither learns the other's address. No pTransfer or Nostr relay is involved and the two networks never connect directly, but the transfer does travel through a Snowflake bridge (STUN-assisted on the `webrtc` bridge), Tor relays, and HSDirs. The same SPAKE2 exchange used by PIN mode authenticates the password, and the file is encrypted again inside the circuit. Slower than the other two and capped at 100 MiB per transfer, with no resume — the page flags anything over 1 MiB as slow without refusing it. Governed by its own interoperability contract and handshake version rather than `INTEROP_PROTOCOL_VERSION`; either side may be a browser tab or ptransfer-cli. See [Tor Transport](./docs/TOR_TRANSPORT.md).
+- **PIN Exchange** (default): Requires internet. Decentralized Nostr relay signaling that carries a Code Exchange offer and answer for you, so devices can be on different networks and a failed direct connection falls back exactly as Code Exchange's does. An experimental advanced option, **anonymous signaling**, carries that signaling through Tor to onion-service relays instead, so no Nostr relay sees either device's IP address; the sender turns it on, the longer PIN it mints tells the receiving side to follow, and its fallback is the Tor one rather than public storage relays. See [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md).
+- **Tor Onion Service**: Requires internet. The sending tab publishes a v3 onion service and mints a one-time password; the two peers meet at a rendezvous point inside the Tor network, so neither learns the other's address. No pTransfer or Nostr relay is involved and the two networks never connect directly, but the transfer does travel through a Snowflake bridge (STUN-assisted on the `webrtc` bridge), Tor relays, and HSDirs. The same SPAKE2 exchange used by PIN mode authenticates the password, and the file is encrypted again inside the circuit. Slower than the other two and capped at 100 MiB per transfer, with no resume — the page flags anything over 1 MiB as slow without refusing it. Its handshake carries a version of its own and refuses a mismatch. See [Tor Transport](./docs/TOR_TRANSPORT.md).
 - **Code Exchange**: No internet required for the ordinary mode. Both the sender's offer and the receiver's response are handed over via QR scan or copy/paste (camera optional); relays never carry signaling in this mode. With internet, STUN assists direct candidate discovery and the devices can connect across different networks when a direct ICE route exists. Without internet, devices must be able to reach each other directly, normally on the same local network. Its experimental **Anonymous signaling and relay** option does require internet on both devices because it prepares Tor for the fallback.
 
 **Data Transfer**: WebRTC P2P first. STUN may help the peers discover a direct route; TURN relaying is not configured. In ordinary **Code Exchange**, when a direct P2P connection cannot be established and the offer named relays, the encrypted file (up to 100 MiB) is relayed through public Nostr relays automatically — the Nostr relay stand-in for TURN. No file data is uploaded ahead of time: the relay path runs only once the direct connection has failed, so a transfer that connects directly never puts file bytes on a storage relay. The fallback is unavailable when the offer named no relays or the file exceeds the 100 MiB cap, and it can still fail if too few storage relays work. With **Anonymous signaling and relay** selected, the same failure instead uses onion-service Nostr relays for coordination and a temporary Tor onion service for the file; that path has the same cap and remains best-effort. **PIN Exchange** runs the same session with its codes carried over the sealed handshake, so it falls back the same way: through public Nostr relays ordinarily, through Tor with anonymous signaling on. When a transfer cannot complete, the UI suggests transferring offline via animated QR codes with [Secure QR Transfer](https://qrsecure.kuvi.dev/transfer), a separate tool for side-by-side devices. See [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) for the ordinary relay transport and [Code Exchange](./docs/CODE_EXCHANGE.md#anonymous-signaling-and-relay-experimental) for the Tor-backed variant.
@@ -197,15 +166,14 @@ One input accepts all three modes; the page works out which one the sender used 
 ## Documentation
 
 - [Architecture](./docs/ARCHITECTURE.md) - Technical architecture and design decisions
-- [Interop Protocol](./docs/INTEROP_PROTOCOL.md) - Normative wire contract for non-web implementations (PIN Exchange + the shared data path)
+- [PIN Exchange and Transfer Protocol](./docs/INTEROP_PROTOCOL.md) - Wire specification for PIN Exchange and the shared transfer layer
 - [Code Exchange](./docs/CODE_EXCHANGE.md) - User guide for Code Exchange
-- [Code Exchange Protocol](./docs/CODE_EXCHANGE_PROTOCOL.md) - Shared Code Exchange container, key schedule, and fallback rendezvous contract
-- [Tor Transport](./docs/TOR_TRANSPORT.md) - Normative spec for the onion service transfer mode, shared with ptransfer-cli
-- [Tor in the Browser](./docs/TOR_BROWSER.md) - pTransfer's webtor-wasm adapter, directory-cache policy, and testing
-- [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md) - Normative spec for the experimental PIN Exchange option that carries signaling through Tor to onion-service relays, shared with ptransfer-cli
-- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - Shared contract and architecture for the ordinary Code Exchange data-path fallback
+- [Code Exchange Protocol](./docs/CODE_EXCHANGE_PROTOCOL.md) - The Code Exchange container, key schedule, and fallback rendezvous
+- [Tor Transport](./docs/TOR_TRANSPORT.md) - Wire specification for the onion service transfer mode
+- [Tor in the Browser](./docs/TOR_BROWSER.md) - The webtor-wasm adapter in both hosts, directory-cache policy, and testing
+- [Anonymous Signaling](./docs/ANONYMOUS_SIGNALING.md) - The experimental PIN Exchange option that carries signaling through Tor to onion-service relays
+- [Nostr File Relay](./docs/NOSTR_FILE_RELAY.md) - The ordinary Code Exchange data-path fallback
 - [Roadmap](./docs/ROADMAP.md) - Planned features and backlog
-- [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli) - The companion command-line app, and the other implementation of the specs above
 
 ## License
 

@@ -28,9 +28,6 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  * no signaling record to look up. There is no additional confirmation code:
  * the receiver enters the password separately, and a wrong password simply
  * fails to open the claim (see lib/tor/handshake.ts).
- *
- * The receiver may be another browser tab or ptransfer-cli's
- * `ptransfer tor receive`; the two speak the same handshake and framing.
  */
 
 export interface UseTorSendReturn {

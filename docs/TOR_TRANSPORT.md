@@ -6,47 +6,25 @@ those two strings are the whole rendezvous. The receiving side needs no
 signaling relay, account, lookup hint, or anything the sender did not hand it
 directly; its Tor client still builds circuits through Tor relays.
 
-This document is the **normative specification** for that mode, and it is what
-the two implementations agree with each other on:
+This document is the **wire specification** for that mode. The browser tab
+runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
+transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
+implementation; where the code and this document disagree, this document is
+what the code is meant to do. The handshake carries its own
+version, `TOR_HANDSHAKE_VERSION` (currently `1`), in the `hello` and `offer`
+frames, and a mismatch is **refused rather than negotiated**: two app versions
+that differ on the frames fail closed at the first exchange instead of part way
+through a transfer. Bump it for any change to the frames. Everything else that
+could diverge between two app versions fails closed on its own — different
+keys leave the seals unopenable, a different address form or port never
+connects, and a raised size bound on one side only produces refusals on the
+other.
 
-| Implementation | Where it lives |
-| --- | --- |
-| The browser tab | this repo — see [TOR_BROWSER.md](./TOR_BROWSER.md) |
-| `ptransfer-cli` | [ptransfer-cli](https://github.com/andrewtheguy/ptransfer-cli)'s `tor` subcommands — see that repo's `docs/ARCHITECTURE.md` |
-
-Either side of a transfer may be a browser tab or the CLI. Where an
-implementation and this document disagree, this document wins.
-
-This is a cross-implementation interoperability contract: the browser and CLI
-both implement it. It is versioned separately from
-[`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md), whose
-`INTEROP_PROTOCOL_VERSION` covers PIN Exchange and the shared data-channel
-layer only. Changes here do not move that version. This mode instead versions
-its own handshake (`TOR_HANDSHAKE_VERSION`, currently `1`).
-
-## Changing this document
-
-This repository is where this specification lives; the CLI implements against
-it rather than restating it, so editing this file is not by itself a change to
-the CLI. What actually binds the two implementations is the short list below —
-the rest of this document is the reasoning around it, and rewording that costs
-the other side nothing.
-
-| What binds both sides | How a divergence surfaces |
-| --- | --- |
-| The handshake frames, their order, and their bodies | `TOR_HANDSHAKE_VERSION`, carried in the `hello` and `offer` frames and **refused rather than negotiated** on a mismatch. Bump it for any change to the frames, in lockstep with the CLI. |
-| Transfer identity, sealed bodies, key schedule | Nothing to bump: a divergence lands the two sides on different keys, and the seals do not open. |
-| The address form and the default port | Nothing to bump: the connection never lands. |
-| The framing, the 100 MiB cap, and the wire ceiling's 1 MiB margin | Nothing to bump: each side enforces the bound on what it accepts, so raising it alone only produces failures. |
-
-Everything outside that list is per-implementation detail and lives with its
-implementation. webtor-rs owns the browser Tor engine's bridges, directory,
-onion lookup and publication, descriptor lifecycle, and circuit behavior; see
+What the Tor engine does underneath — bridges, directory, onion lookup and
+publication, descriptor lifecycle, circuit behavior — belongs to webtor-rs; see
 its [Onion-Service Architecture](https://github.com/andrewtheguy/webtor-rs/blob/main/docs/ONION_SERVICE_ARCHITECTURE.md).
-pTransfer's adapter and stricter browser cache policy are in
-[TOR_BROWSER.md](./TOR_BROWSER.md). The CLI documents how it builds its client
-from Arti in its own `docs/ARCHITECTURE.md`. None has to be mirrored into the
-others, and none belongs in this file.
+pTransfer's adapter and its stricter directory-cache policy are in
+[TOR_BROWSER.md](./TOR_BROWSER.md). Neither belongs in this file.
 
 ## What it is for
 
@@ -56,16 +34,16 @@ metadata to its own infrastructure, but neither peer learns the other's network
 address and that infrastructure receives neither file plaintext nor the
 content key. There is no pTransfer or Nostr rendezvous event, though the onion
 descriptor remains retrievable by anyone holding the address until it expires.
-How each Tor implementation realizes that property is outside this transfer
-contract and belongs to webtor-rs or the CLI respectively.
+How the Tor engine realizes that property is outside this document and belongs
+to webtor-rs.
 
 The price is a **100 MiB cap** per transfer — the same ceiling the web app's
 relayed data path works under, for the same reasons: both push bytes through
 third parties, at a throughput neither controls, and neither can resume, so a
 transfer that dies two thirds of the way through starts over. How slow a
 circuit actually is varies enormously with the relays it was built from, which
-is why the only hard number is that ceiling; below it an implementation is
-expected to *say* that a large transfer may crawl, not to refuse it.
+is why the only hard number is that ceiling; below it the sender is expected
+to *say* that a large transfer may crawl, not to refuse it.
 
 ### What each layer contributes
 
@@ -84,16 +62,16 @@ collides with nothing.
 
 The address is not merely a hostname here: both peers bind their SPAKE2
 transcript to that exact string, so two peers who typed the same address in
-different letter cases would derive different roots. Both implementations
-therefore canonicalize it the same way — **lowercase, always carrying its
+different letter cases would derive different roots. Both sides therefore
+canonicalize it the same way — **lowercase, always carrying its
 port** — and verify the v3 checksum locally before anything touches the
 network, since a bootstrap costs tens of seconds to minutes and a typo caught
 only afterwards reads as a network failure rather than the input error it is.
 
 That canonical string is what the handshake binds, not what a person is handed.
 The port is not a choice either side offers, so **the address handed over
-leaves the default port implicit** and reads `<host>.onion`; an implementation
-that lets an operator pick another port spells that one out. Both sides accept
+leaves the default port implicit** and reads `<host>.onion`; a host that lets
+an operator pick another port spells that one out. Both sides accept
 either form and both must resolve a missing port to 9735, so the two round-trip
 to the same binding.
 
@@ -115,8 +93,8 @@ in, so every data character contributes to authentication.
 
 That generator is how *this mode* mints a password. The handshake below does not
 require it: it takes an opaque string and derives its SPAKE2 scalar from that.
-Both current implementations use this latitude for Code Exchange's anonymous
-relay option: they run the same handshake with a password derived from the ECDH
+Code Exchange's anonymous relay option uses this latitude: it runs the same
+handshake with a password derived from the ECDH
 secret that exchange already established, never shown to a person and never
 transmitted, and announce the address over their own encrypted control channel
 rather than handing the pair over by hand (see
@@ -256,8 +234,9 @@ are whole frames and are never interleaved.
 
 ## Transfer
 
-Above the framing each implementation runs the same transfer protocol it uses
-over a WebRTC data channel: 128 KiB AES-256-GCM chunks with the chunk index as
+Above the framing runs the same transfer protocol every mode runs over the
+transport it opened — a WebRTC data channel elsewhere, this framed stream
+here: 128 KiB AES-256-GCM chunks with the chunk index as
 additional authenticated data, sent within the window the receiver's `ack`s
 open, an `end` with the chunk and byte counts, and the receiver's `done` once
 every chunk has authenticated and been written — or an `abort` from either
@@ -268,8 +247,8 @@ receipt; a generated ZIP travels as-is. See
 ## Limits
 
 - **100 MiB** per transfer, enforced on the *input* when the selection is
-  prepared, before anything is published. Both implementations enforce the same
-  bound and refuse a larger offer, so raising it on one side alone would only
+  prepared, before anything is published. The receiver enforces the same bound
+  and refuses a larger offer, so raising it on one side alone would only
   produce failures.
 - Anything above **1 MiB** is a *suggestion*, not a limit. A sender is expected
   to tell its operator that throughput over a circuit is unpredictable — the

@@ -1,16 +1,11 @@
-import { KeyRound, Lock, QrCode, Shield, Terminal, Zap } from 'lucide-react';
+import { KeyRound, Lock, QrCode, Shield, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   CodeModeIllustration,
   PinModeIllustration,
 } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
-import {
-  OFFLINE_QR_TRANSFER_URL,
-  PTRANSFER_CLI_INSTALL_PS1,
-  PTRANSFER_CLI_INSTALL_SH,
-  PTRANSFER_CLI_URL,
-} from '@/lib/constants';
+import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
 import { generateTextQRCode } from '@/lib/qr-utils';
 
 const VALUE_PROPS = [
@@ -355,10 +350,6 @@ export function AboutContent() {
                   The sender&apos;s tab must remain open while its onion service
                   is published, and interrupted transfers cannot resume.
                 </li>
-                <li>
-                  Browser tabs and ptransfer-cli can send to or receive from one
-                  another in this mode.
-                </li>
               </ul>
               <SpecList items={TOR_DETAILS} />
             </div>
@@ -383,95 +374,6 @@ export function AboutContent() {
               Secure QR Transfer
             </a>{' '}
             instead.
-          </p>
-        </div>
-      </SectionContainer>
-
-      {/* Companion CLI */}
-      <SectionContainer>
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl">Also on the command line</h2>
-          <p className="mt-3 text-muted-foreground">
-            <span className="font-medium text-foreground">ptransfer-cli</span>{' '}
-            is the companion app for terminals and headless machines. It speaks
-            the same wire formats, so either end of a transfer can be a browser
-            tab or the CLI.
-          </p>
-        </div>
-        <div className="mx-auto mt-8 max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
-          <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
-            <Terminal className="h-5 w-5 text-primary" />
-            ptransfer-cli
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            A single native executable with no language runtime or package
-            manager. Running it with no arguments opens a full-screen wizard
-            that walks through the whole transfer — send or receive, file and
-            folder picking, output directory, and PIN entry. Useful for a server
-            with no browser, for scripting a machine you only reach over SSH, or
-            simply when you would rather stay in a terminal.
-          </p>
-          <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
-            <li>
-              <span className="font-medium text-foreground">PIN Exchange</span>{' '}
-              works in both directions: hand a PIN from this page to the CLI, or
-              paste a PIN the CLI minted into the receive box here. Anonymous
-              signaling is interoperable too.
-            </li>
-            <li>
-              <span className="font-medium text-foreground">
-                Tor Onion Service
-              </span>{' '}
-              works in both directions as well: the CLI can receive from an
-              address this tab published, or publish one this page connects to.
-            </li>
-            <li>
-              <span className="font-medium text-foreground">Code Exchange</span>{' '}
-              works in both directions too: the codes are copied and pasted as
-              text, which is the half of that exchange a terminal can take part
-              in — there is no camera to scan a QR grid with, and the CLI draws
-              none. Both of its fallbacks are interoperable too: the clearnet
-              Nostr file relay and the anonymous Tor one.
-            </li>
-            <li>
-              Sender and receiver interoperate when they implement the same
-              interop protocol version, whatever their app versions. The
-              released binaries and source builds include Tor support.
-            </li>
-          </ul>
-          <div className="mt-4 space-y-2">
-            <p className="text-xs font-medium text-foreground">
-              Install (Linux and macOS)
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
-              {PTRANSFER_CLI_INSTALL_SH}
-            </code>
-            <p className="pt-1 text-xs font-medium text-foreground">
-              Install (Windows PowerShell, beta)
-            </p>
-            <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
-              {PTRANSFER_CLI_INSTALL_PS1}
-            </code>
-            <p className="text-xs text-muted-foreground">
-              Windows is a beta target: it ships with every release, but Linux
-              and macOS are the tested ones. The installer and the CLI run under
-              Windows PowerShell 5.1, but PowerShell 7 is recommended and is the
-              environment they are tested in. Copy and paste a Code Exchange
-              code with Ctrl+Shift+C and Ctrl+Shift+V — a right-click copy or
-              paste truncates it.
-            </p>
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Source, releases, and full documentation are on{' '}
-            <a
-              href={PTRANSFER_CLI_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-medium underline underline-offset-2"
-            >
-              GitHub
-            </a>
-            .
           </p>
         </div>
       </SectionContainer>
@@ -520,15 +422,6 @@ export function AboutContent() {
             className="text-primary hover:underline"
           >
             GitHub
-          </a>
-          , and the companion CLI at{' '}
-          <a
-            href={PTRANSFER_CLI_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            ptransfer-cli
           </a>
         </p>
       </SectionContainer>
