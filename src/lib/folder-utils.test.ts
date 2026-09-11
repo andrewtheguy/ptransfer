@@ -111,23 +111,23 @@ async function expectDeflatedEntriesWithValidCrc(
 
   for (const [name, bytes] of Object.entries(expected)) {
     const entry = centralEntries.get(name);
-    expect(entry, `missing central entry for ${name}`).toBeDefined();
-    expect(entry?.method, `compression method for ${name}`).toBe(8);
-    expect(entry?.uncompressedSize).toBe(bytes.length);
-    expect(entry?.crc, `central CRC for ${name}`).toBe(crc32(bytes));
+    if (!entry) throw new Error(`missing central entry for ${name}`);
+    expect(entry.method, `compression method for ${name}`).toBe(8);
+    expect(entry.uncompressedSize).toBe(bytes.length);
+    expect(entry.crc, `central CRC for ${name}`).toBe(crc32(bytes));
 
-    const localOffset = entry!.localOffset;
+    const localOffset = entry.localOffset;
     expect(view.getUint32(localOffset, true)).toBe(0x04034b50);
     const nameLength = view.getUint16(localOffset + 26, true);
     const extraLength = view.getUint16(localOffset + 28, true);
     const dataOffset = localOffset + 30 + nameLength + extraLength;
     const compressed = archive.subarray(
       dataOffset,
-      dataOffset + entry!.compressedSize,
+      dataOffset + entry.compressedSize,
     );
     const inflated = await inflateRaw(compressed);
     expect(inflated, `inflated bytes for ${name}`).toEqual(bytes);
-    expect(entry?.crc, `CRC of inflated bytes for ${name}`).toBe(
+    expect(entry.crc, `CRC of inflated bytes for ${name}`).toBe(
       crc32(inflated),
     );
   }

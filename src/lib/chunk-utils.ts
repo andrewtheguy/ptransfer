@@ -170,22 +170,20 @@ export function reassembleChunks(
 ): Uint8Array | null {
   if (chunks.size !== total) return null;
 
-  // Verify all indices present
-  for (let i = 0; i < total; i++) {
-    if (!chunks.has(i)) return null;
-  }
-
-  // Calculate total size
+  // Collect the chunks in index order, bailing on any missing index
+  const ordered: Uint8Array[] = [];
   let totalSize = 0;
   for (let i = 0; i < total; i++) {
-    totalSize += chunks.get(i)!.length;
+    const chunk = chunks.get(i);
+    if (!chunk) return null;
+    ordered.push(chunk);
+    totalSize += chunk.length;
   }
 
   // Assemble
   const result = new Uint8Array(totalSize);
   let offset = 0;
-  for (let i = 0; i < total; i++) {
-    const chunk = chunks.get(i)!;
+  for (const chunk of ordered) {
     result.set(chunk, offset);
     offset += chunk.length;
   }
