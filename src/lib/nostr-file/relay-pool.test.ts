@@ -123,6 +123,7 @@ function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
     onerror: null as Handler,
     onabort: null as Handler,
     objectStore: () => ({ get: request, getAll: request }),
+    abort: vi.fn(),
   };
   const database = {
     objectStoreNames: stores,
@@ -156,7 +157,13 @@ function mockRelayCacheUpgrade(oldVersion: number, initialStores: string[]) {
     }),
   });
 
-  return { stores, deleted, created, close: database.close };
+  return {
+    stores,
+    deleted,
+    created,
+    close: database.close,
+    abort: transaction.abort,
+  };
 }
 
 describe('IndexedDB relay cache schema', () => {
@@ -196,6 +203,20 @@ describe('IndexedDB relay cache schema', () => {
       RELAY_CACHE_HEALTH_STORE,
     ]);
     expect(database.stores).toEqual(database.created);
+    expect(database.close).toHaveBeenCalledOnce();
+  });
+
+  it('abandons the transaction and closes when a change throws', async () => {
+    const database = mockRelayCacheUpgrade(0, []);
+    const failure = new Error('change failed');
+
+    await expect(
+      createIndexedDbRelayPool().update(() => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+
+    expect(database.abort).toHaveBeenCalledOnce();
     expect(database.close).toHaveBeenCalledOnce();
   });
 });

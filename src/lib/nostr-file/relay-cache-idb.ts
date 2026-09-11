@@ -128,7 +128,20 @@ export function createIndexedDbRelayPool(): RelayPoolStorage {
         // Unreadable: the change still gets an answer, and nothing is kept.
         return change(emptyRelayCache());
       }
-      const result = change(cache);
+      let result: ReturnType<typeof change>;
+      try {
+        result = change(cache);
+      } catch (error) {
+        // A change that fails keeps nothing, and leaves no connection open to
+        // block the next upgrade.
+        try {
+          transaction.abort();
+        } catch {
+          // Already finished.
+        }
+        database.close();
+        throw error;
+      }
       try {
         const { state, relays } = cache;
         if (state) {
