@@ -7,7 +7,7 @@
       "dependencies": {
         "@andrewtheguy/fast-qr-wasm": "https://github.com/andrewtheguy/fast_qr/releases/download/v0.0.5/andrewtheguy-fast-qr-wasm-0.0.5.tgz",
         "@andrewtheguy/rxing-wasm": "https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz",
-        "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.23/andrewtheguy-webtor-wasm-0.0.1-alpha.23.tgz",
+        "@andrewtheguy/webtor-wasm": "https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.24/andrewtheguy-webtor-wasm-0.0.1-alpha.24.tgz",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1",
         "@radix-ui/react-collapsible": "^1.1.12",
@@ -23,6 +23,7 @@
         "clsx": "^2.1.1",
         "fflate": "^0.8.3",
         "lucide-react": "^0.561.0",
+        "node-datachannel": "^0.33.3",
         "nostr-tools": "^2.19.3",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -50,7 +51,7 @@
 
     "@andrewtheguy/rxing-wasm": ["@andrewtheguy/rxing-wasm@https://github.com/andrewtheguy/rxing-reader/releases/download/v0.0.12/andrewtheguy-rxing-wasm-0.0.12.tgz", {}, "sha512-J0JV1NixyxPkOuXeMSidfP0lhc/PBDb2y/qsHDiD6eAkr9sjIW3zz8b9u3pMZhuADV9/mc6DmbNrkG0jXTcPZQ=="],
 
-    "@andrewtheguy/webtor-wasm": ["@andrewtheguy/webtor-wasm@https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.23/andrewtheguy-webtor-wasm-0.0.1-alpha.23.tgz", {}, "sha512-jD8j9zcTLP7BrMDc1ME4n5hEkFEsCtsRoyz49JTcAXwS1uFkkG7at/fXvo+xM8KO/nOGWe1CxY55huzzl37Vtw=="],
+    "@andrewtheguy/webtor-wasm": ["@andrewtheguy/webtor-wasm@https://github.com/andrewtheguy/webtor-rs/releases/download/v0.0.1-alpha.24/andrewtheguy-webtor-wasm-0.0.1-alpha.24.tgz", {}, "sha512-BseV9hpeDfCgScWrC1c0aCU+FJ1X9aU9Ku6N8aC/777KCriwr+z8Z4ziSTQX9xqivk2WmTNUqhkzTh/UsLSvBA=="],
 
     "@apideck/better-ajv-errors": ["@apideck/better-ajv-errors@0.3.6", "", { "dependencies": { "json-schema": "^0.4.0", "jsonpointer": "^5.0.0", "leven": "^3.1.0" }, "peerDependencies": { "ajv": ">=8" } }, "sha512-P+ZygBLZtkp0qqOAJJVX4oX/sFo5JR3eBWwwuqHHhK0GIgQOKWrAfiAaWX0aArHkRWHMuggFEgAZNxVPwPZYaA=="],
 
@@ -335,6 +336,24 @@
     "@noble/curves": ["@noble/curves@2.0.1", "", { "dependencies": { "@noble/hashes": "2.0.1" } }, "sha512-vs1Az2OOTBiP4q0pwjW5aF0xp9n4MxVrmkFBxc6EKZc6ddYx5gaZiAsZoq0uRRXWbi3AT/sBqn05eRPtn1JCPw=="],
 
     "@noble/hashes": ["@noble/hashes@2.0.1", "", {}, "sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw=="],
+
+    "@node-datachannel/android-arm64": ["@node-datachannel/android-arm64@0.33.2", "", { "os": "android", "cpu": "arm64" }, "sha512-I71a0jICUNYgh4ZI5AcINEMuRtQSVyrpp4FV3kJZMcx31xS0vKKtf06tpsUAtW5uS+uRXbZR+vlMEqS1h710wQ=="],
+
+    "@node-datachannel/darwin-arm64": ["@node-datachannel/darwin-arm64@0.33.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-EwBGiaMh3MX6zjYoZHuK02Q6hmQQIvR39335Kb/ZnP3fXZU0/VWx6ksHLM6K0XFFYRfP+yJeVgU79g++xoeQpw=="],
+
+    "@node-datachannel/darwin-x64": ["@node-datachannel/darwin-x64@0.33.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-a1nvL6MiskSjV3TWTNXdVpI/2kHNIOP2AbuBZjR5eC7VSrH/6hCFfHIBW4SFKXGFm8LOGliY9Df10UnJUutjwA=="],
+
+    "@node-datachannel/linux-arm64-gnu": ["@node-datachannel/linux-arm64-gnu@0.33.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-YWAu3EiMl2HRi/fwWlfFTW30wFTkRVYJWRHQcI1uDSeZYG/tfyBqBy6CRy9Sgrb0xjOYZ6XhLDj8cdX0foPlpg=="],
+
+    "@node-datachannel/linux-arm64-musl": ["@node-datachannel/linux-arm64-musl@0.33.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-16o3Ny5hbxTTjDmhsZog/t7p2tRP6s/Oa/V9kKzZfiGlCqvxxCE4ACOWw/MWHOhN0xI9/63IIRfrrnQnPxjK8g=="],
+
+    "@node-datachannel/linux-x64-gnu": ["@node-datachannel/linux-x64-gnu@0.33.2", "", { "os": "linux", "cpu": "x64" }, "sha512-grLRAbZgSIX8nmObciblyCmnevDCst0snhV+z1fvDmUlzXIVXeDmv6lEzAaWs3KRleagqwSsFg5d1td1bwMT9w=="],
+
+    "@node-datachannel/linux-x64-musl": ["@node-datachannel/linux-x64-musl@0.33.2", "", { "os": "linux", "cpu": "x64" }, "sha512-PlpgvYjo+gmBhIkRFaZWIhCF335FMTJmCpl+FVa4XliEgyOqD+cvjQPWcbnlrA2Jd+QnLiZt+NxT7nv4QXpoiQ=="],
+
+    "@node-datachannel/win32-arm64-msvc": ["@node-datachannel/win32-arm64-msvc@0.33.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-8NpHkm7R8EY0jHGHOXdK7K0wjWY34PJ+PJY++2VDHTAtXGazNm28zcnVE/4IU0N26YGdCDSSWat3OO3W6nwoRw=="],
+
+    "@node-datachannel/win32-x64-msvc": ["@node-datachannel/win32-x64-msvc@0.33.2", "", { "os": "win32", "cpu": "x64" }, "sha512-aLk0O/M1JNVpzxx4RVBXMJTMlpswE04Cz5baayKwuEN+qk9hO6DSJgYMR6Wq9a5zGYAmvLFlOg+LsePyXkWliA=="],
 
     "@radix-ui/primitive": ["@radix-ui/primitive@1.1.3", "", {}, "sha512-JTF99U/6XIjCBo0wqkU5sK10glYe27MRRsfwoiq5zzOEZLHU3A3KCMa5X/azekYRCJ0HlwI0crAXS/5dEHTzDg=="],
 
@@ -865,6 +884,8 @@
     "ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
     "nanoid": ["nanoid@3.3.18", "", { "bin": "bin/nanoid.cjs" }, "sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w=="],
+
+    "node-datachannel": ["node-datachannel@0.33.3", "", { "dependencies": { "detect-libc": "^2.0.4" }, "optionalDependencies": { "@node-datachannel/android-arm64": "0.33.2", "@node-datachannel/darwin-arm64": "0.33.2", "@node-datachannel/darwin-x64": "0.33.2", "@node-datachannel/linux-arm64-gnu": "0.33.2", "@node-datachannel/linux-arm64-musl": "0.33.2", "@node-datachannel/linux-x64-gnu": "0.33.2", "@node-datachannel/linux-x64-musl": "0.33.2", "@node-datachannel/win32-arm64-msvc": "0.33.2", "@node-datachannel/win32-x64-msvc": "0.33.2" } }, "sha512-Tf7bbOjUXh7gPiWKTFpMDZXpippya6pdsEz3tgxsIJiW+BMLWSaX7O6F9kDjHu0GCan4vSmXlfA8l21O4D+K9Q=="],
 
     "node-releases": ["node-releases@2.0.55", "", {}, "sha512-mIrE/Cw9y+9Au6dS5vDKDhQza9YvG6w+ZrS6X+ZzA7yFW/soAeaups4Qzn1bL6g5FVy8WtP79+0j82oPIbqRjQ=="],
 

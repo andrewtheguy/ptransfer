@@ -77,7 +77,10 @@ no portability layer in between:
      files found on disk; a lone file still goes as itself. `receive --out
      <folder>` saves into an existing folder instead of the current
      directory.
-   - **2c**: the bridge choices the tab offers.
+   - **2c** (done): `--bridge websocket|webrtc` on every Tor command, the
+     bridge choices the tab offers. The `webrtc` bridge runs on
+     node-datachannel's `RTCPeerConnection`, handed to the Tor client as its
+     `rtcPeerConnection` option and loaded only when that bridge is chosen.
 3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
    node-datachannel, with the Nostr file relay as the fallback; codes are
    carried as text, since a terminal has no camera.

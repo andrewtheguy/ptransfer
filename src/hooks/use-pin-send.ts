@@ -62,7 +62,7 @@ import {
   uint8ArrayToBase64,
 } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
-import type { TorBridge } from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
 import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 

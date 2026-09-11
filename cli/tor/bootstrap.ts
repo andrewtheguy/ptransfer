@@ -1,8 +1,18 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
+import {
+  type BridgeSetup,
+  bridgeOptions,
+  type CustomBridge,
+  DEFAULT_TOR_BRIDGE,
+  TOR_BRIDGE_LABELS,
+  TOR_BRIDGES,
+  type TorBridge,
+} from '@/lib/tor/bridge';
 import type { DirectoryDescription, WebtorClient } from '@/lib/tor/webtor-api';
 import { UsageError } from '../usage';
 import { fetchDirectorySeed } from './directory-fetch';
 import { openDirectoryStore } from './directory-store';
+import { loadRtcPeerConnection } from './webrtc';
 import { loadWebtor } from './webtor';
 
 /**
@@ -13,16 +23,19 @@ import { loadWebtor } from './webtor';
  * 2. Get a directory: the seed cached from the last run if it still
  *    describes the network, otherwise a fresh one over plain HTTP from the
  *    authorities, which is the fast path a browser does not have.
- * 3. Bootstrap over the Snowflake bridge.
+ * 3. Bootstrap over the Snowflake bridge the command chose, the same two the
+ *    tab offers.
  *
  * The browser's counterpart is `bootstrapTorClient` in `src/lib/tor/client.ts`;
- * the two differ only in where the directory comes from and goes to.
+ * the two differ in where the directory comes from and goes to, and in where
+ * the `webrtc` bridge's `RTCPeerConnection` comes from.
  */
 
 /** The flags every Tor command takes, for `parseArgs`. */
 export const TOR_OPTIONS = {
   'refresh-directory': { type: 'boolean', default: false },
   'cache-dir': { type: 'string' },
+  bridge: { type: 'string', default: DEFAULT_TOR_BRIDGE },
   'bridge-url': { type: 'string' },
   'bridge-fingerprint': { type: 'string' },
 } as const satisfies ParseArgsOptionsConfig;
@@ -32,24 +45,42 @@ export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached d
   --cache-dir <path>       where to keep the directory seed (default:
                            ~/Library/Caches/ptransfer on macOS, otherwise
                            $XDG_CACHE_HOME/ptransfer or ~/.cache/ptransfer)
-  --bridge-url <ws://...>  a Snowflake bridge to use instead of the public one;
-                           requires --bridge-fingerprint
+  --bridge <websocket|webrtc>
+                           how to reach the Tor network (default ${DEFAULT_TOR_BRIDGE}):
+                           websocket connects straight to one fixed Snowflake
+                           bridge and is the faster; webrtc goes through a
+                           volunteer proxy the Snowflake broker assigns, which
+                           is harder to block
+  --bridge-url <ws://...>  a Snowflake bridge to use instead of the public one,
+                           with --bridge websocket; requires --bridge-fingerprint
   --bridge-fingerprint <hex>`;
 
 export interface TorOptions {
   refreshDirectory: boolean;
   cacheDir?: string;
-  /** A bridge other than the public one; both or neither. */
-  bridge?: { url: string; fingerprint: string };
+  bridge: TorBridge;
+  /** A `websocket` bridge other than the public one. */
+  customBridge?: CustomBridge;
+}
+
+function isTorBridge(value: string): value is TorBridge {
+  return (TOR_BRIDGES as readonly string[]).includes(value);
 }
 
 /** The parsed flags as options, checked for consistency. */
 export function torOptionsFrom(values: {
   'refresh-directory'?: boolean;
   'cache-dir'?: string;
+  bridge?: string;
   'bridge-url'?: string;
   'bridge-fingerprint'?: string;
 }): TorOptions {
+  const bridge = values.bridge ?? DEFAULT_TOR_BRIDGE;
+  if (!isTorBridge(bridge)) {
+    throw new UsageError(
+      `--bridge must be ${TOR_BRIDGES.join(' or ')}, not ${JSON.stringify(bridge)}`,
+    );
+  }
   const url = values['bridge-url'];
   const fingerprint = values['bridge-fingerprint'];
   if (Boolean(url) !== Boolean(fingerprint)) {
@@ -57,10 +88,17 @@ export function torOptionsFrom(values: {
       'Give --bridge-url and --bridge-fingerprint together, or neither',
     );
   }
+  if (bridge === 'webrtc' && url) {
+    throw new UsageError(
+      '--bridge-url and --bridge-fingerprint apply to --bridge websocket only: ' +
+        'the webrtc bridge reaches the public bridge through a volunteer proxy',
+    );
+  }
   return {
     refreshDirectory: values['refresh-directory'] ?? false,
     cacheDir: values['cache-dir'],
-    ...(url && fingerprint ? { bridge: { url, fingerprint } } : {}),
+    bridge,
+    ...(url && fingerprint ? { customBridge: { url, fingerprint } } : {}),
   };
 }
 
@@ -88,6 +126,12 @@ export async function bootstrapTor(
 
   say('Loading the Tor client...');
   const { WebtorClient, describeDirectory } = await loadWebtor();
+  // Before the directory, so a WebRTC stack that will not load fails the
+  // command without first spending a download on it.
+  const bridge: BridgeSetup =
+    options.bridge === 'webrtc'
+      ? { bridge: 'webrtc', rtcPeerConnection: await loadRtcPeerConnection() }
+      : { bridge: 'websocket', custom: options.customBridge };
   onLap('load the Tor client');
 
   const store = openDirectoryStore(options.cacheDir);
@@ -138,15 +182,11 @@ export async function bootstrapTor(
     );
   }
 
-  say('Bootstrapping Tor...');
+  say(
+    `Bootstrapping Tor over the ${TOR_BRIDGE_LABELS[bridge.bridge]} bridge...`,
+  );
   const client = await WebtorClient.create({
-    bridge: 'websocket',
-    ...(options.bridge
-      ? {
-          bridgeUrl: options.bridge.url,
-          bridgeFingerprint: options.bridge.fingerprint,
-        }
-      : {}),
+    ...bridgeOptions(bridge),
     ...(seed ? { directorySeed: seed } : {}),
     onLog: (message, level) => {
       if (options.verbose || level === 'warn' || level === 'error') {

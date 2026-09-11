@@ -18,7 +18,7 @@ import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { NostrFileTransferStats } from '@/lib/nostr-file/stats';
-import type { TorBridge } from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
 import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
 

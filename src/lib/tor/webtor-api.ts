@@ -54,9 +54,24 @@ export interface PublishOptions {
   introPoints?: number;
 }
 
+/**
+ * An `RTCPeerConnection` constructor for the `webrtc` bridge, which webtor
+ * never takes from the global scope. webtor calls it with an
+ * `RTCConfiguration` carrying the STUN servers, then the W3C methods on what
+ * it returns by name, so any implementation of the interface serves. Typed
+ * loosely on purpose: nothing here calls it, and the DOM types that would
+ * describe it are not in the CLI's build.
+ */
+export type RtcPeerConnectionClass = new (configuration: never) => object;
+
 export interface WebtorClientOptions {
   bridge?: 'websocket' | 'webrtc';
   stunUrls?: string[];
+  /**
+   * The `RTCPeerConnection` the `webrtc` bridge uses, required there and
+   * refused with the `websocket` bridge.
+   */
+  rtcPeerConnection?: RtcPeerConnectionClass;
   /** A bridge other than the public one; both or neither. */
   bridgeUrl?: string;
   bridgeFingerprint?: string;

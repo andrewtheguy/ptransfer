@@ -13,7 +13,9 @@
 // the authorities first.
 //
 // Environment:
-//   BRIDGE_URL, BRIDGE_FINGERPRINT  a Snowflake bridge for both processes to
+//   BRIDGE                          the Snowflake bridge both processes reach
+//                                   Tor through, websocket (default) or webrtc
+//   BRIDGE_URL, BRIDGE_FINGERPRINT  a websocket bridge for both processes to
 //                                   use instead of the public one; both or
 //                                   neither
 //   TOR_TIMEOUT_MS                  how long the whole transfer may take
@@ -32,15 +34,20 @@ import {
 } from './support/live-harness.ts';
 
 const TOR_TIMEOUT_MS = Number(process.env.TOR_TIMEOUT_MS ?? 8 * 60_000);
+const BRIDGE = process.env.BRIDGE ?? 'websocket';
 const BRIDGE_URL = process.env.BRIDGE_URL;
 const BRIDGE_FINGERPRINT = process.env.BRIDGE_FINGERPRINT;
 if (Boolean(BRIDGE_URL) !== Boolean(BRIDGE_FINGERPRINT)) {
   throw new Error('Set BRIDGE_URL and BRIDGE_FINGERPRINT together, or neither');
 }
-const BRIDGE_ARGS =
-  BRIDGE_URL && BRIDGE_FINGERPRINT
+// The CLI checks the combination, so a bad one fails both processes at once.
+const BRIDGE_ARGS = [
+  '--bridge',
+  BRIDGE,
+  ...(BRIDGE_URL && BRIDGE_FINGERPRINT
     ? ['--bridge-url', BRIDGE_URL, '--bridge-fingerprint', BRIDGE_FINGERPRINT]
-    : [];
+    : []),
+];
 
 const ARTIFACTS = await mkdtemp(join(tmpdir(), 'ptransfer-tor-cli-e2e-'));
 const children: ChildProcess[] = [];

@@ -6,7 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import type { TorBridge } from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
 
 export type TransferMode = 'pin' | 'code' | 'tor';
 

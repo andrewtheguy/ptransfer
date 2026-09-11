@@ -3,7 +3,7 @@ import {
   TOR_BRIDGE_LABELS,
   TOR_BRIDGES,
   type TorBridge,
-} from '@/lib/tor/client';
+} from '@/lib/tor/bridge';
 
 /**
  * The one question a tab that is about to reach the Tor network has to ask:

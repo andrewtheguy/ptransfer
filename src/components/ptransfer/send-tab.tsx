@@ -28,7 +28,7 @@ import {
   projectedWireBytesFor,
   supportsFolderSelection,
 } from '@/lib/picked-files';
-import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import {
   TOR_MAX_TRANSFER_BYTES,
   TOR_MAX_WIRE_BYTES,

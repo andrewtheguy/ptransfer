@@ -2,11 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { generatePin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferMetadata, TransferState } from '@/lib/nostr';
-import {
-  bootstrapTorClient,
-  closeTorClient,
-  type TorBridge,
-} from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient, closeTorClient } from '@/lib/tor/client';
 import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
 import { serveUntilSent } from '@/lib/tor/serve';
 import { TOR_MAX_TRANSFER_BYTES, TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';

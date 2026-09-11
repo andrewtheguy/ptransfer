@@ -26,7 +26,7 @@ import {
 } from '@/lib/folder-utils';
 import { testRelayAvailability } from '@/lib/nostr';
 import { pickedZipEntries } from '@/lib/picked-files';
-import { DEFAULT_TOR_BRIDGE } from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE } from '@/lib/tor/bridge';
 import {
   createFileTransferSource,
   type TransferSource,

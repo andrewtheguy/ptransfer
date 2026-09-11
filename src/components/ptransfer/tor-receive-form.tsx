@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { classifyPin, PIN_LENGTH } from '@/lib/crypto';
-import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import { TorBridgeChoice } from './tor-bridge-choice';
 
 interface TorReceiveFormProps {
