@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
+import type { AppendSink } from './append-sink';
 import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
-import {
-  type ChannelEndReason,
-  type ChannelMessage,
-  createDataChannelDuplex,
-  type DuplexChannel,
+import { createDataChannelDuplex } from './data-channel';
+import type {
+  ChannelEndReason,
+  ChannelMessage,
+  DuplexChannel,
 } from './duplex-channel';
 import { P2PConnectionError } from './errors';
 import {
@@ -20,7 +21,7 @@ import {
   TransferAbortedError,
   type TransferLink,
 } from './p2p-transfer';
-import { type AppendSink, createAdaptiveAppendSink } from './scratch-sink';
+import { createAdaptiveAppendSink } from './scratch-sink';
 import {
   createFileTransferSource,
   type TransferSource,

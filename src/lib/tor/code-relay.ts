@@ -10,6 +10,7 @@ import {
 } from '@/lib/nostr-file/control';
 import type { NostrFilePool } from '@/lib/nostr-file/pool';
 import type { RelaySession } from '@/lib/nostr-file/session';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorClientHandshake, sendReady } from './handshake';
@@ -352,6 +353,7 @@ export async function receiveOverAnonymousRelay(
       framed,
       keys.contentKey,
       metadata.contentEncoding,
+      await createAdaptiveAppendSink(metadata.fileSize),
       {
         estimatedBytes: metadata.fileSize,
         isCancelled,

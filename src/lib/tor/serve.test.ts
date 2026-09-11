@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ENCRYPTION_CHUNK_SIZE } from '@/lib/crypto';
 import type { TransferMetadata } from '@/lib/nostr';
 import type { TransferSource } from '@/lib/transfer-source';
+import { createAdaptiveAppendSink } from '../scratch-sink';
 import { TorFramedStream } from './framing';
 import { runTorClientHandshake, sendReady } from './handshake';
 import { createOnionStreamPair } from './mock-stream';
 import { serveUntilSent, TOR_WAIT_TIMEOUT_MS } from './serve';
 import { receiveFileOverTor } from './transfer';
-import type { OnionService, OnionStream } from './webtor';
+import type { OnionService, OnionStream } from './webtor-api';
 
 // Captured before the fake timers go in: the crypto under the handshake and
 // every chunk resolves on real time, and the test has to wait for it.
@@ -98,7 +99,8 @@ describe('serveUntilSent', () => {
       const { keys } = await runTorClientHandshake(client, PASSWORD, ONION);
       await sendReady(client);
       authenticated();
-      return receiveFileOverTor(client, keys.contentKey, 'identity', {
+      const sink = await createAdaptiveAppendSink(total);
+      return receiveFileOverTor(client, keys.contentKey, 'identity', sink, {
         estimatedBytes: total,
       });
     })();

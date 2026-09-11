@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TransferMetadata } from '@/lib/nostr';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import { createFileTransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import {
@@ -193,6 +194,7 @@ describe('a Tor transfer end to end', () => {
         client,
         handshake.keys.contentKey,
         handshake.metadata.contentEncoding,
+        await createAdaptiveAppendSink(handshake.metadata.fileSize),
         { estimatedBytes: handshake.metadata.fileSize },
       );
       // The file is whole: hanging up is the receiver's only word, as the

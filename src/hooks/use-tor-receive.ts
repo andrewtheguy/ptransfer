@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import {
   bootstrapTorClient,
   closeTorClient,
@@ -160,6 +161,7 @@ export function useTorReceive(): UseTorReceiveReturn {
           framed,
           keys.contentKey,
           metadata.contentEncoding,
+          await createAdaptiveAppendSink(metadata.fileSize),
           {
             estimatedBytes: metadata.fileSize,
             isCancelled: () => cancelledRef.current,

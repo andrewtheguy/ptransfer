@@ -14,7 +14,7 @@ import {
   torPakeIdentities,
   wipeBufferSource,
 } from '@/lib/crypto';
-import type { TransferMetadata } from '@/lib/nostr';
+import type { TransferMetadata } from '@/lib/nostr/types';
 import type { WireEncoding } from '@/lib/transfer-source';
 import type { TorFramedStream } from './framing';
 

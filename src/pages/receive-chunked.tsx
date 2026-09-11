@@ -19,11 +19,8 @@ import { useCodeReceive } from '@/hooks/use-code-receive';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { extractChunkParam } from '@/lib/chunk-utils';
 import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
-import {
-  downloadFile,
-  formatFileSize,
-  getMimeTypeDescription,
-} from '@/lib/file-utils';
+import { downloadFile } from '@/lib/download-file';
+import { formatFileSize, getMimeTypeDescription } from '@/lib/file-utils';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import { isMobileDevice } from '@/lib/utils';
 

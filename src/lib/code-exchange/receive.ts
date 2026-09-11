@@ -1,3 +1,4 @@
+import type { AppendSink } from '@/lib/append-sink';
 import {
   type AnswerConfirmationSigner,
   computeOfferTranscriptHash,
@@ -35,7 +36,7 @@ import {
   createTransferReceiver,
   type TransferReceiver,
 } from '@/lib/p2p-transfer';
-import { type AppendSink, createAdaptiveAppendSink } from '@/lib/scratch-sink';
+import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import {
   deriveOnionPassword,
   receiveOverAnonymousRelay,

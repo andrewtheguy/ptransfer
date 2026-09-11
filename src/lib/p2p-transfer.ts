@@ -46,6 +46,7 @@
  * transfer does not recognize is left to whatever else shares the link.
  */
 
+import { type AppendSink, createInflatingAppendSink } from '@/lib/append-sink';
 import {
   AES_NONCE_LENGTH,
   AES_TAG_LENGTH,
@@ -57,7 +58,6 @@ import {
 } from '@/lib/crypto';
 import type { ChannelEndReason, ChannelMessage } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
-import { type AppendSink, createInflatingAppendSink } from '@/lib/scratch-sink';
 import {
   type TransferSource,
   type WireEncoding,
@@ -433,7 +433,7 @@ export async function sendFileOverLink(
     ).getReader();
   // Opened inside the cleanup scope below: a source that fails to open still
   // releases the link and tells the receiver.
-  let openedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let openedReader: ReturnType<typeof openReader> | null = null;
   const plainChunk = new Uint8Array(ENCRYPTION_CHUNK_SIZE);
   let plainChunkLength = 0;
 

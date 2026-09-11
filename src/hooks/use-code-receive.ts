@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppendSink } from '@/lib/append-sink';
 import {
   type AcceptedOffer,
   acceptOffer,
@@ -21,7 +22,6 @@ import type { TransferState } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import { createPendingStep, type PendingStep } from '@/lib/pending-step';
-import type { AppendSink } from '@/lib/scratch-sink';
 import type { TorBridge } from '@/lib/tor/client';
 import type { ReceivedContent } from '@/lib/types';
 import type { WebRTCConnection } from '@/lib/webrtc';
