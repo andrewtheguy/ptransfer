@@ -107,6 +107,10 @@ function httpGet(url: string): Promise<Buffer> {
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => resolve(Buffer.concat(chunks)));
         response.on('error', reject);
+        // A connection dropped mid-body closes without `end`.
+        response.on('close', () => {
+          if (!response.complete) reject(new Error('Response ended early'));
+        });
       },
     );
     request.on('timeout', () =>

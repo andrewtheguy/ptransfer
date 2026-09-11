@@ -233,8 +233,9 @@ are whole frames and are never interleaved.
 
 ## Transfer
 
-Above the framing runs the same transfer protocol every mode uses over a
-WebRTC data channel: 128 KiB AES-256-GCM chunks with the chunk index as
+Above the framing runs the same transfer protocol every mode runs over the
+transport it opened — a WebRTC data channel elsewhere, this framed stream
+here: 128 KiB AES-256-GCM chunks with the chunk index as
 additional authenticated data, sent within the window the receiver's `ack`s
 open, an `end` with the chunk and byte counts, and the receiver's `done` once
 every chunk has authenticated and been written — or an `abort` from either

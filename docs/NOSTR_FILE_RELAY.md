@@ -311,10 +311,12 @@ mid-transfer as well, and it is asymmetric — the sender owns the set:
    It proves no relays of its own and never promotes; it only demotes, on its own
    publish record, so it stops feeding a relay its acknowledgements keep dying on.
 
-A peer that ignores `ctl` still works with one that sends it: demotion never goes below
-`MIN_CONTROL_RELAYS` and neither side stops listening on a relay it once held, so the
-two publish sets always overlap. It simply forfeits the replacement and rides out the
-transfer on what is left of the offer's set.
+`ctl` is not optional: a receiver rejects an `avail` without one. The
+`MIN_CONTROL_RELAYS` floor counts replacements, so a sender that keeps losing relays can
+end up publishing to none of the offer's set. What keeps the two in contact is that each
+swap rides the next `avail`, published over the set in force before it, which the
+receiver already holds; a receiver that takes on every `ctl` as it arrives never loses
+the sender, however far the set drifts from the one the offer named.
 
 ### Sender loop
 

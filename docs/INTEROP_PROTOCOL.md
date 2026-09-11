@@ -576,7 +576,7 @@ hands each one up as soon as it reassembles, so a single retransmit lets a
 later chunk overtake an earlier one and the peer rejects the index. Nothing on
 the wire announces the setting, and a loopback or lossless path never reveals
 it, so a host whose WebRTC binding defaults differently can pass every local
-test and corrupt every real transfer.
+test and fail every real transfer.
 
 Both directions are used throughout. The receiver tells the sender what it has
 stored as it stores it, the sender never runs more than a window ahead of

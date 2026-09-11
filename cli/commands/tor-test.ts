@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import type { OnionService } from '@/lib/tor/webtor-api';
 import { fetchDirectorySeed } from '../tor/directory-fetch';
 import { openDirectoryStore } from '../tor/directory-store';
 import { loadWebtor } from '../tor/webtor';
@@ -126,18 +127,36 @@ export async function torTest(argv: string[]): Promise<number> {
     say(`Using the cached directory in ${store.path}`);
     clock.lap('read the cached directory');
   } else {
-    seed = await fetchDirectorySeed({ onProgress: say });
+    try {
+      seed = await fetchDirectorySeed({ onProgress: say });
+    } catch (error) {
+      // The fast path is a convenience: without a seed the client downloads
+      // the directory through the bridge itself, which is what a tab does.
+      seed = undefined;
+      say(
+        `Could not download the directory from the authorities: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      say(
+        'The client will download it through the bridge instead; expect minutes',
+      );
+    }
     clock.lap('download the directory');
-    await store.save(seed);
-    say(`Kept the directory in ${store.path}`);
+    if (seed) {
+      const kept = await store.save(seed, (reason) =>
+        say(`Could not keep the directory: ${reason}`),
+      );
+      if (kept) say(`Kept the directory in ${store.path}`);
+    }
   }
 
-  const directory = describeDirectory(seed);
-  say(
-    `Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
-      `${directory.validUntil.toISOString()}, onion time period ` +
-      `${directory.timePeriod}`,
-  );
+  if (seed) {
+    const directory = describeDirectory(seed);
+    say(
+      `Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
+        `${directory.validUntil.toISOString()}, onion time period ` +
+        `${directory.timePeriod}`,
+    );
+  }
 
   const client = await WebtorClient.create({
     bridge: 'websocket',
@@ -147,15 +166,16 @@ export async function torTest(argv: string[]): Promise<number> {
           bridgeFingerprint: values['bridge-fingerprint'],
         }
       : {}),
-    directorySeed: seed,
+    ...(seed ? { directorySeed: seed } : {}),
     onLog: (message, level) => say(`[webtor ${level}] ${message}`),
     // A long-lived client refreshes its directory; keep what it downloads so
     // the next run starts from it. A seed this side supplied is never handed
     // back, so nothing here rewrites what it just read.
-    onDirectoryChange: (fresh) => void store.save(fresh).catch(() => undefined),
+    onDirectoryChange: (fresh) => void store.save(fresh),
   });
   clock.lap('bootstrap');
 
+  let service: OnionService | undefined;
   try {
     if (url) {
       const response = await client.fetch(url);
@@ -169,7 +189,7 @@ export async function torTest(argv: string[]): Promise<number> {
       }
     }
 
-    const service = await client.publishOnionService({ introPoints });
+    service = await client.publishOnionService({ introPoints });
     clock.lap('publish the onion service');
     say(`Published ${service.onionAddress}`);
 
@@ -184,6 +204,9 @@ export async function torTest(argv: string[]): Promise<number> {
       await stream.send(`echo: ${text}`);
       await stream.close();
     })();
+    // A failure here before `served` is awaited below must not surface as an
+    // unhandled rejection; the await still sees it.
+    served.catch(() => undefined);
 
     const stream = await client.connectStream(service.onionAddress, PORT);
     clock.lap('connect back to it');
@@ -196,9 +219,8 @@ export async function torTest(argv: string[]): Promise<number> {
     await stream.close();
     await served;
     clock.lap('round-trip a message');
-
-    await service.close();
   } finally {
+    await service?.close().catch(() => undefined);
     await client.close().catch(() => undefined);
   }
 

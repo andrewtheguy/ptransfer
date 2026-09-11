@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { judgeDescription } from '@/lib/tor/directory-policy';
@@ -46,8 +46,11 @@ export interface DirectoryStore {
     describe: (seed: string) => DirectoryDescription,
     onSkip?: (reason: string) => void,
   ): Promise<string | undefined>;
-  /** Keep a verified seed for the next run. Best effort. */
-  save(seed: string): Promise<void>;
+  /**
+   * Keep a verified seed for the next run. Best effort: a failure is handed
+   * to `onFail` and resolves false rather than throwing.
+   */
+  save(seed: string, onFail?: (reason: string) => void): Promise<boolean>;
   readonly path: string;
 }
 
@@ -79,13 +82,20 @@ export function openDirectoryStore(
       }
       return seed;
     },
-    async save(seed) {
+    async save(seed, onFail) {
       // Write beside the file and rename over it, so a run interrupted
       // mid-write leaves the previous seed rather than half of a new one.
-      await mkdir(cacheDir, { recursive: true });
       const partial = `${path}.${process.pid}.part`;
-      await writeFile(partial, seed);
-      await rename(partial, path);
+      try {
+        await mkdir(cacheDir, { recursive: true });
+        await writeFile(partial, seed);
+        await rename(partial, path);
+        return true;
+      } catch (error) {
+        await rm(partial, { force: true }).catch(() => undefined);
+        onFail?.(error instanceof Error ? error.message : String(error));
+        return false;
+      }
     },
   };
 }
