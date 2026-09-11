@@ -1,4 +1,4 @@
-import { createReadStream, openAsBlob } from 'node:fs';
+import { openAsBlob, type Stats } from 'node:fs';
 import {
   access,
   constants,
@@ -9,7 +9,6 @@ import {
   stat,
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
 
@@ -21,7 +20,7 @@ import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
 
 /** A regular file on disk as a lazily opened, repeatable transfer source. */
 export async function openFileSource(path: string): Promise<TransferSource> {
-  let info: Awaited<ReturnType<typeof stat>>;
+  let info: Stats;
   try {
     info = await stat(path);
   } catch {
@@ -37,10 +36,85 @@ export async function openFileSource(path: string): Promise<TransferSource> {
     projectedWireBytes: deflateUpperBound(info.size),
     precompressed: false,
     // A fresh read each time: a receiver that declines leaves the service
-    // waiting, and the next one gets the file from the start.
-    stream: () =>
-      Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>,
+    // waiting, and the next one gets the file from the start. It was named on
+    // the command line, so a symbolic link to it is followed.
+    stream: () => chosenFileStream(path, info, true),
   };
+}
+
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * The file `path` was when it was chosen, as a stream. It is read only once
+ * a receiver has connected, and again for the next one, so it is opened
+ * again each time and refused if it has changed since: another file in its
+ * place, a symbolic link where `followLink` says none may be, or a different
+ * length — none of which should go out under what was chosen.
+ */
+export function chosenFileStream(
+  path: string,
+  chosen: Stats,
+  followLink: boolean,
+): ReadableStream<Uint8Array> {
+  const changed = () =>
+    new Error(`${path} changed after it was chosen; send it again`);
+  let handle: FileHandle | null = null;
+  let read = 0;
+  const close = async () => {
+    const opened = handle;
+    handle = null;
+    await opened?.close().catch(() => undefined);
+  };
+  return new ReadableStream<Uint8Array>({
+    async start() {
+      const flags = followLink
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NOFOLLOW;
+      try {
+        handle = await open(path, flags);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ELOOP' || code === 'ENOENT') throw changed();
+        throw new Error(`Cannot read ${path}`);
+      }
+      const now = await handle.stat().catch(async () => {
+        await close();
+        throw new Error(`Cannot read ${path}`);
+      });
+      if (
+        !now.isFile() ||
+        now.dev !== chosen.dev ||
+        now.ino !== chosen.ino ||
+        now.size !== chosen.size
+      ) {
+        await close();
+        throw changed();
+      }
+    },
+    async pull(controller) {
+      if (!handle) return;
+      try {
+        const buffer = new Uint8Array(READ_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        read += bytesRead;
+        // Its length was checked on opening; this catches it changing while
+        // it is read, so the stream is never more or less than was chosen.
+        if (read > chosen.size || (bytesRead === 0 && read < chosen.size)) {
+          throw changed();
+        }
+        if (bytesRead === 0) {
+          await close();
+          controller.close();
+          return;
+        }
+        controller.enqueue(buffer.subarray(0, bytesRead));
+      } catch (error) {
+        await close();
+        throw error instanceof Error ? error : new Error(`Cannot read ${path}`);
+      }
+    },
+    cancel: close,
+  });
 }
 
 /**

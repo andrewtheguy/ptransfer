@@ -4,7 +4,9 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -65,6 +67,37 @@ describe('openFileSource', () => {
       'No such file',
     );
     await expect(openFileSource(dir)).rejects.toThrow('Not a regular file');
+  });
+
+  it('refuses a file replaced or changed in length after it was chosen', async () => {
+    const path = join(dir, 'notes.txt');
+    await writeFile(path, 'notes');
+    const changed = `${path} changed after it was chosen`;
+
+    // Written beside it first, so the replacement cannot reuse its inode.
+    let source = await openFileSource(path);
+    await writeFile(join(dir, 'other.txt'), 'notes');
+    await rename(join(dir, 'other.txt'), path);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    source = await openFileSource(path);
+    await writeFile(path, 'longer notes');
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    source = await openFileSource(path);
+    await rm(path);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+  });
+
+  it('follows a symbolic link named on the command line', async () => {
+    const path = join(dir, 'notes.txt');
+    await writeFile(path, 'notes');
+    const link = join(dir, 'link.txt');
+    await symlink(path, link);
+    const source = await openFileSource(link);
+    expect(new TextDecoder().decode(await readAll(source.stream()))).toBe(
+      'notes',
+    );
   });
 });
 

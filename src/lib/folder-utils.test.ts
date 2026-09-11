@@ -324,6 +324,49 @@ describe('createZipTransferSource', () => {
     const entries = unzipSync(await readAll(source.stream()));
     expect(Object.keys(entries)).toEqual([]);
   });
+
+  it.each([
+    ['/etc/passwd', 'it is absolute'],
+    ['', 'it has an empty, . or .. part'],
+    ['a//b.txt', 'it has an empty, . or .. part'],
+    ['folder/', 'it has an empty, . or .. part'],
+    ['./a.txt', 'it has an empty, . or .. part'],
+    ['a/../../b.txt', 'it has an empty, . or .. part'],
+    ['..', 'it has an empty, . or .. part'],
+    ['..\\b.txt', 'Windows would unpack it outside the folder'],
+    ['photos/..\\..\\b.txt', 'Windows would unpack it outside the folder'],
+    ['\\Windows\\b.txt', 'Windows would unpack it outside the folder'],
+    ['C:b.txt', 'Windows would unpack it outside the folder'],
+  ])('refuses the entry path %j before anything is sent', (path, problem) => {
+    expect(() => createZipTransferSource([entryOf(path, 1)], 'bad')).toThrow(
+      `Cannot put ${path} in a ZIP: ${problem}`,
+    );
+  });
+
+  it('refuses two entries with one path, which would unpack onto each other', () => {
+    expect(() =>
+      createZipTransferSource(
+        [
+          entryOf('a/notes.txt', 1),
+          entryOf('b.txt', 1),
+          entryOf('a/notes.txt', 2),
+        ],
+        'twice',
+      ),
+    ).toThrow('Two files would both be a/notes.txt in the ZIP');
+  });
+
+  it('keeps a backslash in a Unix file name that stays inside the folder', async () => {
+    const source = createZipTransferSource(
+      [entryOf('photos/a\\b.txt', 1), entryOf('c\\.\\d.txt', 1)],
+      'backslash',
+    );
+    const entries = unzipSync(await readAll(source.stream()));
+    expect(Object.keys(entries).sort()).toEqual([
+      'c\\.\\d.txt',
+      'photos/a\\b.txt',
+    ]);
+  });
 });
 
 describe('archiveTimestamp', () => {

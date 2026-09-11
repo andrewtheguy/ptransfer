@@ -48,7 +48,10 @@ itself; several, or a folder, go as one ZIP generated while it is sent — the
 tab's own archive code — with each folder's contents under the folder's name,
 so `send --tor ./photos ./notes.txt` arrives as `files_<timestamp>.zip`
 holding `photos/…` and `notes.txt`. Symbolic links inside a folder, and other
-files that are not regular files, are left out and named on the way.
+files that are not regular files, are left out and named on the way. Files are
+read only once a receiver connects; one that has been replaced or changed length
+since the command started stops the transfer rather than going out in its
+place.
 
 The password is read from standard input rather than a flag, so it stays out of
 shell history and the process list. The receiver never overwrites a file; if

@@ -1,7 +1,6 @@
-import { createReadStream, type Dirent, type Stats } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { access, constants, readdir, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import {
   archiveTimestamp,
   createZipTransferSource,
@@ -9,7 +8,7 @@ import {
   type ZipEntry,
 } from '@/lib/folder-utils';
 import type { TransferSource } from '@/lib/transfer-source';
-import { openFileSource } from './files';
+import { chosenFileStream, openFileSource } from './files';
 
 /**
  * The paths `send` was given, as one transfer source, by the rule the tab
@@ -79,7 +78,7 @@ async function collectEntries(
     }
     named.set(name, path);
     if (info.isFile()) {
-      entries.push(await diskEntry(path, name, info));
+      entries.push(await diskEntry(path, name, info, true));
     } else if (info.isDirectory()) {
       await walk(path, name, entries, skipped);
     } else {
@@ -112,7 +111,9 @@ async function walk(
     if (child.isDirectory()) {
       await walk(path, inArchive, entries, skipped);
     } else if (child.isFile()) {
-      entries.push(await diskEntry(path, inArchive, await statPath(path)));
+      entries.push(
+        await diskEntry(path, inArchive, await statPath(path), false),
+      );
     } else {
       skipped.push(path);
     }
@@ -124,11 +125,15 @@ async function walk(
  * archive is only generated once a receiver has connected, and a file that
  * cannot be read would fail the transfer after a Tor bootstrap and a
  * handshake, where there is no resume.
+ *
+ * `followLink` is for a path named on the command line; a file found in a
+ * folder walk is opened only if it is still not a symbolic link.
  */
 async function diskEntry(
   path: string,
   inArchive: string,
   info: Stats,
+  followLink: boolean,
 ): Promise<ZipEntry> {
   try {
     await access(path, constants.R_OK);
@@ -141,8 +146,7 @@ async function diskEntry(
     lastModified: info.mtimeMs,
     // A fresh read each time, as for a single file: a receiver that declines
     // leaves the service waiting, and the next one gets the whole archive.
-    stream: () =>
-      Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>,
+    stream: () => chosenFileStream(path, info, followLink),
   };
 }
 

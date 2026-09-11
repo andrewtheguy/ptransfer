@@ -2,6 +2,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  rename,
   rm,
   symlink,
   utimes,
@@ -149,6 +150,35 @@ describe('openSelection', () => {
     const empty = join(dir, 'empty');
     await mkdir(join(empty, 'nested'), { recursive: true });
     await expect(openSelection([empty])).rejects.toThrow('Nothing to send');
+  });
+
+  it('refuses a file replaced, grown or turned into a link after it was chosen', async () => {
+    const { photos, notes } = await tree();
+    const b = join(photos, 'b.jpg');
+    const changed = `${b} changed after it was chosen`;
+
+    // Written beside it first, so the replacement cannot reuse its inode.
+    let { source } = await openSelection([photos]);
+    await writeFile(join(dir, 'other.jpg'), 'bee');
+    await rename(join(dir, 'other.jpg'), b);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    ({ source } = await openSelection([photos]));
+    await writeFile(b, 'bumblebee');
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    ({ source } = await openSelection([photos]));
+    await rm(b);
+    await symlink(notes, b);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+  });
+
+  it('refuses a file name Windows would unpack outside the folder', async () => {
+    const { photos } = await tree();
+    await writeFile(join(photos, '..\\escape.txt'), 'out');
+    await expect(openSelection([photos])).rejects.toThrow(
+      'Cannot put photos/..\\escape.txt in a ZIP',
+    );
   });
 
   it.skipIf(process.getuid?.() === 0)(

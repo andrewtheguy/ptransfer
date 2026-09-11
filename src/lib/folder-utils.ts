@@ -120,6 +120,45 @@ export function zipWireUpperBound(entries: readonly ZipEntry[]): number {
 }
 
 /**
+ * Why `path` cannot be an entry path, or null if it can: it must stay inside
+ * the folder it is unpacked into. A backslash is an ordinary character in a
+ * Unix file name and is kept, but a Windows unpacker reads it as a separator,
+ * so the path must not leave the folder under that reading either.
+ */
+function unsafeEntryPath(path: string): string | null {
+  if (path.startsWith('/')) return 'it is absolute';
+  const parts = path.split('/');
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) {
+    return 'it has an empty, . or .. part';
+  }
+  if (
+    path.startsWith('\\') ||
+    /^[A-Za-z]:/.test(path) ||
+    path.split(/[/\\]/).includes('..')
+  ) {
+    return 'Windows would unpack it outside the folder';
+  }
+  return null;
+}
+
+/**
+ * Throws unless every entry path stays inside the folder it is unpacked into
+ * and no two entries share one, which would unpack on top of each other.
+ * Checked when the source is made, before anything is sent.
+ */
+function checkEntryPaths(entries: readonly ZipEntry[]): void {
+  const seen = new Set<string>();
+  for (const { path } of entries) {
+    const problem = unsafeEntryPath(path);
+    if (problem) throw new Error(`Cannot put ${path} in a ZIP: ${problem}`);
+    if (seen.has(path)) {
+      throw new Error(`Two files would both be ${path} in the ZIP`);
+    }
+    seen.add(path);
+  }
+}
+
+/**
  * Create a ZIP transfer source without generating the archive up front.
  * Works with both folder selection and multi-file selection.
  *
@@ -130,11 +169,14 @@ export function zipWireUpperBound(entries: readonly ZipEntry[]): number {
  *
  * @param entries - The files, each under the path it takes in the archive
  * @param archiveName - Name for the ZIP file (without .zip extension)
+ * @throws If an entry path would leave the folder it is unpacked into, or
+ *   two entries share one
  */
 export function createZipTransferSource(
   entries: readonly ZipEntry[],
   archiveName: string,
 ): TransferSource {
+  checkEntryPaths(entries);
   const totalInputBytes = entries.reduce(
     (total, entry) => total + entry.size,
     0,
