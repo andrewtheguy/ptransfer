@@ -655,14 +655,20 @@ indices arrived exactly once in order, and that the decrypted wire byte count
 matches; then, and only then, it finalizes what it stored. It then closes the
 transport, which is the only thing the sender ever hears from it.
 
+Once `end` has checked out, the rest is the receiver's own work: what it still
+holds is stored whatever the transport does next, so the sender's close after
+its linger, or an `abort` it sends as its user moves on, no longer fails the
+transfer.
+
 ### 7.5 Receive discipline
 
 Receivers **append in reliable arrival order**. There is no positional or
 out-of-order write path: no wire payload has a length known up front, so an
 index cannot be turned into an offset. A receiver MUST reject a chunk whose
 index is not the next expected one, a duplicate index, a short chunk before the
-final one, a chunk after `end`, a malformed length, and a transfer that exceeds
-`MAX_MESSAGE_SIZE`.
+final one, a malformed length, and a transfer that exceeds `MAX_MESSAGE_SIZE`.
+Once `end` has checked out it has stopped reading the transport, so anything
+sent after it is never seen.
 
 There is **no whole-file checksum and no manifest**. Integrity rests entirely
 on per-chunk AES-GCM authentication with the authenticated index, plus the
@@ -680,8 +686,9 @@ completeness checks above.
   check, a protocol violation, a local failure such as storage — closes the
   transport. It has no message to send.
 - A transport that closes before `end` has arrived is a connection failure for
-  the receiver; one that closes while the sender still holds unsent bytes is a
-  connection failure for the sender.
+  the receiver, and an `abort` before it stops the receiver; after a valid
+  `end` neither does anything. A transport that closes while the sender still
+  holds unsent bytes is a connection failure for the sender.
 
 ### 7.7 Stall watchdog
 
@@ -691,8 +698,9 @@ side measuring the other:
 - The sender fails when the transport will not take the next chunk, or will
   not drain after `end`, within the window: a receiver that stopped reading.
   While it waits on its own input it runs no clock.
-- The receiver arms it when the transport opens and resets it on every
-  incoming message.
+- The receiver arms it when the transport opens, resets it on every incoming
+  message, and stops it once `end` has checked out: storing what is in hand
+  is its own work, not the sender's.
 
 A steadily progressing transfer of any size never trips it.
 
@@ -723,7 +731,6 @@ A steadily progressing transfer of any size never trips it.
 | `ENCRYPTION_CHUNK_SIZE` | 128 KiB |
 | `MAX_CHUNKS` | 65 536 |
 | `MAX_MESSAGE_SIZE` | 2 GiB |
-| `TRANSFER_WINDOW_CHUNKS` | 32 |
 | `abort` reason | at most 200 characters |
 
 Peer-visible timeouts:

@@ -20,7 +20,7 @@ import {
   TransferAbortedError,
   type TransferLink,
 } from './p2p-transfer';
-import { createAdaptiveAppendSink } from './scratch-sink';
+import { type AppendSink, createAdaptiveAppendSink } from './scratch-sink';
 import {
   createFileTransferSource,
   type TransferSource,
@@ -88,6 +88,23 @@ function channelPair(): [DuplexChannel, DuplexChannel] {
     createDataChannelDuplex(senderEnd),
     createDataChannelDuplex(receiverEnd),
   ];
+}
+
+/** A sink whose appends wait until `open()` is called, as slow storage would. */
+function gatedSink(inner: AppendSink): AppendSink & { open: () => void } {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return {
+    append: async (bytes) => {
+      await opened;
+      await inner.append(bytes);
+    },
+    finish: () => inner.finish(),
+    discard: () => inner.discard(),
+    open,
+  };
 }
 
 /**
@@ -619,14 +636,17 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).rejects.toThrow('Invalid end message');
   });
 
-  it('refuses content after the end', async () => {
+  it('ignores whatever arrives after a valid end', async () => {
     const { key, receiver, peer } = await attachedReceiver();
     const [message] = await encryptAll(key, makePlaintext(100));
 
     peer.deliver({ t: 'end', chunks: 0, bytes: 0 });
+    // The link has been let go: nothing after the end is read.
     peer.deliver(message);
+    peer.deliver({ t: 'end', chunks: 1, bytes: 100 });
 
-    await expect(receiver.done).rejects.toThrow();
+    const blob = await receiver.done;
+    expect(blob.size).toBe(0);
   });
 
   it('refuses a deflated payload that does not inflate cleanly', async () => {
@@ -679,5 +699,64 @@ describe('createTransferReceiver', () => {
     });
 
     await expect(receiver.done).rejects.toThrow('Transfer stalled');
+  });
+
+  /** A receiver on slow storage with every chunk and a valid `end` in hand. */
+  async function receiverStoringAfterEnd(
+    opts: Parameters<typeof createTransferReceiver>[3] = {},
+  ) {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE + 5;
+    const plaintext = makePlaintext(totalBytes);
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, opts);
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, plaintext);
+    for (const message of messages) peer.deliver(message);
+    peer.deliver({ t: 'end', chunks: messages.length, bytes: totalBytes });
+    return { plaintext, inner, sink, receiver, peer };
+  }
+
+  it('seals the file when the sender hangs up after a valid end while chunks are still being stored', async () => {
+    const { plaintext, inner, sink, receiver, peer } =
+      await receiverStoringAfterEnd();
+    // Everything is in hand, so the link was let go before it is stored.
+    expect(peer.listeners()).toBe(0);
+    // The sender moved on: an abort as its user starts another send, then
+    // the close.
+    peer.deliver({ t: 'abort', reason: CANCELLED_REASON });
+    peer.end('closed');
+    await tick();
+
+    sink.open();
+
+    const blob = await receiver.done;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(plaintext);
+    await inner.discard();
+  });
+
+  it('keeps storing after a valid end past the stall window', async () => {
+    const { plaintext, inner, sink, receiver } = await receiverStoringAfterEnd({
+      stallTimeoutMs: 20,
+    });
+    await tick(60);
+
+    sink.open();
+
+    const blob = await receiver.done;
+    expect(blob.size).toBe(plaintext.length);
+    await inner.discard();
+  });
+
+  it('can still be abandoned while it stores what arrived after the end', async () => {
+    const { inner, sink, receiver } = await receiverStoringAfterEnd();
+
+    receiver.dispose();
+    sink.open();
+
+    await expect(receiver.done).rejects.toThrow('Cancelled');
+    await inner.discard();
   });
 });

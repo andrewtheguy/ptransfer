@@ -223,6 +223,40 @@ describe('createDataChannelDuplex', () => {
     expect(flushed).toBe(true);
   });
 
+  it('waits in flush for a send still queued behind backpressure', async () => {
+    const { dcA, a } = duplexPair(4);
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    // Over the threshold, so this one has not reached the channel yet.
+    const queued = a.sendBinary(new Uint8Array(8));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dcA.sent).toHaveLength(1);
+    const flushing = a.flush();
+
+    dcA.release();
+
+    await flushing;
+    await queued;
+    expect(dcA.sent).toHaveLength(2);
+    expect(dcA.bufferedAmount).toBe(0);
+  });
+
+  it('rejects flush when the channel closes under a send still queued', async () => {
+    const { dcA, a } = duplexPair(4);
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    const queued = a.sendBinary(new Uint8Array(8));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const flushing = a.flush();
+
+    a.close();
+
+    await expect(queued).rejects.toThrow('closed before send completed');
+    await expect(flushing).rejects.toThrow(
+      'Data channel closed with 8 bytes unsent',
+    );
+  });
+
   it('resolves flush when the peer hangs up after the buffer emptied', async () => {
     const { dcB, a } = duplexPair();
     await a.sendText('last');

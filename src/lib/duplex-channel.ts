@@ -58,9 +58,11 @@ export interface DuplexChannel {
   /**
    * Resolve once every send made before the call has left the channel's
    * buffer — handed to the transport, which delivers from there — so the
-   * caller may close without cutting off the tail. Sends made after the call
-   * do not hold it up. Rejects if the channel closes or errors with some of
-   * those bytes still buffered.
+   * caller may close without cutting off the tail. It waits its turn behind
+   * sends still queued on backpressure, with the same lack of a timeout;
+   * sends made after the call do not hold it up, and a send that failed on
+   * its own has told its caller and is not waited for. Rejects if the
+   * channel closes or errors with some of those bytes still buffered.
    */
   flush: () => Promise<void>;
   /**
@@ -119,7 +121,12 @@ export function createDataChannelDuplex(
    * Bytes handed to `dc.send` so far. With `bufferedAmount`, which counts the
    * ones still waiting, it says how many have left — what `flush` waits on.
    */
-  let queuedBytes = 0;
+  let sentBytes = 0;
+  /**
+   * Bytes `sendNow` put ahead of the queue. A flush discounts the ones sent
+   * after it took its mark, which leave in place of the sends it waits on.
+   */
+  let aheadBytes = 0;
 
   const isOpen = () => !closedLocally && !failed && dc.readyState === 'open';
   /** Why a send cannot go out, once `isOpen()` says it cannot. */
@@ -184,13 +191,13 @@ export function createDataChannelDuplex(
     }
     if (typeof data === 'string') {
       dc.send(data);
-      queuedBytes += utf8Length(data);
+      sentBytes += utf8Length(data);
     } else {
       // send() transmits exactly [byteOffset, byteOffset+byteLength). Callers
       // pass fresh, exact-size views (encryptChunk output), so no copy is
       // needed.
       dc.send(data as Uint8Array<ArrayBuffer>);
-      queuedBytes += data.byteLength;
+      sentBytes += data.byteLength;
     }
   };
 
@@ -207,7 +214,9 @@ export function createDataChannelDuplex(
     if (!isOpen()) return false;
     try {
       dc.send(text);
-      queuedBytes += utf8Length(text);
+      const length = utf8Length(text);
+      sentBytes += length;
+      aheadBytes += length;
       return true;
     } catch {
       return false;
@@ -221,47 +230,64 @@ export function createDataChannelDuplex(
     };
   };
 
-  const flush = (): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
-      // Bytes leave in order, so the ones queued so far are out once this
-      // many have left in all.
-      const mark = queuedBytes;
-      const left = () => queuedBytes - dc.bufferedAmount;
-      let settled = false;
-      const settle = (outcome: () => void) => {
-        if (settled) return;
-        settled = true;
-        dc.removeEventListener('bufferedamountlow', check);
-        clearInterval(poll);
-        enders.delete(check);
-        outcome();
-      };
-      // The buffer is read before the channel's state: a peer that hangs up
-      // the moment it has everything can close the channel before this side
-      // has looked, and `bufferedAmount` keeps its last value past a close.
-      const check = () => {
-        if (left() >= mark) {
-          settle(resolve);
-        } else if (!isOpen()) {
-          const unsent = mark - left();
-          settle(() =>
-            reject(
-              new Error(
-                failed
-                  ? `Data channel failed with ${unsent} bytes unsent`
-                  : `Data channel closed with ${unsent} bytes unsent`,
-              ),
-            ),
-          );
-        }
-      };
-      // 'bufferedamountlow' fires at the threshold, not at empty, so the poll
-      // is what sees the last bytes go.
-      const poll = setInterval(check, DRAIN_POLL_MS);
-      dc.addEventListener('bufferedamountlow', check);
-      enders.add(check);
-      check();
+  const flush = (): Promise<void> => {
+    let mark = 0;
+    let aheadAtMark = 0;
+    // Takes its place in the send queue: a send waits its turn behind
+    // backpressure before `dc.send` sees it, so the mark is read once every
+    // send made before this call has been handed to the channel — or failed
+    // and told its caller — and before any made after it.
+    const marked = sendChain.then(() => {
+      mark = sentBytes;
+      aheadAtMark = aheadBytes;
     });
+    sendChain = marked;
+    return marked.then(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          // Bytes leave in order, so the ones sent by the mark are out once
+          // this many have left in all — less what `sendNow` has put ahead
+          // of them since, which leaves in their place.
+          const left = () =>
+            sentBytes - dc.bufferedAmount - (aheadBytes - aheadAtMark);
+          let settled = false;
+          const settle = (outcome: () => void) => {
+            if (settled) return;
+            settled = true;
+            dc.removeEventListener('bufferedamountlow', check);
+            clearInterval(poll);
+            enders.delete(check);
+            outcome();
+          };
+          // The buffer is read before the channel's state: a peer that hangs
+          // up the moment it has everything can close the channel before
+          // this side has looked, and `bufferedAmount` keeps its last value
+          // past a close.
+          const check = () => {
+            if (left() >= mark) {
+              settle(resolve);
+            } else if (!isOpen()) {
+              const unsent = mark - left();
+              settle(() =>
+                reject(
+                  new Error(
+                    failed
+                      ? `Data channel failed with ${unsent} bytes unsent`
+                      : `Data channel closed with ${unsent} bytes unsent`,
+                  ),
+                ),
+              );
+            }
+          };
+          // 'bufferedamountlow' fires at the threshold, not at empty, so the
+          // poll is what sees the last bytes go.
+          const poll = setInterval(check, DRAIN_POLL_MS);
+          dc.addEventListener('bufferedamountlow', check);
+          enders.add(check);
+          check();
+        }),
+    );
+  };
 
   const onEnd: DuplexChannel['onEnd'] = (listener) => {
     if (endedWith !== null) {

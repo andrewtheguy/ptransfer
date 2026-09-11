@@ -28,7 +28,9 @@
  *       end   {chunks, bytes}  the payload is complete
  *       abort {reason}         the sender is stopping, and why
  *   - The receiver closes the transport once it has the file, or when it
- *     gives up. A transport that closes before `end` is a failed transfer.
+ *     gives up. A transport that closes before `end` is a failed transfer;
+ *     once `end` has checked out, what the receiver still holds is stored
+ *     whatever the transport does next.
  *
  * Neither side materializes the whole file: the sender coalesces a lazy
  * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver
@@ -96,9 +98,9 @@ export interface TransferLink {
  * not an overall deadline, and each side measures the other's activity: the
  * sender fails when the transport will not take a chunk, or will not drain
  * after `end`, for this long — a receiver that stopped reading — and the
- * receiver when no message arrives. So an arbitrarily large but
- * steadily-progressing transfer never trips it, while a peer that goes quiet
- * aborts after this span instead of hanging.
+ * receiver when no message arrives before `end` does. So an arbitrarily large
+ * but steadily-progressing transfer never trips it, while a peer that goes
+ * quiet aborts after this span instead of hanging.
  */
 export const STALL_TIMEOUT_MS = 60000;
 
@@ -549,8 +551,9 @@ export interface ReceiverOptions {
   maxWireBytes?: number;
   /**
    * Idle window in ms: once attached, the transfer aborts if no message
-   * arrives within this span. Every message resets it. Defaults to
-   * STALL_TIMEOUT_MS.
+   * arrives within this span. Every message resets it, and it stops once
+   * `end` has checked out: storing what is in hand is this side's own work,
+   * not the sender's. Defaults to STALL_TIMEOUT_MS.
    */
   stallTimeoutMs?: number;
 }
@@ -566,7 +569,9 @@ export interface TransferReceiver {
    * Resolves with the sealed plaintext payload from the sink (disk-backed for
    * an OPFS-backed sink) once `end` has checked out against everything
    * stored, or rejects on any error. The caller then closes the link; the
-   * sender hears nothing else.
+   * sender hears nothing else. Once `end` has checked out, only `dispose()`
+   * can still fail it: the link is let go, so the sender's hang-up or a late
+   * `abort` cannot undo a file that has wholly arrived.
    */
   done: Promise<Blob>;
   /**
@@ -610,7 +615,6 @@ export function createTransferReceiver(
   let claimedWireBytes = 0;
   let totalDecryptedBytes = 0;
   let previousChunkLength: number | null = null;
-  let ended = false;
   let appendChain = Promise.resolve();
   let settled = false;
 
@@ -662,7 +666,6 @@ export function createTransferReceiver(
     let expectedPlaintextLength: number;
 
     try {
-      if (ended) throw new ProtocolError('Content arrived after the end');
       ({ chunkIndex, encryptedData } = parseChunkMessage(data));
       // The link is reliable and ordered. Requiring that order lets the
       // receiver append without holding or seeking chunks, and rejects
@@ -732,7 +735,6 @@ export function createTransferReceiver(
   };
 
   const handleEnd = async (count: number, finalBytes: number) => {
-    ended = true;
     if (count !== receivedChunks) {
       fail(
         new Error(
@@ -745,6 +747,13 @@ export function createTransferReceiver(
       fail(new Error('Invalid end message: final size does not match chunks'));
       return;
     }
+    // Everything is in hand; the rest is storing it, which the link has no
+    // part in. Let the link go now, so the sender's hang-up after its linger,
+    // the `abort` it sends when its user moves on, and the idle watchdog
+    // cannot fail a file that has wholly arrived. Only dispose() still can.
+    // Nothing after the end is read, so a stray message there is not a
+    // violation to catch either.
+    release();
 
     if (pending.size > 0) {
       await Promise.allSettled(Array.from(pending));
@@ -802,10 +811,6 @@ export function createTransferReceiver(
     if (!control) return;
     switch (control.t) {
       case 'end':
-        if (ended) {
-          fail(new ProtocolError('The sender ended the transfer twice'));
-          return;
-        }
         if (control.bytes > maxWireBytes) {
           fail(new Error('Invalid end message values'));
           return;
