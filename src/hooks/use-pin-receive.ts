@@ -57,7 +57,7 @@ import {
 } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
-import type { TorBridge } from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
 import type { PinKeyMaterial, ReceivedContent } from '@/lib/types';
 import type { WebRTCConnection } from '@/lib/webrtc';
 

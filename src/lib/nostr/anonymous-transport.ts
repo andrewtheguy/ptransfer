@@ -1,8 +1,5 @@
-import {
-  bootstrapTorClient,
-  closeTorClient,
-  type TorBridge,
-} from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient, closeTorClient } from '@/lib/tor/client';
 import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor';
 
 /**

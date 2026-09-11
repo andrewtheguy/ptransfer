@@ -1,4 +1,4 @@
-import { getStunUrls } from '@/lib/webrtc-config';
+import { bridgeOptions, type CustomBridge, type TorBridge } from './bridge';
 import {
   describeSeed,
   loadDirectorySeed,
@@ -19,28 +19,6 @@ import { loadWebtor, type WebtorClient } from './webtor';
  */
 
 /**
- * How the tab reaches its Snowflake bridge.
- *
- * - `websocket` opens a direct WebSocket to one fixed bridge endpoint: no
- *   broker, no volunteer proxy, no STUN. Fewer moving parts, and the faster of
- *   the two, but a network that blocks that endpoint blocks the transfer.
- * - `webrtc` goes through a volunteer proxy brokered over HTTPS, which is what
- *   Snowflake is designed for and much harder to block — at the cost of
- *   needing STUN and a proxy being available.
- */
-export type TorBridge = 'websocket' | 'webrtc';
-
-export const TOR_BRIDGES: readonly TorBridge[] = ['websocket', 'webrtc'];
-
-export const DEFAULT_TOR_BRIDGE: TorBridge = 'websocket';
-
-/** Labels for the bridge choice, used wherever it is offered. */
-export const TOR_BRIDGE_LABELS: Record<TorBridge, string> = {
-  websocket: 'Snowflake WebSocket',
-  webrtc: 'Snowflake WebRTC',
-};
-
-/**
  * A bridge to use instead of the public one, from the build's environment:
  *
  * ```
@@ -52,7 +30,8 @@ export const TOR_BRIDGE_LABELS: Record<TorBridge, string> = {
  * every HSDir microdescriptor one hop from the bridge: against a local one that
  * download is local too, which turns a multi-minute cold bootstrap into
  * seconds. Both or neither — a URL without an identity would be a request to
- * trust whatever answers.
+ * trust whatever answers. It stands in for the `websocket` bridge only: the
+ * `webrtc` one reaches the public bridge through a volunteer proxy.
  */
 const BRIDGE_URL = import.meta.env.VITE_TOR_BRIDGE_URL;
 const BRIDGE_FINGERPRINT = import.meta.env.VITE_TOR_BRIDGE_FINGERPRINT;
@@ -62,6 +41,11 @@ if (Boolean(BRIDGE_URL) !== Boolean(BRIDGE_FINGERPRINT)) {
     'Set VITE_TOR_BRIDGE_URL and VITE_TOR_BRIDGE_FINGERPRINT together, or neither',
   );
 }
+
+const CUSTOM_BRIDGE: CustomBridge | undefined =
+  BRIDGE_URL && BRIDGE_FINGERPRINT
+    ? { url: BRIDGE_URL, fingerprint: BRIDGE_FINGERPRINT }
+    : undefined;
 
 export interface BootstrapOptions {
   bridge: TorBridge;
@@ -95,11 +79,11 @@ export async function bootstrapTorClient(
   );
 
   const client = await WebtorClient.create({
-    bridge: options.bridge,
-    ...(options.bridge === 'webrtc' ? { stunUrls: getStunUrls() } : {}),
-    ...(BRIDGE_URL && BRIDGE_FINGERPRINT
-      ? { bridgeUrl: BRIDGE_URL, bridgeFingerprint: BRIDGE_FINGERPRINT }
-      : {}),
+    ...bridgeOptions(
+      options.bridge === 'webrtc'
+        ? { bridge: 'webrtc', rtcPeerConnection: RTCPeerConnection }
+        : { bridge: 'websocket', custom: CUSTOM_BRIDGE },
+    ),
     ...(seed.value ? { directorySeed: seed.value } : {}),
     // Keep every directory this client downloads, not only the one it
     // bootstrapped with: a client refreshes its directory while it runs, and

@@ -71,7 +71,9 @@ cached while that still describes the network. The cache is
 `~/Library/Caches/ptransfer` on macOS; on Linux it is
 `$XDG_CACHE_HOME/ptransfer` when `XDG_CACHE_HOME` is an absolute path, and
 `~/.cache/ptransfer` otherwise. The command then bootstraps the Tor client
-over the Snowflake websocket bridge, fetches a page from the Tor Project's
+over a Snowflake bridge — the websocket one by default, or with
+`--bridge webrtc` a volunteer proxy, which is slower but harder to block, the
+same two the tab offers — fetches a page from the Tor Project's
 onion site (`--url` picks another), publishes a v3 onion service of its own, connects back to it through
 the network, and prints how long each step took. `send` and `receive` bootstrap
 the same way, from the same cache.

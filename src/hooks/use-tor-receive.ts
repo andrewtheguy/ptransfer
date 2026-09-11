@@ -4,11 +4,8 @@ import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
 import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
-import {
-  bootstrapTorClient,
-  closeTorClient,
-  type TorBridge,
-} from '@/lib/tor/client';
+import type { TorBridge } from '@/lib/tor/bridge';
+import { bootstrapTorClient, closeTorClient } from '@/lib/tor/client';
 import { TorFramedStream } from '@/lib/tor/framing';
 import { runTorClientHandshake, sendReady } from '@/lib/tor/handshake';
 import { parseOnionAddress } from '@/lib/tor/onion-address';

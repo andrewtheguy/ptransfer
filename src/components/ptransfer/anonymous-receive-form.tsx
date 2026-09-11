@@ -1,7 +1,7 @@
 import { Download } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import { TorBridgeChoice } from './tor-bridge-choice';
 
 /**
