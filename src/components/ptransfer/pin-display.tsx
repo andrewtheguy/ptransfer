@@ -47,11 +47,6 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     onExpireRef.current = onExpire;
   }, [onExpire]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pin restarts the rotation countdown by design
-  useEffect(() => {
-    rotationStartRef.current = performance.now();
-  }, [pin]);
-
   useEffect(() => {
     mountedRef.current = true;
     if (windowStartRef.current === null) {
@@ -97,9 +92,11 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     };
   }, []);
 
-  // Regenerate whenever the PIN changes, so rotation and "Generate a new PIN"
-  // both leave a scannable code for the PIN currently on screen.
+  // A new PIN restarts the rotation countdown and gets a QR code of its own,
+  // so rotation and "Generate a new PIN" both leave a scannable code for the
+  // PIN currently on screen.
   useEffect(() => {
+    rotationStartRef.current = performance.now();
     let active = true;
     setQrUrl(null);
     setQrFailed(false);

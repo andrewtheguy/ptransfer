@@ -48,7 +48,7 @@ export function QRDisplay({
 
   useEffect(() => {
     if (!data || data.length === 0) {
-      setQrImageUrl(null); // eslint-disable-line react-hooks/set-state-in-effect
+      setQrImageUrl(null);
       return;
     }
 

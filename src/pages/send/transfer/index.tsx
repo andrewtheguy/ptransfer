@@ -55,10 +55,6 @@ export function SendTransferPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  // Bumped by Retry: the preparation effect keys off it so a retry that leaves
-  // the config untouched still schedules a fresh attempt instead of sitting in
-  // 'checking' forever.
-  const [attempt, setAttempt] = useState(0);
 
   // Hooks for transfer
   const pinHook = usePinSend();
@@ -108,8 +104,8 @@ export function SendTransferPage() {
     }
   }, [config, navigate]);
 
-  // Prepare the direct file or lazy ZIP source
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the retry trigger — Retry leaves the config as it is, so nothing else here would change
+  // Prepare the direct file or lazy ZIP source, once per config: Retry and
+  // Switch to Code Exchange each hand over a fresh one to start again.
   useEffect(() => {
     if (!config || startedRef.current) return;
 
@@ -175,7 +171,7 @@ export function SendTransferPage() {
     return () => {
       cancelled = true;
     };
-  }, [config, attempt]);
+  }, [config]);
 
   // Start transfer when file is ready
   useEffect(() => {
@@ -183,7 +179,6 @@ export function SendTransferPage() {
       return;
 
     startedRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: sync step state when starting transfer
     setStep('active');
 
     if (activeHook.type === 'pin') {
@@ -208,7 +203,6 @@ export function SendTransferPage() {
     if (!startedRef.current) return;
 
     if (state.status === 'complete') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: sync step with hook completion
       setStep('complete');
     } else if (state.status === 'error') {
       // TypeScript narrows state to TransferStateError, so message is required
@@ -251,6 +245,7 @@ export function SendTransferPage() {
   }, [config, setConfig, cancel]);
 
   const handleRetry = useCallback(() => {
+    if (!config) return;
     // Cancel any in-flight transfer before retrying
     if (startedRef.current) {
       try {
@@ -260,10 +255,11 @@ export function SendTransferPage() {
       }
     }
     startedRef.current = false;
+    // An unchanged copy: a new object is what restarts preparation.
+    setConfig({ ...config });
     setStep('checking');
     setError(null);
-    setAttempt((value) => value + 1);
-  }, [cancel]);
+  }, [config, setConfig, cancel]);
 
   const handleSendAnother = useCallback(() => {
     cancel();

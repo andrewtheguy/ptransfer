@@ -166,6 +166,7 @@ describe('safeFileName', () => {
 
   it('strips control characters and refuses to name nothing', () => {
     expect(safeFileName('a\u0000b\n.txt')).toBe('ab.txt');
+    expect(safeFileName('a\u009bb.txt')).toBe('ab.txt');
     expect(safeFileName('')).toBe('received');
     expect(safeFileName('..')).toBe('received');
     expect(safeFileName('/')).toBe('received');

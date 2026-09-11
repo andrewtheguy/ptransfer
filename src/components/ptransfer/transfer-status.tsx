@@ -65,7 +65,8 @@ export function TransferStatus({
       : 0;
 
   // Show relays whenever Nostr was used (for debugging)
-  const showRelays = state.currentRelays && state.currentRelays.length > 0;
+  const relays = state.currentRelays ?? [];
+  const showRelays = relays.length > 0;
 
   // Suggest the offline QR transfer app when a direct P2P connection failed.
   const showOfflineQrSuggestion =
@@ -122,11 +123,11 @@ export function TransferStatus({
           {showDebug && (
             <div className="pl-4 space-y-1">
               <p className="font-medium text-muted-foreground">
-                Connected Relays: {state.currentRelays!.length}
+                Connected Relays: {relays.length}
                 {state.totalRelays !== undefined && ` / ${state.totalRelays}`}
               </p>
               <ul className="space-y-0.5 pl-3">
-                {state.currentRelays!.map((relay) => (
+                {relays.map((relay) => (
                   <li
                     key={relay}
                     className="text-muted-foreground truncate"

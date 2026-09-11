@@ -10,6 +10,33 @@ import {
   reassembleChunks,
 } from './chunk-utils';
 
+type ParsedChunk = NonNullable<ReturnType<typeof parseChunk>>;
+
+/** parseChunk, failing the test on a chunk it rejects. */
+function parseValid(encoded: string): ParsedChunk {
+  const parsed = parseChunk(encoded);
+  if (!parsed) throw new Error('parseChunk rejected the chunk');
+  return parsed;
+}
+
+/** The payload checksum chunk 0 carries, failing the test when it is absent. */
+function checksumOf(chunk: ParsedChunk): number {
+  if (chunk.checksum === undefined) {
+    throw new Error(`chunk ${chunk.index} carries no checksum`);
+  }
+  return chunk.checksum;
+}
+
+/** reassembleChunks, failing the test when a chunk is missing. */
+function reassembleAll(
+  chunks: Map<number, Uint8Array>,
+  total: number,
+): Uint8Array {
+  const reassembled = reassembleChunks(chunks, total);
+  if (!reassembled) throw new Error('reassembleChunks found a chunk missing');
+  return reassembled;
+}
+
 describe('base64url', () => {
   it('round-trips arbitrary bytes', () => {
     const data = new Uint8Array([0, 1, 255, 128, 63, 62, 43]);
@@ -40,21 +67,19 @@ describe('chunkPayload / reassembleChunks', () => {
     const map = new Map<number, Uint8Array>();
     let checksum: number | null = null;
     for (const chunk of chunks) {
-      const parsed = parseChunk(base64urlEncode(chunk));
-      expect(parsed).not.toBeNull();
-      if (parsed!.index === 0) {
-        expect(typeof parsed!.checksum).toBe('number');
-        checksum = parsed!.checksum!;
+      const parsed = parseValid(base64urlEncode(chunk));
+      if (parsed.index === 0) {
+        checksum = checksumOf(parsed);
       } else {
-        expect(parsed!.checksum).toBeUndefined();
+        expect(parsed.checksum).toBeUndefined();
       }
-      map.set(parsed!.index, parsed!.data);
+      map.set(parsed.index, parsed.data);
     }
 
-    const reassembled = reassembleChunks(map, 3);
+    const reassembled = reassembleAll(map, 3);
     expect(reassembled).toEqual(original);
-    expect(checksum).not.toBeNull();
-    expect(isValidPayloadChecksum(reassembled!, checksum!)).toBe(true);
+    if (checksum === null) throw new Error('no chunk 0 was parsed');
+    expect(isValidPayloadChecksum(reassembled, checksum)).toBe(true);
   });
 
   it('handles out-of-order reassembly', () => {
@@ -67,16 +92,15 @@ describe('chunkPayload / reassembleChunks', () => {
     const map = new Map<number, Uint8Array>();
     let checksum: number | null = null;
     for (let i = chunks.length - 1; i >= 0; i--) {
-      const parsed = parseChunk(base64urlEncode(chunks[i]));
-      expect(parsed).not.toBeNull();
-      if (parsed!.index === 0) checksum = parsed!.checksum!;
-      map.set(parsed!.index, parsed!.data);
+      const parsed = parseValid(base64urlEncode(chunks[i]));
+      if (parsed.index === 0) checksum = checksumOf(parsed);
+      map.set(parsed.index, parsed.data);
     }
 
-    const reassembled = reassembleChunks(map, 3);
+    const reassembled = reassembleAll(map, 3);
     expect(reassembled).toEqual(original);
-    expect(checksum).not.toBeNull();
-    expect(isValidPayloadChecksum(reassembled!, checksum!)).toBe(true);
+    if (checksum === null) throw new Error('no chunk 0 was parsed');
+    expect(isValidPayloadChecksum(reassembled, checksum)).toBe(true);
   });
 
   it('duplicate chunk is idempotent', () => {
@@ -85,14 +109,12 @@ describe('chunkPayload / reassembleChunks', () => {
 
     const map = new Map<number, Uint8Array>();
     for (const chunk of chunks) {
-      const parsed = parseChunk(base64urlEncode(chunk));
-      expect(parsed).not.toBeNull();
-      map.set(parsed!.index, parsed!.data);
+      const parsed = parseValid(base64urlEncode(chunk));
+      map.set(parsed.index, parsed.data);
     }
     // Re-add first chunk
-    const firstParsed = parseChunk(base64urlEncode(chunks[0]));
-    expect(firstParsed).not.toBeNull();
-    map.set(firstParsed!.index, firstParsed!.data);
+    const firstParsed = parseValid(base64urlEncode(chunks[0]));
+    map.set(firstParsed.index, firstParsed.data);
 
     expect(map.size).toBe(2);
     const reassembled = reassembleChunks(map, 2);
@@ -107,17 +129,15 @@ describe('chunkPayload / reassembleChunks', () => {
     expect(chunks[0][0]).toBe(0); // index
     expect(chunks[0][1]).toBe(1); // total
 
-    const parsed = parseChunk(base64urlEncode(chunks[0]));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.index).toBe(0);
-    expect(parsed!.total).toBe(1);
-    expect(typeof parsed!.checksum).toBe('number');
+    const parsed = parseValid(base64urlEncode(chunks[0]));
+    expect(parsed.index).toBe(0);
+    expect(parsed.total).toBe(1);
 
     const map = new Map<number, Uint8Array>();
-    map.set(parsed!.index, parsed!.data);
-    const reassembled = reassembleChunks(map, 1);
+    map.set(parsed.index, parsed.data);
+    const reassembled = reassembleAll(map, 1);
     expect(reassembled).toEqual(original);
-    expect(isValidPayloadChecksum(reassembled!, parsed!.checksum!)).toBe(true);
+    expect(isValidPayloadChecksum(reassembled, checksumOf(parsed))).toBe(true);
   });
 
   it('produces one chunk when payload length equals maxDataBytes', () => {
@@ -130,17 +150,15 @@ describe('chunkPayload / reassembleChunks', () => {
     expect(chunks[0][0]).toBe(0);
     expect(chunks[0][1]).toBe(1);
 
-    const parsed = parseChunk(base64urlEncode(chunks[0]));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.index).toBe(0);
-    expect(parsed!.total).toBe(1);
-    expect(typeof parsed!.checksum).toBe('number');
+    const parsed = parseValid(base64urlEncode(chunks[0]));
+    expect(parsed.index).toBe(0);
+    expect(parsed.total).toBe(1);
 
     const map = new Map<number, Uint8Array>();
-    map.set(parsed!.index, parsed!.data);
-    const reassembled = reassembleChunks(map, 1);
+    map.set(parsed.index, parsed.data);
+    const reassembled = reassembleAll(map, 1);
     expect(reassembled).toEqual(original);
-    expect(isValidPayloadChecksum(reassembled!, parsed!.checksum!)).toBe(true);
+    expect(isValidPayloadChecksum(reassembled, checksumOf(parsed))).toBe(true);
   });
 
   it('throws for empty payload', () => {
@@ -155,9 +173,8 @@ describe('chunkPayload / reassembleChunks', () => {
     const chunks = chunkPayload(original, 400);
 
     const map = new Map<number, Uint8Array>();
-    const parsed = parseChunk(base64urlEncode(chunks[0]));
-    expect(parsed).not.toBeNull();
-    map.set(parsed!.index, parsed!.data);
+    const parsed = parseValid(base64urlEncode(chunks[0]));
+    map.set(parsed.index, parsed.data);
 
     expect(reassembleChunks(map, 3)).toBeNull();
   });
@@ -191,12 +208,11 @@ describe('parseChunk', () => {
 
   it('parses non-zero chunk without checksum field', () => {
     const chunk = new Uint8Array([1, 2, 99]);
-    const parsed = parseChunk(base64urlEncode(chunk));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.index).toBe(1);
-    expect(parsed!.total).toBe(2);
-    expect(parsed!.checksum).toBeUndefined();
-    expect(parsed!.data).toEqual(new Uint8Array([99]));
+    const parsed = parseValid(base64urlEncode(chunk));
+    expect(parsed.index).toBe(1);
+    expect(parsed.total).toBe(2);
+    expect(parsed.checksum).toBeUndefined();
+    expect(parsed.data).toEqual(new Uint8Array([99]));
   });
 });
 
@@ -209,20 +225,18 @@ describe('payload checksum', () => {
     const map = new Map<number, Uint8Array>();
     let checksum: number | null = null;
     for (const chunk of chunks) {
-      const parsed = parseChunk(base64urlEncode(chunk));
-      expect(parsed).not.toBeNull();
-      if (parsed!.index === 0) checksum = parsed!.checksum!;
-      map.set(parsed!.index, parsed!.data);
+      const parsed = parseValid(base64urlEncode(chunk));
+      if (parsed.index === 0) checksum = checksumOf(parsed);
+      map.set(parsed.index, parsed.data);
     }
 
-    const reassembled = reassembleChunks(map, 3);
-    expect(reassembled).not.toBeNull();
-    expect(checksum).not.toBeNull();
-    expect(isValidPayloadChecksum(reassembled!, checksum!)).toBe(true);
+    const reassembled = reassembleAll(map, 3);
+    if (checksum === null) throw new Error('no chunk 0 was parsed');
+    expect(isValidPayloadChecksum(reassembled, checksum)).toBe(true);
 
-    const tampered = reassembled!.slice();
+    const tampered = reassembled.slice();
     tampered[0] ^= 0xff;
-    expect(isValidPayloadChecksum(tampered, checksum!)).toBe(false);
+    expect(isValidPayloadChecksum(tampered, checksum)).toBe(false);
   });
 });
 
@@ -233,13 +247,12 @@ describe('buildChunkUrl / extractChunkParam', () => {
 
     expect(url).toMatch(/^https:\/\/example\.com\/r#[A-Za-z0-9_-]+$/);
     const param = extractChunkParam(url);
-    expect(param).not.toBeNull();
+    if (param === null) throw new Error('no chunk payload in the URL');
 
-    const parsed = parseChunk(param!);
-    expect(parsed).not.toBeNull();
-    expect(parsed!.index).toBe(0);
-    expect(parsed!.total).toBe(1);
-    expect(parsed!.data).toEqual(new Uint8Array([1, 2, 3]));
+    const parsed = parseValid(param);
+    expect(parsed.index).toBe(0);
+    expect(parsed.total).toBe(1);
+    expect(parsed.data).toEqual(new Uint8Array([1, 2, 3]));
   });
 
   it('strips trailing slash from base URL', () => {
