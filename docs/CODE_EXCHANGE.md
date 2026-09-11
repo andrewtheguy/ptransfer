@@ -35,10 +35,11 @@ in — relays never carry signaling in this mode, so a bystander who saw the sen
 cannot push a response into the sender's page.
 
 Once the two devices are connected, file bytes are sent directly peer-to-peer over WebRTC
-using the shared pTransfer transfer protocol: encrypted 128 KiB chunks, acknowledged by the
-receiver as it stores them, then an `end` the receiver answers with `done` once the chunk count
-and final byte count check out and every chunk has authenticated. Either side that gives up tells
-the other why.
+using the shared pTransfer transfer protocol: encrypted 128 KiB chunks as fast as the connection
+takes them, then an `end` with the chunk and byte counts. The sender is done once they have left
+its buffer; the receiver checks that every chunk authenticated and the counts match, then hangs
+up. Nothing travels back, so whether the file arrived is for the two of you to confirm. A sender
+that gives up tells the receiver why; a receiver that gives up just hangs up.
 
 If a direct connection **cannot** be made — for example, a restrictive NAT or firewall on
 either end — an eligible transfer automatically attempts its selected fallback. The

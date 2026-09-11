@@ -20,12 +20,25 @@ import {
   TransferAbortedError,
   type TransferLink,
 } from './p2p-transfer';
-import { createAdaptiveAppendSink } from './scratch-sink';
+import { type AppendSink, createAdaptiveAppendSink } from './scratch-sink';
 import {
   createFileTransferSource,
   type TransferSource,
   type WireEncoding,
 } from './transfer-source';
+
+/** How many chunks the receiver has decrypted, over every test. */
+const decrypts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('./crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./crypto')>();
+  return {
+    ...actual,
+    decryptChunk: (...args: Parameters<typeof actual.decryptChunk>) => {
+      decrypts.count++;
+      return actual.decryptChunk(...args);
+    },
+  };
+});
 
 let opfs: OpfsMock;
 
@@ -90,6 +103,23 @@ function channelPair(): [DuplexChannel, DuplexChannel] {
   ];
 }
 
+/** A sink whose appends wait until `open()` is called, as slow storage would. */
+function gatedSink(inner: AppendSink): AppendSink & { open: () => void } {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return {
+    append: async (bytes) => {
+      await opened;
+      await inner.append(bytes);
+    },
+    finish: () => inner.finish(),
+    discard: () => inner.discard(),
+    open,
+  };
+}
+
 /**
  * One end of a link the test plays the peer on: `deliver` hands this end a
  * message as if the peer sent it, and `sent` is everything this end sent.
@@ -105,6 +135,7 @@ function scriptedLink() {
     sendText: async (text) => {
       sent.push(text);
     },
+    flush: async () => {},
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
@@ -170,17 +201,8 @@ async function roundTrip(
 
 describe('parseControl', () => {
   it('reads each control message', () => {
-    expect(parseControl('{"t":"ack","chunks":3}')).toEqual({
-      t: 'ack',
-      chunks: 3,
-    });
     expect(parseControl('{"t":"end","chunks":2,"bytes":9}')).toEqual({
       t: 'end',
-      chunks: 2,
-      bytes: 9,
-    });
-    expect(parseControl('{"t":"done","chunks":2,"bytes":9}')).toEqual({
-      t: 'done',
       chunks: 2,
       bytes: 9,
     });
@@ -195,13 +217,16 @@ describe('parseControl', () => {
     expect(parseControl('[1,2]')).toBeNull();
     expect(parseControl('{"t":"note","chunks":1}')).toBeNull();
     expect(parseControl('{"chunks":1}')).toBeNull();
+    // Nothing travels from the receiver, so nothing of the kind is defined.
+    expect(parseControl('{"t":"ack","chunks":3}')).toBeNull();
+    expect(parseControl('{"t":"done","chunks":2,"bytes":9}')).toBeNull();
   });
 
   it('refuses a transfer message with malformed counts', () => {
-    expect(() => parseControl('{"t":"ack","chunks":-1}')).toThrow();
-    expect(() => parseControl('{"t":"ack","chunks":1.5}')).toThrow();
+    expect(() => parseControl('{"t":"end","chunks":-1,"bytes":9}')).toThrow();
+    expect(() => parseControl('{"t":"end","chunks":1.5,"bytes":9}')).toThrow();
     expect(() => parseControl('{"t":"end","chunks":1}')).toThrow();
-    expect(() => parseControl('{"t":"done","chunks":1,"bytes":"9"}')).toThrow();
+    expect(() => parseControl('{"t":"end","chunks":1,"bytes":"9"}')).toThrow();
   });
 
   it('caps an abort reason and tolerates a missing one', () => {
@@ -274,103 +299,70 @@ describe('sendFileOverLink', () => {
     expect(peer.chunks()).toBe(1);
     expect(remainderReleased).toBe(false);
     releaseRemainder();
-    await tick();
 
+    await expect(sending).resolves.toBe(ENCRYPTION_CHUNK_SIZE + 3);
+    expect(peer.chunks()).toBe(2);
     expect(peer.controls()).toEqual([
       { t: 'end', chunks: 2, bytes: ENCRYPTION_CHUNK_SIZE + 3 },
     ]);
-    peer.deliver({ t: 'done', chunks: 2, bytes: ENCRYPTION_CHUNK_SIZE + 3 });
-    await expect(sending).resolves.toBe(ENCRYPTION_CHUNK_SIZE + 3);
   });
 
-  it('never runs more than the window ahead of what the receiver has stored', async () => {
+  it('completes once its bytes are out, hearing nothing from the receiver', async () => {
     const key = await makeKey();
-    const data = makePlaintext(ENCRYPTION_CHUNK_SIZE * 5);
+    const data = makePlaintext(ENCRYPTION_CHUNK_SIZE * 2 + 5);
     const peer = scriptedLink();
 
-    const sending = sendFileOverLink(peer.link, key, zipSource(data), {
-      windowChunks: 2,
-    });
-    // Nothing acknowledged yet: the window is full at two.
-    await vi.waitFor(() => expect(peer.chunks()).toBe(2));
+    await expect(
+      sendFileOverLink(peer.link, key, zipSource(data)),
+    ).resolves.toBe(data.length);
 
-    peer.deliver({ t: 'ack', chunks: 1 });
-    await vi.waitFor(() => expect(peer.chunks()).toBe(3));
-
-    peer.deliver({ t: 'ack', chunks: 3 });
-    await vi.waitFor(() => {
-      expect(peer.chunks()).toBe(5);
-      expect(peer.controls()).toEqual([
-        { t: 'end', chunks: 5, bytes: data.length },
-      ]);
-    });
-
-    peer.deliver({ t: 'done', chunks: 5, bytes: data.length });
-    await expect(sending).resolves.toBe(data.length);
+    expect(peer.chunks()).toBe(3);
+    expect(peer.controls()).toEqual([
+      { t: 'end', chunks: 3, bytes: data.length },
+    ]);
+    expect(peer.listeners()).toBe(0);
   });
 
-  it('reports progress from the receiver acknowledgments, not from its own sends', async () => {
+  it('reports progress as the transport takes each chunk', async () => {
     const key = await makeKey();
     const data = makePlaintext(ENCRYPTION_CHUNK_SIZE * 3);
     const peer = scriptedLink();
     const progress: number[] = [];
 
-    const sending = sendFileOverLink(peer.link, key, zipSource(data), {
+    await sendFileOverLink(peer.link, key, zipSource(data), {
       onProgress: (current) => progress.push(current),
     });
-    await tick();
-    expect(peer.chunks()).toBe(3);
-    expect(progress).toEqual([]);
 
-    peer.deliver({ t: 'ack', chunks: 2 });
-    await tick(150);
-    expect(progress).toEqual([ENCRYPTION_CHUNK_SIZE * 2]);
-
-    peer.deliver({ t: 'done', chunks: 3, bytes: data.length });
-    await sending;
+    expect(progress.length).toBeGreaterThan(0);
     expect(progress.at(-1)).toBe(data.length);
-  });
-
-  it('stops at once with the receiver reason when the receiver aborts', async () => {
-    const key = await makeKey();
-    const peer = scriptedLink();
-    const sending = sendFileOverLink(
-      peer.link,
-      key,
-      zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 3)),
-      { windowChunks: 1 },
-    );
-    await tick();
-
-    peer.deliver({ t: 'abort', reason: 'The disk is full' });
-
-    const error = await sending.catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(TransferAbortedError);
-    expect((error as Error).message).toBe(
-      'The receiver stopped the transfer: The disk is full',
-    );
-    // A receiver that gave up is not told to give up.
-    expect(peer.controls().some((m) => m.t === 'abort')).toBe(false);
+    for (const current of progress) {
+      expect(current % ENCRYPTION_CHUNK_SIZE).toBe(0);
+    }
   });
 
   it('tells the receiver when it is cancelled', async () => {
     const key = await makeKey();
-    const peer = scriptedLink();
+    const [senderEnd] = fakeDataChannelPair();
+    // A tiny threshold with the buffer held: the second chunk waits on
+    // backpressure, which is where the cancel lands.
+    const senderChannel = createDataChannelDuplex(senderEnd, 4);
+    senderEnd.hold();
     let cancelled = false;
     const sending = sendFileOverLink(
-      peer.link,
+      senderChannel,
       key,
       zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 3)),
-      { windowChunks: 1, isCancelled: () => cancelled },
+      { isCancelled: () => cancelled },
     );
     await tick();
     cancelled = true;
 
     await expect(sending).rejects.toThrow('Cancelled');
-    expect(peer.controls().at(-1)).toEqual({
+    expect(parseControl(senderEnd.sent.at(-1) as string)).toEqual({
       t: 'abort',
       reason: 'cancelled',
     });
+    senderChannel.close();
   });
 
   it('lets go of the link and tells the receiver when the source cannot be opened', async () => {
@@ -390,62 +382,25 @@ describe('sendFileOverLink', () => {
     expect(peer.controls().at(-1)?.t).toBe('abort');
   });
 
-  it('refuses a verdict that does not match what was sent', async () => {
+  it('fails as a connection problem when the link closes before the end is out', async () => {
     const key = await makeKey();
-    const data = makePlaintext(100);
-    const peer = scriptedLink();
-    const sending = sendFileOverLink(peer.link, key, zipSource(data));
-    await tick();
-
-    peer.deliver({ t: 'done', chunks: 1, bytes: data.length + 1 });
-
-    await expect(sending).rejects.toThrow('different payload');
-    expect(peer.controls().at(-1)?.t).toBe('abort');
-  });
-
-  it('refuses an acknowledgment for chunks it never sent', async () => {
-    const key = await makeKey();
-    const peer = scriptedLink();
+    const [senderEnd] = fakeDataChannelPair();
+    const senderChannel = createDataChannelDuplex(senderEnd, 4);
+    senderEnd.hold();
     const sending = sendFileOverLink(
-      peer.link,
+      senderChannel,
       key,
       zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 3)),
-      { windowChunks: 1 },
     );
     await tick();
 
-    peer.deliver({ t: 'ack', chunks: 2 });
-
-    await expect(sending).rejects.toThrow('never sent');
-  });
-
-  it('fails as a connection problem when the link closes before the verdict', async () => {
-    const key = await makeKey();
-    const peer = scriptedLink();
-    const sending = sendFileOverLink(
-      peer.link,
-      key,
-      zipSource(makePlaintext(100)),
-    );
-    await tick();
-
-    peer.end('closed');
+    senderEnd.close();
 
     const error = await sending.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(P2PConnectionError);
-    expect((error as Error).message).toMatch(/closed before the receiver/);
-  });
-
-  it('aborts as a stall when the receiver stops acknowledging', async () => {
-    const key = await makeKey();
-    const peer = scriptedLink();
-
-    await expect(
-      sendFileOverLink(peer.link, key, zipSource(makePlaintext(100)), {
-        stallTimeoutMs: 20,
-      }),
-    ).rejects.toThrow('Transfer stalled');
-    expect(peer.controls().at(-1)?.t).toBe('abort');
+    expect((error as Error).message).toMatch(/closed before the file/);
+    // Nobody left to tell.
+    expect(senderEnd.sent.every((m) => typeof m !== 'string')).toBe(true);
   });
 
   it('aborts as a stall when a chunk cannot leave a channel that stopped draining', async () => {
@@ -470,6 +425,69 @@ describe('sendFileOverLink', () => {
     expect(senderEnd.sent[0]).toBeInstanceOf(ArrayBuffer);
     expect(parseControl(senderEnd.sent[1] as string)?.t).toBe('abort');
     senderChannel.close();
+  });
+
+  it('aborts as a stall when the end never leaves the buffer', async () => {
+    const key = await makeKey();
+    const [senderEnd] = fakeDataChannelPair();
+    const senderChannel = createDataChannelDuplex(senderEnd);
+    // Everything fits under the threshold, so every send is accepted at
+    // once; only the final drain has nothing to wait on but the peer.
+    senderEnd.hold();
+
+    await expect(
+      sendFileOverLink(senderChannel, key, zipSource(makePlaintext(100)), {
+        stallTimeoutMs: 20,
+      }),
+    ).rejects.toThrow('stopped draining');
+    expect(senderEnd.sent).toHaveLength(3);
+    expect(parseControl(senderEnd.sent[1] as string)?.t).toBe('end');
+    expect(parseControl(senderEnd.sent[2] as string)?.t).toBe('abort');
+    senderChannel.close();
+  });
+
+  it('completes when the receiver hangs up the moment it has the file', async () => {
+    const key = await makeKey();
+    const data = makePlaintext(ENCRYPTION_CHUNK_SIZE + 77);
+    const sink = await createAdaptiveAppendSink(data.length);
+    const receiver = createTransferReceiver(key, 'identity', sink);
+    const [senderChannel, receiverChannel] = channelPair();
+    receiver.attach(receiverChannel);
+    // As the hooks do: the file is whole, so the connection goes.
+    const received = receiver.done.then((blob) => {
+      receiverChannel.close();
+      return blob;
+    });
+
+    const wireBytes = await sendFileOverLink(
+      senderChannel,
+      key,
+      zipSource(data),
+    );
+    const blob = await received;
+    expect(wireBytes).toBe(data.length);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
+  });
+
+  it('fails when the receiver hangs up with bytes still in this side buffer', async () => {
+    const key = await makeKey();
+    const [senderEnd, receiverEnd] = fakeDataChannelPair();
+    const senderChannel = createDataChannelDuplex(senderEnd);
+    senderEnd.hold();
+    const sending = sendFileOverLink(
+      senderChannel,
+      key,
+      zipSource(makePlaintext(100)),
+    );
+    await tick();
+    expect(senderEnd.sent).toHaveLength(2);
+
+    receiverEnd.close();
+
+    const error = await sending.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(P2PConnectionError);
+    expect((error as Error).message).toMatch(/closed before the file/);
+    expect(senderEnd.sent).toHaveLength(2);
   });
 
   it('completes while both peers exchange other text messages over the same channel', async () => {
@@ -509,34 +527,24 @@ describe('sendFileOverLink', () => {
     expect(
       heardBySender.filter((m) => m.includes('"note"')).length,
     ).toBeGreaterThan(0);
-    expect(parseControl(heardBySender.at(-1) ?? '')).toEqual({
-      t: 'done',
-      chunks: 4,
-      bytes: data.length,
-    });
   });
 });
 
 describe('cancelOverLink', () => {
-  it('tells the peer at once over a channel, so the peer stops with the reason', async () => {
+  it('tells the receiver at once over a channel, so it stops with the reason', async () => {
     const key = await makeKey();
+    const sink = await createAdaptiveAppendSink(100);
+    const receiver = createTransferReceiver(key, 'identity', sink);
     const [senderChannel, receiverChannel] = channelPair();
-    const sending = sendFileOverLink(
-      senderChannel,
-      key,
-      zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 64)),
-      { windowChunks: 1 },
-    );
+    receiver.attach(receiverChannel);
 
-    // The receiving side's user cancels before storing anything.
-    expect(cancelOverLink(receiverChannel)).toBe(true);
+    // The sending side's user cancels before anything has gone out.
+    expect(cancelOverLink(senderChannel)).toBe(true);
 
-    const error = await sending.catch((e: unknown) => e);
+    const error = await receiver.done.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TransferAbortedError);
     expect((error as TransferAbortedError).reason).toBe(CANCELLED_REASON);
-    expect((error as Error).message).toBe(
-      'The receiver cancelled the transfer',
-    );
+    expect((error as Error).message).toBe('The sender cancelled the transfer');
   });
 });
 
@@ -554,7 +562,7 @@ describe('createTransferReceiver', () => {
     return { key, sink, receiver, peer };
   }
 
-  it('stores in-order chunks, acknowledges each, and answers the end with its verdict', async () => {
+  it('stores in-order chunks and seals the file on an end that checks out, sending nothing', async () => {
     const totalBytes = ENCRYPTION_CHUNK_SIZE + 1234;
     const plaintext = makePlaintext(totalBytes);
     const progress: number[] = [];
@@ -572,20 +580,17 @@ describe('createTransferReceiver', () => {
     expect(blob.size).toBe(totalBytes);
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(plaintext);
     expect(progress.at(-1)).toBe(totalBytes);
-    expect(peer.controls()).toEqual([
-      { t: 'ack', chunks: 1 },
-      { t: 'ack', chunks: 2 },
-      { t: 'done', chunks: 2, bytes: totalBytes },
-    ]);
+    expect(peer.sent).toEqual([]);
+    expect(peer.listeners()).toBe(0);
     await sink.discard();
   });
 
-  it('answers a zero-byte transfer', async () => {
+  it('accepts a zero-byte transfer', async () => {
     const { receiver, peer } = await attachedReceiver();
     peer.deliver({ t: 'end', chunks: 0, bytes: 0 });
     const blob = await receiver.done;
     expect(blob.size).toBe(0);
-    expect(peer.controls()).toEqual([{ t: 'done', chunks: 0, bytes: 0 }]);
+    expect(peer.sent).toEqual([]);
   });
 
   it('ignores text that is not a transfer message', async () => {
@@ -596,7 +601,7 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).resolves.toBeInstanceOf(Blob);
   });
 
-  it('refuses chunks out of order, and tells the sender why', async () => {
+  it('refuses chunks out of order', async () => {
     const { key, receiver, peer } = await attachedReceiver();
     const messages = await encryptAll(
       key,
@@ -608,10 +613,7 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).rejects.toThrow(
       'Unexpected streamed chunk index',
     );
-    expect(peer.controls().at(-1)).toEqual({
-      t: 'abort',
-      reason: 'Unexpected streamed chunk index: 1',
-    });
+    expect(peer.sent).toEqual([]);
   });
 
   it('refuses a duplicate chunk index', async () => {
@@ -635,7 +637,6 @@ describe('createTransferReceiver', () => {
     peer.deliver(tampered.buffer as ArrayBuffer);
 
     await expect(receiver.done).rejects.toThrow('failed authentication');
-    expect(peer.controls().at(-1)?.t).toBe('abort');
   });
 
   it('refuses an end whose count disagrees with the chunks received', async () => {
@@ -648,20 +649,17 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).rejects.toThrow('Invalid end message');
   });
 
-  it('refuses a sender that overruns the window', async () => {
-    const { key, receiver, peer } = await attachedReceiver('identity', {
-      windowChunks: 1,
-    });
-    const messages = await encryptAll(
-      key,
-      makePlaintext(ENCRYPTION_CHUNK_SIZE * 2),
-    );
+  it('ignores whatever arrives after a valid end', async () => {
+    const { key, receiver, peer } = await attachedReceiver();
+    const [message] = await encryptAll(key, makePlaintext(100));
 
-    // The second chunk arrives before the first was acknowledged.
-    peer.deliver(messages[0]);
-    peer.deliver(messages[1]);
+    peer.deliver({ t: 'end', chunks: 0, bytes: 0 });
+    // The link has been let go: nothing after the end is read.
+    peer.deliver(message);
+    peer.deliver({ t: 'end', chunks: 1, bytes: 100 });
 
-    await expect(receiver.done).rejects.toThrow('overran');
+    const blob = await receiver.done;
+    expect(blob.size).toBe(0);
   });
 
   it('refuses a deflated payload that does not inflate cleanly', async () => {
@@ -675,15 +673,17 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).rejects.toThrow();
   });
 
-  it('stops with the sender reason when the sender aborts, without answering it', async () => {
+  it('stops with the sender reason when the sender aborts', async () => {
     const { receiver, peer } = await attachedReceiver();
 
-    peer.deliver({ t: 'abort', reason: 'cancelled' });
+    peer.deliver({ t: 'abort', reason: 'The file is no longer readable' });
 
     const error = await receiver.done.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TransferAbortedError);
-    expect((error as Error).message).toBe('The sender cancelled the transfer');
-    expect(peer.controls()).toEqual([]);
+    expect((error as Error).message).toBe(
+      'The sender stopped the transfer: The file is no longer readable',
+    );
+    expect(peer.sent).toEqual([]);
   });
 
   it('fails as a connection problem when the link closes mid-transfer', async () => {
@@ -693,16 +693,17 @@ describe('createTransferReceiver', () => {
 
     const error = await receiver.done.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(P2PConnectionError);
-    expect(peer.controls()).toEqual([]);
+    expect(peer.sent).toEqual([]);
   });
 
-  it('tells the sender when it is abandoned', async () => {
+  it('goes inert when it is abandoned, leaving the link to its caller', async () => {
     const { receiver, peer } = await attachedReceiver();
 
     receiver.dispose();
 
     await expect(receiver.done).rejects.toThrow('Cancelled');
-    expect(peer.controls()).toEqual([{ t: 'abort', reason: 'cancelled' }]);
+    expect(peer.sent).toEqual([]);
+    expect(peer.listeners()).toBe(0);
   });
 
   it('aborts an idle transfer via the stall watchdog', async () => {
@@ -711,5 +712,140 @@ describe('createTransferReceiver', () => {
     });
 
     await expect(receiver.done).rejects.toThrow('Transfer stalled');
+  });
+
+  it('gives up when storage falls too far behind the link', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 2;
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    peer.deliver(messages[0]);
+    peer.deliver(messages[1]);
+
+    await expect(receiver.done).rejects.toThrow(
+      'Storage could not keep up with the connection',
+    );
+    expect(peer.listeners()).toBe(0);
+    sink.open();
+    await inner.discard();
+  });
+
+  it('decrypts nothing still queued once it has given up', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 3;
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE * 2,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    peer.deliver(messages[0]);
+    peer.deliver(messages[1]);
+    // The first chunk is decrypted and waiting on the write; the second is
+    // queued behind it.
+    await tick();
+    const before = decrypts.count;
+    peer.deliver(messages[2]);
+    await expect(receiver.done).rejects.toThrow(
+      'Storage could not keep up with the connection',
+    );
+
+    sink.open();
+    await tick();
+
+    expect(decrypts.count).toBe(before);
+    await inner.discard();
+  });
+
+  it('bounds the backlog, not the file: storage that keeps up is never refused', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 2;
+    const key = await makeKey();
+    const sink = await createAdaptiveAppendSink(totalBytes);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    for (const message of messages) {
+      peer.deliver(message);
+      // Each write finishes before the next chunk arrives.
+      await tick();
+    }
+    peer.deliver({ t: 'end', chunks: 2, bytes: totalBytes });
+
+    const blob = await receiver.done;
+    expect(blob.size).toBe(totalBytes);
+    await sink.discard();
+  });
+
+  /** A receiver on slow storage with every chunk and a valid `end` in hand. */
+  async function receiverStoringAfterEnd(
+    opts: Parameters<typeof createTransferReceiver>[3] = {},
+  ) {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE + 5;
+    const plaintext = makePlaintext(totalBytes);
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, opts);
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, plaintext);
+    for (const message of messages) peer.deliver(message);
+    peer.deliver({ t: 'end', chunks: messages.length, bytes: totalBytes });
+    return { plaintext, inner, sink, receiver, peer };
+  }
+
+  it('seals the file when the sender hangs up after a valid end while chunks are still being stored', async () => {
+    const { plaintext, inner, sink, receiver, peer } =
+      await receiverStoringAfterEnd();
+    // Everything is in hand, so the link was let go before it is stored.
+    expect(peer.listeners()).toBe(0);
+    // The sender moved on: an abort as its user starts another send, then
+    // the close.
+    peer.deliver({ t: 'abort', reason: CANCELLED_REASON });
+    peer.end('closed');
+    await tick();
+
+    sink.open();
+
+    const blob = await receiver.done;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(plaintext);
+    await inner.discard();
+  });
+
+  it('keeps storing after a valid end past the stall window', async () => {
+    const { plaintext, inner, sink, receiver } = await receiverStoringAfterEnd({
+      stallTimeoutMs: 20,
+    });
+    await tick(60);
+
+    sink.open();
+
+    const blob = await receiver.done;
+    expect(blob.size).toBe(plaintext.length);
+    await inner.discard();
+  });
+
+  it('can still be abandoned while it stores what arrived after the end', async () => {
+    const { inner, sink, receiver } = await receiverStoringAfterEnd();
+
+    receiver.dispose();
+    sink.open();
+
+    await expect(receiver.done).rejects.toThrow('Cancelled');
+    await inner.discard();
   });
 });

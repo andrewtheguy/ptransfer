@@ -1,5 +1,5 @@
 /**
- * Shared file-transfer protocol over a bidirectional message link.
+ * Shared file-transfer protocol over a message link.
  *
  * This module is the single source of truth for moving a payload once a
  * transport is open. Every mode uses it — Code Exchange and PIN Exchange over
@@ -7,12 +7,12 @@
  * stream — so the wire protocol and every per-chunk validation live in exactly
  * one place.
  *
- * The link is duplex, and the protocol uses both directions throughout rather
- * than streaming one way and hoping: the receiver tells the sender what it has
- * stored as it stores it, the sender never runs more than a window ahead of
- * that, completion is a verdict the receiver sends back, and either side can
- * stop the other with a reason instead of leaving it to find out from a
- * timeout.
+ * The protocol is one-way. Everything on the wire goes from the sender to the
+ * receiver, and the receiver sends nothing back. The sender is complete once
+ * the last of its bytes has left the transport, and the receiver verifies what
+ * arrived on its own: every chunk authenticates individually, and the sender's
+ * closing `end` says how much there was to arrive. Whether the file reached the
+ * other person is for the two of them to confirm outside the program.
  *
  * Wire protocol (INTEROP_PROTOCOL.md §7):
  *   - The payload bytes are the source's wire encoding (see
@@ -20,23 +20,25 @@
  *     ('deflate-raw') and restored by the receiver, while a source the
  *     multi-file/folder flow already compressed travels as-is ('identity').
  *     Either way the final wire length is unknown during signaling.
- *   - Binary messages, sender to receiver only, are content chunks produced by
- *     `encryptChunk`:
+ *   - Binary messages are content chunks produced by `encryptChunk`:
  *       [2-byte chunk index (big-endian)][12-byte nonce][ciphertext][16-byte tag]
  *     The chunk index is also the AES-GCM additional authenticated data.
  *   - Text messages are control messages, one JSON object each with its type
  *     in `t`:
- *       ack   {chunks}         receiver: this many chunks are stored
- *       end   {chunks, bytes}  sender: the payload is complete
- *       done  {chunks, bytes}  receiver: verified and stored, echoing `end`
- *       abort {reason}         either side: stopping, and why
- *   - The sender keeps at most `TRANSFER_WINDOW_CHUNKS` chunks sent beyond
- *     the receiver's last `ack`, and the receiver enforces it.
+ *       end   {chunks, bytes}  the payload is complete
+ *       abort {reason}         the sender is stopping, and why
+ *   - The receiver closes the transport once it has the file, or when it
+ *     gives up. A transport that closes before `end` is a failed transfer;
+ *     once `end` has checked out, what the receiver still holds is stored
+ *     whatever the transport does next.
  *
  * Neither side materializes the whole file: the sender coalesces a lazy
  * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver
  * appends each decrypted (and, for 'deflate-raw', inflated) chunk to scratch
  * storage in the link's reliable order, finalizing from the `end` byte count.
+ * The sender is paced by the transport's backpressure alone, so what the
+ * receiver has taken off the link but not yet written waits in memory — up to
+ * `RECEIVE_BACKLOG_MAX_BYTES`, past which the receiver gives up.
  *
  * The link must be reliable and ordered: every payload appends in arrival
  * order and only the final chunk may be short, so a transport that reorders
@@ -63,13 +65,14 @@ import {
 } from '@/lib/transfer-source';
 
 /**
- * A reliable, ordered, bidirectional message link: a WebRTC `DuplexChannel`,
- * or a framed Tor stream (`createTorLink`).
+ * A reliable, ordered message link: a WebRTC `DuplexChannel`, or a framed Tor
+ * stream (`createTorLink`). The transfer sends on it from one side and
+ * listens on it from the other.
  */
 export interface TransferLink {
   /**
    * Send one binary message. Resolves once the link has room for more, which
-   * is the local half of the backpressure; the window is the other half.
+   * is the backpressure that paces the sender.
    */
   sendBinary: (data: Uint8Array) => Promise<void>;
   /** Send one text message, in order with every other send. */
@@ -79,6 +82,12 @@ export interface TransferLink {
    * can; see `DuplexChannel.sendNow`. Used only for `abort`.
    */
   sendNow?: (text: string) => boolean;
+  /**
+   * Resolve once everything handed to the link has left its send buffer, so
+   * the caller may let the transport go without cutting off the tail. Rejects
+   * if the link ends with something still unsent.
+   */
+  flush: () => Promise<void>;
   /** Hand every incoming message to `listener` until unsubscribed. */
   subscribe: (listener: (message: ChannelMessage) => void) => () => void;
   /** Call `listener` once when the link closes or fails. */
@@ -86,32 +95,36 @@ export interface TransferLink {
 }
 
 /**
- * Chunks the sender may have sent beyond the receiver's last `ack` — 4 MiB at
- * the 128 KiB chunk size. It bounds what a receiver ever holds unwritten, and
- * it is wide enough that a link's round trip, not the window, sets the pace.
- */
-export const TRANSFER_WINDOW_CHUNKS = 32;
-
-/**
  * Idle/stall timeout for an in-flight transfer. This is a per-activity window,
  * not an overall deadline, and each side measures the other's activity: the
- * sender fails when the receiver acknowledges nothing for this long while
- * something is outstanding, and the receiver when no message arrives. So an
- * arbitrarily large but steadily-progressing transfer never trips it, while a
- * peer that goes quiet aborts after this span instead of hanging.
+ * sender fails when the transport will not take a chunk, or will not drain
+ * after `end`, for this long — a receiver that stopped reading — and the
+ * receiver when no message arrives before `end` does. So an arbitrarily large
+ * but steadily-progressing transfer never trips it, while a peer that goes
+ * quiet aborts after this span instead of hanging.
  */
 export const STALL_TIMEOUT_MS = 60000;
 
-/** The abort reason for a side that was cancelled by its user. */
+/**
+ * Ceiling on what a receiver holds between taking a chunk off the link and
+ * finishing its write. The sender is paced by the transport alone, so a
+ * receiver whose storage is slower than the link accumulates the difference
+ * in memory, and a browser cannot refuse a data channel message: past this
+ * much the receiver gives up, a clean failure where holding on would be a
+ * crashed tab.
+ */
+export const RECEIVE_BACKLOG_MAX_BYTES = 256 * 1024 * 1024;
+
+/** The abort reason a sender gives when its user cancelled. */
 export const CANCELLED_REASON = 'cancelled';
 
-/** Longest abort reason taken from the peer; anything past it is cut. */
+/** Longest abort reason taken from the sender; anything past it is cut. */
 const MAX_REASON_LENGTH = 200;
 
 /**
- * How long a side that is giving up waits for its `abort` to leave before it
- * lets the caller tear the link down. Telling the peer is a courtesy; it must
- * not hold a failure hostage to a link that has stopped moving.
+ * How long a sender that is giving up waits for its `abort` to leave before it
+ * lets the caller tear the link down. Telling the receiver is a courtesy; it
+ * must not hold a failure hostage to a link that has stopped moving.
  */
 const ABORT_SEND_GRACE_MS = 1000;
 
@@ -124,16 +137,14 @@ const MAX_CHUNKS = 0x10000; // 65536
 
 /** One control message, as it travels in a text message. */
 export type ControlMessage =
-  | { t: 'ack'; chunks: number }
   | { t: 'end'; chunks: number; bytes: number }
-  | { t: 'done'; chunks: number; bytes: number }
   | { t: 'abort'; reason: string };
 
 export function encodeControl(message: ControlMessage): string {
   return JSON.stringify(message);
 }
 
-/** A control message the peer sent that breaks the protocol. */
+/** A control message the sender sent that breaks the protocol. */
 class ProtocolError extends Error {
   constructor(message: string) {
     super(message);
@@ -171,12 +182,9 @@ export function parseControl(text: string): ControlMessage | null {
   }
   const m = value as Record<string, unknown>;
   switch (m.t) {
-    case 'ack':
-      return { t: 'ack', chunks: readCount(m.chunks, MAX_CHUNKS, 'chunks') };
     case 'end':
-    case 'done':
       return {
-        t: m.t,
+        t: 'end',
         chunks: readCount(m.chunks, MAX_CHUNKS, 'chunks'),
         bytes: readCount(m.bytes, MAX_MESSAGE_SIZE, 'bytes'),
       };
@@ -193,19 +201,17 @@ export function parseControl(text: string): ControlMessage | null {
   }
 }
 
-/** The peer stopped the transfer, and said why. */
+/** The sender stopped the transfer, and said why. */
 export class TransferAbortedError extends Error {
-  readonly by: 'sender' | 'receiver';
   readonly reason: string;
 
-  constructor(by: 'sender' | 'receiver', reason: string) {
+  constructor(reason: string) {
     super(
       reason === CANCELLED_REASON
-        ? `The ${by} cancelled the transfer`
-        : `The ${by} stopped the transfer${reason ? `: ${reason}` : ''}`,
+        ? 'The sender cancelled the transfer'
+        : `The sender stopped the transfer${reason ? `: ${reason}` : ''}`,
     );
     this.name = 'TransferAbortedError';
-    this.by = by;
     this.reason = reason;
   }
 }
@@ -259,8 +265,9 @@ function paceProgress(
 }
 
 /**
- * Tell the peer this side is stopping, without letting a stuck link hold the
- * failure up. Best effort: the peer's own watchdog covers a lost `abort`.
+ * Tell the receiver this side is stopping, without letting a stuck link hold
+ * the failure up. Best effort: the receiver's own watchdog covers a lost
+ * `abort`.
  */
 async function sendAbort(link: TransferLink, reason: string): Promise<void> {
   const message = encodeControl({
@@ -280,11 +287,14 @@ async function sendAbort(link: TransferLink, reason: string): Promise<void> {
 }
 
 /**
- * Tell the peer this side's user cancelled, before whoever holds the link
+ * Tell the receiver this side's user cancelled, before whoever holds the link
  * tears it down. Best effort, and immediate where the link allows it: the
- * caller is about to close the transport, and a peer told why stops at once
- * with that reason instead of reporting a dropped connection. Returns whether
- * the message went out at once.
+ * caller is about to close the transport, and a receiver told why stops at
+ * once with that reason instead of reporting a dropped connection. Returns
+ * whether the message went out at once.
+ *
+ * For a sender only. A receiver that cancels just closes the link; nothing it
+ * could say travels the other way.
  */
 export function cancelOverLink(link: TransferLink): boolean {
   const message = encodeControl({ t: 'abort', reason: CANCELLED_REASON });
@@ -293,7 +303,7 @@ export function cancelOverLink(link: TransferLink): boolean {
   return false;
 }
 
-/** What this side tells the peer when `error` ends the transfer here. */
+/** What this side tells the receiver when `error` ends the transfer here. */
 function abortReasonFor(error: unknown): string {
   if (error instanceof Error) {
     return error.message === 'Cancelled' ? CANCELLED_REASON : error.message;
@@ -303,9 +313,9 @@ function abortReasonFor(error: unknown): string {
 
 export interface SendOptions {
   /**
-   * Called with the wire bytes the receiver has confirmed storing, and the
-   * total. Driven by the receiver's `ack`s, so it shows what arrived rather
-   * than what left this side's buffer.
+   * Called with the wire bytes handed to the transport, and the total. The
+   * transport's backpressure is what admits them, so this tracks what the
+   * link has accepted, not what this side has produced.
    */
   onProgress?: (current: number, total: number) => void;
   /**
@@ -319,19 +329,17 @@ export interface SendOptions {
   /** Return true to abort the transfer; the receiver is told. */
   isCancelled?: () => boolean;
   /**
-   * Idle window in ms: while anything sent is unacknowledged, the receiver
-   * must acknowledge progress within this span. Defaults to STALL_TIMEOUT_MS.
+   * Idle window in ms: the transport must take each chunk, and drain after
+   * `end`, within this span. Defaults to STALL_TIMEOUT_MS.
    */
   stallTimeoutMs?: number;
-  /** Flow-control window in chunks. Defaults to TRANSFER_WINDOW_CHUNKS. */
-  windowChunks?: number;
 }
 
 /**
  * Read a lazy payload in its wire encoding, coalesce it into
- * `ENCRYPTION_CHUNK_SIZE` chunks, and encrypt and send each within the
- * window the receiver's acknowledgments open. Resolves with the wire byte
- * count once the receiver has verified and stored the whole payload.
+ * `ENCRYPTION_CHUNK_SIZE` chunks, and encrypt and send each as the transport
+ * takes it. Resolves with the wire byte count once `end` has followed the
+ * last chunk and all of it has left this side's send buffer.
  */
 export async function sendFileOverLink(
   link: TransferLink,
@@ -343,25 +351,15 @@ export async function sendFileOverLink(
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
   const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
-  const windowChunks =
-    opts.windowChunks !== undefined &&
-    Number.isSafeInteger(opts.windowChunks) &&
-    opts.windowChunks > 0
-      ? opts.windowChunks
-      : TRANSFER_WINDOW_CHUNKS;
   const progressTotal = source.size ?? source.estimatedSize;
   const encoding = wireEncodingFor(source);
 
   /** Chunks handed to the link. */
   let sent = 0;
-  /** Chunks the receiver reports stored. */
-  let acked = 0;
   /** Wire bytes handed to the link. */
   let totalBytes = 0;
-  /** Whether `end` has gone to the link. */
-  let ended = false;
-  /** Whether the receiver's `done` has arrived. */
-  let finished = false;
+  /** Whether `end` is out and the send buffer is being drained. */
+  let flushing = false;
 
   // Everything that ends the transfer early lands here, once. Every wait
   // below races it.
@@ -373,123 +371,53 @@ export async function sendFileOverLink(
     rejectFailed = reject;
   });
   failed.catch(() => undefined);
-  // Wakes whatever is waiting for the receiver to move.
-  let signalProgress: () => void = () => {};
-
-  let stallTimer: ReturnType<typeof setTimeout> | null = null;
-  const clearStall = () => {
-    if (stallTimer !== null) clearTimeout(stallTimer);
-    stallTimer = null;
-  };
-  const outstanding = () => sent - acked > 0 || (ended && !finished);
-  // (Re)start the idle window while the receiver owes this side something,
-  // and stop it when it owes nothing.
-  const armStall = () => {
-    clearStall();
-    if (failure || !outstanding()) return;
-    stallTimer = setTimeout(() => {
-      fail(
-        new P2PConnectionError(
-          `Transfer stalled: the receiver acknowledged nothing for ${Math.round(stallTimeoutMs / 1000)}s`,
-        ),
-      );
-    }, stallTimeoutMs);
-  };
 
   const fail = (error: Error, byPeer = false) => {
-    if (failure || finished) return;
+    if (failure) return;
     failure = error;
     peerGone = byPeer;
-    clearStall();
     rejectFailed(error);
   };
 
-  const ackedBytes = () =>
-    // Only the final chunk may be short, so every acknowledged chunk short of
-    // the last one sent is a full one.
-    Math.min(acked * ENCRYPTION_CHUNK_SIZE, totalBytes);
-
-  const unsubscribe = link.subscribe((message) => {
-    // Content only ever flows the other way.
-    if (typeof message !== 'string' || failure || finished) return;
-    let control: ControlMessage | null;
-    try {
-      control = parseControl(message);
-    } catch (error) {
+  // Every wait on the link is bounded by the idle window: a link that will
+  // not take the next chunk, or will not drain, is a receiver that stopped
+  // reading.
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+  const awaitLink = async <T>(pending: Promise<T>, stalled: string) => {
+    stallTimer = setTimeout(() => {
       fail(
-        error instanceof Error ? error : new Error('Invalid control message'),
+        new P2PConnectionError(
+          `Transfer stalled: ${stalled} for ${Math.round(stallTimeoutMs / 1000)}s`,
+        ),
       );
-      return;
+    }, stallTimeoutMs);
+    try {
+      return await Promise.race([pending, failed]);
+    } finally {
+      clearTimeout(stallTimer);
+      stallTimer = null;
     }
-    if (!control) return;
-    switch (control.t) {
-      case 'ack':
-        if (control.chunks > sent) {
-          fail(
-            new ProtocolError('The receiver acknowledged chunks never sent'),
-          );
-        } else if (control.chunks > acked) {
-          acked = control.chunks;
-          armStall();
-          reportProgress(ackedBytes(), progressTotal);
-          signalProgress();
-        }
-        break;
-      case 'done':
-        if (!ended) {
-          fail(
-            new ProtocolError(
-              'The receiver reported completion before the transfer ended',
-            ),
-          );
-        } else if (control.chunks !== sent || control.bytes !== totalBytes) {
-          fail(
-            new ProtocolError(
-              'The receiver verified a different payload than was sent',
-            ),
-          );
-        } else {
-          finished = true;
-          acked = sent;
-          clearStall();
-          signalProgress();
-        }
-        break;
-      case 'abort':
-        fail(new TransferAbortedError('receiver', control.reason), true);
-        break;
-      // `end` is this side's to send; a receiver has no use for it.
-    }
-  });
+  };
+  const STALLED_TAKING = 'the receiver stopped taking data';
+
   const unwatchEnd = link.onEnd((reason) => {
+    // Once `end` is out, the flush decides: a receiver hangs up as soon as it
+    // has the file, which can be before this side has noticed its buffer
+    // empty, and only a close that strands unsent bytes is a failure.
+    if (flushing) return;
     fail(
       new P2PConnectionError(
         reason === 'error'
-          ? 'The connection failed before the receiver confirmed the file'
-          : 'The connection closed before the receiver confirmed the file',
+          ? 'The connection failed before the file was delivered'
+          : 'The connection closed before the file was delivered',
       ),
       true,
     );
   });
-  // Waits on the window and on `done` notice a cancel without a chunk to
-  // check it at.
+  // A wait on the link notices a cancel without a chunk to check it at.
   const cancelPoll = setInterval(() => {
     if (isCancelled?.()) fail(new Error('Cancelled'));
   }, 250);
-
-  /** Wait until `ready()` holds, or the transfer fails. */
-  const waitUntil = async (ready: () => boolean) => {
-    while (!ready()) {
-      if (failure) throw failure;
-      await Promise.race([
-        new Promise<void>((resolve) => {
-          signalProgress = resolve;
-        }),
-        failed,
-      ]);
-    }
-    if (failure) throw failure;
-  };
 
   const openReader = () =>
     (encoding === 'deflate-raw'
@@ -517,20 +445,14 @@ export async function sendFileOverLink(
     if (totalBytes + chunk.length > maxWireBytes) {
       throw new Error('Generated payload exceeds the transfer size limit');
     }
-    // Flow control: never more than the window ahead of what the receiver
-    // has stored.
-    await waitUntil(() => sent - acked < windowChunks);
-
     const encryptedChunk = await encryptChunk(key, chunk, sent);
     if (failure) throw failure;
-    const handedOff = link.sendBinary(encryptedChunk);
-    // Counted as sent from the moment the link has it, so an `ack` for it
-    // can never look like one for a chunk that was not sent.
-    const wasIdle = !outstanding();
+    // Resolves once the link has room for more, which is what paces this
+    // side.
+    await awaitLink(link.sendBinary(encryptedChunk), STALLED_TAKING);
     sent++;
     totalBytes += chunk.length;
-    if (wasIdle) armStall();
-    await Promise.race([handedOff, failed]);
+    reportProgress(totalBytes, progressTotal);
   };
 
   let completed = false;
@@ -541,7 +463,7 @@ export async function sendFileOverLink(
       if (isCancelled?.()) throw new Error('Cancelled');
       if (failure) throw failure;
       // A source can take its time — a ZIP entry being compressed — and a
-      // receiver that gives up meanwhile must not wait on it.
+      // link that ends meanwhile must not wait on it.
       const { done, value } = await Promise.race([reader.read(), failed]);
       if (done) break;
 
@@ -582,17 +504,33 @@ export async function sendFileOverLink(
     reader.releaseLock();
 
     // The counts authenticate the final wire length, which was not known
-    // during signaling. From here the receiver owes a verdict, and the idle
-    // window covers it like any acknowledgment.
-    ended = true;
-    armStall();
-    await Promise.race([
+    // during signaling.
+    await awaitLink(
       link.sendText(
         encodeControl({ t: 'end', chunks: sent, bytes: totalBytes }),
       ),
-      failed,
-    ]);
-    await waitUntil(() => finished);
+      STALLED_TAKING,
+    );
+    // Complete once the last message has left this side's buffer: the
+    // transport delivers from there, and the receiver hangs up when it has
+    // the file.
+    flushing = true;
+    try {
+      await awaitLink(
+        link.flush(),
+        'the receiver stopped draining the connection',
+      );
+    } catch (error) {
+      if (!failure) {
+        fail(
+          new P2PConnectionError(
+            'The connection closed before the file was delivered',
+          ),
+          true,
+        );
+      }
+      throw failure ?? error;
+    }
     reportProgress(totalBytes, totalBytes);
     return totalBytes;
   } catch (error) {
@@ -600,13 +538,12 @@ export async function sendFileOverLink(
       await openedReader.cancel().catch(() => {});
       openedReader.releaseLock();
     }
-    // The peer is told, unless it is the one that ended things.
+    // The receiver is told, unless the link is already gone.
     if (!peerGone) await sendAbort(link, abortReasonFor(failure ?? error));
     throw failure ?? error;
   } finally {
-    clearStall();
+    if (stallTimer !== null) clearTimeout(stallTimer);
     clearInterval(cancelPoll);
-    unsubscribe();
     unwatchEnd();
   }
 }
@@ -625,32 +562,40 @@ export interface ReceiverOptions {
   maxWireBytes?: number;
   /**
    * Idle window in ms: once attached, the transfer aborts if no message
-   * arrives within this span. Every message resets it. Defaults to
-   * STALL_TIMEOUT_MS.
+   * arrives within this span. Every message resets it, and it stops once
+   * `end` has checked out: storing what is in hand is this side's own work,
+   * not the sender's. Defaults to STALL_TIMEOUT_MS.
    */
   stallTimeoutMs?: number;
-  /** Flow-control window in chunks. Defaults to TRANSFER_WINDOW_CHUNKS. */
-  windowChunks?: number;
+  /**
+   * Most wire bytes held between arrival and the end of their write before
+   * the transfer gives up as storage that cannot keep up. Defaults to
+   * RECEIVE_BACKLOG_MAX_BYTES.
+   */
+  maxBacklogBytes?: number;
 }
 
 export interface TransferReceiver {
   /**
-   * Take the link over: from now on its messages drive the transfer and this
-   * side's replies go back on it, and the stall watchdog is armed. Call once
-   * the link is open, before any message can arrive — from a data channel's
-   * open callback.
+   * Take the link over: from now on its messages drive the transfer, and the
+   * stall watchdog is armed. Call once the link is open, before any message
+   * can arrive — from a data channel's open callback.
    */
   attach: (link: TransferLink) => void;
   /**
    * Resolves with the sealed plaintext payload from the sink (disk-backed for
-   * an OPFS-backed sink) once it is verified and the sender has been told, or
-   * rejects on any error.
+   * an OPFS-backed sink) once `end` has checked out against everything
+   * stored, or rejects on any error. The caller then closes the link; the
+   * sender hears nothing else. Once `end` has checked out, only `dispose()`
+   * can still fail it: the link is let go, so the sender's hang-up or a late
+   * `abort` cannot undo a file that has wholly arrived.
    */
   done: Promise<Blob>;
   /**
-   * Abandon the transfer: stop the watchdog, make the receiver inert, and —
-   * when attached and still running — tell the sender it was cancelled. Call
-   * from a hook's own cancel path so nothing outlives an abandoned transfer.
+   * Abandon the transfer: stop the watchdog and make the receiver inert.
+   * Nothing is sent — the caller closes the link, which is how the sender
+   * learns. Call from a hook's own cancel path so nothing outlives an
+   * abandoned transfer.
    */
   dispose: () => void;
 }
@@ -659,9 +604,9 @@ export interface TransferReceiver {
  * Create a streaming receiver for a payload of unknown wire size. Chunks must
  * arrive in the link's reliable order and are appended to `sink` as they
  * authenticate; for a 'deflate-raw' wire encoding they are inflated in
- * between, so the sealed Blob is the original file. Each stored chunk is
- * acknowledged, and `end` supplies the final authenticated chunk count and
- * wire byte count before the sink is sealed and the sender is told `done`.
+ * between, so the sealed Blob is the original file. `end` supplies the final
+ * authenticated chunk count and wire byte count, and the sink is sealed once
+ * everything before it has been stored and checks out.
  */
 export function createTransferReceiver(
   key: CryptoKey,
@@ -672,12 +617,12 @@ export function createTransferReceiver(
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
   const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
-  const windowChunks =
-    opts.windowChunks !== undefined &&
-    Number.isSafeInteger(opts.windowChunks) &&
-    opts.windowChunks > 0
-      ? opts.windowChunks
-      : TRANSFER_WINDOW_CHUNKS;
+  const maxBacklogBytes =
+    typeof opts.maxBacklogBytes === 'number' &&
+    Number.isFinite(opts.maxBacklogBytes) &&
+    opts.maxBacklogBytes > 0
+      ? opts.maxBacklogBytes
+      : RECEIVE_BACKLOG_MAX_BYTES;
   const progressTotal = opts.estimatedBytes ?? 0;
   // The size cap on the inflated output is the decompression-bomb guard: the
   // in-band `end` byte count only covers the compressed wire bytes.
@@ -686,16 +631,13 @@ export function createTransferReceiver(
       ? createInflatingAppendSink(sink, maxWireBytes)
       : sink;
 
-  let link: TransferLink | null = null;
+  let attached = false;
   const detach: (() => void)[] = [];
   const pending = new Set<Promise<void>>();
   let receivedChunks = 0;
-  /** Chunks stored and acknowledged; the sender's window is measured from it. */
-  let storedChunks = 0;
   let claimedWireBytes = 0;
   let totalDecryptedBytes = 0;
   let previousChunkLength: number | null = null;
-  let ended = false;
   let appendChain = Promise.resolve();
   let settled = false;
 
@@ -719,21 +661,12 @@ export function createTransferReceiver(
     for (const stop of detach.splice(0)) stop();
   };
 
-  /**
-   * End the transfer here. The sender is told why, unless it is the one that
-   * ended it or the link is already gone.
-   */
-  const fail = (error: Error, tellSender = true) => {
+  /** End the transfer here. The sender learns when the caller closes the link. */
+  const fail = (error: Error) => {
     if (settled) return;
     settled = true;
     release();
-    if (tellSender && link) {
-      void sendAbort(link, abortReasonFor(error)).finally(() =>
-        rejectDone(error),
-      );
-    } else {
-      rejectDone(error);
-    }
+    rejectDone(error);
   };
 
   // Arm (or reset) the idle watchdog: no message within the window aborts the
@@ -750,28 +683,18 @@ export function createTransferReceiver(
     }, stallTimeoutMs);
   };
 
-  const sendControl = (message: ControlMessage) =>
-    link?.sendText(encodeControl(message)) ?? Promise.resolve();
-
   const handleChunk = (data: ArrayBuffer) => {
     let chunkIndex: number;
     let encryptedData: Uint8Array;
     let expectedPlaintextLength: number;
 
     try {
-      if (ended) throw new ProtocolError('Content arrived after the end');
       ({ chunkIndex, encryptedData } = parseChunkMessage(data));
       // The link is reliable and ordered. Requiring that order lets the
       // receiver append without holding or seeking chunks, and rejects
       // duplicates in the same stroke.
       if (chunkIndex !== receivedChunks || chunkIndex >= MAX_CHUNKS) {
         throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
-      }
-      // The sender may only run a window ahead of what this side has
-      // acknowledged; one that does not is not respecting the bound on what
-      // this side holds unwritten.
-      if (chunkIndex >= storedChunks + windowChunks) {
-        throw new ProtocolError('The sender overran the flow-control window');
       }
       expectedPlaintextLength =
         encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
@@ -790,6 +713,14 @@ export function createTransferReceiver(
       if (claimedWireBytes + expectedPlaintextLength > maxWireBytes) {
         throw new Error('Transfer exceeds the supported size limit');
       }
+      // What has come off the link but is not yet written is this side's
+      // memory, and nothing here can slow the sender down.
+      if (
+        claimedWireBytes - totalDecryptedBytes + expectedPlaintextLength >
+        maxBacklogBytes
+      ) {
+        throw new Error('Storage could not keep up with the connection');
+      }
       previousChunkLength = expectedPlaintextLength;
       claimedWireBytes += expectedPlaintextLength;
 
@@ -802,6 +733,9 @@ export function createTransferReceiver(
     }
 
     const processChunk = async () => {
+      // Once the transfer has failed, what is still queued behind the write in
+      // progress is dropped unread rather than decrypted for nothing.
+      if (settled) return;
       let decryptedChunk: Uint8Array;
       try {
         decryptedChunk = await decryptChunk(key, encryptedData, chunkIndex);
@@ -818,13 +752,6 @@ export function createTransferReceiver(
       await target.append(decryptedChunk);
       if (settled) return;
       totalDecryptedBytes += decryptedChunk.length;
-      storedChunks = chunkIndex + 1;
-      // Stored: the sender may move its window on.
-      void sendControl({ t: 'ack', chunks: storedChunks }).catch(() => {
-        // A link that can no longer carry an ack reports itself through
-        // onEnd; nothing more to do here.
-      });
-
       reportProgress(totalDecryptedBytes, progressTotal);
     };
 
@@ -842,7 +769,6 @@ export function createTransferReceiver(
   };
 
   const handleEnd = async (count: number, finalBytes: number) => {
-    ended = true;
     if (count !== receivedChunks) {
       fail(
         new Error(
@@ -855,6 +781,13 @@ export function createTransferReceiver(
       fail(new Error('Invalid end message: final size does not match chunks'));
       return;
     }
+    // Everything is in hand; the rest is storing it, which the link has no
+    // part in. Let the link go now, so the sender's hang-up after its linger,
+    // the `abort` it sends when its user moves on, and the idle watchdog
+    // cannot fail a file that has wholly arrived. Only dispose() still can.
+    // Nothing after the end is read, so a stray message there is not a
+    // violation to catch either.
+    release();
 
     if (pending.size > 0) {
       await Promise.allSettled(Array.from(pending));
@@ -887,14 +820,6 @@ export function createTransferReceiver(
     settled = true;
     release();
     reportProgress(finalBytes, finalBytes);
-    // The verdict the sender is waiting on. The file is whole either way, so a
-    // `done` that cannot be sent is the sender's failure to report, not a
-    // reason to discard what arrived.
-    try {
-      await sendControl({ t: 'done', chunks: count, bytes: finalBytes });
-    } catch (error) {
-      console.error('Failed to send the transfer verdict:', error);
-    }
     resolveDone(payload);
   };
 
@@ -920,10 +845,6 @@ export function createTransferReceiver(
     if (!control) return;
     switch (control.t) {
       case 'end':
-        if (ended) {
-          fail(new ProtocolError('The sender ended the transfer twice'));
-          return;
-        }
         if (control.bytes > maxWireBytes) {
           fail(new Error('Invalid end message values'));
           return;
@@ -931,25 +852,23 @@ export function createTransferReceiver(
         void handleEnd(control.chunks, control.bytes);
         break;
       case 'abort':
-        fail(new TransferAbortedError('sender', control.reason), false);
+        fail(new TransferAbortedError(control.reason));
         break;
-      // `ack` and `done` are this side's to send.
     }
   };
 
-  const attach = (attached: TransferLink) => {
-    if (link || settled) return;
-    link = attached;
-    detach.push(attached.subscribe(onMessage));
+  const attach = (link: TransferLink) => {
+    if (attached || settled) return;
+    attached = true;
+    detach.push(link.subscribe(onMessage));
     detach.push(
-      attached.onEnd((reason) =>
+      link.onEnd((reason) =>
         fail(
           new P2PConnectionError(
             reason === 'error'
               ? 'The connection failed before the transfer completed'
               : 'The connection closed before the transfer completed',
           ),
-          false,
         ),
       ),
     );
@@ -957,8 +876,6 @@ export function createTransferReceiver(
   };
 
   const dispose = () => {
-    // A receiver still running is being abandoned by its user, and the sender
-    // should hear so rather than stall out.
     if (!settled) fail(new Error('Cancelled'));
     settled = true;
     release();

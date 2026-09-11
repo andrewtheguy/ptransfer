@@ -19,11 +19,13 @@ import { LINGER_TIMEOUT_MS, type TorFramedStream } from './framing';
  * handshake has produced a content key.
  *
  * Above the framing this is the *same* protocol as the WebRTC data path —
- * encrypted chunks one way, acknowledgments and the receiver's verdict the
- * other — so it runs on the shared implementation in `lib/p2p-transfer.ts`
- * rather than a second copy of it. All this module adds is the link that
- * turns a pull-based framed stream into the push-fed, bidirectional one the
- * protocol runs on, and the transport's own size ceiling.
+ * encrypted chunks and the closing `end` from the sender, nothing back — so
+ * it runs on the shared implementation in `lib/p2p-transfer.ts` rather than a
+ * second copy of it. All this module adds is the link that turns a pull-based
+ * framed stream into the push-fed one the protocol runs on, the transport's
+ * own size ceiling, and the stream's hang-up rule: the receiver closes once it
+ * has the file, and the sender waits for that close before it lets the stream
+ * go.
  */
 
 /**
@@ -65,10 +67,10 @@ export interface TorLink extends TransferLink {
   /**
    * Resolve once the peer has closed its end, or reject after `timeoutMs`.
    *
-   * Over Tor the close is the delivery receipt for the last message of a
-   * conversation: whoever sent it waits for the peer to hang up before
-   * tearing the stream down, since the peer closes as soon as it has acted on
-   * that message.
+   * The receiver closes the stream as soon as it has the file. Waiting for
+   * that before tearing the stream down keeps the sender's own close from
+   * racing the receiver's last reads; it is not a verdict, and its absence is
+   * reported rather than raised.
    */
   waitForPeerClose: (timeoutMs?: number) => Promise<void>;
 }
@@ -137,6 +139,9 @@ export function createTorLink(framed: TorFramedStream): TorLink {
   return {
     sendBinary: (data) => whileOpen(() => framed.sendBinary(data)),
     sendText: (text) => whileOpen(() => framed.sendText(text)),
+    // Every frame write is awaited to the stream, so nothing is ever held
+    // here to drain.
+    flush: () => Promise.resolve(),
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -176,19 +181,28 @@ export function createTorLink(framed: TorFramedStream): TorLink {
 }
 
 /**
- * Send `source` over an authenticated Tor stream and wait for the receiver's
- * verdict. Returns the wire byte count.
+ * Send `source` over an authenticated Tor stream. Returns the wire byte count
+ * once every frame has been written and the receiver has hung up — or, when
+ * the receiver never does, after the linger window, which is reported rather
+ * than raised: the bytes are out either way.
  */
-export function sendFileOverTor(
+export async function sendFileOverTor(
   framed: TorFramedStream,
   contentKey: CryptoKey,
   source: TransferSource,
   opts: Omit<SendOptions, 'maxWireBytes'> = {},
 ): Promise<number> {
-  return sendFileOverLink(createTorLink(framed), contentKey, source, {
+  const link = createTorLink(framed);
+  const wireBytes = await sendFileOverLink(link, contentKey, source, {
     ...opts,
     maxWireBytes: TOR_MAX_WIRE_BYTES,
   });
+  try {
+    await link.waitForPeerClose();
+  } catch (error) {
+    console.warn('[tor] The receiver did not hang up after the file:', error);
+  }
+  return wireBytes;
 }
 
 export interface TorReceiveOptions {
@@ -200,13 +214,9 @@ export interface TorReceiveOptions {
 }
 
 /**
- * Receive a payload from an authenticated Tor stream.
- *
- * The receiver acknowledges every chunk it stores and ends by sending its
- * verdict, `done`, which is the last message of the conversation — so this
- * then waits for the sender to hang up, its receipt that the verdict landed.
- * A missing receipt does not undo a file that is already written and
- * verified, so it is reported rather than raised.
+ * Receive a payload from an authenticated Tor stream. Resolves once the
+ * sender's `end` has checked out against everything stored; the caller then
+ * closes the stream, which is what tells the sender it may let go.
  */
 export async function receiveFileOverTor(
   framed: TorFramedStream,
@@ -234,12 +244,6 @@ export async function receiveFileOverTor(
     throw error;
   } finally {
     clearInterval(cancelPoll);
-  }
-
-  try {
-    await link.waitForPeerClose();
-  } catch (error) {
-    console.warn('[tor] The sender never acknowledged receipt:', error);
   }
   return payload;
 }

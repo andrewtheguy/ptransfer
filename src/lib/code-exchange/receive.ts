@@ -315,8 +315,8 @@ export async function buildDirectAttempt(opts: {
   sinkHolder.current = sink;
 
   // Streaming receiver: decrypts each chunk into the sink as it arrives
-  // (inflating deflated payloads in between), acknowledges what it stores,
-  // and resolves once the sender's `end` checks out and its verdict is sent.
+  // (inflating deflated payloads in between) and resolves once the sender's
+  // `end` checks out against what it stored.
   const receiver = createTransferReceiver(
     keys.key,
     offer.metadata.contentEncoding,
@@ -487,18 +487,11 @@ export async function buildDirectAttempt(opts: {
 }
 
 /**
- * How long to keep the peer connection alive after sending the verdict. The
- * sender closes the connection as soon as `done` arrives; this delayed close
- * is only a fallback for a sender that never does. Closing in the same tick
- * as the send can tear the transport down before `done` is delivered, making
- * the sender report a closed connection even though the transfer succeeded.
- */
-const VERDICT_LINGER_MS = 3000;
-
-/**
- * Receive the file over a direct attempt whose channel opened. Resolves with
- * the sealed payload once the sender has been sent its verdict, or null when
- * cancelled.
+ * Wait for a connected direct attempt's transfer to finish, then hang up.
+ * Resolves with the sealed payload once the sender's `end` has checked out,
+ * or null when cancelled. The sender hears nothing but the close: it is
+ * complete once its bytes are out, and the two people confirm the rest
+ * between themselves.
  */
 export async function finishDirectReceive(opts: {
   attempt: DirectAttempt;
@@ -509,9 +502,9 @@ export async function finishDirectReceive(opts: {
   const { receiver } = attempt;
 
   // The receiver decrypts, authenticates and writes chunks to the sink as
-  // they arrive, and resolves with the sealed payload once its `done` is on
-  // the way. A stalled stream is aborted by its own idle watchdog, and a
-  // cancel tells the sender (see createTransferReceiver).
+  // they arrive, and resolves with the sealed payload once `end` checks out.
+  // A stalled stream is aborted by its own idle watchdog; a cancel is told to
+  // the sender by the close below.
   const payload = await new Promise<Blob>((resolve, reject) => {
     const checkInterval = setInterval(() => {
       if (isCancelled()) {
@@ -531,11 +524,11 @@ export async function finishDirectReceive(opts: {
       },
     );
   });
-  // The connection is this function's to close now, after a linger that lets
-  // the verdict reach the sender; see VERDICT_LINGER_MS.
+  // The connection is this function's to close now: the file is whole, and
+  // the close is how the sender learns it may let go.
   const rtc = opts.rtcHolder.current;
   opts.rtcHolder.current = null;
-  if (rtc) setTimeout(() => rtc.close(), VERDICT_LINGER_MS);
+  rtc?.close();
   if (isCancelled()) return null;
   return payload;
 }

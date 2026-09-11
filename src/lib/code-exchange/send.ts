@@ -53,6 +53,7 @@ import {
 import type { TransferSource } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
+import { lingerAfterSend } from './hang-up';
 import { chunkBytesEstimate, readSourceFully } from './relay-source';
 import type { TorProgress } from './tor-progress';
 
@@ -615,8 +616,8 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
   });
   report(transferring(0, fileSize));
 
-  // Encrypted chunks within the window the receiver's acknowledgments open,
-  // then its verdict.
+  // Encrypted chunks as the channel takes them, then `end`; complete once
+  // all of it has left this side's buffer.
   await sendFileOverLink(channel, key, content, {
     onProgress: (current, total) => {
       if (!isCancelled()) report(transferring(current, total));
@@ -631,6 +632,10 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     contentType: 'file',
     useWebRTC: true,
   });
+  // The bytes left this side's buffer, not this machine: the connection stays
+  // up until the receiver hangs up with the file, so the caller's close
+  // cannot cut off what the transport is still delivering.
+  await lingerAfterSend(channel, isCancelled);
 
   /**
    * The anonymous relay data path: the same session keys an encrypted control

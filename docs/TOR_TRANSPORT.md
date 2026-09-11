@@ -11,7 +11,7 @@ runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
 transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
 implementation; where the code and this document disagree, this document is
 what the code is meant to do. The handshake carries its own
-version, `TOR_HANDSHAKE_VERSION` (currently `1`), in the `hello` and `offer`
+version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
 frames, and a mismatch is **refused rather than negotiated**: two app versions
 that differ on the frames fail closed at the first exchange instead of part way
 through a transfer. Bump it for any change to the frames. Everything else that
@@ -222,25 +222,22 @@ length is capped at one full encrypted chunk — 128 KiB + 30 bytes of overhead 
 so a peer cannot make the other side allocate more than the transfer itself
 would.
 
-Whoever sends the last message of the conversation waits (up to 30 seconds) for
-the peer to close before tearing the stream down: over Tor the close is the
-delivery receipt for that final frame. Its absence after the receiver's `done`
-is reported but is not a transfer failure — by then the file is written and
-verified; the receiver just cannot confirm that its `done` reached the sender.
-
-The stream carries both directions at once once the handshake is over: the
-receiver acknowledges chunks while the sender is still sending them. Writes
-are whole frames and are never interleaved.
+Once the handshake is over the stream flows one way: the sender writes chunks
+and then `end`, and the receiver closes the stream once it has the file or
+gives up. The sender waits (up to 30 seconds) for that close before tearing
+the stream down, so its own close never races the receiver's last reads. A
+receiver that never closes is reported rather than treated as a failure — by
+then the bytes are out. Writes are whole frames and are never interleaved.
 
 ## Transfer
 
 Above the framing runs the same transfer protocol every mode runs over the
 transport it opened — a WebRTC data channel elsewhere, this framed stream
 here: 128 KiB AES-256-GCM chunks with the chunk index as
-additional authenticated data, sent within the window the receiver's `ack`s
-open, an `end` with the chunk and byte counts, and the receiver's `done` once
-every chunk has authenticated and been written — or an `abort` from either
-side, with its reason. A single file is deflated on the wire and restored on
+additional authenticated data, written as the stream takes them, then an `end`
+with the chunk and byte counts — or an `abort` from the sender, with its
+reason. Nothing travels back: the receiver verifies every chunk and the final
+counts on its own and hangs up. A single file is deflated on the wire and restored on
 receipt; a generated ZIP travels as-is. See
 [`INTEROP_PROTOCOL.md` §7](./INTEROP_PROTOCOL.md#7-transfer) for that layer.
 

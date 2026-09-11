@@ -567,8 +567,10 @@ for PIN Exchange and Code Exchange, whose content key is the Code Exchange
 session's (§3), and over a framed onion stream for the Tor transport of
 [TOR_TRANSPORT.md](TOR_TRANSPORT.md), whose handshake supplies its own.
 
-The transport is a **reliable, ordered, bidirectional** message link that
-keeps binary and text messages apart. Whichever peer creates a data channel
+The transport is a **reliable, ordered** message link that keeps binary and
+text messages apart. It may carry other traffic in both directions beside the
+transfer — PIN Exchange's code carriage does — but the transfer itself uses
+one direction. Whichever peer creates a data channel
 MUST create it **ordered and reliable** — the WebRTC default, i.e.
 `ordered: true` with neither `maxRetransmits` nor `maxPacketLifeTime` set. This
 is stated rather than assumed because §7.5's receive discipline has no way to
@@ -579,10 +581,14 @@ the wire announces the setting, and a loopback or lossless path never reveals
 it, so a host whose WebRTC binding defaults differently can pass every local
 test and fail every real transfer.
 
-Both directions are used throughout. The receiver tells the sender what it has
-stored as it stores it, the sender never runs more than a window ahead of
-that, completion is a verdict the receiver sends back, and either side stops
-the other with a reason rather than leaving it to a timeout.
+The transfer is **one-way**. Every message goes from the sender to the
+receiver, and the receiver sends nothing back: it verifies what arrives on its
+own — each chunk authenticates individually, and the sender's closing `end`
+says how much there was — and it closes the transport once it has the file or
+gives up. The sender is complete once its last message has left its send
+buffer. Neither side is told what the other concluded; whether the file
+arrived is for the two people to confirm between themselves, which they do
+anyway.
 
 ### 7.1 Chunk framing
 
@@ -603,19 +609,16 @@ Indices start at 0 and increase by one. The 2-byte field caps a transfer at
 
 ### 7.2 Control messages
 
-Every **text** message the transfer sends is one JSON object, its type in `t`:
+Every **text** message the transfer sends is one JSON object, its type in `t`,
+and every one goes from the sender to the receiver:
 
-| `t` | Direction | Fields | Meaning |
-|---|---|---|---|
-| `ack` | receiver → sender | `chunks` | This many chunks have authenticated and been stored |
-| `end` | sender → receiver | `chunks`, `bytes` | The payload is complete: its chunk count and wire byte count |
-| `done` | receiver → sender | `chunks`, `bytes` | Verified and stored; echoes `end` |
-| `abort` | either | `reason` | This side is stopping, and why |
+| `t` | Fields | Meaning |
+|---|---|---|
+| `end` | `chunks`, `bytes` | The payload is complete: its chunk count and wire byte count |
+| `abort` | `reason` | The sender is stopping, and why |
 
 ```json
-{ "t": "ack", "chunks": 3 }
 { "t": "end", "chunks": 4, "bytes": 393233 }
-{ "t": "done", "chunks": 4, "bytes": 393233 }
 { "t": "abort", "reason": "cancelled" }
 ```
 
@@ -625,41 +628,41 @@ Every **text** message the transfer sends is one JSON object, its type in `t`:
 - A text message that is not a JSON object with a `t` defined here is not
   addressed to the transfer, and a peer MUST ignore it: the link may carry
   other messages beside the transfer.
-- `reason` is a short human-readable string. A peer cuts a longer one at 200
-  characters, and reads a missing one as empty. `cancelled` is the reason a
-  side sends when its user cancelled.
+- `reason` is a short human-readable string. A receiver cuts a longer one at
+  200 characters, and reads a missing one as empty. `cancelled` is the reason
+  a sender sends when its user cancelled.
 
 ### 7.3 Flow control
 
-- After each chunk it has authenticated and stored, the receiver sends `ack`
-  with the cumulative count of chunks stored.
-- The sender MUST NOT send chunk index `i` unless
-  `i < acked + TRANSFER_WINDOW_CHUNKS`, where `acked` is the largest `ack`
-  count it has received and `TRANSFER_WINDOW_CHUNKS` = 32 (4 MiB). The window
-  bounds what a receiver ever holds unwritten, and is wide enough that the
-  link's round trip rather than the window sets the pace.
-- The receiver MUST abort a transfer whose sender sends chunk index
-  `i ≥ stored + TRANSFER_WINDOW_CHUNKS`, where `stored` is the last count it
-  acknowledged.
-- The sender MUST abort on an `ack` whose count exceeds the chunks it sent.
-- A sender also applies the transport's own backpressure (a data channel is
-  drained at a 1 MiB `bufferedAmountLowThreshold`).
+The sender is paced by the transport alone: it hands the next chunk over only
+once the transport has taken the last (a data channel is drained at a 1 MiB
+`bufferedAmountLowThreshold`; a framed onion stream's writes complete as the
+stream takes them). Nothing comes back to open a window, so a receiver stores
+chunks as fast as its storage allows, and what it has taken off the link but
+not yet written waits in its memory. A receiver bounds that wait at
+`RECEIVE_BACKLOG_MAX_BYTES` (256 MiB) and gives up past it, closing the
+transport: nothing it does can slow the sender down, and a browser cannot
+refuse a data channel message, so the alternative would be to hold on until
+the process dies.
 
 ### 7.4 Completion
 
 After the last chunk the sender sends `end` with the chunk count and the
-**wire** byte count (post-encoding, pre-encryption).
+**wire** byte count (post-encoding, pre-encryption), and is complete once
+`end` has left its send buffer. It then keeps the transport up until the
+receiver hangs up or a linger window passes (10 s on a data channel, 30 s on
+an onion stream), so its own close never cuts off what the transport is still
+delivering.
 
 The receiver MUST verify that the chunk count matches what it received, that
 indices arrived exactly once in order, and that the decrypted wire byte count
-matches; then, and only then, it finalizes what it stored and replies `done`
-with the same two values. The sender MUST check that `done` echoes exactly
-what it sent; a mismatch, or a `done` before `end`, is a protocol violation.
+matches; then, and only then, it finalizes what it stored. It then closes the
+transport, which is the only thing the sender ever hears from it.
 
-The transfer is complete for the sender when a matching `done` arrives, and it
-then closes the transport. Over a framed onion stream the receiver waits up to
-30 s for that close, which is the delivery receipt for `done`; its absence is
-reported but does not undo a file already verified.
+Once `end` has checked out, the rest is the receiver's own work: what it still
+holds is stored whatever the transport does next, so the sender's close after
+its linger, or an `abort` it sends as its user moves on, no longer fails the
+transfer.
 
 ### 7.5 Receive discipline
 
@@ -667,8 +670,9 @@ Receivers **append in reliable arrival order**. There is no positional or
 out-of-order write path: no wire payload has a length known up front, so an
 index cannot be turned into an offset. A receiver MUST reject a chunk whose
 index is not the next expected one, a duplicate index, a short chunk before the
-final one, a chunk after `end`, a malformed length, and a transfer that exceeds
-`MAX_MESSAGE_SIZE`.
+final one, a malformed length, and a transfer that exceeds `MAX_MESSAGE_SIZE`.
+Once `end` has checked out it has stopped reading the transport, so anything
+sent after it is never seen.
 
 There is **no whole-file checksum and no manifest**. Integrity rests entirely
 on per-chunk AES-GCM authentication with the authenticated index, plus the
@@ -676,26 +680,32 @@ completeness checks above.
 
 ### 7.6 Abort
 
-- A side that gives up — cancelled by its user, a chunk that fails a check, a
-  protocol violation, a local failure such as storage — sends `abort` with its
-  reason and closes the transport. Sending it is best effort: the peer's
-  watchdog (§7.7) covers one that is lost.
-- A side that receives `abort` stops at once and reports the peer's reason. It
-  does not answer with an `abort` of its own.
-- A transport that closes before `done` has arrived is a connection failure,
-  on either side.
+- A sender that gives up — cancelled by its user, a source that fails, a
+  transport that will not drain — sends `abort` with its reason and closes the
+  transport. Sending it is best effort: the receiver's watchdog (§7.7) covers
+  one that is lost.
+- A receiver that receives `abort` stops at once and reports the sender's
+  reason.
+- A receiver that gives up — cancelled by its user, a chunk that fails a
+  check, a protocol violation, a local failure such as storage, or storage
+  that fell `RECEIVE_BACKLOG_MAX_BYTES` behind the link — closes the
+  transport. It has no message to send.
+- A transport that closes before `end` has arrived is a connection failure for
+  the receiver, and an `abort` before it stops the receiver; after a valid
+  `end` neither does anything. A transport that closes while the sender still
+  holds unsent bytes is a connection failure for the sender.
 
 ### 7.7 Stall watchdog
 
 `STALL_TIMEOUT_MS` = 60 s, an idle window rather than an overall deadline, each
 side measuring the other:
 
-- The sender fails when, with anything outstanding — chunks not yet
-  acknowledged, or an `end` not yet answered by `done` — neither an `ack` that
-  moves the count nor `done` arrives within the window. With nothing
-  outstanding, as while it waits on its own input, it runs no clock.
-- The receiver arms it when the transport opens and resets it on every
-  incoming message.
+- The sender fails when the transport will not take the next chunk, or will
+  not drain after `end`, within the window: a receiver that stopped reading.
+  While it waits on its own input it runs no clock.
+- The receiver arms it when the transport opens, resets it on every incoming
+  message, and stops it once `end` has checked out: storing what is in hand
+  is its own work, not the sender's.
 
 A steadily progressing transfer of any size never trips it.
 
@@ -726,7 +736,7 @@ A steadily progressing transfer of any size never trips it.
 | `ENCRYPTION_CHUNK_SIZE` | 128 KiB |
 | `MAX_CHUNKS` | 65 536 |
 | `MAX_MESSAGE_SIZE` | 2 GiB |
-| `TRANSFER_WINDOW_CHUNKS` | 32 |
+| `RECEIVE_BACKLOG_MAX_BYTES` | 256 MiB |
 | `abort` reason | at most 200 characters |
 
 Peer-visible timeouts:
@@ -742,6 +752,7 @@ Peer-visible timeouts:
 | Direct attempt, sender | 20 s with a fallback, 120 s without |
 | Direct attempt, receiver | 30 s with a fallback, 120 s without |
 | Transfer stall (idle) | 60 s |
+| Sender linger after `end` | 10 s (data channel), 30 s (onion stream) |
 | Sender rotation/wait backstop | 30 min |
 
 The direct-attempt windows run from when each side has the other's code; the

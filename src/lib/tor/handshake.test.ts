@@ -175,13 +175,13 @@ describe('a Tor transfer end to end', () => {
         serviceMetadata,
       );
       if (handshake.outcome !== 'ready') throw new Error('expected ready');
+      // Resolves once the receiver has hung up; then the service lets go,
+      // as serveUntilSent's teardown does.
       const sent = await sendFileOverTor(
         service,
         handshake.keys.contentKey,
         source,
       );
-      // The receiver's verdict was the last message; hanging up is the
-      // receipt it waits for, as serveUntilSent's teardown gives it.
       await service.close();
       return sent;
     })();
@@ -189,12 +189,16 @@ describe('a Tor transfer end to end', () => {
     const receiving = (async () => {
       const handshake = await runTorClientHandshake(client, PASSWORD, ONION);
       await sendReady(client);
-      return receiveFileOverTor(
+      const payload = await receiveFileOverTor(
         client,
         handshake.keys.contentKey,
         handshake.metadata.contentEncoding,
         { estimatedBytes: handshake.metadata.fileSize },
       );
+      // The file is whole: hanging up is the receiver's only word, as the
+      // receive hook's teardown gives it.
+      await client.close();
+      return payload;
     })();
 
     const [wireBytes, payload] = await Promise.all([serving, receiving]);

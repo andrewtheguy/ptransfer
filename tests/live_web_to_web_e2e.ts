@@ -208,7 +208,13 @@ try {
   browser = await chromium.launch({
     executablePath,
     headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      // Headless Chrome hides host candidates behind mDNS names, which
+      // nothing here resolves; the two tabs then never connect directly.
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+    ],
   });
 
   await warmWebApp(browser);

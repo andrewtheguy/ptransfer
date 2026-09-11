@@ -31,8 +31,9 @@ const KIND_TEXT = 1;
 export const MAX_FRAME_BYTES = ENCRYPTION_CHUNK_SIZE + ENCRYPTED_CHUNK_OVERHEAD;
 
 /**
- * How long the side that sent the last message of a conversation waits for
- * the peer to hang up; see `createTorLink`'s `waitForPeerClose`.
+ * How long a sender that has written its last frame waits for the receiver
+ * to hang up before closing the stream itself; see `createTorLink`'s
+ * `waitForPeerClose`.
  */
 export const LINGER_TIMEOUT_MS = 30_000;
 
@@ -46,11 +47,11 @@ export interface TorMessage {
  * Framed message transport over one Tor stream.
  *
  * Reads and writes run independently, as the two directions of a stream do:
- * the transfer above is bidirectional, acknowledgments coming back while
- * chunks go out. Writes are serialized here so two senders can never
- * interleave one frame's bytes into another's; reads have one reader at a
- * time by construction — the handshake's turn-taking, then the transfer
- * link's single read loop.
+ * the handshake takes turns, and the transfer above then flows one way while
+ * the other side only watches for the close. Writes are serialized here so
+ * two senders can never interleave one frame's bytes into another's; reads
+ * have one reader at a time by construction — the handshake's turn-taking,
+ * then the transfer link's single read loop.
  */
 export class TorFramedStream {
   private readonly stream: OnionStream;

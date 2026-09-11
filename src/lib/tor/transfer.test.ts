@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { installOpfsMock, type OpfsMock } from '../../test/opfs-mock';
 import { ENCRYPTION_CHUNK_SIZE } from '../crypto';
-import { TransferAbortedError } from '../p2p-transfer';
+import { P2PConnectionError } from '../errors';
 import type { TransferSource } from '../transfer-source';
 import { TorFramedStream } from './framing';
 import { createOnionStreamPair } from './mock-stream';
@@ -81,21 +81,28 @@ describe('createTorLink', () => {
 });
 
 describe('Tor transfer', () => {
-  it('carries a multi-chunk payload with acknowledgments flowing back', async () => {
+  it('carries a multi-chunk payload one way, and the sender waits for the receiver to hang up', async () => {
     const contentKey = await key();
     const data = new Uint8Array(ENCRYPTION_CHUNK_SIZE * 3 + 99).map(
       (_, i) => i % 251,
     );
     const [service, client] = pair();
 
+    let receiverHungUp = false;
     const sending = sendFileOverTor(service, contentKey, zipOf(data)).then(
       async (wireBytes) => {
+        expect(receiverHungUp).toBe(true);
         await service.close();
         return wireBytes;
       },
     );
+    // As the hooks do: the file is whole, so the stream goes.
     const receiving = receiveFileOverTor(client, contentKey, 'identity', {
       estimatedBytes: data.length,
+    }).then(async (payload) => {
+      await client.close();
+      receiverHungUp = true;
+      return payload;
     });
 
     const [wireBytes, payload] = await Promise.all([sending, receiving]);
@@ -103,7 +110,7 @@ describe('Tor transfer', () => {
     expect(new Uint8Array(await payload.arrayBuffer())).toEqual(data);
   });
 
-  it('tells the sender when the receiver is cancelled', async () => {
+  it('ends the sender when a cancelled receiver hangs up', async () => {
     const contentKey = await key();
     const [service, client] = pair();
     let cancelled = false;
@@ -130,10 +137,10 @@ describe('Tor transfer', () => {
     });
 
     await expect(receiving).rejects.toThrow('Cancelled');
+    // Nothing travels back: the close is what the sender learns from.
+    await client.close();
     const error = await sending.catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(TransferAbortedError);
-    expect((error as Error).message).toBe(
-      'The receiver cancelled the transfer',
-    );
+    expect(error).toBeInstanceOf(P2PConnectionError);
+    expect((error as Error).message).toMatch(/closed before the file/);
   });
 });

@@ -217,8 +217,8 @@ The sender creates the data channel; the receiver answers. Both then run the
 shared transfer layer of
 [INTEROP_PROTOCOL.md §7](./INTEROP_PROTOCOL.md#7-transfer)
 unchanged — ordered and reliable, 128 KiB AES-256-GCM chunks under the content
-key within the window the receiver's acknowledgments open, then `end` answered
-by the receiver's `done` — with the wire encoding of §6 there. Nothing about
+key as the channel takes them, then `end`; the receiver verifies on its own and
+hangs up — with the wire encoding of §6 there. Nothing about
 that layer is specific to how the two sides met.
 
 ICE is STUN-only; no TURN is configured. Candidates are
