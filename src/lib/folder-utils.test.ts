@@ -88,7 +88,7 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const writer = decompressor.writable.getWriter();
   void writer.write(data.slice()).catch(() => {});
   void writer.close().catch(() => {});
-  return readAll(decompressor.readable);
+  return await readAll(decompressor.readable);
 }
 
 /**

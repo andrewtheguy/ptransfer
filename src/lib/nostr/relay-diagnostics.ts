@@ -572,7 +572,7 @@ export async function probeSignalingRelays(
       urls.map(normalizeRelayUrl).filter((url): url is string => url !== null),
     ),
   ];
-  return Promise.all(
+  return await Promise.all(
     canonical.map((url) => probeSignalingRelay(url, timeoutMs)),
   );
 }

@@ -78,44 +78,38 @@ export function MultiQRDisplay({
     setError(null);
     setQrImageUrls(new Map());
 
-    Promise.allSettled(
-      chunkInfos.map(async (info) => {
-        const imageUrl = await generateTextQRCode(info.url, {
-          width: qrWidth,
-          errorCorrectionLevel: 'M',
-        });
-        return { index: info.index, imageUrl };
-      }),
-    )
-      .then((results) => {
-        if (!active) return;
+    void (async () => {
+      const results = await Promise.allSettled(
+        chunkInfos.map(async (info) => {
+          const imageUrl = await generateTextQRCode(info.url, {
+            width: qrWidth,
+            errorCorrectionLevel: 'M',
+          });
+          return { index: info.index, imageUrl };
+        }),
+      );
+      if (!active) return;
 
-        const urls = new Map<number, string>();
-        let firstError: unknown = null;
+      const urls = new Map<number, string>();
+      let firstError: unknown = null;
 
-        for (const result of results) {
-          if (result.status === 'fulfilled') {
-            urls.set(result.value.index, result.value.imageUrl);
-          } else if (firstError === null) {
-            firstError = result.reason;
-          }
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          urls.set(result.value.index, result.value.imageUrl);
+        } else if (firstError === null) {
+          firstError = result.reason;
         }
+      }
 
-        if (firstError !== null) {
-          console.error('Failed to generate QR codes:', firstError);
-          setError('Failed to generate QR codes');
-          setQrImageUrls(new Map());
-          return;
-        }
-
-        setQrImageUrls(urls);
-      })
-      .catch((err) => {
-        if (!active) return;
-        console.error('Failed to generate QR codes:', err);
+      if (firstError !== null) {
+        console.error('Failed to generate QR codes:', firstError);
         setError('Failed to generate QR codes');
         setQrImageUrls(new Map());
-      });
+        return;
+      }
+
+      setQrImageUrls(urls);
+    })();
 
     return () => {
       active = false;

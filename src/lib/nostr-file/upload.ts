@@ -547,12 +547,14 @@ export function prepareStorageRelays(
     sweep(upload.storageRelays, upload.unprobedCandidates);
     return upload;
   })();
-  selection.catch(() => {});
-  const ring = selection.then((upload) => upload.storageRelays);
+  const ring = (async () => (await selection).storageRelays)();
   ring.catch(() => {});
-  const reserve = selection.then(
-    (upload) => upload.reserveRelays,
-    () => [],
-  );
+  const reserve = (async () => {
+    try {
+      return (await selection).reserveRelays;
+    } catch {
+      return [];
+    }
+  })();
   return { ring, reserve, stats };
 }

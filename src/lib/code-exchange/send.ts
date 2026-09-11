@@ -204,45 +204,46 @@ export function startSenderFallback(opts: {
       resolveListener?.(next);
     };
     phase = 'probing_defaults';
-    settled = resolveTransferRelays(relayPool, storage, {
-      isCancelled: opts.isCancelled,
-      stats: createTransferStats('sender'),
-      onControlProgress: () => setPhase('probing_defaults'),
-      onUploadProgress: (p) =>
-        setPhase(
-          p.phase === 'discovering' ? 'discovering' : 'probing_discovered',
-        ),
-    }).then(
-      (selection): OfferFallback => {
-        phase = null;
-        // The control relays are settled; the storage ring is prepared in
-        // the background on the same pool and relay cache, since the offer
-        // does not depend on it. When control resolution already had to
-        // discover candidates to backfill a defunct default, the ring is
-        // probed from what it left unprobed instead of discovering again.
-        // Either way the sweep then keeps probing the rest of the population
-        // for as long as the transfer lasts, warming the shared cache and
-        // handing a failed direct attempt its ring ready-made.
-        return {
-          kind: 'relay',
-          controlRelays: selection.controlRelays,
-          storage: prepareStorageRelays(relayPool, {
-            controlRelays: selection.controlRelays,
-            storage,
-            stats: selection.stats,
-            discovered: selection.discovered,
-            signal: sweepAbort.signal,
-            isCancelled: opts.isCancelled,
-            onProgress: (p) => storageListener?.(p),
-          }),
-        };
-      },
-      (): OfferFallback => {
+    settled = (async (): Promise<OfferFallback> => {
+      let selection: Awaited<ReturnType<typeof resolveTransferRelays>>;
+      try {
+        selection = await resolveTransferRelays(relayPool, storage, {
+          isCancelled: opts.isCancelled,
+          stats: createTransferStats('sender'),
+          onControlProgress: () => setPhase('probing_defaults'),
+          onUploadProgress: (p) =>
+            setPhase(
+              p.phase === 'discovering' ? 'discovering' : 'probing_discovered',
+            ),
+        });
+      } catch {
         phase = null;
         close();
         return { kind: 'none' };
-      },
-    );
+      }
+      phase = null;
+      // The control relays are settled; the storage ring is prepared in the
+      // background on the same pool and relay cache, since the offer does not
+      // depend on it. When control resolution already had to discover
+      // candidates to backfill a defunct default, the ring is probed from what
+      // it left unprobed instead of discovering again. Either way the sweep
+      // then keeps probing the rest of the population for as long as the
+      // transfer lasts, warming the shared cache and handing a failed direct
+      // attempt its ring ready-made.
+      return {
+        kind: 'relay',
+        controlRelays: selection.controlRelays,
+        storage: prepareStorageRelays(relayPool, {
+          controlRelays: selection.controlRelays,
+          storage,
+          stats: selection.stats,
+          discovered: selection.discovered,
+          signal: sweepAbort.signal,
+          isCancelled: opts.isCancelled,
+          onProgress: (p) => storageListener?.(p),
+        }),
+      };
+    })();
   } else {
     settled = Promise.resolve({ kind: 'none' });
   }
@@ -893,19 +894,22 @@ async function waitForDataChannel(
     timeout = setTimeout(() => {
       reject(new P2PConnectionError('Connection timeout'));
     }, timeoutMs);
-    receiverGaveUp?.then(
-      () => {
+    if (receiverGaveUp) {
+      void (async () => {
+        try {
+          await receiverGaveUp;
+        } catch {
+          // A failed hello watch only disables this early-exit signal; ICE
+          // failure and the connection timeout remain authoritative.
+          return;
+        }
         reject(
           new P2PConnectionError(
             'The receiver reports no direct connection is possible',
           ),
         );
-      },
-      () => {
-        // A failed hello watch only disables this early-exit signal; ICE
-        // failure and the connection timeout remain authoritative.
-      },
-    );
+      })();
+    }
     onStateChange = () => {
       if (
         pc.connectionState === 'failed' ||

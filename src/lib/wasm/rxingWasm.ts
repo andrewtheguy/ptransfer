@@ -20,12 +20,14 @@ export async function ensureRxingWasmInit(): Promise<void> {
 
   if (!wasmInitPromise) {
     wasmInitPromise = (async () => {
-      await initRxingWasm({ module_or_path: rxingWasmUrl });
-      wasmInitialized = true;
-    })().catch((error) => {
-      wasmInitPromise = null;
-      throw error;
-    });
+      try {
+        await initRxingWasm({ module_or_path: rxingWasmUrl });
+        wasmInitialized = true;
+      } catch (error) {
+        wasmInitPromise = null;
+        throw error;
+      }
+    })();
   }
 
   await wasmInitPromise;
@@ -69,7 +71,7 @@ export async function readQrCodesFromImageData(
   imageData: ImageData,
   options: RxingReaderOptions = {},
 ): Promise<Uint8Array[]> {
-  return readQrCodesFromRgba(
+  return await readQrCodesFromRgba(
     imageData.data,
     imageData.width,
     imageData.height,

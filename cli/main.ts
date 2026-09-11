@@ -60,20 +60,19 @@ async function main(argv: string[]): Promise<number> {
     process.stderr.write(`Unknown command: ${command}\n\n${USAGE}`);
     return 2;
   }
-  return run(rest);
+  return await run(rest);
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (error: unknown) => {
-    if (error instanceof InterruptedError) process.exit(INTERRUPTED_STATUS);
-    if (error instanceof UsageError) {
-      process.stderr.write(`${error.message}\n`);
-      process.exit(2);
-    }
-    process.stderr.write(
-      `${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exit(1);
-  },
-);
+try {
+  process.exit(await main(process.argv.slice(2)));
+} catch (error: unknown) {
+  if (error instanceof InterruptedError) process.exit(INTERRUPTED_STATUS);
+  if (error instanceof UsageError) {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(2);
+  }
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exit(1);
+}

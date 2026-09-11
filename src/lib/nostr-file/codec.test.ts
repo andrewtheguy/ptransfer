@@ -13,10 +13,11 @@ import {
 import { NOSTR_FILE_CHUNK_SIZE } from './constants';
 
 async function makeKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
+  return await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 describe('compressPayload / decompressPayload', () => {

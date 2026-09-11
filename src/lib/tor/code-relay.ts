@@ -377,7 +377,7 @@ export async function receiveOverAnonymousRelay(
  * abandoned. The cancellation poll is what keeps a cancelled page from sitting
  * inside an hour-long wait for a sender that is never coming.
  */
-function untilDeadline<T>(
+async function untilDeadline<T>(
   pending: Promise<T>,
   ms: number,
   message: string,
@@ -391,8 +391,10 @@ function untilDeadline<T>(
       if (isCancelled()) reject(new Error('Cancelled'));
     }, 500);
   });
-  return Promise.race([pending, ended]).finally(() => {
+  try {
+    return await Promise.race([pending, ended]);
+  } finally {
     clearTimeout(timer);
     clearInterval(poll);
-  });
+  }
 }

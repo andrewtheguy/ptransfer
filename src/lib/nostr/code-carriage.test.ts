@@ -37,11 +37,12 @@ function relayHub() {
   const published: Event[] = [];
   let next = 0;
   const client: CarriageClient = {
-    async publish(event) {
+    publish(event) {
       published.push(event);
       for (const { filter, onEvent } of subscriptions.values()) {
         if (matches(filter, event)) setTimeout(() => onEvent(event), 0);
       }
+      return Promise.resolve();
     },
     subscribe(filters, onEvent) {
       const id = String(next++);

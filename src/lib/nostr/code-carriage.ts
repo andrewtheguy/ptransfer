@@ -41,7 +41,7 @@ export async function sealCarriedCode(
     type: carried.type,
     code: uint8ArrayToBase64(carried.code),
   });
-  return encrypt(signalsKey, new TextEncoder().encode(json));
+  return await encrypt(signalsKey, new TextEncoder().encode(json));
 }
 
 /**
@@ -152,13 +152,15 @@ export function carryOfferForAnswer(
         if (event.pubkey !== receiverPubkey) return;
         const signal = parseSignalingEvent(event);
         if (!signal || signal.transferId !== transferId) return;
-        void openCarriedCode(signalsKey, signal.encryptedSignal).then(
-          (carried) => {
-            if (carried?.type === 'answer') {
-              finish(() => resolve(carried.code));
-            }
-          },
-        );
+        void (async () => {
+          const carried = await openCarriedCode(
+            signalsKey,
+            signal.encryptedSignal,
+          );
+          if (carried?.type === 'answer') {
+            finish(() => resolve(carried.code));
+          }
+        })();
       },
     );
 
@@ -179,11 +181,15 @@ export function carryOfferForAnswer(
       if (settled) return;
       retry = setTimeout(() => {
         if (settled) return;
-        publishOffer()
-          .catch((error: unknown) => {
+        void (async () => {
+          try {
+            await publishOffer();
+          } catch (error: unknown) {
             console.error('Failed to republish the connection offer:', error);
-          })
-          .finally(scheduleRetry);
+          } finally {
+            scheduleRetry();
+          }
+        })();
       }, opts.retryMs);
     };
     timeout = setTimeout(() => {
@@ -201,11 +207,17 @@ export function carryOfferForAnswer(
 
     // The first publish failing means no relay took the offer at all; the
     // repeats are best-effort on top of one that did.
-    publishOffer().then(scheduleRetry, (error: unknown) => {
-      finish(() =>
-        reject(error instanceof Error ? error : new Error('Publish failed')),
-      );
-    });
+    void (async () => {
+      try {
+        await publishOffer();
+      } catch (error: unknown) {
+        finish(() =>
+          reject(error instanceof Error ? error : new Error('Publish failed')),
+        );
+        return;
+      }
+      scheduleRetry();
+    })();
   });
 }
 
@@ -280,19 +292,21 @@ export function awaitCarriedOffer(
     if (event.pubkey !== senderPubkey) return;
     const signal = parseSignalingEvent(event);
     if (!signal || signal.transferId !== transferId) return;
-    void openCarriedCode(signalsKey, signal.encryptedSignal).then((carried) => {
+    void (async () => {
+      const carried = await openCarriedCode(signalsKey, signal.encryptedSignal);
       if (closed || carried?.type !== 'offer') return;
       if (!first) {
         first = carried.code;
         settleOffer(() => resolveOffer(carried.code));
         return;
       }
-      if (sameBytes(carried.code, first)) {
-        void publishAnswer().catch((error: unknown) => {
-          console.error('Failed to republish the answer:', error);
-        });
+      if (!sameBytes(carried.code, first)) return;
+      try {
+        await publishAnswer();
+      } catch (error: unknown) {
+        console.error('Failed to republish the answer:', error);
       }
-    });
+    })();
   };
 
   const filter: Filter = {
@@ -303,14 +317,15 @@ export function awaitCarriedOffer(
   const subId = client.subscribe([filter], onEvent);
   // Backstop for a relay that delivered the offer before the subscription
   // was in place and kept it.
-  void client
-    .query([{ ...filter, limit: 50 }])
-    .then((events) => {
-      for (const event of events) onEvent(event);
-    })
-    .catch((error: unknown) => {
+  void (async () => {
+    try {
+      for (const event of await client.query([{ ...filter, limit: 50 }])) {
+        onEvent(event);
+      }
+    } catch (error: unknown) {
       console.error('Failed to query for an earlier offer:', error);
-    });
+    }
+  })();
 
   const close = () => {
     if (closed) return;

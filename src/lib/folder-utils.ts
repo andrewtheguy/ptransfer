@@ -224,10 +224,15 @@ function createZipStream(
   const transform = new TransformStream<Uint8Array, Uint8Array>();
   const writer = transform.writable.getWriter();
 
-  void writeZip(entries, writer).then(
-    () => writer.close(),
-    (error: unknown) => writer.abort(error).catch(() => {}),
-  );
+  void (async () => {
+    try {
+      await writeZip(entries, writer);
+    } catch (error: unknown) {
+      await writer.abort(error).catch(() => {});
+      return;
+    }
+    await writer.close();
+  })();
 
   return transform.readable;
 }
@@ -260,16 +265,20 @@ async function writeZip(
     // Cancelling the transfer's reader errors the TransformStream writable.
     // Propagate that cancellation into whichever file is currently being
     // read so ZIP production cannot remain blocked on file I/O.
-    void writer.closed.catch((streamError: unknown) => {
-      if (failure) return;
-      failure =
-        streamError instanceof Error
-          ? streamError
-          : new Error('Archive stream cancelled');
-      void activeReader?.cancel(failure).catch(() => {});
-      activeEntry?.terminate();
-      reject(failure);
-    });
+    void (async () => {
+      try {
+        await writer.closed;
+      } catch (streamError: unknown) {
+        if (failure) return;
+        failure =
+          streamError instanceof Error
+            ? streamError
+            : new Error('Archive stream cancelled');
+        void activeReader?.cancel(failure).catch(() => {});
+        activeEntry?.terminate();
+        reject(failure);
+      }
+    })();
 
     const zip = new Zip((err, chunk, final) => {
       if (failure) return;
@@ -293,55 +302,59 @@ async function writeZip(
           reject(failure);
         });
       if (final) {
-        void pending.then(() => {
+        void (async () => {
+          await pending;
           if (!failure) resolve();
-        });
+        })();
       }
     });
 
     void (async () => {
-      for (const file of entries) {
-        const entry = new ZipNativeDeflate(file.path);
-        entry.mtime = zipMtime(file.lastModified);
-        zip.add(entry);
-        activeEntry = entry;
+      try {
+        for (const file of entries) {
+          const entry = new ZipNativeDeflate(file.path);
+          entry.mtime = zipMtime(file.lastModified);
+          zip.add(entry);
+          activeEntry = entry;
 
-        const reader = file.stream().getReader();
-        activeReader = reader;
-        try {
-          while (true) {
-            if (failure) return;
-            const { done, value } = await reader.read();
-            if (done) {
-              entry.push(new Uint8Array(0), true);
-              // Wait for the deflater to flush and for every emitted chunk to
-              // reach the consumer before adding the next entry, so
-              // backpressure also applies at file boundaries.
-              await entry.flushed;
+          const reader = file.stream().getReader();
+          activeReader = reader;
+          try {
+            while (true) {
+              if (failure) return;
+              const { done, value } = await reader.read();
+              if (done) {
+                entry.push(new Uint8Array(0), true);
+                // Wait for the deflater to flush and for every emitted chunk
+                // to reach the consumer before adding the next entry, so
+                // backpressure also applies at file boundaries.
+                await entry.flushed;
+                await pending;
+                break;
+              }
+              entry.push(value);
+              // Backpressure: let queued archive output reach the consumer
+              // before producing more, so memory stays bounded by in-flight
+              // chunks.
               await pending;
-              break;
             }
-            entry.push(value);
-            // Backpressure: let queued archive output reach the consumer before
-            // producing more, so memory stays bounded by in-flight chunks.
-            await pending;
+          } finally {
+            activeReader = null;
+            activeEntry = null;
+            reader.releaseLock();
+            if (failure) entry.terminate();
           }
-        } finally {
-          activeReader = null;
-          activeEntry = null;
-          reader.releaseLock();
-          if (failure) entry.terminate();
         }
+        zip.end();
+      } catch (readError: unknown) {
+        if (failure) return;
+        failure =
+          readError instanceof Error
+            ? readError
+            : new Error('Failed to read file for archiving');
+        reject(failure);
       }
-      zip.end();
-    })().catch((readError: unknown) => {
-      if (failure) return;
-      failure =
-        readError instanceof Error
-          ? readError
-          : new Error('Failed to read file for archiving');
-      reject(failure);
-    });
+    })();
   });
 
   await ended;

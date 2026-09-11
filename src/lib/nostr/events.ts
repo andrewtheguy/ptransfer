@@ -247,7 +247,7 @@ export async function sealHandshakePayload(
   payload: object,
 ): Promise<Uint8Array> {
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
-  return encrypt(sealKey, bytes);
+  return await encrypt(sealKey, bytes);
 }
 
 /**

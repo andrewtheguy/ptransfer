@@ -55,7 +55,7 @@ async function deriveSessionKey(
   }
 
   const encoder = new TextEncoder();
-  return crypto.subtle.deriveKey(
+  return await crypto.subtle.deriveKey(
     {
       name: 'HKDF',
       hash: 'SHA-256',

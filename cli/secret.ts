@@ -23,9 +23,9 @@ export async function readSecret(
   output: SecretOutput = process.stderr,
 ): Promise<string> {
   if (input.isTTY && input.setRawMode) {
-    return readAtTerminal(prompt, input, output);
+    return await readAtTerminal(prompt, input, output);
   }
-  return readFirstLine(input);
+  return await readFirstLine(input);
 }
 
 /** The first line, without its line ending. Empty input is an error. */

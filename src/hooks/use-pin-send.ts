@@ -678,12 +678,14 @@ export function usePinSend(): UsePinSendReturn {
 
                 // The failed claim consumed this generation's element; publish
                 // a replacement so the generation stays claimable.
-                void publishReplacement(generation).catch((err) => {
+                try {
+                  await publishReplacement(generation);
+                } catch (err) {
                   console.error(
                     'Failed to publish replacement rendezvous:',
                     err,
                   );
-                });
+                }
               })();
             },
           );
@@ -692,9 +694,13 @@ export function usePinSend(): UsePinSendReturn {
             if (rotationInterval) clearInterval(rotationInterval);
             rotationInterval = setInterval(() => {
               if (settled || abandoned()) return;
-              void publishRendezvous().catch((err) => {
-                console.error('Failed to publish rendezvous rotation:', err);
-              });
+              void (async () => {
+                try {
+                  await publishRendezvous();
+                } catch (err) {
+                  console.error('Failed to publish rendezvous rotation:', err);
+                }
+              })();
             }, PIN_ROTATION_MS);
           };
 
@@ -719,12 +725,16 @@ export function usePinSend(): UsePinSendReturn {
           };
 
           // First PIN generation, then rotate.
-          void publishRendezvous().catch((err) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(err instanceof Error ? err : new Error('Publish failed'));
-          });
+          void (async () => {
+            try {
+              await publishRendezvous();
+            } catch (err) {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              reject(err instanceof Error ? err : new Error('Publish failed'));
+            }
+          })();
           scheduleRotation();
         });
 
@@ -890,9 +900,10 @@ export function usePinSend(): UsePinSendReturn {
         });
         const offer = await offerBuild;
         if (!offer || abandoned()) return;
-        void offer.channelOpened.then((opened) => {
+        void (async () => {
+          const opened = await offer.channelOpened;
           if (rtc === offer.rtc) channel = opened;
-        });
+        })();
 
         setState({
           status: 'connecting',

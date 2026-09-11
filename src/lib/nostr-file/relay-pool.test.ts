@@ -61,12 +61,14 @@ function memoryStorage(
     state: initial,
     relayHealth,
     getState: async () => holder.state,
-    setState: async (s: RelayPoolState) => {
+    setState: (s: RelayPoolState) => {
       holder.state = s;
+      return Promise.resolve();
     },
     getRelayHealth: async () => holder.relayHealth,
-    setRelayHealth: async (relays: CachedRelay[]) => {
+    setRelayHealth: (relays: CachedRelay[]) => {
       holder.relayHealth = relays;
+      return Promise.resolve();
     },
   };
   return holder;

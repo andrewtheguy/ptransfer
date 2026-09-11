@@ -18,17 +18,19 @@ let modulePromise: Promise<WebtorModule> | undefined;
 
 export function loadWebtor(): Promise<WebtorModule> {
   modulePromise ??= (async () => {
-    const module = (await import(
-      '@andrewtheguy/webtor-wasm'
-    )) as unknown as WebtorModule;
-    const binary = fileURLToPath(
-      import.meta.resolve('@andrewtheguy/webtor-wasm/webtor_wasm_bg.wasm'),
-    );
-    await module.default({ module_or_path: await readFile(binary) });
-    return module;
-  })().catch((error: unknown) => {
-    modulePromise = undefined;
-    throw error;
-  });
+    try {
+      const module = (await import(
+        '@andrewtheguy/webtor-wasm'
+      )) as unknown as WebtorModule;
+      const binary = fileURLToPath(
+        import.meta.resolve('@andrewtheguy/webtor-wasm/webtor_wasm_bg.wasm'),
+      );
+      await module.default({ module_or_path: await readFile(binary) });
+      return module;
+    } catch (error: unknown) {
+      modulePromise = undefined;
+      throw error;
+    }
+  })();
   return modulePromise;
 }

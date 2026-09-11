@@ -13,15 +13,11 @@ describe('createPendingStep', () => {
     vi.useFakeTimers();
     try {
       const step = createPendingStep<string>();
-      const outcome = step.promise.then(
-        () => 'resolved',
-        (e: Error) => e.message,
-      );
       step.reject(new Error('Cancelled'));
       // No poll interval is involved: the rejection is observable without
       // advancing time at all.
       expect(vi.getTimerCount()).toBe(0);
-      await expect(outcome).resolves.toBe('Cancelled');
+      await expect(step.promise).rejects.toThrow('Cancelled');
     } finally {
       vi.useRealTimers();
     }
@@ -51,16 +47,12 @@ describe('createPendingStep', () => {
     };
 
     const old = current;
-    const oldOutcome = old.promise.then(
-      () => 'resolved',
-      (e: Error) => e.message,
-    );
     cancel();
     restart();
 
     expect(cancelled).toBe(false);
     expect(old.settled).toBe(true);
-    await expect(oldOutcome).resolves.toBe('Cancelled');
+    await expect(old.promise).rejects.toThrow('Cancelled');
 
     // A stray settle aimed at the old run cannot leak into the new one.
     old.resolve('manual');

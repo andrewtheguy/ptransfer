@@ -24,6 +24,18 @@ function toBytes(data: BufferSource): Uint8Array {
   return new Uint8Array(data.slice(0));
 }
 
+/**
+ * A synchronous body's outcome as a settled promise: a throw rejects, as the
+ * real OPFS calls do, instead of escaping the call.
+ */
+function settle<T>(body: () => T): Promise<T> {
+  try {
+    return Promise.resolve(body());
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
 class MockWritableFileStream {
   private data = new Uint8Array(0);
   private size = 0;
@@ -48,39 +60,47 @@ class MockWritableFileStream {
     this.data = next;
   }
 
-  async write(chunk: WriteChunk): Promise<void> {
-    this.ensureOpen();
-    let position = this.cursor;
-    let source: BufferSource;
-    if ('type' in chunk && chunk.type === 'write') {
-      position = chunk.position ?? this.cursor;
-      source = chunk.data;
-    } else {
-      source = chunk as BufferSource;
-    }
-    const bytes = toBytes(source);
-    this.grow(position + bytes.length);
-    this.data.set(bytes, position);
-    this.cursor = position + bytes.length;
-    this.size = Math.max(this.size, this.cursor);
+  write(chunk: WriteChunk): Promise<void> {
+    return settle(() => {
+      this.ensureOpen();
+      let position = this.cursor;
+      let source: BufferSource;
+      if ('type' in chunk && chunk.type === 'write') {
+        position = chunk.position ?? this.cursor;
+        source = chunk.data;
+      } else {
+        source = chunk as BufferSource;
+      }
+      const bytes = toBytes(source);
+      this.grow(position + bytes.length);
+      this.data.set(bytes, position);
+      this.cursor = position + bytes.length;
+      this.size = Math.max(this.size, this.cursor);
+    });
   }
 
-  async truncate(newSize: number): Promise<void> {
-    this.ensureOpen();
-    this.grow(newSize);
-    this.size = newSize;
-    this.cursor = Math.min(this.cursor, newSize);
+  truncate(newSize: number): Promise<void> {
+    return settle(() => {
+      this.ensureOpen();
+      this.grow(newSize);
+      this.size = newSize;
+      this.cursor = Math.min(this.cursor, newSize);
+    });
   }
 
-  async close(): Promise<void> {
-    this.ensureOpen();
-    this.state = 'closed';
-    this.commit(this.data.slice(0, this.size));
+  close(): Promise<void> {
+    return settle(() => {
+      this.ensureOpen();
+      this.state = 'closed';
+      this.commit(this.data.slice(0, this.size));
+    });
   }
 
-  async abort(): Promise<void> {
-    this.ensureOpen();
-    this.state = 'aborted';
+  abort(): Promise<void> {
+    return settle(() => {
+      this.ensureOpen();
+      this.state = 'aborted';
+    });
   }
 }
 
@@ -93,14 +113,16 @@ class MockFileHandle {
     this.name = name;
   }
 
-  async createWritable(): Promise<MockWritableFileStream> {
-    return new MockWritableFileStream((data) => {
-      this.committed = data;
-    });
+  createWritable(): Promise<MockWritableFileStream> {
+    return Promise.resolve(
+      new MockWritableFileStream((data) => {
+        this.committed = data;
+      }),
+    );
   }
 
-  async getFile(): Promise<File> {
-    return new File([this.committed as BlobPart], this.name);
+  getFile(): Promise<File> {
+    return Promise.resolve(new File([this.committed as BlobPart], this.name));
   }
 }
 
@@ -113,34 +135,40 @@ export class MockDirectoryHandle {
     this.name = name;
   }
 
-  async getDirectoryHandle(
+  getDirectoryHandle(
     name: string,
     opts?: { create?: boolean },
   ): Promise<MockDirectoryHandle> {
-    const existing = this.entries.get(name);
-    if (existing instanceof MockDirectoryHandle) return existing;
-    if (existing) throw new Error(`TypeMismatch: ${name} is a file`);
-    if (!opts?.create) throw new Error(`NotFound: ${name}`);
-    const dir = new MockDirectoryHandle(name);
-    this.entries.set(name, dir);
-    return dir;
+    return settle(() => {
+      const existing = this.entries.get(name);
+      if (existing instanceof MockDirectoryHandle) return existing;
+      if (existing) throw new Error(`TypeMismatch: ${name} is a file`);
+      if (!opts?.create) throw new Error(`NotFound: ${name}`);
+      const dir = new MockDirectoryHandle(name);
+      this.entries.set(name, dir);
+      return dir;
+    });
   }
 
-  async getFileHandle(
+  getFileHandle(
     name: string,
     opts?: { create?: boolean },
   ): Promise<MockFileHandle> {
-    const existing = this.entries.get(name);
-    if (existing instanceof MockFileHandle) return existing;
-    if (existing) throw new Error(`TypeMismatch: ${name} is a directory`);
-    if (!opts?.create) throw new Error(`NotFound: ${name}`);
-    const file = new MockFileHandle(name);
-    this.entries.set(name, file);
-    return file;
+    return settle(() => {
+      const existing = this.entries.get(name);
+      if (existing instanceof MockFileHandle) return existing;
+      if (existing) throw new Error(`TypeMismatch: ${name} is a directory`);
+      if (!opts?.create) throw new Error(`NotFound: ${name}`);
+      const file = new MockFileHandle(name);
+      this.entries.set(name, file);
+      return file;
+    });
   }
 
-  async removeEntry(name: string): Promise<void> {
-    if (!this.entries.delete(name)) throw new Error(`NotFound: ${name}`);
+  removeEntry(name: string): Promise<void> {
+    return settle(() => {
+      if (!this.entries.delete(name)) throw new Error(`NotFound: ${name}`);
+    });
   }
 
   async *keys(): AsyncIterableIterator<string> {

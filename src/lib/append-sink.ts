@@ -60,9 +60,13 @@ export function createInflatingAppendSink(
   // A pump failure resurfaces on the next append()/finish() await; this only
   // keeps it from reporting as unhandled meanwhile and unblocks a writer
   // waiting on decompressor backpressure that will never drain.
-  pumped.catch(() => {
-    void writer.abort().catch(() => {});
-  });
+  void (async () => {
+    try {
+      await pumped;
+    } catch {
+      await writer.abort().catch(() => {});
+    }
+  })();
 
   return {
     async append(bytes) {
@@ -78,9 +82,9 @@ export function createInflatingAppendSink(
       await pumped;
       return inner.finish();
     },
-    discard() {
+    async discard() {
       void writer.abort().catch(() => {});
-      return inner.discard();
+      await inner.discard();
     },
   };
 }

@@ -58,19 +58,22 @@ export function QRDisplay({
     setIsGenerating(true);
     setError(null);
 
-    generateBinaryQRCode(data, {
-      width: qrWidth,
-      errorCorrectionLevel: 'M',
-    })
-      .then((url) => {
-        setQrImageUrl(url);
-      })
-      .catch((err) => {
+    void (async () => {
+      try {
+        setQrImageUrl(
+          await generateBinaryQRCode(data, {
+            width: qrWidth,
+            errorCorrectionLevel: 'M',
+          }),
+        );
+      } catch (err) {
         console.error('Failed to generate QR code:', err);
         setError('Failed to generate QR code');
         setQrImageUrl(null);
-      })
-      .finally(() => setIsGenerating(false));
+      } finally {
+        setIsGenerating(false);
+      }
+    })();
   }, [data]);
 
   // Copy signaling payload as base64 for paste flow.

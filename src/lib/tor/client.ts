@@ -112,10 +112,13 @@ export async function bootstrapTorClient(
   });
 
   // Which directory this client actually ended up on, seeded or downloaded.
-  void client
-    .directoryCache()
-    .then((cache) => logDirectory(cache))
-    .catch(() => undefined);
+  void (async () => {
+    try {
+      await logDirectory(await client.directoryCache());
+    } catch {
+      // Diagnostics only; the client works the same without the line.
+    }
+  })();
 
   return client;
 }

@@ -50,12 +50,18 @@ async function exchange(
   // The real sender closes the stream when a connection ends, however it
   // ended; a client whose claim could not be opened learns of the refusal that
   // way and no other.
-  const serving = runTorServiceHandshake(
-    service,
-    servicePassword,
-    serviceOnion,
-    metadata(),
-  ).finally(() => void service.close());
+  const serving = (async () => {
+    try {
+      return await runTorServiceHandshake(
+        service,
+        servicePassword,
+        serviceOnion,
+        metadata(),
+      );
+    } finally {
+      void service.close();
+    }
+  })();
   const receiving = (async () => {
     const handshake = await runTorClientHandshake(
       client,

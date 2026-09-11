@@ -12,7 +12,16 @@ const session = () => ({
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function settled(p: Promise<unknown>): Promise<boolean> {
-  return Promise.race([p.then(() => true), sleep(50).then(() => false)]);
+  return await Promise.race([
+    (async () => {
+      await p;
+      return true;
+    })(),
+    (async () => {
+      await sleep(50);
+      return false;
+    })(),
+  ]);
 }
 
 describe('watchForReceiverHello', () => {

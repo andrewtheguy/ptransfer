@@ -232,6 +232,14 @@ export async function sendFileLive(
       outcome.reject(err);
       stop();
     };
+    // A background task whose failure ends the upload rather than rejecting.
+    const failOnError = async (task: () => Promise<unknown>) => {
+      try {
+        await task();
+      } catch (err) {
+        fail(err);
+      }
+    };
     const succeed = () => {
       if (finished) return;
       succeeded = true;
@@ -518,22 +526,23 @@ export async function sendFileLive(
       // receiver that the sender is here while storage relays are still
       // being found.
       availDirty = true;
-      const loop = controlLoop().catch(fail);
+      const loop = failOnError(controlLoop);
 
       // The spares land with the ring. A signaling relay demoted before then
       // is replaced the moment they arrive; one demoted after is replaced on
       // the spot.
-      const reserveReady = opts.storageRelays.reserve.then((spares) => {
+      const reserveReady = (async () => {
+        const spares = await opts.storageRelays.reserve;
         if (finished) return;
         reserve.push(...spares);
         promote();
-      });
+      })();
 
       // The ring lands whenever its preparation finishes; workers exist only
       // once it does. A failure rejects `outcome`, and the teardown's
       // best-effort cancel tells a waiting receiver to stop.
       let workers: Promise<unknown> = Promise.resolve();
-      const uploadStart = (async () => {
+      const uploadStart = failOnError(async () => {
         const dataRelays = await opts.storageRelays.ring;
         if (finished) return;
         ring = dataRelays;
@@ -546,10 +555,10 @@ export async function sendFileLive(
         workers = Promise.all(
           Array.from(
             { length: Math.min(UPLOAD_CHUNK_CONCURRENCY, total) },
-            () => worker().catch(fail),
+            () => failOnError(worker),
           ),
         );
-      })().catch(fail);
+      });
 
       try {
         await outcome.promise;

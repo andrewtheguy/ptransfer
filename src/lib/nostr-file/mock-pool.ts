@@ -101,7 +101,7 @@ export function createMockPool(opts: MockPoolOptions = {}): MockPool {
         return 'ok';
       });
     },
-    async querySync(relays, filter) {
+    querySync(relays, filter) {
       const out: Event[] = [];
       for (const relay of relays) {
         // Newest first, then `limit` — how a relay answers a filter, and what
@@ -113,7 +113,7 @@ export function createMockPool(opts: MockPoolOptions = {}): MockPool {
           ...(filter.limit === undefined ? hits : hits.slice(0, filter.limit)),
         );
       }
-      return out;
+      return Promise.resolve(out);
     },
     subscribeMany(relays, filter, params) {
       const sub: Subscription = {
