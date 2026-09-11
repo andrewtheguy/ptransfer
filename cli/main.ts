@@ -14,7 +14,7 @@ import { UsageError } from './usage';
  * cache directory, plain HTTP to the Tor directory authorities.
  *
  * It is a Unix program — Linux and macOS — and leans on that: signals,
- * hard links, the XDG cache directory, `/` as the only path separator.
+ * atomic rename, the XDG cache directory, `/` as the only path separator.
  * Windows is refused up front rather than half-supported.
  *
  *   bun run cli <command> [options]

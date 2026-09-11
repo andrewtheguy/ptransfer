@@ -49,10 +49,10 @@ no portability layer in between:
 - **Signals**: SIGINT, SIGTERM and SIGHUP each close the circuits and the
   service and remove a part file, then exit with 128 plus the signal's number,
   as a shell reports it.
-- **Files**: a received file takes its name through `link`, which refuses an
-  existing name in the same step; on a file system without hard links — FAT
-  and exFAT, which most USB sticks are — through an exclusive create and a
-  `rename` over that empty claim. `/` is the only path separator, and a
+- **Files**: a received file is written to a part file beside its
+  destination and takes its name with one `rename` — atomic, because both are
+  in one directory and so on one file system — after a check that the name is
+  still free. `/` is the only path separator, and a
   sender's name is cut to the 255-byte limit of Linux and macOS file names.
 - **Cache**: `$XDG_CACHE_HOME/ptransfer`, else `~/.cache/ptransfer`;
   `~/Library/Caches/ptransfer` on macOS.

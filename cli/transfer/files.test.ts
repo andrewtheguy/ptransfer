@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TransferMetadata } from '@/lib/nostr/types';
 import { TorFramedStream } from '@/lib/tor/framing';
 import { runTorClientHandshake, sendReady } from '@/lib/tor/handshake';
@@ -12,27 +12,6 @@ import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
 import { wireEncodingFor } from '@/lib/transfer-source';
 import { createFileSink, openFileSource, safeFileName } from './files';
 
-/**
- * The error `link` fails with, while set: EPERM is what Linux says on FAT
- * and exFAT, which have no hard links.
- */
-const linkFailure = vi.hoisted(() => ({ code: null as string | null }));
-
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return {
-    ...actual,
-    link: (...args: Parameters<typeof actual.link>) =>
-      linkFailure.code
-        ? Promise.reject(
-            Object.assign(new Error('link refused'), {
-              code: linkFailure.code,
-            }),
-          )
-        : actual.link(...args),
-  };
-});
-
 let dir: string;
 
 beforeEach(async () => {
@@ -40,7 +19,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  linkFailure.code = null;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -178,44 +156,6 @@ describe('createFileSink', () => {
     await sink.append(new Uint8Array([9]));
     await sink.finish();
     expect(await readdir(dir)).toEqual([name]);
-  });
-
-  describe('on a file system without hard links', () => {
-    beforeEach(() => {
-      linkFailure.code = 'EPERM';
-    });
-
-    it('still installs the file, and leaves nothing else behind', async () => {
-      const destination = join(dir, 'out.bin');
-      const sink = await createFileSink(destination);
-      await sink.append(new Uint8Array([1, 2, 3]));
-      const blob = await sink.finish();
-      expect(await blob.bytes()).toEqual(new Uint8Array([1, 2, 3]));
-      expect(new Uint8Array(await readFile(destination))).toEqual(
-        new Uint8Array([1, 2, 3]),
-      );
-      expect(await readdir(dir)).toEqual(['out.bin']);
-    });
-
-    it('still never overwrites a file that arrived meanwhile', async () => {
-      const destination = join(dir, 'out.bin');
-      const sink = await createFileSink(destination);
-      await sink.append(new Uint8Array([1]));
-      await writeFile(destination, 'arrived meanwhile');
-      await expect(sink.finish()).rejects.toThrow('already exists');
-      await sink.discard();
-      expect(await readFile(destination, 'utf8')).toBe('arrived meanwhile');
-      expect(await readdir(dir)).toEqual(['out.bin']);
-    });
-  });
-
-  it('passes on a link failure that is not about hard links', async () => {
-    linkFailure.code = 'EIO';
-    const sink = await createFileSink(join(dir, 'out.bin'));
-    await sink.append(new Uint8Array([1]));
-    await expect(sink.finish()).rejects.toThrow('link refused');
-    await sink.discard();
-    expect(await readdir(dir)).toEqual([]);
   });
 });
 

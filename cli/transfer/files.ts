@@ -1,13 +1,5 @@
 import { createReadStream, openAsBlob } from 'node:fs';
-import {
-  type FileHandle,
-  link,
-  open,
-  rename,
-  rm,
-  stat,
-  unlink,
-} from 'node:fs/promises';
+import { type FileHandle, open, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
@@ -102,7 +94,7 @@ function fitName(name: string, limit: number): string {
  * out, so a transfer that fails leaves no half-file under the real name.
  *
  * The destination must not exist when the sink is created or when it is
- * finished; it is never overwritten, even by a file that appears in between.
+ * finished, so a file that appears while the transfer runs is not replaced.
  * The finished file is the payload, so a finished sink has nothing to discard.
  */
 export async function createFileSink(destination: string): Promise<AppendSink> {
@@ -142,7 +134,13 @@ export async function createFileSink(destination: string): Promise<AppendSink> {
         if (!handle) throw new Error('The destination file was discarded');
         await handle.close();
         handle = null;
-        await installWithoutReplacing(partial, destination);
+        // The part file sits beside the destination, so the move is a
+        // rename within one file system: the file appears whole or not at
+        // all. A rename replaces what holds the name, so it is checked for
+        // first; the check and the rename are not one step, and a file that
+        // appears between them is replaced.
+        await refuseExisting(destination);
+        await rename(partial, destination);
         finished = true;
         return openAsBlob(destination);
       });
@@ -167,61 +165,4 @@ async function refuseExisting(path: string): Promise<void> {
     return;
   }
   throw new Error(`${path} already exists`);
-}
-
-/**
- * What `link` fails with on a file system that has no hard links: FAT and
- * exFAT, which most USB sticks are, and some network mounts. Linux says
- * EPERM, macOS ENOTSUP.
- */
-const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
-
-/**
- * Give the part file the destination's name without ever replacing a file
- * that got there first. A check followed by a rename leaves a window in which
- * another process's file appears and is replaced; `link` refuses an existing
- * name with EEXIST in the same step that would create it. The part file's
- * own name goes once the destination has the data.
- *
- * Where there are no hard links, the name is claimed with an exclusive
- * create instead, which refuses an existing file the same way, and the part
- * file is renamed over that empty claim — its own file, so nothing of anyone
- * else's is replaced, and nothing is copied.
- */
-async function installWithoutReplacing(
-  partial: string,
-  destination: string,
-): Promise<void> {
-  try {
-    await link(partial, destination);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EEXIST') throw new Error(`${destination} already exists`);
-    if (!code || !NO_HARD_LINKS.has(code)) throw error;
-    await renameOverClaim(partial, destination);
-    return;
-  }
-  await unlink(partial);
-}
-
-async function renameOverClaim(
-  partial: string,
-  destination: string,
-): Promise<void> {
-  let claim: FileHandle;
-  try {
-    claim = await open(destination, 'wx');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`${destination} already exists`);
-    }
-    throw error;
-  }
-  try {
-    await claim.close();
-    await rename(partial, destination);
-  } catch (error) {
-    await rm(destination, { force: true });
-    throw error;
-  }
 }
