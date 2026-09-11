@@ -109,6 +109,7 @@ diagnosable failure and a silent one.
 | `cli/tor/bootstrap.ts` | The CLI's bootstrap: the cached or freshly fetched directory, then the client |
 | `cli/commands/send.ts`, `receive.ts` | `send --tor` and `receive --onion`, the terminal's sender and receiver |
 | `cli/transfer/files.ts` | A file on disk as a transfer source, and the part-file sink that never overwrites |
+| `cli/transfer/selection.ts` | `send`'s paths as one source: a lone file as itself, anything else walked into the tab's ZIP |
 
 Above the framing, `sendFileOverLink` and `createTransferReceiver` in
 `src/lib/p2p-transfer.ts` are the identical code the WebRTC path runs — one

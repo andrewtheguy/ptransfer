@@ -2,7 +2,9 @@
 
 // Live Tor CLI-to-CLI test: one `ptransfer send --tor` process publishes a
 // v3 onion service and one `ptransfer receive --onion` process fetches it,
-// over real circuits, the way two people at two terminals would.
+// over real circuits, the way two people at two terminals would. It sends a
+// single file into the receiver's current directory, then a folder and a
+// file together, which arrive as one ZIP in the folder `--out` names.
 //
 //   bun run test:live:tor:cli
 //
@@ -18,9 +20,10 @@
 //                                   (default 480000)
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { unzipSync } from 'fflate';
 import {
   assertSameBytes,
   terminate,
@@ -119,17 +122,18 @@ function waitForRendezvous(
   });
 }
 
-async function cliToCli(): Promise<void> {
-  console.log('\n=== CLI sender -> CLI receiver (Tor) ===');
-  const source = join(ARTIFACTS, 'cli-to-cli.txt');
-  await writeFile(
-    source,
-    'pTransfer over Tor, terminal to terminal.\n'.repeat(400),
-  );
-  const inbox = join(ARTIFACTS, 'inbox');
+/**
+ * One `send --tor` of `paths` and one `receive` of it into a fresh `inbox`,
+ * both exiting 0; the path the receiver reports it saved. The receiver runs
+ * in `inbox`, or with `--out` naming it from outside.
+ */
+async function transfer(
+  paths: string[],
+  inbox: string,
+  { viaOut = false } = {},
+): Promise<string> {
   await mkdir(inbox);
-
-  const sender = runCli('sender', ['send', '--tor', source, ...BRIDGE_ARGS]);
+  const sender = runCli('sender', ['send', '--tor', ...paths, ...BRIDGE_ARGS]);
   const { address, password } = await withTimeout(
     Promise.race([
       waitForRendezvous(sender.child),
@@ -146,8 +150,14 @@ async function cliToCli(): Promise<void> {
 
   const receiver = runCli(
     'receiver',
-    ['receive', '--onion', address, ...BRIDGE_ARGS],
-    { cwd: inbox, stdin: `${password}\n` },
+    [
+      'receive',
+      '--onion',
+      address,
+      ...(viaOut ? ['--out', basename(inbox)] : []),
+      ...BRIDGE_ARGS,
+    ],
+    { cwd: viaOut ? dirname(inbox) : inbox, stdin: `${password}\n` },
   );
   await withTimeout(
     bothSucceed([
@@ -158,10 +168,60 @@ async function cliToCli(): Promise<void> {
     'the transfer',
   );
   const saved = (await receiver.stdout).trim().split('\n').pop() ?? '';
-  if (saved !== join(inbox, 'cli-to-cli.txt')) {
+  if (dirname(saved) !== inbox) {
     throw new Error(`the receiver reported an unexpected path: ${saved}`);
   }
+  return saved;
+}
+
+async function cliToCli(): Promise<void> {
+  console.log('\n=== CLI sender -> CLI receiver (Tor) ===');
+  const source = join(ARTIFACTS, 'cli-to-cli.txt');
+  await writeFile(
+    source,
+    'pTransfer over Tor, terminal to terminal.\n'.repeat(400),
+  );
+  const saved = await transfer([source], join(ARTIFACTS, 'inbox'));
+  if (basename(saved) !== 'cli-to-cli.txt') {
+    throw new Error(`the receiver saved an unexpected name: ${saved}`);
+  }
   await assertSameBytes(source, saved, 'cli -> cli received file');
+}
+
+async function cliToCliFolder(): Promise<void> {
+  console.log('\n=== CLI sender -> CLI receiver, a folder and a file (Tor) ===');
+  const folder = join(ARTIFACTS, 'album');
+  await mkdir(join(folder, 'nested'), { recursive: true });
+  const sent: Record<string, Uint8Array> = {
+    'album/cover.txt': new TextEncoder().encode('front cover\n'.repeat(50)),
+    'album/nested/ünïcødé.bin': crypto.getRandomValues(new Uint8Array(40_000)),
+    'loose.txt': new TextEncoder().encode('a loose file\n'),
+  };
+  await writeFile(join(folder, 'cover.txt'), sent['album/cover.txt']);
+  await writeFile(
+    join(folder, 'nested', 'ünïcødé.bin'),
+    sent['album/nested/ünïcødé.bin'],
+  );
+  const loose = join(ARTIFACTS, 'loose.txt');
+  await writeFile(loose, sent['loose.txt']);
+
+  const saved = await transfer([folder, loose], join(ARTIFACTS, 'inbox-zip'), {
+    viaOut: true,
+  });
+  if (!/^files_\d{14}\.zip$/.test(basename(saved))) {
+    throw new Error(`the receiver saved an unexpected name: ${saved}`);
+  }
+  const received = unzipSync(new Uint8Array(await readFile(saved)));
+  const names = Object.keys(received).sort();
+  if (names.join('\n') !== Object.keys(sent).sort().join('\n')) {
+    throw new Error(`the ZIP holds ${names.join(', ')}`);
+  }
+  for (const [name, bytes] of Object.entries(sent)) {
+    if (Buffer.compare(Buffer.from(received[name]), Buffer.from(bytes)) !== 0) {
+      throw new Error(`${name} came out of the ZIP changed`);
+    }
+  }
+  say(`[PASS] cli -> cli folder: ${names.length} files intact in ${basename(saved)}`);
 }
 
 async function cleanup(): Promise<void> {
@@ -176,6 +236,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 try {
   await cliToCli();
+  await cliToCliFolder();
   console.log(`\nAll Tor CLI transfers passed in ${elapsed()}.`);
 } catch (error) {
   console.error(`\n[FAIL] ${error instanceof Error ? error.message : error}`);

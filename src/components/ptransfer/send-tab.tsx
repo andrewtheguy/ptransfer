@@ -27,7 +27,7 @@ import { formatFileSize } from '@/lib/file-utils';
 import {
   projectedWireBytesFor,
   supportsFolderSelection,
-} from '@/lib/folder-utils';
+} from '@/lib/picked-files';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/client';
 import {
   TOR_MAX_TRANSFER_BYTES,

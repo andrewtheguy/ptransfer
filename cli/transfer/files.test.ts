@@ -1,6 +1,16 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TransferMetadata } from '@/lib/nostr/types';
 import { TorFramedStream } from '@/lib/tor/framing';
@@ -9,8 +19,13 @@ import { createOnionStreamPair } from '@/lib/tor/mock-stream';
 import { serveUntilSent } from '@/lib/tor/serve';
 import { receiveFileOverTor } from '@/lib/tor/transfer';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
-import { wireEncodingFor } from '@/lib/transfer-source';
-import { createFileSink, openFileSource, safeFileName } from './files';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import {
+  createFileSink,
+  destinationFolder,
+  openFileSource,
+  safeFileName,
+} from './files';
 
 let dir: string;
 
@@ -53,6 +68,73 @@ describe('openFileSource', () => {
     );
     await expect(openFileSource(dir)).rejects.toThrow('Not a regular file');
   });
+
+  it('refuses a file replaced or changed in length after it was chosen', async () => {
+    const path = join(dir, 'notes.txt');
+    await writeFile(path, 'notes');
+    const changed = `${path} changed after it was chosen`;
+
+    // Written beside it first, so the replacement cannot reuse its inode.
+    let source = await openFileSource(path);
+    await writeFile(join(dir, 'other.txt'), 'notes');
+    await rename(join(dir, 'other.txt'), path);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    source = await openFileSource(path);
+    await writeFile(path, 'longer notes');
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+
+    source = await openFileSource(path);
+    await rm(path);
+    await expect(readAll(source.stream())).rejects.toThrow(changed);
+  });
+
+  it('follows a symbolic link named on the command line', async () => {
+    const path = join(dir, 'notes.txt');
+    await writeFile(path, 'notes');
+    const link = join(dir, 'link.txt');
+    await symlink(path, link);
+    const source = await openFileSource(link);
+    expect(new TextDecoder().decode(await readAll(source.stream()))).toBe(
+      'notes',
+    );
+  });
+});
+
+describe('destinationFolder', () => {
+  it('gives a folder back as an absolute path', async () => {
+    const inbox = join(dir, 'inbox');
+    await mkdir(inbox);
+    expect(await destinationFolder(inbox)).toBe(inbox);
+    expect(await destinationFolder(`${inbox}/`)).toBe(inbox);
+    expect(await destinationFolder(relative(process.cwd(), inbox))).toBe(inbox);
+  });
+
+  it('refuses a missing folder rather than creating it', async () => {
+    const missing = join(dir, 'missing');
+    await expect(destinationFolder(missing)).rejects.toThrow(
+      `No such folder: ${missing}`,
+    );
+    await expect(readdir(dir)).resolves.toEqual([]);
+  });
+
+  it('refuses a file', async () => {
+    const file = join(dir, 'file.txt');
+    await writeFile(file, 'x');
+    await expect(destinationFolder(file)).rejects.toThrow('Not a folder');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses a folder it cannot create files in',
+    async () => {
+      const locked = join(dir, 'locked');
+      await mkdir(locked);
+      await chmod(locked, 0o500);
+      await expect(destinationFolder(locked)).rejects.toThrow(
+        `Cannot save files in ${locked}`,
+      );
+    },
+  );
 });
 
 describe('safeFileName', () => {
@@ -176,64 +258,100 @@ function oneStreamService(stream: OnionStream): OnionService {
   };
 }
 
-describe('a file on disk to a file on disk', () => {
-  it('goes through the service loop, the handshake, and the framed stream', async () => {
-    const sourcePath = join(dir, 'photo.bin');
-    const data = new Uint8Array(300_000);
-    for (let i = 0; i < data.length; i++) data[i] = (i * 31 + 7) % 251;
-    await writeFile(sourcePath, data);
-    const content = await openFileSource(sourcePath);
-    const metadata: TransferMetadata = {
-      contentType: 'file',
-      fileName: content.name,
-      fileSize: content.estimatedSize,
-      contentEncoding: wireEncodingFor(content),
-      mimeType: content.type,
-    };
-    const [serviceSide, clientSide] = createOnionStreamPair();
+/**
+ * `content` served by the service loop, over a mock onion stream, to a
+ * receiver saving it at `destination`.
+ */
+function serveToFile(content: TransferSource, destination: string) {
+  const metadata: TransferMetadata = {
+    contentType: 'file',
+    fileName: content.name,
+    fileSize: content.estimatedSize,
+    contentEncoding: wireEncodingFor(content),
+    mimeType: content.type,
+  };
+  const [serviceSide, clientSide] = createOnionStreamPair();
 
-    const serving = serveUntilSent({
-      service: oneStreamService(serviceSide),
-      onion: ONION,
-      password: PASSWORD,
-      metadata,
-      content,
-      fileMetadata: {
-        fileName: metadata.fileName,
-        fileSize: metadata.fileSize,
-        mimeType: metadata.mimeType,
-      },
-      isCancelled: () => false,
-      setState: () => {},
-    });
+  const serving = serveUntilSent({
+    service: oneStreamService(serviceSide),
+    onion: ONION,
+    password: PASSWORD,
+    metadata,
+    content,
+    fileMetadata: {
+      fileName: metadata.fileName,
+      fileSize: metadata.fileSize,
+      mimeType: metadata.mimeType,
+    },
+    isCancelled: () => false,
+    setState: () => {},
+  });
 
-    const destination = join(dir, 'received', 'photo.bin');
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(join(dir, 'received'));
-    const receiving = (async () => {
-      const framed = new TorFramedStream(clientSide);
-      const { keys, metadata: offered } = await runTorClientHandshake(
-        framed,
-        PASSWORD,
-        ONION,
-      );
-      expect(offered.fileName).toBe('photo.bin');
-      const sink = await createFileSink(destination);
-      await sendReady(framed);
-      const payload = await receiveFileOverTor(
+  const receiving = (async () => {
+    const framed = new TorFramedStream(clientSide);
+    const { keys, metadata: offered } = await runTorClientHandshake(
+      framed,
+      PASSWORD,
+      ONION,
+    );
+    expect(offered.fileName).toBe(content.name);
+    const sink = await createFileSink(destination);
+    await sendReady(framed);
+    try {
+      return await receiveFileOverTor(
         framed,
         keys.contentKey,
         offered.contentEncoding,
         sink,
         { estimatedBytes: offered.fileSize },
       );
+    } finally {
       await framed.close();
-      return payload;
-    })();
+    }
+  })();
+  return { serving, receiving };
+}
+
+describe('a file on disk to a file on disk', () => {
+  it('goes through the service loop, the handshake, and the framed stream', async () => {
+    const sourcePath = join(dir, 'photo.bin');
+    const data = new Uint8Array(300_000);
+    for (let i = 0; i < data.length; i++) data[i] = (i * 31 + 7) % 251;
+    await writeFile(sourcePath, data);
+    await mkdir(join(dir, 'received'));
+    const destination = join(dir, 'received', 'photo.bin');
+
+    const { serving, receiving } = serveToFile(
+      await openFileSource(sourcePath),
+      destination,
+    );
 
     const [, payload] = await Promise.all([serving, receiving]);
     expect(payload.size).toBe(data.length);
     expect(new Uint8Array(await readFile(destination))).toEqual(data);
     expect(await readdir(join(dir, 'received'))).toEqual(['photo.bin']);
+  });
+
+  it('stops waiting once the file has changed, and does not tell the receiver where it is', async () => {
+    const sourcePath = join(dir, 'photo.bin');
+    await writeFile(sourcePath, 'as chosen');
+    const content = await openFileSource(sourcePath);
+    await writeFile(sourcePath, 'changed since, and longer');
+
+    // The service would hand out no second connection: a sender that went
+    // back to waiting would hang here instead of failing.
+    const { serving, receiving } = serveToFile(content, join(dir, 'got.bin'));
+
+    await expect(serving).rejects.toThrow(
+      `${sourcePath} changed after it was chosen`,
+    );
+    const refused = await receiving.then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(refused?.message).toBe(
+      "The sender stopped the transfer: A file being sent changed on the sender's side",
+    );
+    expect(await readdir(dir)).toEqual(['photo.bin']);
   });
 });

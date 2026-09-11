@@ -72,8 +72,12 @@ no portability layer in between:
      file and prints its address and password; `receive --onion <address>`
      reads the password from standard input and saves the file in the current
      directory under the sender's name, never overwriting.
-   - **2b**: folders sent as a ZIP, a choice of where the file lands, and the
-     bridge choices the tab offers.
+   - **2b** (done): `send --tor <path>...` takes several files and folders
+     and sends them as one ZIP, built by the tab's own archive code from the
+     files found on disk; a lone file still goes as itself. `receive --out
+     <folder>` saves into an existing folder instead of the current
+     directory.
+   - **2c**: the bridge choices the tab offers.
 3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
    node-datachannel, with the Nostr file relay as the fallback; codes are
    carried as text, since a terminal has no camera.

@@ -62,3 +62,6 @@ because public keys can always be exported.
   `NOSTR_FILE_RELAY.md`) specify what goes on the wire. The browser tab and the
   CLI run it from the same code, so there is no other implementation to
   coordinate with; keep a wire change and its document in the same change.
+
+## Tools
+- for one off python scripts, always run it with uv

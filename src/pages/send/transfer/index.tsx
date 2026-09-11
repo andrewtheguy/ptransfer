@@ -25,6 +25,7 @@ import {
   getArchiveBaseName,
 } from '@/lib/folder-utils';
 import { testRelayAvailability } from '@/lib/nostr';
+import { pickedZipEntries } from '@/lib/picked-files';
 import { DEFAULT_TOR_BRIDGE } from '@/lib/tor/client';
 import {
   createFileTransferSource,
@@ -155,8 +156,9 @@ export function SendTransferPage() {
           // preserved: create a lazy ZIP source. Compression starts only once
           // the data channel is ready and its output is sent immediately.
           if (cancelled) return;
-          const archiveName = `${getArchiveBaseName(files)}_${archiveTimestamp()}`;
-          setTransferSource(createZipTransferSource(files, archiveName));
+          const entries = pickedZipEntries(files);
+          const archiveName = `${getArchiveBaseName(entries)}_${archiveTimestamp()}`;
+          setTransferSource(createZipTransferSource(entries, archiveName));
           setStep('ready');
         }
       } catch (err) {

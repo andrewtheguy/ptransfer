@@ -39,3 +39,22 @@ export class P2PConnectionError extends Error {
     }
   }
 }
+
+/**
+ * The payload being sent cannot be read as it was chosen: a file changed or
+ * became unreadable on the sender's side. Unlike a failed connection, the
+ * next receiver would meet it too, so the sender stops instead of waiting.
+ *
+ * `message` is for the sender and may name local paths; `peerReason` is what
+ * the receiver is told, and names none.
+ */
+export class SourceError extends Error {
+  readonly peerReason: string;
+
+  constructor(message: string, peerReason: string) {
+    super(message);
+    Object.setPrototypeOf(this, SourceError.prototype);
+    this.name = 'SourceError';
+    this.peerReason = peerReason;
+  }
+}

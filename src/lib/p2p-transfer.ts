@@ -57,7 +57,7 @@ import {
   parseChunkMessage,
 } from '@/lib/crypto';
 import type { ChannelEndReason, ChannelMessage } from '@/lib/duplex-channel';
-import { P2PConnectionError } from '@/lib/errors';
+import { P2PConnectionError, SourceError } from '@/lib/errors';
 import {
   type TransferSource,
   type WireEncoding,
@@ -305,6 +305,8 @@ export function cancelOverLink(link: TransferLink): boolean {
 
 /** What this side tells the receiver when `error` ends the transfer here. */
 function abortReasonFor(error: unknown): string {
+  // Its message may name the sender's local paths.
+  if (error instanceof SourceError) return error.peerReason;
   if (error instanceof Error) {
     return error.message === 'Cancelled' ? CANCELLED_REASON : error.message;
   }
