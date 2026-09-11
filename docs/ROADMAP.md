@@ -54,6 +54,35 @@ retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
    — whether the native WebRTC addon can be embedded in that binary is the
    open question.
 
+Why a JavaScript CLI is viable at all, checked under Bun 1.4 before phase 1
+was built, so the later phases rest on something measured rather than assumed:
+
+- The slow browser bootstrap is a browser limitation, not a Tor one: a tab
+  cannot fetch the directory over plain HTTP, a process can. Plain HTTP to the
+  directory authorities' DirPorts, four requests in flight, assembles a ~38 MiB
+  seed in about 25 s; with that seed the unmodified webtor-wasm binary is
+  bootstrapped over the public websocket Snowflake bridge in about 3.5 s. A
+  cold `tor-test` runs in about 35 s end to end and a warm one, with the seed
+  cached on disk, in about 12–15 s. Performance is not a goal, which is why
+  Snowflake over websocket is acceptable and a native Arti stack is not on the
+  table.
+- `node-datachannel/polyfill` gives a working `RTCPeerConnection` under Bun,
+  so PIN Exchange and Code Exchange have a transport for phase 3.
+- Ink 7 with `@inkjs/ui` renders under Bun, so phase 4's terminal UI is React
+  in the stack the web app already uses.
+
+Open items, in no particular order:
+
+- `cli/tor/directory-fetch.ts` is a copy of webtor-rs's
+  `tests/tools/fetch-directory.ts`. It belongs in the webtor npm package, which
+  pTransfer is the only live customer of, so the two do not drift.
+- The fetcher reads from the directory authorities directly. Public directory
+  mirrors (fallback directories) should be preferred, with the authorities as
+  the last resort, so a fleet of CLIs does not load the nine authorities.
+- `bun build --compile` with the `node-datachannel` N-API addon is untested;
+  if it cannot embed the addon, phase 4 ships a Bun script plus a lockfile
+  instead of one binary.
+
 ## Backlog (Future Considerations)
 
 ### Relay Fallback for Data Transfer via ppng.io (piping-server)
