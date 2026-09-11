@@ -2,14 +2,15 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RELAY_CACHE_VERSION } from '@/lib/nostr-file/constants';
 import {
-  type CachedRelay,
+  emptyRelayCache,
   parseRelayHealth,
   parseRelayPoolState,
-  type RelayPoolState,
+  type RelayCacheContents,
   type RelayPoolStorage,
   storedRelayHealth,
   storedRelayPoolState,
 } from '@/lib/nostr-file/relay-pool';
+import { type FileLock, fileLock } from '../file-lock';
 
 /**
  * The relay cache on disk: what earlier transfers learned about the public
@@ -19,80 +20,90 @@ import {
  * records in IndexedDB (`src/lib/nostr-file/relay-cache-idb.ts`); what they
  * mean, and how a stored one is read back, is `relay-pool.ts`'s.
  *
- * One JSON file beside the Tor directory seed. Each write replaces the file
- * by rename, so a reader never sees half of one. `RelayPoolStorage` is a get
- * and a set rather than a read-modify-write, so two transfers running at once
- * can lose each other's latest verdicts — the cost is a probe, as it is
- * between two tabs.
+ * One JSON file beside the Tor directory seed. Several transfers may run on
+ * one machine at once, so every change is a locked read-modify-write, as the
+ * retired Rust CLI's was: an exclusive lock on a sibling lock file, the file
+ * read again under it, the change applied to *that*, and the result renamed
+ * into place. A second process therefore adds its verdicts to the first's
+ * rather than overwriting them, and a reader, which takes no lock, never sees
+ * a torn file. The lock is on a separate file because the rename replaces the
+ * cache file's inode, and a lock on the old one would mean nothing to the
+ * next writer.
  *
  * Nothing here can fail a transfer: a missing, unreadable, or unparseable
- * file, or one of another version, is an empty cache, and a write that fails
- * is dropped. The file holds relay URLs and verdicts, nothing about any
- * transfer.
+ * file, or one of another version, is an empty cache, and a change that
+ * cannot take the lock or write its result is applied and dropped. The file
+ * holds relay URLs and verdicts, nothing about any transfer.
  */
 
 const CACHE_FILE = 'relay-cache.json';
+const LOCK_FILE = 'relay-cache.lock';
 
-interface CacheFile {
+interface CacheFile extends RelayCacheContents {
   version: typeof RELAY_CACHE_VERSION;
-  state: RelayPoolState | null;
-  relays: CachedRelay[];
 }
 
-export function openRelayStore(cacheDir: string): RelayPoolStorage {
+export function openRelayStore(
+  cacheDir: string,
+  lock: FileLock = fileLock(join(cacheDir, LOCK_FILE)),
+): RelayPoolStorage {
   const path = join(cacheDir, CACHE_FILE);
-  // One change at a time from this process, so a set never writes back a
-  // file another set from here has since replaced.
-  let chain: Promise<unknown> = Promise.resolve();
-  const serialize = <T>(op: () => Promise<T>): Promise<T> => {
-    const run = chain.then(op);
-    chain = run.catch(() => undefined);
-    return run;
-  };
 
-  const read = async (): Promise<CacheFile> => {
+  const read = async (): Promise<RelayCacheContents> => {
     try {
       const value: unknown = JSON.parse(await readFile(path, 'utf8'));
-      if (
-        value &&
-        typeof value === 'object' &&
-        (value as Record<string, unknown>).version === RELAY_CACHE_VERSION
-      ) {
+      if (value && typeof value === 'object') {
         const file = value as Record<string, unknown>;
-        return {
-          version: RELAY_CACHE_VERSION,
-          state: parseRelayPoolState(file.state),
-          relays: parseRelayHealth(file.relays),
-        };
+        if (file.version === RELAY_CACHE_VERSION) {
+          return {
+            state: parseRelayPoolState(file.state),
+            relays: parseRelayHealth(file.relays),
+          };
+        }
       }
     } catch {
       // Missing or unreadable: an empty cache.
     }
-    return { version: RELAY_CACHE_VERSION, state: null, relays: [] };
+    return emptyRelayCache();
   };
 
-  const change = (edit: (file: CacheFile) => CacheFile) =>
-    serialize(async () => {
-      // Written beside the file and renamed over it: the rename is atomic
-      // within one directory, so the file is always one whole write.
-      const partial = `${path}.${process.pid}.part`;
-      try {
-        const next = edit(await read());
-        await mkdir(cacheDir, { recursive: true });
-        await writeFile(partial, JSON.stringify(next));
-        await rename(partial, path);
-      } catch {
-        // Cache persistence never prevents a transfer.
-        await rm(partial, { force: true }).catch(() => undefined);
-      }
-    });
+  const write = async (cache: RelayCacheContents) => {
+    // Written beside the file and renamed over it: the rename is atomic
+    // within one directory, so the file is always one whole write.
+    const partial = `${path}.${process.pid}.part`;
+    const file: CacheFile = {
+      version: RELAY_CACHE_VERSION,
+      state: cache.state && storedRelayPoolState(cache.state),
+      relays: storedRelayHealth(cache.relays),
+    };
+    try {
+      await writeFile(partial, JSON.stringify(file));
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  };
 
   return {
-    getState: () => serialize(async () => (await read()).state),
-    setState: (state) =>
-      change((file) => ({ ...file, state: storedRelayPoolState(state) })),
-    getRelayHealth: () => serialize(async () => (await read()).relays),
-    setRelayHealth: (relays) =>
-      change((file) => ({ ...file, relays: storedRelayHealth(relays) })),
+    read,
+    async update(change) {
+      let applied = false;
+      let result!: ReturnType<typeof change>;
+      try {
+        await mkdir(cacheDir, { recursive: true });
+        await lock(async () => {
+          const cache = await read();
+          result = change(cache);
+          applied = true;
+          await write(cache);
+        });
+      } catch {
+        // Cache persistence never prevents a transfer: a change that could
+        // not be kept still gets its answer.
+        if (!applied) result = change(await read());
+      }
+      return result;
+    },
   };
 }

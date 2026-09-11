@@ -89,7 +89,9 @@ no portability layer in between:
      switch of that name. Codes are carried as text, since a terminal has no
      camera, and are the same text the tab copies and pastes, so either end can
      be a tab. Both fallbacks run: the Nostr file relay, with the relay cache in
-     `relay-cache.json`, and with `--anonymous` the Tor one. The engine in
+     `relay-cache.json` — changed under an `flock` on `relay-cache.lock`, as
+     the Rust CLI did, so concurrent senders keep each other's verdicts — and
+     with `--anonymous` the Tor one. The engine in
      `src/lib/code-exchange` takes what differs per host as an `ExchangeHost`.
    - **3b**: PIN Exchange, which carries the same codes over its sealed Nostr
      channel.
@@ -145,10 +147,6 @@ Open items, in no particular order:
 - The node-datachannel build plugin rewrites the package's own loader, so it
   breaks when a release changes that loader. A static per-target entry point
   in node-datachannel itself would make the plugin unnecessary.
-- `RelayPoolStorage` is a get and a set, so two CLIs sending at once can each
-  write back a relay cache without the other's latest verdicts. The retired
-  Rust CLI took an advisory lock around a read-modify-write; the interface
-  would need an `update` for the file store to do the same.
 
 ## Backlog (Future Considerations)
 

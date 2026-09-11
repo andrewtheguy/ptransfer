@@ -466,7 +466,7 @@ sequenceDiagram
 | `src/lib/nostr-file/events.ts` | Chunk/probe event construction and fetch filters |
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection; the relay cache's records and `RelayPoolStorage` |
-| `src/lib/nostr-file/relay-cache-idb.ts`, `cli/code/relay-store.ts` | The relay cache in IndexedDB (tab) and in a file (CLI) |
+| `src/lib/nostr-file/relay-cache-idb.ts`, `cli/code/relay-store.ts` | The relay cache in IndexedDB (tab) and in a file under `flock` (CLI); every change one read-modify-write |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
 | `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
 | `src/lib/nostr-file/upload.ts` | Publish-with-retry, control/storage relay resolution, and background storage preparation |

@@ -57,15 +57,42 @@ export interface CachedRelay {
 }
 
 /**
+ * The whole relay cache: the candidate list with its ring cursor, and one
+ * health record per relay.
+ */
+export interface RelayCacheContents {
+  state: RelayPoolState | null;
+  relays: CachedRelay[];
+}
+
+/**
  * Where the relay cache persists: IndexedDB in the browser tab
- * (`relay-cache-idb.ts`), a file in the CLI. Best effort on every side — a
- * read that fails is an empty cache, and a write that fails is dropped.
+ * (`relay-cache-idb.ts`), a file in the CLI (`cli/code/relay-store.ts`).
+ *
+ * Several transfers can share one cache — two tabs, two terminals — so
+ * every change is a read-modify-write that nothing else interleaves with:
+ * `change` sees the cache as every other writer has left it, and what it
+ * leaves is written before anyone else reads. Two writers therefore add
+ * their verdicts to each other's rather than one overwriting the other.
+ *
+ * Best effort on every side: a cache that cannot be read is an empty one,
+ * and a write that fails is dropped. `change` still runs either way, so the
+ * caller always gets its answer.
  */
 export interface RelayPoolStorage {
-  getState(): Promise<RelayPoolState | null>;
-  setState(state: RelayPoolState): Promise<void>;
-  getRelayHealth(): Promise<CachedRelay[]>;
-  setRelayHealth(relays: CachedRelay[]): Promise<void>;
+  /** The cache as it is now. */
+  read(): Promise<RelayCacheContents>;
+  /**
+   * Apply `change` to the cache as it is now and keep what it leaves there;
+   * resolves with what `change` returned. `change` runs synchronously — it
+   * holds the cache for as long as it runs.
+   */
+  update<T>(change: (cache: RelayCacheContents) => T): Promise<T>;
+}
+
+/** A cache with nothing in it. */
+export function emptyRelayCache(): RelayCacheContents {
+  return { state: null, relays: [] };
 }
 
 /** A stored state, or null when it is not one. */
@@ -501,21 +528,23 @@ export async function saveDiscoveredRelays(
 ): Promise<void> {
   const canonical = canonicalUrls(urls);
   if (canonical.length === 0) return;
-  const byUrl = new Map<string, CachedRelay>();
-  for (const relay of await storage.getRelayHealth()) {
-    const url = normalizeRelayUrl(relay.url);
-    if (url) byUrl.set(url, { ...relay, url });
-  }
-  for (const url of canonical) {
-    const previous = byUrl.get(url);
-    byUrl.set(
-      url,
-      previous
-        ? { ...previous, lastDiscoveredAt: now }
-        : emptyCachedRelay(url, now),
-    );
-  }
-  await storage.setRelayHealth(rankRelayCache([...byUrl.values()], now));
+  await storage.update((cache) => {
+    const byUrl = new Map<string, CachedRelay>();
+    for (const relay of cache.relays) {
+      const url = normalizeRelayUrl(relay.url);
+      if (url) byUrl.set(url, { ...relay, url });
+    }
+    for (const url of canonical) {
+      const previous = byUrl.get(url);
+      byUrl.set(
+        url,
+        previous
+          ? { ...previous, lastDiscoveredAt: now }
+          : emptyCachedRelay(url, now),
+      );
+    }
+    cache.relays = rankRelayCache([...byUrl.values()], now);
+  });
 }
 
 /**
@@ -616,7 +645,8 @@ export async function sweepRelayHealth(
   // Longest-unchecked first, so a second session picks up where this one ran
   // out of transfer rather than re-probing the same relays.
   const lastCheckedAt = new Map<string, number>();
-  for (const relay of await storage.getRelayHealth().catch(() => [])) {
+  const { relays: cached } = await storage.read().catch(emptyRelayCache);
+  for (const relay of cached) {
     const url = normalizeRelayUrl(relay.url);
     if (url && relay.lastCheckedAt !== null) {
       lastCheckedAt.set(url, relay.lastCheckedAt);
@@ -691,18 +721,20 @@ export async function selectUploadRelays(
   storage: RelayPoolStorage,
 ): Promise<string[]> {
   if (healthy.length === 0) return [];
-  const state = await storage.getState();
-  const cursor = state ? state.cursor % healthy.length : 0;
-  const selected: string[] = [];
-  for (let i = 0; i < Math.min(count, healthy.length); i++) {
-    selected.push(healthy[(cursor + i) % healthy.length].url);
-  }
-  await storage.setState({
-    candidates: state?.candidates ?? [],
-    discoveredAt: state?.discoveredAt ?? 0,
-    cursor: (cursor + selected.length) % healthy.length,
+  return await storage.update((cache) => {
+    const { state } = cache;
+    const cursor = state ? state.cursor % healthy.length : 0;
+    const selected: string[] = [];
+    for (let i = 0; i < Math.min(count, healthy.length); i++) {
+      selected.push(healthy[(cursor + i) % healthy.length].url);
+    }
+    cache.state = {
+      candidates: state?.candidates ?? [],
+      discoveredAt: state?.discoveredAt ?? 0,
+      cursor: (cursor + selected.length) % healthy.length,
+    };
+    return selected;
   });
-  return selected;
 }
 
 /**
@@ -727,85 +759,87 @@ export async function getRelayCandidates(
 ): Promise<string[]> {
   const capability = opts.capability ?? 'storage';
   const now = opts.now ?? Date.now();
-  const [state, savedRelayHealth] = await Promise.all([
-    storage.getState(),
-    storage.getRelayHealth(),
-  ]);
-  const byUrl = new Map(
-    savedRelayHealth
-      .filter((relay) => isFreshRelay(relay, now))
-      .map((relay) => [relay.url, relay]),
-  );
-  // Discovery drops seeds from what it returns, but the caches are older than
-  // any given seed list: a relay listed as a candidate before it became a
-  // signaling seed, or left behind by a seed list that has since changed, is
-  // still sitting in them. Barring seeds here too is what makes `merged` —
-  // which is written straight back to the candidate cache — self-healing
-  // rather than carrying such an entry forever.
   const seeds = canonicalUrls(opts.seeds ?? [...DEFAULT_RELAYS]);
-  const seedSet = new Set(seeds);
-  const cachedCandidates =
-    state &&
-    state.discoveredAt <= now &&
-    now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
-      ? state.candidates
-          .map((url) => normalizeRelayUrl(url))
-          .filter((url): url is string => url !== null && !seedSet.has(url))
-      : [];
+  // Discovery is seconds on the network and needs nothing from the cache, so
+  // it runs first: the merge below holds the cache only for as long as it
+  // takes to compute.
   const discovered = await discoverRelayCandidates(pool, seeds);
-  for (const url of cachedCandidates) {
-    if (!byUrl.has(url)) {
-      byUrl.set(url, emptyCachedRelay(url, state?.discoveredAt ?? 0));
-    }
-  }
-  for (const url of discovered) {
-    const relay = byUrl.get(url) ?? emptyCachedRelay(url, now);
-    byUrl.set(url, { ...relay, lastDiscoveredAt: now });
-  }
-  const knownWorking = [...byUrl.values()]
-    .filter(
-      (relay) =>
-        !seedSet.has(relay.url) &&
-        (capability === 'storage'
-          ? relay.supportsStorage
-          : relay.supportsControl) &&
-        isHealthyRelay(relay),
-    )
-    .sort(
-      (a, b) =>
-        (a.rttMs ?? Number.POSITIVE_INFINITY) -
-          (b.rttMs ?? Number.POSITIVE_INFINITY) ||
-        (b.lastSucceededAt ?? 0) - (a.lastSucceededAt ?? 0),
-    )
-    .map((relay) => relay.url);
-  const rankedCandidates = [
-    ...new Set([...discovered, ...cachedCandidates]),
-  ].sort((a, b) => {
-    const relayA = byUrl.get(a);
-    const relayB = byUrl.get(b);
-    return (
-      (relayA?.consecutiveFailures ?? 0) - (relayB?.consecutiveFailures ?? 0) ||
-      (relayB?.lastDiscoveredAt ?? 0) - (relayA?.lastDiscoveredAt ?? 0)
+  return await storage.update((cache) => {
+    const { state } = cache;
+    const byUrl = new Map(
+      cache.relays
+        .filter((relay) => isFreshRelay(relay, now))
+        .map((relay) => [relay.url, relay]),
     );
-  });
-  // Recently proven low-latency relays stay first so a seed outage can fall
-  // back to them. Remaining candidates are failure-ranked, then newest-first.
-  const merged = [...new Set([...knownWorking, ...rankedCandidates])].slice(
-    0,
-    DISCOVERY_CANDIDATE_CAP,
-  );
-  await Promise.all([
-    storage.setState({
+    // Discovery drops seeds from what it returns, but the caches are older
+    // than any given seed list: a relay listed as a candidate before it
+    // became a signaling seed, or left behind by a seed list that has since
+    // changed, is still sitting in them. Barring seeds here too is what makes
+    // `merged` — which is written straight back to the candidate cache —
+    // self-healing rather than carrying such an entry forever.
+    const seedSet = new Set(seeds);
+    const cachedCandidates =
+      state &&
+      state.discoveredAt <= now &&
+      now - state.discoveredAt < RELAY_CANDIDATE_TTL_MS
+        ? state.candidates
+            .map((url) => normalizeRelayUrl(url))
+            .filter((url): url is string => url !== null && !seedSet.has(url))
+        : [];
+    for (const url of cachedCandidates) {
+      if (!byUrl.has(url)) {
+        byUrl.set(url, emptyCachedRelay(url, state?.discoveredAt ?? 0));
+      }
+    }
+    for (const url of discovered) {
+      const relay = byUrl.get(url) ?? emptyCachedRelay(url, now);
+      byUrl.set(url, { ...relay, lastDiscoveredAt: now });
+    }
+    const knownWorking = [...byUrl.values()]
+      .filter(
+        (relay) =>
+          !seedSet.has(relay.url) &&
+          (capability === 'storage'
+            ? relay.supportsStorage
+            : relay.supportsControl) &&
+          isHealthyRelay(relay),
+      )
+      .sort(
+        (a, b) =>
+          (a.rttMs ?? Number.POSITIVE_INFINITY) -
+            (b.rttMs ?? Number.POSITIVE_INFINITY) ||
+          (b.lastSucceededAt ?? 0) - (a.lastSucceededAt ?? 0),
+      )
+      .map((relay) => relay.url);
+    const rankedCandidates = [
+      ...new Set([...discovered, ...cachedCandidates]),
+    ].sort((a, b) => {
+      const relayA = byUrl.get(a);
+      const relayB = byUrl.get(b);
+      return (
+        (relayA?.consecutiveFailures ?? 0) -
+          (relayB?.consecutiveFailures ?? 0) ||
+        (relayB?.lastDiscoveredAt ?? 0) - (relayA?.lastDiscoveredAt ?? 0)
+      );
+    });
+    // Recently proven low-latency relays stay first so a seed outage can fall
+    // back to them. Remaining candidates are failure-ranked, then
+    // newest-first.
+    const merged = [...new Set([...knownWorking, ...rankedCandidates])].slice(
+      0,
+      DISCOVERY_CANDIDATE_CAP,
+    );
+    cache.state = {
       candidates: merged,
       discoveredAt: now,
       cursor: state?.cursor ?? 0,
-    }),
+    };
     // The whole cache is written back, not just `merged`. Trimming it to this
     // transfer's working set would throw away everything the background pass
     // enumerated beyond the 150 relays this run happens to rank highest.
-    storage.setRelayHealth(rankRelayCache([...byUrl.values()], now)),
-  ]);
-  return merged;
+    cache.relays = rankRelayCache([...byUrl.values()], now);
+    return merged;
+  });
 }
 
 /**
@@ -824,7 +858,6 @@ export async function saveRelayHealth(
 ): Promise<void> {
   const { capability } = opts;
   const now = opts.now ?? Date.now();
-  const previous = await storage.getRelayHealth();
   const failed = new Set(
     failedRelays
       .map((url) => normalizeRelayUrl(url))
@@ -844,37 +877,39 @@ export async function saveRelayHealth(
     }
   }
   const probed = new Set([...failed, ...healthyByUrl.keys()]);
-  const byUrl = new Map<string, CachedRelay>();
-  for (const relay of previous) {
-    const url = normalizeRelayUrl(relay.url);
-    if (url) byUrl.set(url, { ...relay, url });
-  }
-  for (const url of probed) {
-    const previousRelay = byUrl.get(url);
-    const relay: CachedRelay = previousRelay ?? emptyCachedRelay(url, now);
-    const rttMs = healthyByUrl.get(url);
-    byUrl.set(
-      url,
-      rttMs === undefined
-        ? {
-            ...relay,
-            lastCheckedAt: now,
-            rttMs: null,
-            consecutiveFailures: relay.consecutiveFailures + 1,
-            supportsControl: false,
-            supportsStorage: false,
-          }
-        : {
-            ...relay,
-            lastCheckedAt: now,
-            lastSucceededAt: now,
-            rttMs,
-            consecutiveFailures: 0,
-            supportsControl: true,
-            supportsStorage:
-              capability === 'storage' ? true : relay.supportsStorage,
-          },
-    );
-  }
-  await storage.setRelayHealth(rankRelayCache([...byUrl.values()], now));
+  await storage.update((cache) => {
+    const byUrl = new Map<string, CachedRelay>();
+    for (const relay of cache.relays) {
+      const url = normalizeRelayUrl(relay.url);
+      if (url) byUrl.set(url, { ...relay, url });
+    }
+    for (const url of probed) {
+      const previousRelay = byUrl.get(url);
+      const relay: CachedRelay = previousRelay ?? emptyCachedRelay(url, now);
+      const rttMs = healthyByUrl.get(url);
+      byUrl.set(
+        url,
+        rttMs === undefined
+          ? {
+              ...relay,
+              lastCheckedAt: now,
+              rttMs: null,
+              consecutiveFailures: relay.consecutiveFailures + 1,
+              supportsControl: false,
+              supportsStorage: false,
+            }
+          : {
+              ...relay,
+              lastCheckedAt: now,
+              lastSucceededAt: now,
+              rttMs,
+              consecutiveFailures: 0,
+              supportsControl: true,
+              supportsStorage:
+                capability === 'storage' ? true : relay.supportsStorage,
+            },
+      );
+    }
+    cache.relays = rankRelayCache([...byUrl.values()], now);
+  });
 }

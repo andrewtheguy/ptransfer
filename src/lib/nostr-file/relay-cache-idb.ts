@@ -5,8 +5,10 @@ import {
   RELAY_CACHE_VERSION,
 } from './constants';
 import {
+  emptyRelayCache,
   parseRelayHealth,
   parseRelayPoolState,
+  type RelayCacheContents,
   type RelayPoolStorage,
   storedRelayHealth,
   storedRelayPoolState,
@@ -62,83 +64,79 @@ function openRelayCache(): Promise<IDBDatabase> {
   });
 }
 
+/**
+ * Read both stores in `transaction` and parse what they hold. Only IndexedDB
+ * requests are awaited, so a readwrite transaction is still active after it.
+ */
+async function readCache(
+  transaction: IDBTransaction,
+): Promise<RelayCacheContents> {
+  const [state, relays] = await Promise.all([
+    requestResult(
+      transaction
+        .objectStore(RELAY_CACHE_STATE_STORE)
+        .get(RELAY_POOL_STATE_KEY),
+    ),
+    requestResult(transaction.objectStore(RELAY_CACHE_HEALTH_STORE).getAll()),
+  ]);
+  return {
+    state: parseRelayPoolState(state),
+    relays: parseRelayHealth(relays),
+  };
+}
+
+const STORES = [RELAY_CACHE_STATE_STORE, RELAY_CACHE_HEALTH_STORE];
+
 export function createIndexedDbRelayPool(): RelayPoolStorage {
   return {
-    async getState() {
+    async read() {
       let database: IDBDatabase | undefined;
       try {
         database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_STATE_STORE,
-          'readonly',
-        );
-        const value = await requestResult(
+        const transaction = database.transaction(STORES, 'readonly');
+        const cache = await readCache(transaction);
+        await transactionDone(transaction);
+        return cache;
+      } catch {
+        return emptyRelayCache();
+      } finally {
+        database?.close();
+      }
+    },
+    async update(change) {
+      let database: IDBDatabase | undefined;
+      let transaction: IDBTransaction | undefined;
+      let cache: RelayCacheContents;
+      try {
+        database = await openRelayCache();
+        // One readwrite transaction over both stores: IndexedDB runs it to
+        // completion before any other that touches them, in this tab or
+        // another, which is what makes the read-modify-write whole.
+        transaction = database.transaction(STORES, 'readwrite');
+        cache = await readCache(transaction);
+      } catch {
+        database?.close();
+        // Unreadable: the change still gets an answer, and nothing is kept.
+        return change(emptyRelayCache());
+      }
+      const result = change(cache);
+      try {
+        const { state, relays } = cache;
+        if (state) {
           transaction
             .objectStore(RELAY_CACHE_STATE_STORE)
-            .get(RELAY_POOL_STATE_KEY),
-        );
-        await transactionDone(transaction);
-        return parseRelayPoolState(value);
-      } catch {
-        return null;
-      } finally {
-        database?.close();
-      }
-    },
-    async setState(state) {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_STATE_STORE,
-          'readwrite',
-        );
-        transaction
-          .objectStore(RELAY_CACHE_STATE_STORE)
-          .put(storedRelayPoolState(state), RELAY_POOL_STATE_KEY);
+            .put(storedRelayPoolState(state), RELAY_POOL_STATE_KEY);
+        }
+        const health = transaction.objectStore(RELAY_CACHE_HEALTH_STORE);
+        health.clear();
+        for (const relay of storedRelayHealth(relays)) health.put(relay);
         await transactionDone(transaction);
       } catch {
         // Cache persistence never prevents a transfer.
       } finally {
-        database?.close();
+        database.close();
       }
-    },
-    async getRelayHealth() {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_HEALTH_STORE,
-          'readonly',
-        );
-        const value = await requestResult(
-          transaction.objectStore(RELAY_CACHE_HEALTH_STORE).getAll(),
-        );
-        await transactionDone(transaction);
-        return parseRelayHealth(value);
-      } catch {
-        return [];
-      } finally {
-        database?.close();
-      }
-    },
-    async setRelayHealth(relays) {
-      let database: IDBDatabase | undefined;
-      try {
-        database = await openRelayCache();
-        const transaction = database.transaction(
-          RELAY_CACHE_HEALTH_STORE,
-          'readwrite',
-        );
-        const store = transaction.objectStore(RELAY_CACHE_HEALTH_STORE);
-        store.clear();
-        for (const relay of storedRelayHealth(relays)) store.put(relay);
-        await transactionDone(transaction);
-      } catch {
-        // Cache persistence never prevents a transfer.
-      } finally {
-        database?.close();
-      }
+      return result;
     },
   };
 }
