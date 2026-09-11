@@ -24,8 +24,9 @@ also fail later if too few storage relays work or the selected relays do not del
 pieces.
 
 This document is the architecture reference and the wire specification for
-this path, which the browser tab and the CLI in `cli/` run from the same code —
-the CLI will keep the same relay-health records in a file under the user's
+this path, which the browser tab runs from `src/lib` and the CLI in `cli/` will
+run from the same code once its transfer commands land ([ROADMAP.md](ROADMAP.md)) —
+it will keep the same relay-health records in a file under the user's
 cache directory rather than IndexedDB. Nothing on the wire depends on the cache
 either way: it changes which candidates are tried first, never what is
 published or how it is read back. An offer names no relays when its sender could not

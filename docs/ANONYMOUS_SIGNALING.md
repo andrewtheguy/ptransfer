@@ -10,9 +10,9 @@ Code Exchange session an anonymous PIN carries asks for that mode's Tor
 fallback rather than its clearnet one. A direct connection is still WebRTC, so
 the option does not make the transfer as a whole anonymous.
 
-The browser tab and the CLI in `cli/` run it from the same code in `src/lib`,
-so either side of a transfer may be a tab or a terminal, and this document is
-the specification of what that code does on the wire. Three things here are
+The browser tab runs it from `src/lib`, and the CLI in `cli/` will run the
+same code once its transfer commands land ([ROADMAP.md](ROADMAP.md)); this
+document is the specification of what that code does on the wire. Three things here are
 what the two sides have to agree on, and a peer that runs a different app
 version can only fail closed on them:
 

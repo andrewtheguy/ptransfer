@@ -6,10 +6,11 @@ those two strings are the whole rendezvous. The receiving side needs no
 signaling relay, account, lookup hint, or anything the sender did not hand it
 directly; its Tor client still builds circuits through Tor relays.
 
-This document is the **wire specification** for that mode. The browser tab and
-the CLI in `cli/` run it from the same code in `src/lib`, so either side of a
-transfer may be a tab or a terminal; where the code and this document disagree,
-this document is what the code is meant to do. The handshake carries its own
+This document is the **wire specification** for that mode. The browser tab
+runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
+transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
+implementation; where the code and this document disagree, this document is
+what the code is meant to do. The handshake carries its own
 version, `TOR_HANDSHAKE_VERSION` (currently `1`), in the `hello` and `offer`
 frames, and a mismatch is **refused rather than negotiated**: two app versions
 that differ on the frames fail closed at the first exchange instead of part way

@@ -6,7 +6,7 @@ pTransfer is a browser-based encrypted file and folder transfer application. Its
 
 ## Hosts
 
-One codebase, two hosts. The browser tab (`src/`) and the CLI (`cli/`) both run
+One codebase, two hosts. The browser tab (`src/`) and the CLI (`cli/`) share
 the protocol code in `src/lib` — the cryptography, PIN and Code Exchange, Nostr
 signaling and the file relay, the Tor handshake and framing, and the transfer
 layer — so there is one implementation of every wire format and the documents

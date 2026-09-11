@@ -3,9 +3,10 @@
 This guide is intentionally high-level and user-focused.
 For protocol internals, signaling payload format, and implementation details, see [Architecture](ARCHITECTURE.md).
 
-The browser tab and the CLI in `cli/` run Code Exchange from the same code, so
-either side of a transfer may be a tab or a terminal. Only the *way* a code is
-carried will differ, because a terminal has no camera — the CLI will copy and
+The browser tab runs Code Exchange from `src/lib`, and the CLI in `cli/` will
+run the same code once its transfer commands land ([ROADMAP.md](ROADMAP.md));
+either side of a transfer will then be a tab or a terminal. Only the *way* a
+code is carried will differ, because a terminal has no camera — the CLI will copy and
 paste text where the browser also offers QR. The wire specification is
 [CODE_EXCHANGE_PROTOCOL.md](CODE_EXCHANGE_PROTOCOL.md).
 

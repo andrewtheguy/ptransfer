@@ -22,7 +22,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Command line
 
-The same code runs from a terminal. `cli/` is a Bun application that imports
+The same code is headed for the terminal. `cli/` is a Bun application that imports
 the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
 are the ones the browser tab runs, so a change to the app is a change to the
 CLI by construction. What the CLI adds is what a process has and a page does

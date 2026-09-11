@@ -1,5 +1,9 @@
 import { parseArgs } from 'node:util';
-import type { OnionService } from '@/lib/tor/webtor-api';
+import type {
+  DirectoryDescription,
+  OnionService,
+  OnionStream,
+} from '@/lib/tor/webtor-api';
 import { fetchDirectorySeed } from '../tor/directory-fetch';
 import { openDirectoryStore } from '../tor/directory-store';
 import { loadWebtor } from '../tor/webtor';
@@ -75,6 +79,26 @@ function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/**
+ * The next `length` bytes as text, or null if the stream ends first. A Tor
+ * stream is a byte stream: one `receive` may hand back part of what the peer
+ * wrote in one `send`.
+ */
+async function readExactly(
+  stream: OnionStream,
+  length: number,
+): Promise<string | null> {
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  while (total < length) {
+    const next = await stream.receive();
+    if (!next) return null;
+    parts.push(next);
+    total += next.length;
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
 export async function torTest(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -123,12 +147,18 @@ export async function torTest(argv: string[]): Promise<number> {
     : await store.load(describeDirectory, (reason) =>
         say(`Ignoring the cached directory: ${reason}`),
       );
+  let directory: DirectoryDescription | undefined;
   if (seed) {
+    directory = describeDirectory(seed);
     say(`Using the cached directory in ${store.path}`);
     clock.lap('read the cached directory');
   } else {
     try {
-      seed = await fetchDirectorySeed({ onProgress: say });
+      const fresh = await fetchDirectorySeed({ onProgress: say });
+      // Read it before keeping it: a seed the client cannot read is worth
+      // neither a file nor a bootstrap.
+      directory = describeDirectory(fresh);
+      seed = fresh;
     } catch (error) {
       // The fast path is a convenience: without a seed the client downloads
       // the directory through the bridge itself, which is what a tab does.
@@ -149,8 +179,7 @@ export async function torTest(argv: string[]): Promise<number> {
     }
   }
 
-  if (seed) {
-    const directory = describeDirectory(seed);
+  if (directory) {
     say(
       `Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
         `${directory.validUntil.toISOString()}, onion time period ` +
@@ -196,13 +225,17 @@ export async function torTest(argv: string[]): Promise<number> {
     const served = (async () => {
       const stream = await service.accept();
       if (!stream) throw new Error('The service closed before a client came');
-      const received = await stream.receive();
-      const text = received ? new TextDecoder().decode(received) : null;
-      if (text !== PROBE) {
-        throw new Error(`The service received ${JSON.stringify(text)}`);
+      try {
+        const text = await readExactly(stream, Buffer.byteLength(PROBE));
+        if (text !== PROBE) {
+          throw new Error(`The service received ${JSON.stringify(text)}`);
+        }
+        await stream.send(`echo: ${text}`);
+      } finally {
+        // Closing on failure too is what lets the client's read end instead
+        // of waiting on a reply that is never coming.
+        await stream.close().catch(() => undefined);
       }
-      await stream.send(`echo: ${text}`);
-      await stream.close();
     })();
     // A failure here before `served` is awaited below must not surface as an
     // unhandled rejection; the await still sees it.
@@ -210,13 +243,16 @@ export async function torTest(argv: string[]): Promise<number> {
 
     const stream = await client.connectStream(service.onionAddress, PORT);
     clock.lap('connect back to it');
-    await stream.send(PROBE);
-    const reply = await stream.receive();
-    const echoed = reply ? new TextDecoder().decode(reply) : null;
-    if (echoed !== `echo: ${PROBE}`) {
-      throw new Error(`The client received ${JSON.stringify(echoed)}`);
+    try {
+      await stream.send(PROBE);
+      const expected = `echo: ${PROBE}`;
+      const echoed = await readExactly(stream, Buffer.byteLength(expected));
+      if (echoed !== expected) {
+        throw new Error(`The client received ${JSON.stringify(echoed)}`);
+      }
+    } finally {
+      await stream.close().catch(() => undefined);
     }
-    await stream.close();
     await served;
     clock.lap('round-trip a message');
   } finally {

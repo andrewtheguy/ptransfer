@@ -11,10 +11,11 @@ SPAKE2-sealed Nostr channel instead of a person's hand
 this document specifies holds there unchanged; only the carriage differs, and
 §6 says what that changes.
 
-This document is the **wire specification** for that mode. The browser tab and
-the CLI in `cli/` run it from the same code in `src/lib`, so either side of a
-transfer may be a tab or a terminal; where the code and this document disagree,
-this document is what the code is meant to do. The user-facing guide to the
+This document is the **wire specification** for that mode. The browser tab
+runs it from `src/lib`, and the CLI in `cli/` will run the same code once its
+transfer commands land ([ROADMAP.md](./ROADMAP.md)), so there is one
+implementation; where the code and this document disagree, this document is
+what the code is meant to do. The user-facing guide to the
 same mode is [CODE_EXCHANGE.md](./CODE_EXCHANGE.md).
 
 What Code Exchange shares with [`INTEROP_PROTOCOL.md`](./INTEROP_PROTOCOL.md)
