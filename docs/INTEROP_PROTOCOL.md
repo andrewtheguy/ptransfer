@@ -639,7 +639,11 @@ once the transport has taken the last (a data channel is drained at a 1 MiB
 `bufferedAmountLowThreshold`; a framed onion stream's writes complete as the
 stream takes them). Nothing comes back to open a window, so a receiver stores
 chunks as fast as its storage allows, and what it has taken off the link but
-not yet written waits in its memory.
+not yet written waits in its memory. A receiver bounds that wait at
+`RECEIVE_BACKLOG_MAX_BYTES` (256 MiB) and gives up past it, closing the
+transport: nothing it does can slow the sender down, and a browser cannot
+refuse a data channel message, so the alternative would be to hold on until
+the process dies.
 
 ### 7.4 Completion
 
@@ -683,7 +687,8 @@ completeness checks above.
 - A receiver that receives `abort` stops at once and reports the sender's
   reason.
 - A receiver that gives up — cancelled by its user, a chunk that fails a
-  check, a protocol violation, a local failure such as storage — closes the
+  check, a protocol violation, a local failure such as storage, or storage
+  that fell `RECEIVE_BACKLOG_MAX_BYTES` behind the link — closes the
   transport. It has no message to send.
 - A transport that closes before `end` has arrived is a connection failure for
   the receiver, and an `abort` before it stops the receiver; after a valid
@@ -731,6 +736,7 @@ A steadily progressing transfer of any size never trips it.
 | `ENCRYPTION_CHUNK_SIZE` | 128 KiB |
 | `MAX_CHUNKS` | 65 536 |
 | `MAX_MESSAGE_SIZE` | 2 GiB |
+| `RECEIVE_BACKLOG_MAX_BYTES` | 256 MiB |
 | `abort` reason | at most 200 characters |
 
 Peer-visible timeouts:

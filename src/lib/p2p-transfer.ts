@@ -37,7 +37,8 @@
  * appends each decrypted (and, for 'deflate-raw', inflated) chunk to scratch
  * storage in the link's reliable order, finalizing from the `end` byte count.
  * The sender is paced by the transport's backpressure alone, so what the
- * receiver has taken off the link but not yet written waits in memory.
+ * receiver has taken off the link but not yet written waits in memory — up to
+ * `RECEIVE_BACKLOG_MAX_BYTES`, past which the receiver gives up.
  *
  * The link must be reliable and ordered: every payload appends in arrival
  * order and only the final chunk may be short, so a transport that reorders
@@ -103,6 +104,16 @@ export interface TransferLink {
  * quiet aborts after this span instead of hanging.
  */
 export const STALL_TIMEOUT_MS = 60000;
+
+/**
+ * Ceiling on what a receiver holds between taking a chunk off the link and
+ * finishing its write. The sender is paced by the transport alone, so a
+ * receiver whose storage is slower than the link accumulates the difference
+ * in memory, and a browser cannot refuse a data channel message: past this
+ * much the receiver gives up, a clean failure where holding on would be a
+ * crashed tab.
+ */
+export const RECEIVE_BACKLOG_MAX_BYTES = 256 * 1024 * 1024;
 
 /** The abort reason a sender gives when its user cancelled. */
 export const CANCELLED_REASON = 'cancelled';
@@ -556,6 +567,12 @@ export interface ReceiverOptions {
    * not the sender's. Defaults to STALL_TIMEOUT_MS.
    */
   stallTimeoutMs?: number;
+  /**
+   * Most wire bytes held between arrival and the end of their write before
+   * the transfer gives up as storage that cannot keep up. Defaults to
+   * RECEIVE_BACKLOG_MAX_BYTES.
+   */
+  maxBacklogBytes?: number;
 }
 
 export interface TransferReceiver {
@@ -600,6 +617,12 @@ export function createTransferReceiver(
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
   const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
+  const maxBacklogBytes =
+    typeof opts.maxBacklogBytes === 'number' &&
+    Number.isFinite(opts.maxBacklogBytes) &&
+    opts.maxBacklogBytes > 0
+      ? opts.maxBacklogBytes
+      : RECEIVE_BACKLOG_MAX_BYTES;
   const progressTotal = opts.estimatedBytes ?? 0;
   // The size cap on the inflated output is the decompression-bomb guard: the
   // in-band `end` byte count only covers the compressed wire bytes.
@@ -689,6 +712,14 @@ export function createTransferReceiver(
       }
       if (claimedWireBytes + expectedPlaintextLength > maxWireBytes) {
         throw new Error('Transfer exceeds the supported size limit');
+      }
+      // What has come off the link but is not yet written is this side's
+      // memory, and nothing here can slow the sender down.
+      if (
+        claimedWireBytes - totalDecryptedBytes + expectedPlaintextLength >
+        maxBacklogBytes
+      ) {
+        throw new Error('Storage could not keep up with the connection');
       }
       previousChunkLength = expectedPlaintextLength;
       claimedWireBytes += expectedPlaintextLength;

@@ -701,6 +701,52 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).rejects.toThrow('Transfer stalled');
   });
 
+  it('gives up when storage falls too far behind the link', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 2;
+    const key = await makeKey();
+    const inner = await createAdaptiveAppendSink(totalBytes);
+    const sink = gatedSink(inner);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    peer.deliver(messages[0]);
+    peer.deliver(messages[1]);
+
+    await expect(receiver.done).rejects.toThrow(
+      'Storage could not keep up with the connection',
+    );
+    expect(peer.listeners()).toBe(0);
+    sink.open();
+    await inner.discard();
+  });
+
+  it('bounds the backlog, not the file: storage that keeps up is never refused', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE * 2;
+    const key = await makeKey();
+    const sink = await createAdaptiveAppendSink(totalBytes);
+    const receiver = createTransferReceiver(key, 'identity', sink, {
+      maxBacklogBytes: ENCRYPTION_CHUNK_SIZE,
+    });
+    const peer = scriptedLink();
+    receiver.attach(peer.link);
+    const messages = await encryptAll(key, makePlaintext(totalBytes));
+
+    for (const message of messages) {
+      peer.deliver(message);
+      // Each write finishes before the next chunk arrives.
+      await tick();
+    }
+    peer.deliver({ t: 'end', chunks: 2, bytes: totalBytes });
+
+    const blob = await receiver.done;
+    expect(blob.size).toBe(totalBytes);
+    await sink.discard();
+  });
+
   /** A receiver on slow storage with every chunk and a valid `end` in hand. */
   async function receiverStoringAfterEnd(
     opts: Parameters<typeof createTransferReceiver>[3] = {},
