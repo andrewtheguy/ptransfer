@@ -106,12 +106,8 @@ export interface DirectoryDescription {
 export interface OnionResponse {
   readonly status: number;
   readonly ok: boolean;
-  /**
-   * A `Headers` in a browser. Under Bun the binding hands back a plain
-   * object keyed by lowercase header name instead, so read it through
-   * something that accepts both rather than calling `get` on it.
-   */
-  readonly headers: Headers | Record<string, string>;
+  /** Every header the service sent, repeats included. */
+  readonly headers: Headers;
   bytes(): Uint8Array;
   text(): string;
 }

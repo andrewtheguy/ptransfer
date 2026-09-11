@@ -1,5 +1,4 @@
 import { parseArgs } from 'node:util';
-import type { OnionResponse } from '@/lib/tor/webtor-api';
 import { fetchDirectorySeed } from '../tor/directory-fetch';
 import { openDirectoryStore } from '../tor/directory-store';
 import { loadWebtor } from '../tor/webtor';
@@ -69,15 +68,6 @@ class Stopwatch {
   get total(): number {
     return performance.now() - this.started;
   }
-}
-
-/** One response header, whichever shape the binding produced. */
-function header(
-  headers: OnionResponse['headers'],
-  name: string,
-): string | undefined {
-  if (headers instanceof Headers) return headers.get(name) ?? undefined;
-  return headers[name] ?? headers[name.toLowerCase()];
 }
 
 function seconds(ms: number): string {
@@ -170,7 +160,7 @@ export async function torTest(argv: string[]): Promise<number> {
     if (url) {
       const response = await client.fetch(url);
       clock.lap('fetch an onion page');
-      const type = header(response.headers, 'content-type') ?? 'unknown type';
+      const type = response.headers.get('content-type') ?? 'unknown type';
       say(
         `GET ${url} -> HTTP ${response.status}, ${response.bytes().length} bytes of ${type}`,
       );
