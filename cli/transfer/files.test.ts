@@ -60,9 +60,26 @@ describe('safeFileName', () => {
     expect(safeFileName('report.pdf')).toBe('report.pdf');
   });
 
-  it('keeps only the last path segment, whichever separator was used', () => {
+  it('keeps only the last path segment', () => {
     expect(safeFileName('../../etc/passwd')).toBe('passwd');
-    expect(safeFileName('C:\\Users\\me\\a.txt')).toBe('a.txt');
+  });
+
+  it('keeps a backslash, an ordinary character in a Unix file name', () => {
+    expect(safeFileName('a\\b.txt')).toBe('a\\b.txt');
+    expect(safeFileName('..\\..\\x')).toBe('..\\..\\x');
+  });
+
+  it('fits a long name into 255 bytes, keeping its extension', () => {
+    const bytes = (name: string) => new TextEncoder().encode(name).length;
+    const ascii = safeFileName(`${'a'.repeat(300)}.pdf`);
+    expect(bytes(ascii)).toBe(255);
+    expect(ascii.endsWith('.pdf')).toBe(true);
+    // 255 UTF-16 units from another system are up to 765 bytes here; no
+    // character is cut in half.
+    const wide = safeFileName(`${'日'.repeat(251)}.txt`);
+    expect(bytes(wide)).toBeLessThanOrEqual(255);
+    expect(wide).toBe(`${'日'.repeat(83)}.txt`);
+    expect(safeFileName('a'.repeat(255))).toBe('a'.repeat(255));
   });
 
   it('strips control characters and refuses to name nothing', () => {
@@ -131,6 +148,14 @@ describe('createFileSink', () => {
     await sink.discard();
     expect(await readFile(destination, 'utf8')).toBe('arrived meanwhile');
     expect(await readdir(dir)).toEqual(['out.bin']);
+  });
+
+  it('takes a destination whose name is as long as a name can be', async () => {
+    const name = `${'n'.repeat(251)}.bin`;
+    const sink = await createFileSink(join(dir, name));
+    await sink.append(new Uint8Array([9]));
+    await sink.finish();
+    expect(await readdir(dir)).toEqual([name]);
   });
 });
 

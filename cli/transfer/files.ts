@@ -1,13 +1,6 @@
 import { createReadStream, openAsBlob } from 'node:fs';
-import {
-  type FileHandle,
-  link,
-  open,
-  rm,
-  stat,
-  unlink,
-} from 'node:fs/promises';
-import { basename } from 'node:path';
+import { type FileHandle, open, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
@@ -53,17 +46,46 @@ function mimeTypeOf(path: string): string {
   return sniffed || 'application/octet-stream';
 }
 
+/** The longest file name Linux and macOS file systems take, in bytes. */
+const NAME_MAX_BYTES = 255;
+/** What a part file adds to its destination's name: `.<8 hex>.part`. */
+const PART_SUFFIX_BYTES = 14;
+
 /**
  * The name a received file is saved under: the sender's, reduced to one
  * path segment with nothing in it a file name cannot hold. A sender chose it,
  * so it is not trusted to stay in the directory it was given.
+ *
+ * `/` is the only separator a Unix path has; a backslash is an ordinary
+ * character in a file name here, and is kept.
  */
 export function safeFileName(name: string): string {
-  const segment = name.split(/[\\/]/).pop() ?? '';
+  const segment = name.split('/').pop() ?? '';
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are exactly what is being stripped
   const cleaned = segment.replace(/[\x00-\x1f\x7f]/g, '').trim();
   if (cleaned === '' || cleaned === '.' || cleaned === '..') return 'received';
-  return cleaned;
+  return fitName(cleaned, NAME_MAX_BYTES);
+}
+
+/**
+ * `name` cut to at most `limit` bytes of UTF-8, at a character boundary,
+ * keeping a short extension. A sender's system may allow longer names than
+ * this one — 255 UTF-16 units is up to 765 bytes — and a name the file
+ * system refuses would fail the transfer only after the handshake.
+ */
+function fitName(name: string, limit: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(name).length <= limit) return name;
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : '';
+  let fitted = '';
+  let used = encoder.encode(extension).length;
+  for (const char of name.slice(0, name.length - extension.length)) {
+    used += encoder.encode(char).length;
+    if (used > limit) break;
+    fitted += char;
+  }
+  return fitted + extension;
 }
 
 /**
@@ -72,12 +94,20 @@ export function safeFileName(name: string): string {
  * out, so a transfer that fails leaves no half-file under the real name.
  *
  * The destination must not exist when the sink is created or when it is
- * finished; it is never overwritten, even by a file that appears in between.
+ * finished, so a file that appears while the transfer runs is not replaced.
  * The finished file is the payload, so a finished sink has nothing to discard.
  */
 export async function createFileSink(destination: string): Promise<AppendSink> {
   await refuseExisting(destination);
-  const partial = `${destination}.${crypto.randomUUID().slice(0, 8)}.part`;
+  // The part file's name fits wherever the destination's does.
+  const stem = fitName(
+    basename(destination),
+    NAME_MAX_BYTES - PART_SUFFIX_BYTES,
+  );
+  const partial = join(
+    dirname(destination),
+    `${stem}.${crypto.randomUUID().slice(0, 8)}.part`,
+  );
   // Exclusive: two receivers in one directory get two part files, never one.
   let handle: FileHandle | null = await open(partial, 'wx');
   let chain: Promise<unknown> = Promise.resolve();
@@ -104,7 +134,13 @@ export async function createFileSink(destination: string): Promise<AppendSink> {
         if (!handle) throw new Error('The destination file was discarded');
         await handle.close();
         handle = null;
-        await installWithoutReplacing(partial, destination);
+        // The part file sits beside the destination, so the move is a
+        // rename within one file system: the file appears whole or not at
+        // all. A rename replaces what holds the name, so it is checked for
+        // first; the check and the rename are not one step, and a file that
+        // appears between them is replaced.
+        await refuseExisting(destination);
+        await rename(partial, destination);
         finished = true;
         return openAsBlob(destination);
       });
@@ -129,26 +165,4 @@ async function refuseExisting(path: string): Promise<void> {
     return;
   }
   throw new Error(`${path} already exists`);
-}
-
-/**
- * Give the part file the destination's name without ever replacing a file
- * that got there first. A check followed by a rename leaves a window in which
- * another process's file appears and is replaced; `link` refuses an existing
- * name with EEXIST in the same step that would create it. The part file's
- * own name goes once the destination has the data.
- */
-async function installWithoutReplacing(
-  partial: string,
-  destination: string,
-): Promise<void> {
-  try {
-    await link(partial, destination);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`${destination} already exists`);
-    }
-    throw error;
-  }
-  await unlink(partial);
 }

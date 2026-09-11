@@ -23,6 +23,10 @@
   both typed by `src/lib/tor/webtor-api.ts`; the rule they share, such as the
   directory freshness rule in `src/lib/tor/directory-policy.ts`, stays in
   `src/lib` with no platform API in it.
+- `cli/` is Unix only: Linux and macOS, never Windows. Use what a Unix process
+  has — signals, atomic rename, the XDG directories, `/` as the only separator —
+  directly, with no Windows branch. Its terminal UI is OpenTUI with the React
+  bindings. The scope and the release targets are in `docs/ROADMAP.md`.
 
 ## Checks to run
 

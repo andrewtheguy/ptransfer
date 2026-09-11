@@ -13,6 +13,10 @@ import { UsageError } from './usage';
  * adds is the platform seam a process has and a page does not: files, a
  * cache directory, plain HTTP to the Tor directory authorities.
  *
+ * It is a Unix program — Linux and macOS — and leans on that: signals,
+ * atomic rename, the XDG cache directory, `/` as the only path separator.
+ * Windows is refused up front rather than half-supported.
+ *
  *   bun run cli <command> [options]
  */
 
@@ -33,6 +37,12 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
 };
 
 async function main(argv: string[]): Promise<number> {
+  if (process.platform === 'win32') {
+    process.stderr.write(
+      'The pTransfer CLI runs on Linux and macOS; on Windows, use WSL or the web app.\n',
+    );
+    return 1;
+  }
   // Quiet until a command has read its own --verbose.
   routeDiagnostics(false);
   const [command, ...rest] = argv;
