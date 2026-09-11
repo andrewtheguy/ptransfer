@@ -52,10 +52,11 @@ afterAll(() => {
 });
 
 async function makeKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
+  return await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 function makePlaintext(totalBytes: number): Uint8Array {
@@ -130,11 +131,13 @@ function scriptedLink() {
   const enders = new Set<(reason: ChannelEndReason) => void>();
   const sent: (string | Uint8Array)[] = [];
   const link: TransferLink = {
-    sendBinary: async (data) => {
+    sendBinary: (data) => {
       sent.push(data);
+      return Promise.resolve();
     },
-    sendText: async (text) => {
+    sendText: (text) => {
       sent.push(text);
+      return Promise.resolve();
     },
     flush: async () => {},
     subscribe: (listener) => {
@@ -455,10 +458,11 @@ describe('sendFileOverLink', () => {
     const [senderChannel, receiverChannel] = channelPair();
     receiver.attach(receiverChannel);
     // As the hooks do: the file is whole, so the connection goes.
-    const received = receiver.done.then((blob) => {
+    const received = (async () => {
+      const blob = await receiver.done;
       receiverChannel.close();
       return blob;
-    });
+    })();
 
     const wireBytes = await sendFileOverLink(
       senderChannel,

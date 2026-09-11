@@ -760,14 +760,21 @@ export function createTransferReceiver(
     // Appends must follow wire order even if Web Crypto resolves operations
     // at different times.
     appendChain = appendChain.then(processChunk);
-    const promise = appendChain.catch((error: unknown) => {
-      fail(
-        error instanceof Error ? error : new Error('Failed to receive chunk'),
-      );
-    });
-
+    const appended = appendChain;
+    const promise = (async () => {
+      try {
+        await appended;
+      } catch (error: unknown) {
+        fail(
+          error instanceof Error ? error : new Error('Failed to receive chunk'),
+        );
+      }
+    })();
     pending.add(promise);
-    void promise.finally(() => pending.delete(promise));
+    void (async () => {
+      await promise;
+      pending.delete(promise);
+    })();
   };
 
   const handleEnd = async (count: number, finalBytes: number) => {

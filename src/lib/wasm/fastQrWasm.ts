@@ -50,12 +50,14 @@ export async function ensureFastQrWasmInit(): Promise<void> {
 
   if (!wasmInitPromise) {
     wasmInitPromise = (async () => {
-      await initFastQrWasm({ module_or_path: fastQrWasmUrl });
-      wasmInitialized = true;
-    })().catch((error) => {
-      wasmInitPromise = null;
-      throw error;
-    });
+      try {
+        await initFastQrWasm({ module_or_path: fastQrWasmUrl });
+        wasmInitialized = true;
+      } catch (error) {
+        wasmInitPromise = null;
+        throw error;
+      }
+    })();
   }
 
   await wasmInitPromise;

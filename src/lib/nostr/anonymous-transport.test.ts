@@ -12,21 +12,25 @@ const torMocks = vi.hoisted(() => {
   const closeClient = vi.fn(async () => undefined);
   let received = false;
   const socket = {
-    send: vi.fn(async (text: string) => {
+    send: vi.fn((text: string) => {
       sent.push(text);
+      return Promise.resolve();
     }),
     sendBinary: vi.fn(async () => undefined),
     receive: vi.fn(
-      async (): Promise<
+      (): Promise<
         | { type: 'text'; text: string }
         | { type: 'binary'; bytes: Uint8Array }
         | null
       > => {
         if (!received) {
           received = true;
-          return { type: 'text', text: '["EOSE","subscription"]' };
+          return Promise.resolve({
+            type: 'text',
+            text: '["EOSE","subscription"]',
+          });
         }
-        return null;
+        return Promise.resolve(null);
       },
     ),
     close: closeSocket,

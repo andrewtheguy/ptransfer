@@ -180,7 +180,7 @@ async function serveConnection(
   return true;
 }
 
-function withTimeout<T>(
+async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
   message: string,
@@ -189,5 +189,9 @@ function withTimeout<T>(
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(message)), ms);
   });
-  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -156,7 +156,7 @@ export function createDataChannelDuplex(
     };
   };
 
-  const flush = (): Promise<void> => {
+  const flush = async (): Promise<void> => {
     let mark = 0;
     // Takes its place in the send queue: a send waits its turn behind
     // backpressure before `dc.send` sees it, so the mark is read once every
@@ -166,51 +166,48 @@ export function createDataChannelDuplex(
       mark = sentBytes;
     });
     sendChain = marked;
-    return marked.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          // Bytes leave in order, so the ones sent by the mark are out once
-          // this many have left in all. Whatever is sent after the mark —
-          // queued or by `sendNow`, which only jumps the queue and not the
-          // channel's buffer — sits behind them and is not waited for.
-          const left = () => sentBytes - dc.bufferedAmount;
-          let settled = false;
-          const settle = (outcome: () => void) => {
-            if (settled) return;
-            settled = true;
-            dc.removeEventListener('bufferedamountlow', check);
-            clearInterval(poll);
-            enders.delete(check);
-            outcome();
-          };
-          // The buffer is read before the channel's state: a peer that hangs
-          // up the moment it has everything can close the channel before
-          // this side has looked, and `bufferedAmount` keeps its last value
-          // past a close.
-          const check = () => {
-            if (left() >= mark) {
-              settle(resolve);
-            } else if (!isOpen()) {
-              const unsent = mark - left();
-              settle(() =>
-                reject(
-                  new Error(
-                    failed
-                      ? `Data channel failed with ${unsent} bytes unsent`
-                      : `Data channel closed with ${unsent} bytes unsent`,
-                  ),
-                ),
-              );
-            }
-          };
-          // 'bufferedamountlow' fires at the threshold, not at empty, so the
-          // poll is what sees the last bytes go.
-          const poll = setInterval(check, DRAIN_POLL_MS);
-          dc.addEventListener('bufferedamountlow', check);
-          enders.add(check);
-          check();
-        }),
-    );
+    await marked;
+    await new Promise<void>((resolve, reject) => {
+      // Bytes leave in order, so the ones sent by the mark are out once this
+      // many have left in all. Whatever is sent after the mark — queued or by
+      // `sendNow`, which only jumps the queue and not the channel's buffer —
+      // sits behind them and is not waited for.
+      const left = () => sentBytes - dc.bufferedAmount;
+      let settled = false;
+      const settle = (outcome: () => void) => {
+        if (settled) return;
+        settled = true;
+        dc.removeEventListener('bufferedamountlow', check);
+        clearInterval(poll);
+        enders.delete(check);
+        outcome();
+      };
+      // The buffer is read before the channel's state: a peer that hangs up
+      // the moment it has everything can close the channel before this side
+      // has looked, and `bufferedAmount` keeps its last value past a close.
+      const check = () => {
+        if (left() >= mark) {
+          settle(resolve);
+        } else if (!isOpen()) {
+          const unsent = mark - left();
+          settle(() =>
+            reject(
+              new Error(
+                failed
+                  ? `Data channel failed with ${unsent} bytes unsent`
+                  : `Data channel closed with ${unsent} bytes unsent`,
+              ),
+            ),
+          );
+        }
+      };
+      // 'bufferedamountlow' fires at the threshold, not at empty, so the poll
+      // is what sees the last bytes go.
+      const poll = setInterval(check, DRAIN_POLL_MS);
+      dc.addEventListener('bufferedamountlow', check);
+      enders.add(check);
+      check();
+    });
   };
 
   const onEnd: DuplexChannel['onEnd'] = (listener) => {

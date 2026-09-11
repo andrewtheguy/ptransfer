@@ -178,6 +178,7 @@ export async function receiveFileLive(
 
     // One fetch cycle: fetch whatever the latest announcement made available,
     // report the outcome, and repeat while another announcement queued a pass.
+    // A failure ends the download rather than rejecting.
     const runCycle = async (
       ch: ControlChannel,
       manifest: NostrFileManifest,
@@ -279,6 +280,8 @@ export async function receiveFileLive(
             return;
           }
         } while (cyclePending && !finished);
+      } catch (err) {
+        fail(err);
       } finally {
         cycleRunning = false;
       }
@@ -293,7 +296,7 @@ export async function receiveFileLive(
         cyclePending = true;
         return;
       }
-      cyclePromise = runCycle(channel, manifest).catch(fail);
+      cyclePromise = runCycle(channel, manifest);
     };
 
     // The sender's pubkey is learned from the manifest, so the subscription

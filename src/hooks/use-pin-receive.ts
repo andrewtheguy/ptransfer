@@ -737,25 +737,30 @@ export function usePinReceive(): UsePinReceiveReturn {
             if (!rc) return;
 
             void (async () => {
-              const transcriptHash = await computeRendezvousTranscriptHash(
-                rc.payload,
-                rc.salt,
-              );
-              if (settled || abandoned()) return;
-              if (claimedHashes.has(transcriptHash)) return;
-              if (claimAttempts >= MAX_CLAIM_ATTEMPTS) return;
-              claimAttempts += 1;
-              claimedHashes.add(transcriptHash);
+              try {
+                const transcriptHash = await computeRendezvousTranscriptHash(
+                  rc.payload,
+                  rc.salt,
+                );
+                if (settled || abandoned()) return;
+                if (claimedHashes.has(transcriptHash)) return;
+                if (claimAttempts >= MAX_CLAIM_ATTEMPTS) return;
+                claimAttempts += 1;
+                claimedHashes.add(transcriptHash);
 
-              const claim = await buildClaim(rc);
-              if (!claim || settled || abandoned()) return;
-              // The confirm subscription and poll already cover this claim:
-              // its transfer id and author match the original candidate's.
-              candidates.push(claim);
-              await nostr.publish(claim.claimEvent);
-            })().catch((err) => {
-              console.error('Failed to re-claim replacement rendezvous:', err);
-            });
+                const claim = await buildClaim(rc);
+                if (!claim || settled || abandoned()) return;
+                // The confirm subscription and poll already cover this claim:
+                // its transfer id and author match the original candidate's.
+                candidates.push(claim);
+                await nostr.publish(claim.claimEvent);
+              } catch (err) {
+                console.error(
+                  'Failed to re-claim replacement rendezvous:',
+                  err,
+                );
+              }
+            })();
           };
 
           rendezvousSubId = nostr.subscribe(
@@ -798,12 +803,16 @@ export function usePinReceive(): UsePinReceiveReturn {
             }, 3000);
           };
 
-          void publishAndPoll().catch((err) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(err instanceof Error ? err : new Error('Publish failed'));
-          });
+          void (async () => {
+            try {
+              await publishAndPoll();
+            } catch (err) {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              reject(err instanceof Error ? err : new Error('Publish failed'));
+            }
+          })();
         });
 
         let winner: Awaited<typeof winnerPromise>;

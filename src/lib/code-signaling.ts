@@ -235,7 +235,7 @@ function decodeCodePayload(binary: Uint8Array): unknown {
 export async function computeOfferTranscriptHash(
   offerBinary: Uint8Array,
 ): Promise<string> {
-  return sha256Hex(offerBinary as BufferSource);
+  return await sha256Hex(offerBinary as BufferSource);
 }
 
 const ANSWER_TRANSCRIPT_LABEL = 'ptransfer:code-exchange-answer-transcript:v1';
@@ -274,7 +274,7 @@ export async function computeAnswerTranscriptHash(
     toHex(Uint8Array.from(payload.publicKey)),
   ]);
 
-  return sha256Hex(new TextEncoder().encode(canonical));
+  return await sha256Hex(new TextEncoder().encode(canonical));
 }
 
 /** Base64 of the raw confirmation tag, as it travels in the answer. */

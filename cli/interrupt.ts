@@ -60,9 +60,10 @@ export function onInterrupt(
       const grace = new Promise<void>((resolve) =>
         setTimeout(resolve, TEARDOWN_GRACE_MS),
       );
-      void Promise.race([teardown(status).catch(() => undefined), grace]).then(
-        () => process.exit(status),
-      );
+      void (async () => {
+        await Promise.race([teardown(status).catch(() => undefined), grace]);
+        process.exit(status);
+      })();
     };
     installed.push([signal, handler]);
     process.on(signal, handler);

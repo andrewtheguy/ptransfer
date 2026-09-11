@@ -194,7 +194,7 @@ export async function createAdaptiveAppendSink(
   estimatedBytes: number,
 ): Promise<AppendSink> {
   if (estimatedBytes > MEMORY_SINK_MAX_BYTES) {
-    return createAppendSink(estimatedBytes);
+    return await createAppendSink(estimatedBytes);
   }
 
   let chunks: Uint8Array[] | null = [];
@@ -237,7 +237,7 @@ export async function createAdaptiveAppendSink(
       return enqueue(async () => {
         ensureWritable();
         finished = true;
-        if (diskSink) return diskSink.finish();
+        if (diskSink) return await diskSink.finish();
         const payload = new Blob((chunks ?? []) as BlobPart[]);
         chunks = null;
         return payload;

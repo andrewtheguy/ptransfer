@@ -129,16 +129,20 @@ export function AboutContent() {
   useEffect(() => {
     let active = true;
     if (!siteUrl) return;
-    generateTextQRCode(siteUrl, { width: 220, errorCorrectionLevel: 'M' })
-      .then((url) => {
+    void (async () => {
+      try {
+        const url = await generateTextQRCode(siteUrl, {
+          width: 220,
+          errorCorrectionLevel: 'M',
+        });
         if (active) setShareQrUrl(url);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (active)
           setShareQrError(
             err instanceof Error ? err.message : 'Failed to generate QR code',
           );
-      });
+      }
+    })();
     return () => {
       active = false;
     };

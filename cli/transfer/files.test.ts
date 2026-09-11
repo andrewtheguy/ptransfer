@@ -346,11 +346,8 @@ describe('a file on disk to a file on disk', () => {
     await expect(serving).rejects.toThrow(
       `${sourcePath} changed after it was chosen`,
     );
-    const refused = await receiving.then(
-      () => null,
-      (error: Error) => error,
-    );
-    expect(refused?.message).toBe(
+    await expect(receiving).rejects.toHaveProperty(
+      'message',
       "The sender stopped the transfer: A file being sent changed on the sender's side",
     );
     expect(await readdir(dir)).toEqual(['photo.bin']);

@@ -78,38 +78,33 @@ export interface AnonymousTransportOptions {
  * late — otherwise it would sit holding circuits for a session that has
  * already reported failure.
  */
-function withBootstrapDeadline(
+async function withBootstrapDeadline(
   pending: Promise<WebtorClient>,
 ): Promise<WebtorClient> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timeout = globalThis.setTimeout(() => {
-      settled = true;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timeout = globalThis.setTimeout(() => {
       reject(
         new Error(
           'Anonymous signaling could not reach the Tor network within 5 minutes',
         ),
       );
     }, BOOTSTRAP_TIMEOUT_MS);
-
-    void pending.then(
-      (client) => {
-        if (settled) {
-          void closeTorClient(client);
-          return;
-        }
-        settled = true;
-        globalThis.clearTimeout(timeout);
-        resolve(client);
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        globalThis.clearTimeout(timeout);
-        reject(error);
-      },
-    );
   });
+  try {
+    return await Promise.race([pending, expired]);
+  } catch (error) {
+    void (async () => {
+      try {
+        await closeTorClient(await pending);
+      } catch {
+        // The bootstrap itself failed: there is no client to close.
+      }
+    })();
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 /** One bootstrapped Tor client and the sockets opened through it. */
@@ -137,12 +132,13 @@ export class AnonymousSignalingTransport {
       this.cancelBootstrap = reject;
     });
 
-    const bootstrap = withBootstrapDeadline(
-      bootstrapTorClient({
-        bridge: options.bridge,
-        onStatus: options.onStatus,
-      }),
-    ).then(async (client) => {
+    const bootstrap = (async () => {
+      const client = await withBootstrapDeadline(
+        bootstrapTorClient({
+          bridge: options.bridge,
+          onStatus: options.onStatus,
+        }),
+      );
       if (this.closed) {
         // Cancelled while this was still in flight: it holds circuits for a
         // session that has already reported itself finished.
@@ -151,7 +147,7 @@ export class AnonymousSignalingTransport {
       }
       this.client = client;
       return client;
-    });
+    })();
 
     // Racing the cancellation is what makes `close()` prompt, and that is a
     // correctness property rather than a nicety. Everything that awaits this
@@ -236,18 +232,20 @@ export class AnonymousSignalingTransport {
               'NotSupportedError',
             );
           }
-          if (
-            !this.socket ||
-            this.readyState !== AnonymousSignalingWebSocket.OPEN
-          ) {
+          const socket = this.socket;
+          if (!socket || this.readyState !== AnonymousSignalingWebSocket.OPEN) {
             return;
           }
 
-          void this.socket.send(data).catch((error: unknown) => {
-            this.emitError(errorMessage(error));
-            this.discardSocket();
-            this.finishClose(false, 1006, 'Tor WebSocket send failed');
-          });
+          void (async () => {
+            try {
+              await socket.send(data);
+            } catch (error: unknown) {
+              this.emitError(errorMessage(error));
+              this.discardSocket();
+              this.finishClose(false, 1006, 'Tor WebSocket send failed');
+            }
+          })();
         }
 
         close(code = 1000, reason = ''): void {
@@ -258,12 +256,18 @@ export class AnonymousSignalingTransport {
             return;
           }
           this.readyState = AnonymousSignalingWebSocket.CLOSING;
-          if (!this.socket) return;
+          const socket = this.socket;
+          if (!socket) return;
 
-          void this.socket
-            .close()
-            .catch((error: unknown) => this.emitError(errorMessage(error)))
-            .finally(() => this.finishClose(true, code, reason));
+          void (async () => {
+            try {
+              await socket.close();
+            } catch (error: unknown) {
+              this.emitError(errorMessage(error));
+            } finally {
+              this.finishClose(true, code, reason);
+            }
+          })();
         }
 
         private async open(pending: Promise<WebtorClient>): Promise<void> {
@@ -337,10 +341,14 @@ export class AnonymousSignalingTransport {
           const socket = this.socket;
           this.socket = null;
           if (!socket) return;
-          void Promise.resolve(socket.close()).catch(() => {
-            // Teardown: the adapter has already reported why it is closing,
-            // and a stream the relay dropped refuses this by definition.
-          });
+          void (async () => {
+            try {
+              await socket.close();
+            } catch {
+              // Teardown: the adapter has already reported why it is closing,
+              // and a stream the relay dropped refuses this by definition.
+            }
+          })();
         }
 
         private emitError(message: string): void {

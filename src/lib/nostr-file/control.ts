@@ -529,7 +529,7 @@ class ControlRelaySet {
  * attempts, acceptances, bytes, and give-ups are tallied into `stats`, and a
  * give-up may demote the relay it happened on.
  */
-function publishToAny(
+async function publishToAny(
   pool: NostrFilePool,
   set: ControlRelaySet,
   event: Event,
@@ -538,12 +538,10 @@ function publishToAny(
   // A channel closed before the first attempt says so, rather than blaming
   // relays it never tried; an empty ring has to settle too, or the caller
   // waits forever on a loop that never runs.
-  if (isClosed()) return Promise.reject(new Error(CHANNEL_CLOSED_MESSAGE));
+  if (isClosed()) throw new Error(CHANNEL_CLOSED_MESSAGE);
   const relays = set.snapshot();
-  if (relays.length === 0) {
-    return Promise.reject(new Error(DELIVERY_FAILED_MESSAGE));
-  }
-  return new Promise<void>((resolve, reject) => {
+  if (relays.length === 0) throw new Error(DELIVERY_FAILED_MESSAGE);
+  await new Promise<void>((resolve, reject) => {
     let failures = 0;
     for (const relay of relays) {
       void (async () => {
@@ -630,15 +628,23 @@ export function openControlChannel(
     seen.add(event.id);
     const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
     if (!dTag.startsWith(`${transferId}:ctl:${peerRole}:`)) return;
-    void decodeControlMessage(key, transferId, peerRole, event.content)
-      .then((message) => {
-        if (closed) return;
-        if (opts.stats) opts.stats.controlReceived++;
-        onMessage(message, event.pubkey);
-      })
-      .catch(() => {
+    void (async () => {
+      let message: unknown;
+      try {
+        message = await decodeControlMessage(
+          key,
+          transferId,
+          peerRole,
+          event.content,
+        );
+      } catch {
         // Not sealed under this transfer's key — ignore.
-      });
+        return;
+      }
+      if (closed) return;
+      if (opts.stats) opts.stats.controlReceived++;
+      onMessage(message, event.pubkey);
+    })();
   };
 
   // One subscription per batch of relays taken on. A promotion opens another

@@ -138,7 +138,7 @@ describe('createDataChannelDuplex', () => {
     expect(failed.dcA.sent).toHaveLength(0);
   });
 
-  it('tells a late onEnd listener how the channel ended', async () => {
+  it('tells a late onEnd listener how the channel ended', () => {
     const { dcB, b } = duplexPair();
     dcB.fail();
     const heard: string[] = [];
@@ -208,9 +208,10 @@ describe('createDataChannelDuplex', () => {
     dcA.hold();
     await a.sendBinary(new Uint8Array(8));
     let flushed = false;
-    const flushing = a.flush().then(() => {
+    const flushing = (async () => {
+      await a.flush();
       flushed = true;
-    });
+    })();
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(flushed).toBe(false);
 
@@ -243,9 +244,10 @@ describe('createDataChannelDuplex', () => {
     dcA.hold();
     await a.sendBinary(new Uint8Array(8));
     let flushed = false;
-    const flushing = a.flush().then(() => {
+    const flushing = (async () => {
+      await a.flush();
       flushed = true;
-    });
+    })();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(a.sendNow('late')).toBe(true);
 

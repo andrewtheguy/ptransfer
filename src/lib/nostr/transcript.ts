@@ -55,7 +55,7 @@ export async function computeRendezvousTranscriptHash(
     toHex(salt),
   ]);
 
-  return sha256Hex(canonical);
+  return await sha256Hex(canonical);
 }
 
 /**
@@ -81,5 +81,5 @@ export async function computeTransferMetadataHash(
     metadata.mimeType,
   ]);
 
-  return sha256Hex(canonical);
+  return await sha256Hex(canonical);
 }

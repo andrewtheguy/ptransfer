@@ -506,25 +506,22 @@ export async function finishDirectReceive(opts: {
   // they arrive, and resolves with the sealed payload once `end` checks out.
   // A stalled stream is aborted by its own idle watchdog; a cancel is told to
   // the sender by the close below.
-  const payload = await new Promise<Blob>((resolve, reject) => {
-    const checkInterval = setInterval(() => {
+  let checkInterval: ReturnType<typeof setInterval> | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    checkInterval = setInterval(() => {
       if (isCancelled()) {
         clearInterval(checkInterval);
         receiver.dispose();
         reject(new Error('Cancelled'));
       }
     }, 500);
-    receiver.done.then(
-      (data) => {
-        clearInterval(checkInterval);
-        resolve(data);
-      },
-      (error: unknown) => {
-        clearInterval(checkInterval);
-        reject(error);
-      },
-    );
   });
+  let payload: Blob;
+  try {
+    payload = await Promise.race([receiver.done, cancelled]);
+  } finally {
+    clearInterval(checkInterval);
+  }
   // The connection is this function's to close now: the file is whole, and
   // the close is how the sender learns it may let go.
   const rtc = opts.rtcHolder.current;

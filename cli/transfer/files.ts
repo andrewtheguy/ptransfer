@@ -87,10 +87,13 @@ export function chosenFileStream(
         if (code === 'ELOOP' || code === 'ENOENT') throw changed();
         throw unreadable();
       }
-      const now = await handle.stat().catch(async () => {
+      let now: Stats;
+      try {
+        now = await handle.stat();
+      } catch {
         await close();
         throw unreadable();
-      });
+      }
       if (
         !now.isFile() ||
         now.dev !== chosen.dev ||

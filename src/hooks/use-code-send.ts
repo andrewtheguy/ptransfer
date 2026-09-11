@@ -265,9 +265,10 @@ export function useCodeSend(): UseCodeSendReturn {
           },
         });
         if (!offer || cancelledRef.current) return;
-        void offer.channelOpened.then((channel) => {
+        void (async () => {
+          const channel = await offer.channelOpened;
           if (rtcRef.current === offer.rtc) channelRef.current = channel;
-        });
+        })();
 
         // Show offer and wait for answer
         setState({

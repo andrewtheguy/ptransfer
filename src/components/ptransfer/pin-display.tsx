@@ -101,20 +101,21 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     setQrUrl(null);
     setQrFailed(false);
 
-    generateTextQRCode(buildPinUrl(window.location.origin, pin), {
-      width: QR_WIDTH,
-      errorCorrectionLevel: 'M',
-    })
-      .then((url) => {
+    void (async () => {
+      try {
+        const url = await generateTextQRCode(
+          buildPinUrl(window.location.origin, pin),
+          { width: QR_WIDTH, errorCorrectionLevel: 'M' },
+        );
         if (active) setQrUrl(url);
-      })
-      .catch((err) => {
+      } catch (err) {
         // The QR only saves the receiver some typing; the PIN below it is the
         // real handoff, so a failure here just drops the code rather than
         // leaving a spinner running forever.
         console.error('Failed to generate PIN QR code:', err);
         if (active) setQrFailed(true);
-      });
+      }
+    })();
 
     return () => {
       active = false;

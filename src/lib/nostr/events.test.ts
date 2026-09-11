@@ -19,10 +19,11 @@ import {
 } from './types';
 
 async function generateAesKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
+  return await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 describe('Nostr events', () => {

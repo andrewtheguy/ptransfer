@@ -26,15 +26,17 @@ let modulePromise: Promise<WebtorModule> | undefined;
  * bundle every visitor downloads.
  */
 export function loadWebtor(): Promise<WebtorModule> {
-  modulePromise ??= import('@andrewtheguy/webtor-wasm')
-    .then(async (module) => {
-      const typed = module as unknown as WebtorModule;
-      await typed.default({ module_or_path: webtorWasmUrl });
-      return typed;
-    })
-    .catch((error: unknown) => {
+  modulePromise ??= (async () => {
+    try {
+      const module = (await import(
+        '@andrewtheguy/webtor-wasm'
+      )) as unknown as WebtorModule;
+      await module.default({ module_or_path: webtorWasmUrl });
+      return module;
+    } catch (error: unknown) {
       modulePromise = undefined;
       throw error;
-    });
+    }
+  })();
   return modulePromise;
 }

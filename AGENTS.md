@@ -54,6 +54,8 @@ committed.
 Always use `extractable: false` for Web Crypto API keys even for asymmetric keys
 because public keys can always be exported.
 
+Use async await instead of promises unless promises is meant for a specific reason
+
 ## Documentation
 
 - No change logs on documentations since git already tracks all changes.

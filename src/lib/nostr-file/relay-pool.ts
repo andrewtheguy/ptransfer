@@ -502,17 +502,21 @@ async function probeRelay(
     const { event, dTag } = buildProbeEvent(secretKey, content);
     wipeBufferSource(secretKey);
 
-    const withTimeout = <T>(p: Promise<T>): Promise<T> => {
+    const withTimeout = async <T>(p: Promise<T>): Promise<T> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
-      return Promise.race([
-        p,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('probe timeout')),
-            timeoutMs,
-          );
-        }),
-      ]).finally(() => clearTimeout(timer));
+      try {
+        return await Promise.race([
+          p,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('probe timeout')),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     };
 
     await withTimeout(Promise.all(pool.publish([url], event)));
@@ -682,11 +686,11 @@ export async function sweepRelayHealth(
   // chunks, so they stay out of the sweep exactly as they stay out of a ring.
   const excluded = new Set([...transferRelays, ...seeds]);
 
-  const aborted = new Promise<void>((resolve) => {
+  const aborted = new Promise<null>((resolve) => {
     const signal = opts.signal;
     if (!signal) return;
-    if (signal.aborted) resolve();
-    else signal.addEventListener('abort', () => resolve(), { once: true });
+    if (signal.aborted) resolve(null);
+    else signal.addEventListener('abort', () => resolve(null), { once: true });
   });
 
   // Discovery only polls the abort flag between pages, and a page can sit on
@@ -705,7 +709,7 @@ export async function sweepRelayHealth(
         partial = found;
       },
     }).catch(() => [] as string[]),
-    aborted.then(() => null),
+    aborted,
   ]);
   const discovered = raced ?? partial;
   // Discovery reopened the seeds; the ones not carrying this transfer are

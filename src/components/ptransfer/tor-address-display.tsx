@@ -34,20 +34,21 @@ export function TorAddressDisplay({
     setQrUrl(null);
     setQrFailed(false);
 
-    generateTextQRCode(buildOnionUrl(window.location.origin, address), {
-      width: QR_WIDTH,
-      errorCorrectionLevel: 'M',
-    })
-      .then((url) => {
+    void (async () => {
+      try {
+        const url = await generateTextQRCode(
+          buildOnionUrl(window.location.origin, address),
+          { width: QR_WIDTH, errorCorrectionLevel: 'M' },
+        );
         if (active) setQrUrl(url);
-      })
-      .catch((err) => {
+      } catch (err) {
         // The QR only saves the receiver 56 characters of typing; the address
         // below it is the real handoff, so a failure here drops the code
         // rather than leaving a spinner running forever.
         console.error('Failed to generate onion address QR code:', err);
         if (active) setQrFailed(true);
-      });
+      }
+    })();
 
     return () => {
       active = false;

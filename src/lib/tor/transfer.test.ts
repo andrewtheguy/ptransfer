@@ -90,22 +90,26 @@ describe('Tor transfer', () => {
     const [service, client] = pair();
 
     let receiverHungUp = false;
-    const sending = sendFileOverTor(service, contentKey, zipOf(data)).then(
-      async (wireBytes) => {
-        expect(receiverHungUp).toBe(true);
-        await service.close();
-        return wireBytes;
-      },
-    );
+    const sending = (async () => {
+      const wireBytes = await sendFileOverTor(service, contentKey, zipOf(data));
+      expect(receiverHungUp).toBe(true);
+      await service.close();
+      return wireBytes;
+    })();
     // As the hooks do: the file is whole, so the stream goes.
     const sink = await createAdaptiveAppendSink(data.length);
-    const receiving = receiveFileOverTor(client, contentKey, 'identity', sink, {
-      estimatedBytes: data.length,
-    }).then(async (payload) => {
+    const receiving = (async () => {
+      const payload = await receiveFileOverTor(
+        client,
+        contentKey,
+        'identity',
+        sink,
+        { estimatedBytes: data.length },
+      );
       await client.close();
       receiverHungUp = true;
       return payload;
-    });
+    })();
 
     const [wireBytes, payload] = await Promise.all([sending, receiving]);
     expect(wireBytes).toBe(data.length);

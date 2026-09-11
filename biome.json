@@ -28,6 +28,9 @@
       "recommended": true,
       "style": {
         "noNonNullAssertion": "error"
+      },
+      "suspicious": {
+        "useAwait": "error"
       }
     }
   }
