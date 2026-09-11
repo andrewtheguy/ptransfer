@@ -386,7 +386,15 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           report,
         });
         if (outcome === 'switched') return 'switched';
-        if (!outcome || abandoned()) return 'completed';
+        if (!outcome) return 'completed';
+        if (abandoned()) {
+          void outcome.sink?.discard();
+          return 'completed';
+        }
+        // Held like a direct receive's sink: a reset or the next receive
+        // discards it. The direct attempt was disposed before the fallback
+        // ran, so there is no other sink in the ref to lose.
+        sinkRef.current = outcome.sink ?? null;
         setReceivedContent(outcome.content);
         setState({
           status: 'complete',

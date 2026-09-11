@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
@@ -53,6 +54,15 @@ export function useTorReceive(): UseTorReceiveReturn {
   const receivingRef = useRef(false);
   const clientRef = useRef<WebtorClient | null>(null);
   const framedRef = useRef<TorFramedStream | null>(null);
+  // Storage behind the received payload, which receivedContent.data reads
+  // from until a reset or the next receive drops it.
+  const sinkRef = useRef<AppendSink | null>(null);
+
+  const discardSink = useCallback(() => {
+    const sink = sinkRef.current;
+    sinkRef.current = null;
+    if (sink) void sink.discard();
+  }, []);
 
   // Everything this owns is taken and cleared before the first await.
   // `receive` releases its guard before tearing down, so a Receive Another can
@@ -75,10 +85,11 @@ export function useTorReceive(): UseTorReceiveReturn {
 
   const reset = useCallback(() => {
     cancelledRef.current = true;
+    discardSink();
     setReceivedContent(null);
     setState({ status: 'idle' });
     void teardown();
-  }, [teardown]);
+  }, [teardown, discardSink]);
 
   useEffect(
     () => () => {
@@ -94,6 +105,8 @@ export function useTorReceive(): UseTorReceiveReturn {
       receivingRef.current = true;
       cancelledRef.current = false;
       setReceivedContent(null);
+      // The previous transfer's payload (if any) is gone from the UI now.
+      discardSink();
 
       try {
         // Both inputs are checked before the bootstrap, which otherwise spends
@@ -186,6 +199,7 @@ export function useTorReceive(): UseTorReceiveReturn {
           return;
         }
 
+        sinkRef.current = sink;
         setReceivedContent({
           contentType: 'file',
           data: payload,
@@ -215,7 +229,7 @@ export function useTorReceive(): UseTorReceiveReturn {
         await teardown();
       }
     },
-    [teardown],
+    [teardown, discardSink],
   );
 
   return { state, receivedContent, receive, cancel, reset };

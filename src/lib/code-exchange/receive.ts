@@ -551,6 +551,8 @@ export interface FallbackReceipt {
   content: ReceivedContent;
   message: string;
   stats?: NostrFileTransferStats;
+  /** The storage behind `content.data`, when it has any, for the caller to discard. */
+  sink?: AppendSink;
 }
 
 export interface FallbackReceiveOptions {
@@ -804,5 +806,6 @@ async function receiveOverTorFallback(
       mimeType: received.mimeType,
     },
     message: 'File received through Tor!',
+    sink,
   };
 }
