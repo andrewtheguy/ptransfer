@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import type { OnionResponse } from '@/lib/tor/webtor-api';
 import { fetchDirectorySeed } from '../tor/directory-fetch';
 import { openDirectoryStore } from '../tor/directory-store';
 import { loadWebtor } from '../tor/webtor';
@@ -12,7 +13,10 @@ import { loadWebtor } from '../tor/webtor';
  *    describes the network, otherwise a fresh one over plain HTTP from the
  *    authorities, which is the fast path a browser does not have.
  * 3. Bootstrap over the Snowflake bridge.
- * 4. Publish a v3 onion service, connect back to it through the network,
+ * 4. Fetch a page from a real onion service somebody else runs: the proof
+ *    that a full rendezvous works against the network as it is, not only
+ *    against this process.
+ * 5. Publish a v3 onion service, connect back to it through the network,
  *    and round-trip a message.
  *
  * Each step is timed and the timings are the output: a bootstrap that used
@@ -22,9 +26,13 @@ import { loadWebtor } from '../tor/webtor';
 
 const USAGE = `usage: ptransfer tor-test [options]
 
-Bootstrap Tor, publish an onion service, and connect back to it.
+Bootstrap Tor, fetch a page from an onion service, publish an onion service
+of this process's own, and connect back to it.
 
 options:
+  --url <http://...onion/...>
+                           the onion URL to fetch (default: the Tor Project's
+                           site); --url none skips the fetch
   --refresh-directory      ignore the cached directory and download a fresh one
   --cache-dir <path>       where to keep the directory seed (default: the
                            platform's per-user cache directory)
@@ -36,6 +44,15 @@ options:
 `;
 
 const PORT = 9735;
+/**
+ * The Tor Project's own site as a v3 onion over plain HTTP: a service that
+ * is expected to stay up, run by people who are not us, so reaching it says
+ * something reaching our own service cannot. The wasm compiles in no
+ * address of its own; what a client is checked against is the caller's
+ * choice, and this is ours.
+ */
+const DEFAULT_URL =
+  'http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion/';
 const PROBE = 'ping from ptransfer tor-test';
 
 class Stopwatch {
@@ -54,6 +71,15 @@ class Stopwatch {
   }
 }
 
+/** One response header, whichever shape the binding produced. */
+function header(
+  headers: OnionResponse['headers'],
+  name: string,
+): string | undefined {
+  if (headers instanceof Headers) return headers.get(name) ?? undefined;
+  return headers[name] ?? headers[name.toLowerCase()];
+}
+
 function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
@@ -62,6 +88,7 @@ export async function torTest(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
+      url: { type: 'string', default: DEFAULT_URL },
       'refresh-directory': { type: 'boolean', default: false },
       'cache-dir': { type: 'string' },
       'bridge-url': { type: 'string' },
@@ -77,6 +104,13 @@ export async function torTest(argv: string[]): Promise<number> {
   if (Boolean(values['bridge-url']) !== Boolean(values['bridge-fingerprint'])) {
     process.stderr.write(
       'Give --bridge-url and --bridge-fingerprint together, or neither\n',
+    );
+    return 2;
+  }
+  const url = values.url === 'none' ? undefined : values.url;
+  if (url && !/^http:\/\/[a-z2-7]{56}\.onion(?::\d+)?(?:\/|$)/i.test(url)) {
+    process.stderr.write(
+      '--url must be http://<v3 address>.onion/... (no TLS: the address is the key)\n',
     );
     return 2;
   }
@@ -133,6 +167,18 @@ export async function torTest(argv: string[]): Promise<number> {
   clock.lap('bootstrap');
 
   try {
+    if (url) {
+      const response = await client.fetch(url);
+      clock.lap('fetch an onion page');
+      const type = header(response.headers, 'content-type') ?? 'unknown type';
+      say(
+        `GET ${url} -> HTTP ${response.status}, ${response.bytes().length} bytes of ${type}`,
+      );
+      if (!response.ok) {
+        throw new Error(`${url} answered HTTP ${response.status}`);
+      }
+    }
+
     const service = await client.publishOnionService({ introPoints });
     clock.lap('publish the onion service');
     say(`Published ${service.onionAddress}`);

@@ -38,8 +38,9 @@ bun run cli tor-test
 It downloads the Tor directory from the authorities, or reuses the copy it
 cached under the platform's per-user cache directory while that still
 describes the network, bootstraps the Tor client over the Snowflake websocket
-bridge, publishes a v3 onion service, connects back to it through the network,
-and prints how long each step took. Transfers from the terminal follow; see
+bridge, fetches a page from the Tor Project's onion site (`--url` picks
+another), publishes a v3 onion service of its own, connects back to it through
+the network, and prints how long each step took. Transfers from the terminal follow; see
 [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 ## Browser Requirements

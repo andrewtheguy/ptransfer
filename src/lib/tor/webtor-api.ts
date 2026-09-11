@@ -99,7 +99,35 @@ export interface DirectoryDescription {
   timePeriodAt(at: number): number;
 }
 
+/**
+ * One HTTP/1.1 response from an onion service, buffered whole. A 4xx or 5xx
+ * is a response, not a rejection.
+ */
+export interface OnionResponse {
+  readonly status: number;
+  readonly ok: boolean;
+  /**
+   * A `Headers` in a browser. Under Bun the binding hands back a plain
+   * object keyed by lowercase header name instead, so read it through
+   * something that accepts both rather than calling `get` on it.
+   */
+  readonly headers: Headers | Record<string, string>;
+  bytes(): Uint8Array;
+  text(): string;
+}
+
+export interface OnionFetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string | Uint8Array;
+  timeoutMs?: number;
+  /** Most the buffered response may hold, headers and body together. */
+  maxResponseBytes?: number;
+}
+
 export interface WebtorClient {
+  /** One HTTP request to `http://<address>.onion/...`. */
+  fetch(url: string, options?: OnionFetchOptions): Promise<OnionResponse>;
   connectStream(address: string, port: number): Promise<OnionStream>;
   /** Open a WebSocket to `ws://<address>.onion[:port][/path]`. */
   connectWebSocket(

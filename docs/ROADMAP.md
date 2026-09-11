@@ -44,8 +44,8 @@ retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
 1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
    Bun-hosted loader for the same webtor-wasm Tor client, a directory
    download over plain HTTP from the authorities with a disk cache, and a
-   `bun run cli tor-test` self-check that bootstraps, publishes an onion
-   service, and connects back to it.
+   `bun run cli tor-test` self-check that bootstraps, fetches a page from a
+   public onion service, publishes an onion service, and connects back to it.
 2. **Tor send and receive** from the terminal over `src/lib/tor`.
 3. **PIN Exchange and Code Exchange** over a WebRTC data channel supplied by
    node-datachannel, with the Nostr file relay as the fallback; codes are

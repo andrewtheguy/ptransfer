@@ -118,7 +118,9 @@ loop and `TorFramedStream` serializes its frame writes.
 `bun run test:live:tor:web` runs a transfer between two browser tabs over real
 circuits — one publishes a service, the other connects to it — and
 `bun run cli tor-test` is the CLI's own live self-check: it fetches the
-directory, bootstraps, publishes an onion service, and connects back to it.
+directory, bootstraps, fetches a page from a real onion service (the Tor
+Project's site unless `--url` names another), publishes an onion service, and
+connects back to it.
 Both need the network.
 
 ```bash
