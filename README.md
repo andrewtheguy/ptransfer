@@ -55,10 +55,12 @@ bun run cli tor-test
 ```
 
 It downloads the Tor directory from the authorities, or reuses the copy it
-cached in `~/.cache/ptransfer` (under `$XDG_CACHE_HOME` if set, and
-`~/Library/Caches` on macOS) while that still describes the network,
-bootstraps the Tor client over the Snowflake websocket bridge, fetches a page from the Tor Project's onion site (`--url` picks
-another), publishes a v3 onion service of its own, connects back to it through
+cached while that still describes the network. The cache is
+`~/Library/Caches/ptransfer` on macOS; on Linux it is
+`$XDG_CACHE_HOME/ptransfer` when `XDG_CACHE_HOME` is an absolute path, and
+`~/.cache/ptransfer` otherwise. The command then bootstraps the Tor client
+over the Snowflake websocket bridge, fetches a page from the Tor Project's
+onion site (`--url` picks another), publishes a v3 onion service of its own, connects back to it through
 the network, and prints how long each step took. `send` and `receive` bootstrap
 the same way, from the same cache.
 
