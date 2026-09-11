@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { compressPayload } from './codec';
 import { isValidNostrFileManifest, type NostrFileManifest } from './manifest';
 
 describe('isValidNostrFileManifest', () => {
@@ -43,6 +44,32 @@ describe('isValidNostrFileManifest', () => {
         compression: 'deflate',
         payloadSize: manifest.fileSize + 10,
         totalChunks: Math.ceil((manifest.fileSize + 10) / manifest.chunkSize),
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts what the sender actually produces for incompressible input', () => {
+    // Random bytes do not compress: the payload is the file plus the framing
+    // of every stored block fflate splits it into, which is more blocks than
+    // one per 64 KiB.
+    const fileSize = 3_000_000;
+    const random = new Uint8Array(fileSize);
+    for (let offset = 0; offset < fileSize; offset += 65_536) {
+      crypto.getRandomValues(
+        random.subarray(offset, Math.min(offset + 65_536, fileSize)),
+      );
+    }
+    const { payload } = compressPayload(random, false);
+    expect(payload.length).toBeGreaterThan(
+      fileSize + Math.ceil(fileSize / 65_535) * 5 + 64,
+    );
+    expect(
+      isValidNostrFileManifest({
+        ...manifest,
+        fileSize,
+        compression: 'deflate',
+        payloadSize: payload.length,
+        totalChunks: Math.ceil(payload.length / manifest.chunkSize),
       }),
     ).toBe(true);
   });
