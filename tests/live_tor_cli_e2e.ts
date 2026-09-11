@@ -78,7 +78,11 @@ function runCli(
   const exited = new Promise<number>((resolve) =>
     child.once('exit', (code) => resolve(code ?? -1)),
   );
-  return { child, stdout: exited.then(() => stdout), exited };
+  // 'exit' can come before the pipes drain; 'close' waits for them.
+  const closed = new Promise<void>((resolve) =>
+    child.once('close', () => resolve()),
+  );
+  return { child, stdout: closed.then(() => stdout), exited };
 }
 
 /**

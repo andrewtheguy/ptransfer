@@ -157,11 +157,12 @@ export function useTorReceive(): UseTorReceiveReturn {
         });
 
         await sendReady(framed);
+        const sink = await createAdaptiveAppendSink(metadata.fileSize);
         const payload = await receiveFileOverTor(
           framed,
           keys.contentKey,
           metadata.contentEncoding,
-          await createAdaptiveAppendSink(metadata.fileSize),
+          sink,
           {
             estimatedBytes: metadata.fileSize,
             isCancelled: () => cancelledRef.current,
@@ -179,7 +180,11 @@ export function useTorReceive(): UseTorReceiveReturn {
         // Cancelling between the last frame and this point still means the
         // user asked for nothing: publishing the payload here would hand back
         // a file — and a 'complete' state — after `cancel()` reset the UI.
-        if (cancelledRef.current) return;
+        // Nothing else will read the payload, so its scratch file goes now.
+        if (cancelledRef.current) {
+          await sink.discard();
+          return;
+        }
 
         setReceivedContent({
           contentType: 'file',

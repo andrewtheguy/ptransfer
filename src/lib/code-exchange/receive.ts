@@ -730,6 +730,7 @@ async function receiveOverTorFallback(
   });
   opts.poolHolder.current = pool;
   let payload: Blob;
+  let sink: AppendSink;
   let received: FileMetadata;
   try {
     // From here until the client is up, its progress is the transfer's only
@@ -770,6 +771,7 @@ async function receiveOverTorFallback(
       },
     });
     payload = receipt.payload;
+    sink = receipt.sink;
     received = {
       fileName: receipt.metadata.fileName,
       fileSize: payload.size,
@@ -787,7 +789,12 @@ async function receiveOverTorFallback(
     pool.destroy();
   }
 
-  if (isCancelled()) return null;
+  // A cancel that lands after the last frame leaves a payload nobody will
+  // read, so its scratch file goes now rather than at the next sweep.
+  if (isCancelled()) {
+    await sink.discard();
+    return null;
+  }
   return {
     content: {
       contentType: 'file',
