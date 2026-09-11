@@ -4,9 +4,9 @@
  * Once a WebRTC data channel opens, neither side is the sender or the
  * receiver of the channel itself: both may send and both may listen, at any
  * time. The file transfer (`lib/p2p-transfer.ts`) is one client of it —
- * chunks and control messages one way, acknowledgments and the receiver's
- * verdict the other — and anything else the two peers need to say to each
- * other once connected rides the same channel beside it.
+ * chunks and control messages from the sender, nothing back — and anything
+ * else the two peers need to say to each other once connected rides the same
+ * channel beside it.
  *
  * Messages keep the text/binary distinction the data channel gives natively,
  * and arrive reliably and in order: whoever creates the underlying channel
@@ -56,22 +56,13 @@ export interface DuplexChannel {
    */
   subscribe: (listener: ChannelListener) => () => void;
   /**
-   * Resolve with the first incoming message `accept` returns true for;
-   * messages it declines are left to the other subscribers. Rejects if the
-   * channel closes or errors first, or after `timeoutMs`. `purpose` names what
-   * is awaited in those errors ("acknowledgment").
-   *
-   * With `clockStart`, listening begins now but the `timeoutMs` clock starts
-   * only once it resolves, so a reply can be listened for before the message
-   * it answers has gone out without that send eating into the reply's time.
-   * If `clockStart` rejects, the wait rejects with its error.
+   * Resolve once every send made before the call has left the channel's
+   * buffer — handed to the transport, which delivers from there — so the
+   * caller may close without cutting off the tail. Sends made after the call
+   * do not hold it up. Rejects if the channel closes or errors with some of
+   * those bytes still buffered.
    */
-  waitFor: (
-    accept: (message: ChannelMessage) => boolean,
-    timeoutMs: number,
-    purpose: string,
-    clockStart?: Promise<unknown>,
-  ) => Promise<ChannelMessage>;
+  flush: () => Promise<void>;
   /**
    * Call `listener` once if the channel closes or errors, until the returned
    * function is called. A channel that has already ended calls it at once.
@@ -93,6 +84,10 @@ export const BACKPRESSURE_THRESHOLD = 1024 * 1024; // 1 MiB
 
 /** Fallback poll for a drain whose 'bufferedamountlow' event never fires. */
 const DRAIN_POLL_MS = 100;
+
+const utf8 = new TextEncoder();
+/** What `bufferedAmount` counts for a text message. */
+const utf8Length = (text: string) => utf8.encode(text).length;
 
 /**
  * Wrap an open (or opening) RTCDataChannel as a `DuplexChannel`.
@@ -120,6 +115,11 @@ export function createDataChannelDuplex(
   // a moment after one, but nothing sent then can be relied on to arrive.
   let failed = false;
   let sendChain: Promise<void> = Promise.resolve();
+  /**
+   * Bytes handed to `dc.send` so far. With `bufferedAmount`, which counts the
+   * ones still waiting, it says how many have left — what `flush` waits on.
+   */
+  let queuedBytes = 0;
 
   const isOpen = () => !closedLocally && !failed && dc.readyState === 'open';
   /** Why a send cannot go out, once `isOpen()` says it cannot. */
@@ -184,11 +184,13 @@ export function createDataChannelDuplex(
     }
     if (typeof data === 'string') {
       dc.send(data);
+      queuedBytes += utf8Length(data);
     } else {
       // send() transmits exactly [byteOffset, byteOffset+byteLength). Callers
       // pass fresh, exact-size views (encryptChunk output), so no copy is
       // needed.
       dc.send(data as Uint8Array<ArrayBuffer>);
+      queuedBytes += data.byteLength;
     }
   };
 
@@ -205,6 +207,7 @@ export function createDataChannelDuplex(
     if (!isOpen()) return false;
     try {
       dc.send(text);
+      queuedBytes += utf8Length(text);
       return true;
     } catch {
       return false;
@@ -218,64 +221,46 @@ export function createDataChannelDuplex(
     };
   };
 
-  const waitFor: DuplexChannel['waitFor'] = (
-    accept,
-    timeoutMs,
-    purpose,
-    clockStart,
-  ) =>
-    new Promise<ChannelMessage>((resolve, reject) => {
-      if (!isOpen()) {
-        reject(
-          new Error(
-            failed
-              ? `Data channel error while waiting for ${purpose}`
-              : `Data channel closed before ${purpose}`,
-          ),
-        );
-        return;
-      }
-
+  const flush = (): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      // Bytes leave in order, so the ones queued so far are out once this
+      // many have left in all.
+      const mark = queuedBytes;
+      const left = () => queuedBytes - dc.bufferedAmount;
       let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
       const settle = (outcome: () => void) => {
         if (settled) return;
         settled = true;
-        unsubscribe();
-        enders.delete(onEnd);
-        clearTimeout(timer);
+        dc.removeEventListener('bufferedamountlow', check);
+        clearInterval(poll);
+        enders.delete(check);
         outcome();
       };
-      const unsubscribe = subscribe((message) => {
-        if (accept(message)) settle(() => resolve(message));
-      });
-      // A close or error means the awaited message can never arrive, so fail
-      // at once instead of waiting out the timeout.
-      const onEnd = (reason: ChannelEndReason) => {
-        settle(() =>
-          reject(
-            new Error(
-              reason === 'closed'
-                ? `Data channel closed before ${purpose}`
-                : `Data channel error while waiting for ${purpose}`,
+      // The buffer is read before the channel's state: a peer that hangs up
+      // the moment it has everything can close the channel before this side
+      // has looked, and `bufferedAmount` keeps its last value past a close.
+      const check = () => {
+        if (left() >= mark) {
+          settle(resolve);
+        } else if (!isOpen()) {
+          const unsent = mark - left();
+          settle(() =>
+            reject(
+              new Error(
+                failed
+                  ? `Data channel failed with ${unsent} bytes unsent`
+                  : `Data channel closed with ${unsent} bytes unsent`,
+              ),
             ),
-          ),
-        );
+          );
+        }
       };
-      enders.add(onEnd);
-      const startClock = () => {
-        if (settled) return;
-        timer = setTimeout(() => {
-          settle(() => reject(new Error(`Timeout waiting for ${purpose}`)));
-        }, timeoutMs);
-      };
-      if (clockStart) {
-        clockStart.then(startClock, (error: unknown) =>
-          settle(() => reject(error)),
-        );
-      } else {
-        startClock();
-      }
+      // 'bufferedamountlow' fires at the threshold, not at empty, so the poll
+      // is what sees the last bytes go.
+      const poll = setInterval(check, DRAIN_POLL_MS);
+      dc.addEventListener('bufferedamountlow', check);
+      enders.add(check);
+      check();
     });
 
   const onEnd: DuplexChannel['onEnd'] = (listener) => {
@@ -308,7 +293,7 @@ export function createDataChannelDuplex(
     sendText: enqueue,
     sendNow,
     subscribe,
-    waitFor,
+    flush,
     onEnd,
     close,
   };

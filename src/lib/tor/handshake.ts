@@ -55,7 +55,7 @@ import type { TorFramedStream } from './framing';
  * mismatch is refused rather than negotiated, so two app versions that differ
  * on the frames fail closed.
  */
-export const TOR_HANDSHAKE_VERSION = 1;
+export const TOR_HANDSHAKE_VERSION = 2;
 
 const CLAIM_TYPE = 'claim';
 const CONFIRM_TYPE = 'confirm';

@@ -1,6 +1,5 @@
 import type { Event } from 'nostr-tools';
 import { useCallback, useRef, useState } from 'react';
-import { hangUp } from '@/lib/code-exchange/hang-up';
 import {
   acceptOffer,
   buildDirectAttempt,
@@ -29,7 +28,6 @@ import {
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
-import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import {
@@ -218,17 +216,14 @@ export function usePinReceive(): UsePinReceiveReturn {
       let transport: AnonymousSignalingTransport | null = null;
       let closeCarriage: (() => void) | null = null;
       const rtcHolder: { current: WebRTCConnection | null } = { current: null };
-      let channel: DuplexChannel | null = null;
       const poolHolder: {
         current: ReturnType<typeof createTransferPool> | null;
       } = { current: null };
-      // A cancel tells a sender mid-transfer why the connection is going
-      // away; any other exit has already said what happened.
-      const release = (cancelling = false) => {
-        if (cancelling) hangUp(rtcHolder.current, channel);
-        else rtcHolder.current?.close();
+      // Closing the connection is what tells a sender mid-transfer; any
+      // other exit has already said what happened.
+      const release = () => {
+        rtcHolder.current?.close();
         rtcHolder.current = null;
-        channel = null;
         poolHolder.current?.destroy();
         poolHolder.current = null;
         closeCarriage?.();
@@ -238,7 +233,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         transport?.close();
         transport = null;
       };
-      const cancelRelease = () => release(true);
+      const cancelRelease = () => release();
       releaseRef.current = cancelRelease;
 
       setReceivedContent(null);
@@ -968,7 +963,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         if (abandoned()) return;
 
         try {
-          channel = await attempt.opened;
+          await attempt.opened;
         } catch (error) {
           attempt.dispose();
           if (

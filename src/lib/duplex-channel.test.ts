@@ -84,9 +84,7 @@ describe('createDataChannelDuplex', () => {
     const both = collect(b, 2);
 
     await a.sendText('kept');
-    await expect(b.waitFor((m) => m === 'kept', 1000, 'kept')).resolves.toBe(
-      'kept',
-    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
     unsubscribe();
     await a.sendText('missed');
     await both;
@@ -113,100 +111,6 @@ describe('createDataChannelDuplex', () => {
     expect(
       (await received).map((m) => (typeof m === 'string' ? m : 'bin')),
     ).toEqual(['bin', 'bin', 'after']);
-  });
-
-  it('resolves waitFor on the first accepted message and leaves the rest to other subscribers', async () => {
-    const { a, b } = duplexPair();
-    const everything = collect(b, 3);
-
-    const waited = b.waitFor((m) => m === 'ACK', 1000, 'acknowledgment');
-    await a.sendText('noise');
-    await a.sendBinary(new Uint8Array([1]));
-    await a.sendText('ACK');
-
-    await expect(waited).resolves.toBe('ACK');
-    expect((await everything).map(text)).toEqual(['noise', [1], 'ACK']);
-  });
-
-  it('rejects waitFor when the peer closes the channel', async () => {
-    const { dcA, b } = duplexPair();
-    const waited = b.waitFor(() => true, 1000, 'acknowledgment');
-
-    dcA.close();
-
-    await expect(waited).rejects.toThrow(
-      'Data channel closed before acknowledgment',
-    );
-  });
-
-  it('rejects waitFor at once when this side closes the channel', async () => {
-    const { b } = duplexPair();
-    const waited = b.waitFor(() => true, 60_000, 'acknowledgment');
-
-    b.close();
-
-    await expect(waited).rejects.toThrow(
-      'Data channel closed before acknowledgment',
-    );
-    await expect(b.waitFor(() => true, 1000, 'acknowledgment')).rejects.toThrow(
-      'Data channel closed before acknowledgment',
-    );
-  });
-
-  it('rejects waitFor on a channel error', async () => {
-    const { dcB, b } = duplexPair();
-    const waited = b.waitFor(() => true, 1000, 'acknowledgment');
-
-    dcB.fail();
-
-    await expect(waited).rejects.toThrow(
-      'Data channel error while waiting for acknowledgment',
-    );
-  });
-
-  it('rejects waitFor after the timeout', async () => {
-    const { b } = duplexPair();
-
-    await expect(b.waitFor(() => true, 10, 'acknowledgment')).rejects.toThrow(
-      'Timeout waiting for acknowledgment',
-    );
-  });
-
-  it('listens at once but starts the waitFor clock only when clockStart resolves', async () => {
-    const { a, b } = duplexPair();
-    let startClock!: () => void;
-    const clockStart = new Promise<void>((resolve) => {
-      startClock = resolve;
-    });
-
-    const answered = b.waitFor((m) => m === 'ACK', 10, 'reply', clockStart);
-    // Well past the timeout, but the clock has not started.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    await a.sendText('ACK');
-    await expect(answered).resolves.toBe('ACK');
-
-    const unanswered = b.waitFor(() => false, 10, 'reply', clockStart);
-    startClock();
-    await expect(unanswered).rejects.toThrow('Timeout waiting for reply');
-  });
-
-  it('rejects waitFor with the error of a clockStart that fails', async () => {
-    const { a, b } = duplexPair();
-    const seen: ChannelMessage[] = [];
-    const waited = b.waitFor(
-      (m) => {
-        seen.push(m);
-        return false;
-      },
-      1000,
-      'reply',
-      Promise.reject(new Error('send failed')),
-    );
-
-    await expect(waited).rejects.toThrow('send failed');
-    await a.sendText('late');
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(seen).toEqual([]);
   });
 
   it('sends at once ahead of sends waiting on backpressure', async () => {
@@ -264,9 +168,6 @@ describe('createDataChannelDuplex', () => {
     await expect(a.sendBinary(new Uint8Array(1))).rejects.toThrow(
       'Data channel failed',
     );
-    await expect(a.waitFor(() => true, 1000, 'acknowledgment')).rejects.toThrow(
-      'Data channel error while waiting for acknowledgment',
-    );
     expect(dcA.sent).toHaveLength(0);
   });
 
@@ -298,6 +199,52 @@ describe('createDataChannelDuplex', () => {
     await expect(failed).rejects.toThrow('Message too large');
     await expect(next).resolves.toBeUndefined();
     expect(await received).toEqual(['delivered']);
+  });
+
+  it('resolves flush at once when nothing is buffered', async () => {
+    const { a } = duplexPair();
+    await expect(a.flush()).resolves.toBeUndefined();
+  });
+
+  it('resolves flush once held sends have left the buffer', async () => {
+    const { dcA, a } = duplexPair();
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    let flushed = false;
+    const flushing = a.flush().then(() => {
+      flushed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(flushed).toBe(false);
+
+    dcA.release();
+
+    await flushing;
+    expect(flushed).toBe(true);
+  });
+
+  it('resolves flush when the peer hangs up after the buffer emptied', async () => {
+    const { dcB, a } = duplexPair();
+    await a.sendText('last');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    dcB.close();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await expect(a.flush()).resolves.toBeUndefined();
+  });
+
+  it('rejects flush when the channel closes with bytes still buffered', async () => {
+    const { dcA, dcB, a } = duplexPair();
+    dcA.hold();
+    await a.sendBinary(new Uint8Array(8));
+    const flushing = a.flush();
+
+    dcB.close();
+
+    await expect(flushing).rejects.toThrow(
+      'Data channel closed with 8 bytes unsent',
+    );
   });
 
   it('fails a send waiting on backpressure when the channel closes under it', async () => {

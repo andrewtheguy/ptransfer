@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { hangUp } from '@/lib/code-exchange/hang-up';
 import {
   type AcceptedOffer,
   acceptOffer,
@@ -149,9 +148,6 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     useState<ReceivedContent | null>(null);
 
   const rtcRef = useRef<WebRTCConnection | null>(null);
-  // The data channel of the attempt that connected, so a cancel can tell
-  // the sender.
-  const channelRef = useRef<DuplexChannel | null>(null);
   const cancelledRef = useRef(false);
   const receivingRef = useRef(false);
   // Storage backing the in-flight or completed transfer. Discarded whenever
@@ -210,10 +206,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
     const offerStep = offerStepRef.current;
     offerStepRef.current = null;
     offerStep?.reject(new Error('Cancelled'));
-    // A sender mid-transfer is told why the connection is going away.
-    hangUp(rtcRef.current, channelRef.current);
+    // Closing the connection is what tells a sender mid-transfer.
+    rtcRef.current?.close();
     rtcRef.current = null;
-    channelRef.current = null;
     setState({ status: 'idle' });
   }, [discardSink]);
 
@@ -494,7 +489,6 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             return;
           }
           switchRef.current = null;
-          channelRef.current = channel;
           connected = { attempt, channel };
           break;
         }
@@ -588,7 +582,6 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         const transport = transportRef.current;
         transportRef.current = null;
         transport?.close();
-        channelRef.current = null;
         if (rtcRef.current) {
           rtcRef.current.close();
           rtcRef.current = null;
