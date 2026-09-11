@@ -1,5 +1,5 @@
 import type { Event } from 'nostr-tools';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppendSink } from '@/lib/append-sink';
 import {
   acceptOffer,
@@ -191,6 +191,10 @@ export function usePinReceive(): UsePinReceiveReturn {
     discardSink();
     setReceivedContent(null);
   }, [cancel, discardSink]);
+
+  // Navigating away ends the transfer and drops a completed payload: nothing
+  // reaches this hook once it is gone, so neither can be read again.
+  useEffect(() => () => reset(), [reset]);
 
   const receive = useCallback(
     async (pinMaterial: PinKeyMaterial, options: PinReceiveOptions) => {

@@ -91,12 +91,15 @@ export function useTorReceive(): UseTorReceiveReturn {
     void teardown();
   }, [teardown, discardSink]);
 
+  // Navigating away ends the transfer and drops a completed payload: nothing
+  // reaches this hook once it is gone, so neither can be read again.
   useEffect(
     () => () => {
       cancelledRef.current = true;
+      discardSink();
       void teardown();
     },
-    [teardown],
+    [teardown, discardSink],
   );
 
   const receive = useCallback(

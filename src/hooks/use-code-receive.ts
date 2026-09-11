@@ -221,8 +221,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
   // Navigating away ends the transfer, as it does in the Tor modes: nothing
   // reaches this hook once it is gone, and an anonymous fallback left running
   // would hold a Tor client, its circuits, and an onion service until the
-  // session expired.
-  useEffect(() => () => cancel(), [cancel]);
+  // session expired. A completed payload goes too, since nothing can read it.
+  useEffect(() => () => reset(), [reset]);
 
   const setSimulateNoDirect = useCallback((value: boolean) => {
     switchRef.current?.(value);
