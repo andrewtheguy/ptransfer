@@ -78,6 +78,9 @@ function readAtTerminal<T>(
     const setRawMode = (mode: boolean) => input.setRawMode?.(mode);
     let pasted = '';
     let line = '';
+    // The character before this one, which may have arrived in an earlier
+    // chunk: a CRLF is one line ending however it is split.
+    let previous = '';
 
     const listen = () => {
       setRawMode(true);
@@ -92,6 +95,7 @@ function readAtTerminal<T>(
     const ask = () => {
       pasted = '';
       line = '';
+      previous = '';
       output.write(prompt);
       listen();
     };
@@ -123,6 +127,8 @@ function readAtTerminal<T>(
     const onData = (chunk: Buffer | string) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       for (const char of text) {
+        const afterCarriageReturn = previous === '\r';
+        previous = char;
         switch (char) {
           case '\u0003': // Ctrl-C, which raw mode delivers instead of SIGINT
             fail(new InterruptedError());
@@ -132,6 +138,9 @@ function readAtTerminal<T>(
             return;
           case '\r':
           case '\n':
+            // The second half of a CRLF ends nothing of its own; a terminal
+            // that sends one would otherwise look like a second Enter.
+            if (char === '\n' && afterCarriageReturn) break;
             if (line === '' && pasted.trim() !== '') {
               // A second Enter: what was pasted is all there is.
               const container = decodeCode(pasted);

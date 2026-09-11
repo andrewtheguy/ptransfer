@@ -94,6 +94,21 @@ describe('openRelayStore', () => {
     expect(await readdir(dir)).toEqual([]);
   });
 
+  it('raises what a change throws, having run it once', async () => {
+    const dir = await cacheDir();
+    const failure = new Error('change failed');
+    let calls = 0;
+    await expect(
+      openRelayStore(dir, mutex()).update(() => {
+        calls += 1;
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(calls).toBe(1);
+    // Nothing was written: the cache is what it was.
+    expect(await readdir(dir)).toEqual([]);
+  });
+
   it('loses nothing to writers in other processes', async () => {
     // Real processes and the real flock: what two terminals sending at once
     // do to one cache.

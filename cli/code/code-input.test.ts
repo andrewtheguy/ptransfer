@@ -101,6 +101,16 @@ describe('readCode at a terminal', () => {
     expect(output.join('')).toContain(CODE.slice(0, 30));
   });
 
+  it('takes a code whose lines end in CRLF', async () => {
+    const { input, output, write } = terminal();
+    const pending = readCode('Code: ', accept, input, { write });
+    // What a terminal that ends its lines the DOS way sends for a wrapped
+    // paste: the \n of each \r\n must not read as an Enter on an empty line.
+    input.push(`${CODE.match(/.{1,60}/g)?.join('\r\n')}\r`);
+    expect(await pending).toBeGreaterThan(0);
+    expect(output.join('')).not.toContain('not a complete pTransfer code');
+  });
+
   it('asks again after a refusal, and after text that is not a code', async () => {
     const { input, output, write } = terminal();
     let calls = 0;

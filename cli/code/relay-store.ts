@@ -89,16 +89,25 @@ export function openRelayStore(
     read,
     async update(change) {
       let applied = false;
+      let refused = false;
       let result!: ReturnType<typeof change>;
       try {
         await mkdir(cacheDir, { recursive: true });
         await lock(async () => {
           const cache = await read();
-          result = change(cache);
+          try {
+            result = change(cache);
+          } catch (error) {
+            // The change itself failed. It is the caller's error, and the
+            // change is not run a second time.
+            refused = true;
+            throw error;
+          }
           applied = true;
           await write(cache);
         });
-      } catch {
+      } catch (error) {
+        if (refused) throw error;
         // Cache persistence never prevents a transfer: a change that could
         // not be kept still gets its answer.
         if (!applied) result = change(await read());
