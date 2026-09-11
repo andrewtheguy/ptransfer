@@ -1,6 +1,14 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TransferMetadata } from '@/lib/nostr/types';
 import { TorFramedStream } from '@/lib/tor/framing';
@@ -10,7 +18,12 @@ import { serveUntilSent } from '@/lib/tor/serve';
 import { receiveFileOverTor } from '@/lib/tor/transfer';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
 import { wireEncodingFor } from '@/lib/transfer-source';
-import { createFileSink, openFileSource, safeFileName } from './files';
+import {
+  createFileSink,
+  destinationFolder,
+  openFileSource,
+  safeFileName,
+} from './files';
 
 let dir: string;
 
@@ -53,6 +66,42 @@ describe('openFileSource', () => {
     );
     await expect(openFileSource(dir)).rejects.toThrow('Not a regular file');
   });
+});
+
+describe('destinationFolder', () => {
+  it('gives a folder back as an absolute path', async () => {
+    const inbox = join(dir, 'inbox');
+    await mkdir(inbox);
+    expect(await destinationFolder(inbox)).toBe(inbox);
+    expect(await destinationFolder(`${inbox}/`)).toBe(inbox);
+    expect(await destinationFolder(relative(process.cwd(), inbox))).toBe(inbox);
+  });
+
+  it('refuses a missing folder rather than creating it', async () => {
+    const missing = join(dir, 'missing');
+    await expect(destinationFolder(missing)).rejects.toThrow(
+      `No such folder: ${missing}`,
+    );
+    await expect(readdir(dir)).resolves.toEqual([]);
+  });
+
+  it('refuses a file', async () => {
+    const file = join(dir, 'file.txt');
+    await writeFile(file, 'x');
+    await expect(destinationFolder(file)).rejects.toThrow('Not a folder');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses a folder it cannot create files in',
+    async () => {
+      const locked = join(dir, 'locked');
+      await mkdir(locked);
+      await chmod(locked, 0o500);
+      await expect(destinationFolder(locked)).rejects.toThrow(
+        `Cannot save files in ${locked}`,
+      );
+    },
+  );
 });
 
 describe('safeFileName', () => {

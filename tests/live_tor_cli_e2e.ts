@@ -3,7 +3,8 @@
 // Live Tor CLI-to-CLI test: one `ptransfer send --tor` process publishes a
 // v3 onion service and one `ptransfer receive --onion` process fetches it,
 // over real circuits, the way two people at two terminals would. It sends a
-// single file, then a folder and a file together, which arrive as one ZIP.
+// single file into the receiver's current directory, then a folder and a
+// file together, which arrive as one ZIP in the folder `--out` names.
 //
 //   bun run test:live:tor:cli
 //
@@ -123,9 +124,14 @@ function waitForRendezvous(
 
 /**
  * One `send --tor` of `paths` and one `receive` of it into a fresh `inbox`,
- * both exiting 0; the path the receiver reports it saved.
+ * both exiting 0; the path the receiver reports it saved. The receiver runs
+ * in `inbox`, or with `--out` naming it from outside.
  */
-async function transfer(paths: string[], inbox: string): Promise<string> {
+async function transfer(
+  paths: string[],
+  inbox: string,
+  { viaOut = false } = {},
+): Promise<string> {
   await mkdir(inbox);
   const sender = runCli('sender', ['send', '--tor', ...paths, ...BRIDGE_ARGS]);
   const { address, password } = await withTimeout(
@@ -144,8 +150,14 @@ async function transfer(paths: string[], inbox: string): Promise<string> {
 
   const receiver = runCli(
     'receiver',
-    ['receive', '--onion', address, ...BRIDGE_ARGS],
-    { cwd: inbox, stdin: `${password}\n` },
+    [
+      'receive',
+      '--onion',
+      address,
+      ...(viaOut ? ['--out', basename(inbox)] : []),
+      ...BRIDGE_ARGS,
+    ],
+    { cwd: viaOut ? dirname(inbox) : inbox, stdin: `${password}\n` },
   );
   await withTimeout(
     bothSucceed([
@@ -193,7 +205,9 @@ async function cliToCliFolder(): Promise<void> {
   const loose = join(ARTIFACTS, 'loose.txt');
   await writeFile(loose, sent['loose.txt']);
 
-  const saved = await transfer([folder, loose], join(ARTIFACTS, 'inbox-zip'));
+  const saved = await transfer([folder, loose], join(ARTIFACTS, 'inbox-zip'), {
+    viaOut: true,
+  });
   if (!/^files_\d{14}\.zip$/.test(basename(saved))) {
     throw new Error(`the receiver saved an unexpected name: ${saved}`);
   }

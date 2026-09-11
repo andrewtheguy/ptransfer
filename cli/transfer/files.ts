@@ -1,6 +1,14 @@
 import { createReadStream, openAsBlob } from 'node:fs';
-import { type FileHandle, open, rename, rm, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import {
+  access,
+  constants,
+  type FileHandle,
+  open,
+  rename,
+  rm,
+  stat,
+} from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AppendSink } from '@/lib/append-sink';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
@@ -86,6 +94,31 @@ function fitName(name: string, limit: number): string {
     fitted += char;
   }
   return fitted + extension;
+}
+
+/**
+ * The folder a received file is saved in, as an absolute path, once it is
+ * known to be a folder this process can create files in. It is checked
+ * before the bootstrap, since finding out after the handshake costs a Tor
+ * bootstrap and a circuit for nothing. It is never created: a mistyped name
+ * should fail, not quietly collect files somewhere new.
+ */
+export async function destinationFolder(path: string): Promise<string> {
+  const absolute = resolve(path);
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(absolute);
+  } catch {
+    throw new Error(`No such folder: ${path}`);
+  }
+  if (!info.isDirectory()) throw new Error(`Not a folder: ${path}`);
+  try {
+    // Creating a file in a folder takes write and search permission on it.
+    await access(absolute, constants.W_OK | constants.X_OK);
+  } catch {
+    throw new Error(`Cannot save files in ${path}`);
+  }
+  return absolute;
 }
 
 /**

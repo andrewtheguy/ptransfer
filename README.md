@@ -38,8 +38,9 @@ tab's Tor Onion Service mode run from the same code:
 bun run cli send --tor ./report.pdf
 
 # receiver: asks for the password (or reads it from a pipe) and saves
-# report.pdf in the current directory
+# report.pdf in the current directory, or in the folder --out names
 bun run cli receive --onion <address>.onion
+bun run cli receive --onion <address>.onion --out ~/Downloads
 ```
 
 `send --tor` takes any number of files and folders. One file is sent as
@@ -52,7 +53,8 @@ files that are not regular files, are left out and named on the way.
 The password is read from standard input rather than a flag, so it stays out of
 shell history and the process list. The receiver never overwrites a file; if
 the name is taken it declines, and the sender keeps waiting for another try.
-A choice of destination and the other modes follow; see
+The folder `--out` names must already exist; it is never created, so a typo
+fails instead of saving somewhere unexpected. The other modes follow; see
 [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 It also carries a live self-check of the Tor path:
