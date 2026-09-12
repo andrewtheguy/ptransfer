@@ -1,7 +1,7 @@
 {
   "name": "ptransfer",
   "private": true,
-  "version": "0.0.3",
+  "version": "0.0.4",
   "packageManager": "bun@1.4.0",
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
     "test:integration:nostr-file": "vitest run --project integration",
     "test:live": "bun run test:live:nostr-file && bun run test:live:web",
     "test:live:code:cli": "bun tests/live_code_cli_e2e.ts",
+    "test:live:pin:cli": "bun tests/live_pin_cli_e2e.ts",
     "test:live:code:cli-web": "bun tests/live_code_cli_web_e2e.ts",
     "test:live:tor:cli": "bun tests/live_tor_cli_e2e.ts",
     "test:live:tor:web": "bun tests/live_tor_web_e2e.ts",

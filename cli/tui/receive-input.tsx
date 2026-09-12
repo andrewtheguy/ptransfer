@@ -39,17 +39,20 @@ const INCOMPLETE =
   'That is the start of a code, but not a whole one — or it is more than an hour old. Copy it again, whole.';
 
 export type Accepted =
+  | { kind: 'pin'; pin: string; anonymous: boolean }
   | { kind: 'offer'; code: string }
   | { kind: 'onion'; address: string };
 
 /**
  * Whether what is in the field will go through Tor. An onion address always
- * does. A code does only when the sender chose the anonymous fallback, which
- * the code says itself — a plain one falls back through Nostr, or not at all,
- * and never starts Tor.
+ * does. A PIN does when it is an anonymous one, which its length says. A code
+ * does only when the sender chose the anonymous fallback, which the code says
+ * itself — a plain one falls back through Nostr, or not at all, and never
+ * starts Tor.
  */
 function needsTor(found: ReceiveInput | null): boolean {
   if (found?.kind === 'onion') return true;
+  if (found?.kind === 'pin') return found.pinKind === 'anonymous';
   if (found?.kind !== 'offer') return false;
   const payload = parseMutualPayload(found.payload);
   return payload !== null && isAnonymousOffer(payload);
@@ -57,7 +60,11 @@ function needsTor(found: ReceiveInput | null): boolean {
 
 function describe(text: string, found: ReceiveInput | null): string | null {
   if (!text.trim()) return null;
-  if (found?.kind === 'pin') return 'A PIN Exchange PIN';
+  if (found?.kind === 'pin') {
+    return found.pinKind === 'anonymous'
+      ? 'A PIN Exchange PIN · anonymous, so its handshake is over Tor'
+      : 'A PIN Exchange PIN';
+  }
   if (found?.kind === 'offer') {
     return needsTor(found)
       ? 'A Code Exchange code · anonymous, so its fallback is over Tor'
@@ -79,13 +86,11 @@ export function ReceiveInputScreen({
   bridge,
   onBridge,
   onAccept,
-  onUnsupported,
   onCancel,
 }: {
   bridge: TorBridge;
   onBridge(): void;
   onAccept(accepted: Accepted): void;
-  onUnsupported(what: string): void;
   onCancel(): void;
 }) {
   const [text, setText] = useState('');
@@ -112,9 +117,11 @@ export function ReceiveInputScreen({
     setProblem(null);
     switch (found.kind) {
       case 'pin':
-        onUnsupported(
-          'PIN Exchange is not supported in the terminal yet. Ask the sender for a code, or receive in the web app.',
-        );
+        onAccept({
+          kind: 'pin',
+          pin: found.pin,
+          anonymous: found.pinKind === 'anonymous',
+        });
         return;
       case 'offer-chunk':
         setProblem(

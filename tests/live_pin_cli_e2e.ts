@@ -1,20 +1,20 @@
 #!/usr/bin/env bun
 
-// Live Code Exchange CLI-to-CLI test: one `ptransfer send --code` process and
-// one `ptransfer receive --code` process, the sender's code piped into the
-// receiver and the receiver's response piped back, the way two people at two
-// terminals would carry them by copy and paste.
+// Live PIN Exchange CLI-to-CLI test: one `ptransfer send --pin` process and
+// one `ptransfer receive --pin` process, the sender's PIN piped into the
+// receiver and the receiver's confirmation code piped back, the way two people
+// at two terminals would carry them — one read out, one read back.
 //
-//   bun run test:live:code:cli
+//   bun run test:live:pin:cli
 //
 // Scenarios, in order:
 //   direct     a single file over a direct WebRTC connection
 //   folder     a folder and a file, which arrive as one ZIP in --out
 //   relay      a file with the receiver simulating no direct route, so it
-//              goes through the public Nostr relays the code names
-//   anonymous  the same through Tor: the anonymous fallback's onion relays
-//              and an onion service; a Tor bootstrap on both sides, so slow,
-//              and not run unless asked for
+//              goes through the public Nostr relays the sender's offer names
+//   anonymous  the same through Tor: an anonymous PIN, so the handshake rides
+//              onion relays and the file an onion service; a Tor bootstrap on
+//              both sides, so slow, and not run unless asked for
 //
 // Environment:
 //   SCENARIOS   comma-separated scenarios to run (default direct,folder,relay)
@@ -43,14 +43,18 @@ import {
 
 const KNOWN_SCENARIOS = ['direct', 'folder', 'relay', 'anonymous'];
 const SCENARIOS = new Set(
-  (process.env.SCENARIOS ?? 'direct,folder,relay').split(',').map((s) => s.trim()),
+  (process.env.SCENARIOS ?? 'direct,folder,relay')
+    .split(',')
+    .map((s) => s.trim()),
 );
 // A typo or an empty list would otherwise run nothing and report a pass.
 const unknown = [...SCENARIOS].filter((s) => !KNOWN_SCENARIOS.includes(s));
 if (unknown.length > 0 || SCENARIOS.size === 0) {
   throw new Error(
     `SCENARIOS must name at least one of ${KNOWN_SCENARIOS.join(', ')}` +
-      (unknown.length > 0 ? `; unknown: ${unknown.map((s) => JSON.stringify(s)).join(', ')}` : ''),
+      (unknown.length > 0
+        ? `; unknown: ${unknown.map((s) => JSON.stringify(s)).join(', ')}`
+        : ''),
   );
 }
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 8 * 60_000);
@@ -61,7 +65,7 @@ const VERBOSE = process.env.VERBOSE === '1' ? ['--verbose'] : [];
 // symbolic link, and a receiver reports the path it actually wrote to, so
 // the two would not compare equal.
 const ARTIFACTS = await realpath(
-  await mkdtemp(join(tmpdir(), 'ptransfer-code-cli-e2e-')),
+  await mkdtemp(join(tmpdir(), 'ptransfer-pin-cli-e2e-')),
 );
 const children: ChildProcess[] = [];
 
@@ -81,10 +85,11 @@ interface Cli {
 /** One CLI process, its output relayed line by line and kept. */
 function runCli(label: string, args: string[], cwd = WEB_ROOT): Cli {
   // Absolute, since a receiver runs from its own inbox directory.
-  const child = spawn('bun', [join(WEB_ROOT, 'cli', 'main.ts'), ...args, ...VERBOSE], {
-    cwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    'bun',
+    [join(WEB_ROOT, 'cli', 'main.ts'), ...args, ...VERBOSE],
+    { cwd, stdio: ['pipe', 'pipe', 'pipe'] },
+  );
   children.push(child);
 
   let stdout = '';
@@ -98,7 +103,9 @@ function runCli(label: string, args: string[], cwd = WEB_ROOT): Cli {
     const newline = stdout.indexOf('\n');
     if (newline >= 0) resolveFirst(stdout.slice(0, newline));
     for (const line of text.split('\n')) {
-      if (line) say(`[${label} out] ${line.length > 80 ? `${line.slice(0, 77)}...` : line}`);
+      if (line) {
+        say(`[${label} out] ${line.length > 80 ? `${line.slice(0, 77)}...` : line}`);
+      }
     }
   });
   child.stderr?.setEncoding('utf8');
@@ -117,62 +124,94 @@ function runCli(label: string, args: string[], cwd = WEB_ROOT): Cli {
   return { child, firstLine, stdout: closed.then(() => stdout), exited };
 }
 
-/** The first line `cli` prints, or why it never will. */
-function codeFrom(cli: Cli, label: string): Promise<string> {
-  return withTimeout(
+/**
+ * The value of the first `label: value` line `cli` prints, or why it never
+ * will. A PIN and a confirmation code are both handed over under a label, so
+ * a script can split them off standard output.
+ */
+async function handedBy(
+  cli: Cli,
+  label: string,
+  what: string,
+): Promise<string> {
+  const line = await withTimeout(
     Promise.race([
       cli.firstLine,
       cli.exited.then((status) => {
-        throw new Error(`the ${label} exited with status ${status} before printing its code`);
+        throw new Error(
+          `the ${label} exited with status ${status} before showing its ${what}`,
+        );
       }),
     ]),
     TIMEOUT_MS,
-    `the ${label}'s code`,
+    `the ${label}'s ${what}`,
   );
+  const value = line.slice(line.indexOf(': ') + 2).trim();
+  if (!value || !line.includes(': ')) {
+    throw new Error(`the ${label} printed ${JSON.stringify(line)}, not a ${what}`);
+  }
+  return value;
 }
 
 /**
  * Settles once both processes exit 0, and rejects as soon as either exits
  * otherwise, rather than waiting on the other to time out.
  */
-function bothSucceed(processes: { label: string; exited: Promise<number> }[]): Promise<void> {
+function bothSucceed(
+  processes: { label: string; exited: Promise<number> }[],
+): Promise<void> {
   return Promise.all(
     processes.map(({ label, exited }) =>
       exited.then((status) => {
-        if (status !== 0) throw new Error(`the ${label} exited with status ${status}`);
+        if (status !== 0) {
+          throw new Error(`the ${label} exited with status ${status}`);
+        }
       }),
     ),
   ).then(() => undefined);
 }
 
 /**
- * One `send --code` of `paths` and one `receive --code` of it into a fresh
+ * One `send --pin` of `paths` and one `receive --pin` of it into a fresh
  * `inbox`, both exiting 0; the path the receiver reports it saved.
  */
 async function transfer(
   paths: string[],
   inbox: string,
-  options: { viaOut?: boolean; senderArgs?: string[]; receiverArgs?: string[] } = {},
+  options: {
+    viaOut?: boolean;
+    senderArgs?: string[];
+    receiverArgs?: string[];
+  } = {},
 ): Promise<string> {
   await mkdir(inbox);
-  const sender = runCli('sender', ['send', '--code', ...paths, ...(options.senderArgs ?? [])]);
-  const offer = await codeFrom(sender, 'sender');
-  say(`the sender's code is ${offer.length} characters`);
+  const sender = runCli('sender', [
+    'send',
+    '--pin',
+    ...paths,
+    ...(options.senderArgs ?? []),
+  ]);
+  const pin = await handedBy(sender, 'sender', 'PIN');
+  say(`the sender's PIN is ${pin.length} characters`);
 
   const receiver = runCli(
     'receiver',
     [
       'receive',
-      '--code',
+      '--pin',
       ...(options.viaOut ? ['--out', basename(inbox)] : []),
       ...(options.receiverArgs ?? []),
     ],
     options.viaOut ? dirname(inbox) : inbox,
   );
-  receiver.child.stdin?.write(`${offer}\n`);
-  const answer = await codeFrom(receiver, 'receiver');
-  say(`the receiver's response is ${answer.length} characters`);
-  sender.child.stdin?.write(`${answer}\n`);
+  receiver.child.stdin?.write(`${pin}\n`);
+  const confirmation = await handedBy(
+    receiver,
+    'receiver',
+    'confirmation code',
+  );
+  say(`the receiver's confirmation code is ${confirmation}`);
+  sender.child.stdin?.write(`${confirmation}\n`);
 
   await withTimeout(
     bothSucceed([
@@ -197,7 +236,11 @@ async function oneFile(
   console.log(`\n=== CLI sender -> CLI receiver: ${scenario} ===`);
   const source = join(ARTIFACTS, `${scenario}.bin`);
   await writeFile(source, crypto.getRandomValues(new Uint8Array(bytes)));
-  const saved = await transfer([source], join(ARTIFACTS, `inbox-${scenario}`), options);
+  const saved = await transfer(
+    [source],
+    join(ARTIFACTS, `inbox-${scenario}`),
+    options,
+  );
   if (basename(saved) !== `${scenario}.bin`) {
     throw new Error(`the receiver saved an unexpected name: ${saved}`);
   }
@@ -214,13 +257,18 @@ async function folder(): Promise<void> {
     'loose.txt': new TextEncoder().encode('a loose file\n'),
   };
   await writeFile(join(album, 'cover.txt'), sent['album/cover.txt']);
-  await writeFile(join(album, 'nested', 'ünïcødé.bin'), sent['album/nested/ünïcødé.bin']);
+  await writeFile(
+    join(album, 'nested', 'ünïcødé.bin'),
+    sent['album/nested/ünïcødé.bin'],
+  );
   const loose = join(ARTIFACTS, 'loose.txt');
   await writeFile(loose, sent['loose.txt']);
 
-  const saved = await transfer([album, loose], join(ARTIFACTS, 'inbox-folder'), {
-    viaOut: true,
-  });
+  const saved = await transfer(
+    [album, loose],
+    join(ARTIFACTS, 'inbox-folder'),
+    { viaOut: true },
+  );
   if (!/^files_\d{14}\.zip$/.test(basename(saved))) {
     throw new Error(`the receiver saved an unexpected name: ${saved}`);
   }
@@ -259,7 +307,7 @@ try {
       receiverArgs: ['--simulate-no-direct', '--bridge', BRIDGE],
     });
   }
-  console.log(`\nAll Code Exchange CLI transfers passed in ${elapsed()}.`);
+  console.log(`\nAll PIN Exchange CLI transfers passed in ${elapsed()}.`);
 } catch (error) {
   console.error(`\n[FAIL] ${error instanceof Error ? error.message : error}`);
   process.exitCode = 1;

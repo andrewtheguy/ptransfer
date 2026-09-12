@@ -823,7 +823,7 @@ Changing either digest is a breaking change, never an accident.
 | AES-GCM framing | [`src/lib/crypto/aes-gcm.ts`](../src/lib/crypto/aes-gcm.ts) |
 | Events, tags, filters | [`src/lib/nostr/events.ts`](../src/lib/nostr/events.ts), [`types.ts`](../src/lib/nostr/types.ts) |
 | Transcript hashes | [`src/lib/nostr/transcript.ts`](../src/lib/nostr/transcript.ts) |
-| Handshake choreography | [`src/hooks/use-pin-send.ts`](../src/hooks/use-pin-send.ts), [`use-pin-receive.ts`](../src/hooks/use-pin-receive.ts) |
+| Handshake choreography | [`src/lib/pin-exchange/send.ts`](../src/lib/pin-exchange/send.ts), [`receive.ts`](../src/lib/pin-exchange/receive.ts), driven by [`src/hooks/use-pin-send.ts`](../src/hooks/use-pin-send.ts) and [`use-pin-receive.ts`](../src/hooks/use-pin-receive.ts) in the tab and by [`cli/pin/`](../cli/pin/) in the terminal |
 | Wire encoding | [`src/lib/transfer-source.ts`](../src/lib/transfer-source.ts) |
 | Transfer protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts), over the channel in [`src/lib/duplex-channel.ts`](../src/lib/duplex-channel.ts) or the Tor link in [`src/lib/tor/transfer.ts`](../src/lib/tor/transfer.ts) |
 

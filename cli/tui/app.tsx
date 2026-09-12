@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
 import { sendByCode } from '../code/send';
+import { receiveByPin } from '../pin/receive';
+import { sendByPin } from '../pin/send';
 import type { TorOptions } from '../tor/bootstrap';
 import { destinationFolder } from '../transfer/files';
 import { receiveOverTor } from '../transfer/tor-receive';
@@ -14,29 +16,32 @@ import type { Presenter } from '../ui/presenter';
 import { Picker } from './picker';
 import { type Accepted, ReceiveInputScreen } from './receive-input';
 import { Run } from './run';
-import { Gap, Note, Problem, Screen } from './screen';
+import { Gap, Note, Screen } from './screen';
 import { type SendChoice, SendMode } from './send-mode';
 
 /**
  * The terminal UI, screen by screen.
  *
- * It runs the same two flows the line interface runs, on the same engine —
+ * It runs the same three flows the line interface runs, on the same engine —
  * what it adds is where they are shown and where their questions are answered.
  * The send side mirrors the tab's send tab: pick what to send, then one of the
  * three transfer modes. The receive side mirrors the tab's receive screen:
- * one field, the mode read off what is pasted into it, and then where to save
- * what is coming — that question is always asked, and asked after the code,
- * since until the code is in there is nothing to save.
+ * one field, the mode read off what is pasted or typed into it, and then where
+ * to save what is coming — that question is always asked, and asked after the
+ * PIN or the code, since until then there is nothing to save.
  *
- * PIN Exchange is in both, and in both it says it is not here yet: it is one
- * of the three modes, and leaving it out would say it had been dropped.
+ * PIN Exchange is the mode the screens are worth most to: its PIN rotates
+ * while it waits and can be replaced on demand, which is a line that has to be
+ * rewritten rather than printed again.
  */
 
 /** A transfer waiting to be started, and what to call its screen. */
 interface Running {
   title: string;
   start(presenter: Presenter): Promise<number>;
+  /** An answer the screen before this one already took in; see `TuiPresenterOptions`. */
   firstCode?: string;
+  firstWord?: string;
 }
 
 type Stage =
@@ -45,8 +50,7 @@ type Stage =
   | { name: 'send-mode'; paths: string[] }
   | { name: 'receive-ask' }
   | { name: 'receive-folder'; accepted: Accepted }
-  | { name: 'run'; running: Running }
-  | { name: 'unsupported'; message: string; back: Stage };
+  | { name: 'run'; running: Running };
 
 const HOME: SelectOption[] = [
   {
@@ -86,30 +90,34 @@ export function App({ onExit }: { onExit(status: number): void }) {
 
   const startSend = (choice: SendChoice) => {
     const torOptions = torOptionsFor(choice.bridge);
+    const common = {
+      content: choice.content,
+      anonymous: choice.anonymous,
+      torOptions,
+      cacheDir: defaultCacheDir(),
+      verbose: false,
+    };
     const running: Running =
-      choice.mode === 'code'
+      choice.mode === 'pin'
         ? {
-            title: 'Send · Code Exchange',
-            start: (presenter) =>
-              sendByCode({
-                content: choice.content,
-                anonymous: choice.anonymous,
-                torOptions,
-                cacheDir: defaultCacheDir(),
-                verbose: false,
-                presenter,
-              }),
+            title: 'Send · PIN Exchange',
+            start: (presenter) => sendByPin({ ...common, presenter }),
           }
-        : {
-            title: 'Send · Tor Onion Service',
-            start: (presenter) =>
-              sendOverTor({
-                content: choice.content,
-                torOptions,
-                verbose: false,
-                presenter,
-              }),
-          };
+        : choice.mode === 'code'
+          ? {
+              title: 'Send · Code Exchange',
+              start: (presenter) => sendByCode({ ...common, presenter }),
+            }
+          : {
+              title: 'Send · Tor Onion Service',
+              start: (presenter) =>
+                sendOverTor({
+                  content: choice.content,
+                  torOptions,
+                  verbose: false,
+                  presenter,
+                }),
+            };
     setStage({ name: 'run', running });
   };
 
@@ -119,6 +127,28 @@ export function App({ onExit }: { onExit(status: number): void }) {
   const startReceive = (accepted: Accepted, into: string) => {
     setFolder(into);
     const torOptions = torOptionsFor(bridge);
+    if (accepted.kind === 'pin') {
+      setStage({
+        name: 'run',
+        running: {
+          title: 'Receive · PIN Exchange',
+          // The PIN is what the screen before this one read the mode off, so
+          // it answers the engine's own request for one rather than asking
+          // the same question twice.
+          firstWord: accepted.pin,
+          start: (presenter) =>
+            receiveByPin({
+              folder: into,
+              simulateNoDirect: false,
+              torOptions,
+              cacheDir: defaultCacheDir(),
+              verbose: false,
+              presenter,
+            }),
+        },
+      });
+      return;
+    }
     if (accepted.kind === 'offer') {
       setStage({
         name: 'run',
@@ -216,9 +246,6 @@ export function App({ onExit }: { onExit(status: number): void }) {
             setBridge((was) => (was === 'websocket' ? 'webrtc' : 'websocket'))
           }
           onAccept={(accepted) => setStage({ name: 'receive-folder', accepted })}
-          onUnsupported={(message) =>
-            setStage({ name: 'unsupported', message, back: stage })
-          }
           onCancel={() => setStage({ name: 'home' })}
         />
       );
@@ -243,39 +270,9 @@ export function App({ onExit }: { onExit(status: number): void }) {
           title={stage.running.title}
           start={stage.running.start}
           firstCode={stage.running.firstCode}
+          firstWord={stage.running.firstWord}
           onFinished={onExit}
         />
       );
-
-    case 'unsupported':
-      return (
-        <Unsupported
-          message={stage.message}
-          onBack={() => setStage(stage.back)}
-        />
-      );
   }
-}
-
-/** A mode that is one of the three, but is not here yet. */
-function Unsupported({
-  message,
-  onBack,
-}: {
-  message: string;
-  onBack(): void;
-}) {
-  useKeyboard((key) => {
-    if (key.name === 'return' || key.name === 'escape') onBack();
-  });
-  return (
-    <Screen title="PIN Exchange" hints={['enter back']}>
-      <Problem>{message}</Problem>
-      <Gap />
-      <Note>
-        Code Exchange carries the same transfer; the code is longer than a PIN,
-        and it has to be copied rather than read out.
-      </Note>
-    </Screen>
-  );
 }

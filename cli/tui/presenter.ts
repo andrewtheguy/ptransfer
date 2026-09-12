@@ -1,7 +1,7 @@
 import { decodeCode } from '../code/code-input';
 import { InterruptedError } from '../interrupt';
 import type { Presenter } from '../ui/presenter';
-import type { Prompt, TransferStore } from './store';
+import type { Action, Prompt, TransferStore } from './store';
 
 /**
  * A transfer shown on the terminal UI rather than on standard error.
@@ -25,6 +25,8 @@ export interface TuiPresenterOptions {
    * same question twice.
    */
   firstCode?: string;
+  /** The same for a PIN, which the receive screen reads the mode off just as it does a code. */
+  firstWord?: string;
 }
 
 export function createTuiPresenter(
@@ -32,6 +34,7 @@ export function createTuiPresenter(
   options: TuiPresenterOptions = {},
 ): Presenter {
   let firstCode = options.firstCode ?? null;
+  let firstWord = options.firstWord ?? null;
 
   const setPrompt = (prompt: Prompt | null) => {
     store.update((view) => ({ ...view, prompt }));
@@ -52,10 +55,25 @@ export function createTuiPresenter(
       store.update((view) => ({ ...view, progress: { current, total } }));
     },
     hand(value, label) {
-      store.update((view) => ({
-        ...view,
-        handed: [...view.handed, { label: label ?? null, value }],
-      }));
+      const handed = { label: label ?? null, value };
+      store.update((view) => {
+        // A value handed again under a label it has been handed under before
+        // takes that place: a rotated PIN is the same thing with a new value,
+        // and a screen can show it where the last one was.
+        const at =
+          label === undefined
+            ? -1
+            : view.handed.findIndex((item) => item.label === label);
+        return {
+          ...view,
+          handed:
+            at < 0
+              ? [...view.handed, handed]
+              : view.handed.map((item, index) =>
+                  index === at ? handed : item,
+                ),
+        };
+      });
     },
     readCode(message, accept) {
       return new Promise((resolve, reject) => {
@@ -97,6 +115,53 @@ export function createTuiPresenter(
         }
         ask(null);
       });
+    },
+    readWord(message, accept) {
+      return new Promise((resolve, reject) => {
+        let attempt = 0;
+        const ask = (error: string | null) => {
+          attempt += 1;
+          setPrompt({
+            kind: 'word',
+            message,
+            error,
+            attempt,
+            submit: (text) => void take(text),
+          });
+        };
+        const take = async (text: string) => {
+          if (!text.trim()) return;
+          // Off the screen while the answer is judged: a claim can take a
+          // moment, and a second Enter must not submit the same answer twice.
+          setPrompt(null);
+          try {
+            resolve(await accept(text.trim()));
+          } catch (error) {
+            if (error instanceof InterruptedError) {
+              reject(error);
+              return;
+            }
+            ask(error instanceof Error ? error.message : String(error));
+          }
+        };
+        const pending = firstWord;
+        firstWord = null;
+        if (pending !== null) {
+          void take(pending);
+          return;
+        }
+        ask(null);
+      });
+    },
+    action(key, label, run) {
+      const action: Action = { key, label, run };
+      store.update((view) => ({ ...view, actions: [...view.actions, action] }));
+      return () => {
+        store.update((view) => ({
+          ...view,
+          actions: view.actions.filter((candidate) => candidate !== action),
+        }));
+      };
     },
     readSecret(message) {
       return new Promise((resolve) => {

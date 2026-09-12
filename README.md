@@ -30,22 +30,32 @@ CLI by construction. What the CLI adds is what a process has and a page does
 not — files, a cache directory, and plain HTTP to the Tor directory
 authorities, which turns the minutes-long browser bootstrap into seconds.
 
-Today it sends and receives files and folders by Code Exchange and over a Tor
-onion service, the tab's modes of the same names run from the same code.
+Today it sends and receives files and folders in all three of the tab's
+transfer modes — PIN Exchange, Code Exchange, and a Tor onion service — run
+from the same code.
 
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
 one of the tab's three transfer modes; or paste what a sender gave you and
-let it work out which of the three it is. PIN Exchange is listed on both
-sides and says it is not here yet — see [docs/ROADMAP.md](./docs/ROADMAP.md).
+let it work out which of the three it is.
 
 Every command below is the line-oriented interface instead, which is what a
-pipe and a script want and what stays out of the terminal UI's way. Code
-Exchange carries its codes as text — a terminal has no camera — which is also
-the text the tab's **Copy Data** gives and its **Paste** tab takes, so either
-end can be a tab:
+pipe and a script want and what stays out of the terminal UI's way. PIN
+Exchange reads out a PIN and takes back a confirmation code; Code Exchange
+carries its codes as text — a terminal has no camera — which is also the text
+the tab's **Copy Data** gives and its **Paste** tab takes, so either end of
+either mode can be a tab:
 
 ```bash
+# sender: shows a PIN to read out — a fresh one every couple of minutes until
+# someone takes it — then asks for the confirmation code the receiver shows
+bun run cli send --pin ./report.pdf
+bun run cli send --pin --anonymous ./report.pdf  # the handshake through Tor
+
+# receiver: asks for the PIN, prints the confirmation code to read back, and
+# saves report.pdf once the sender has typed it
+bun run cli receive --pin
+
 # sender: prints a code for the receiver, then asks for their response
 bun run cli send --code ./report.pdf
 bun run cli send --code --anonymous ./report.pdf  # the Tor fallback instead

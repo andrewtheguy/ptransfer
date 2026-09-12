@@ -1,5 +1,6 @@
 import type { AppendSink } from '@/lib/append-sink';
 import type { ExchangeHost } from '@/lib/code-exchange/host';
+import type { FallbackReceipt } from '@/lib/code-exchange/receive';
 import { createFileSink } from '../transfer/files';
 import { loadRtcPeerConnection } from '../webrtc';
 import { openRelayStore } from './relay-store';
@@ -57,4 +58,32 @@ export async function createCliHost(options: {
       );
     },
   };
+}
+
+/**
+ * The bytes a fallback saved. The Tor fallback writes through the host's sink,
+ * so its file is already in place; the relay fallback hands back what it
+ * reassembled in memory, which is written out here the same way.
+ */
+export async function savedFrom(
+  receipt: FallbackReceipt | 'switched' | null,
+  host: CliExchangeHost,
+): Promise<number> {
+  if (receipt === null || receipt === 'switched') throw new Error('Cancelled');
+  if (receipt.sink) return receipt.content.data.size;
+  const { fileName, fileSize, mimeType } = receipt.content;
+  const sink = await host.createSink({
+    contentType: 'file',
+    fileName,
+    fileSize,
+    contentEncoding: 'identity',
+    mimeType,
+  });
+  try {
+    await sink.append(new Uint8Array(await receipt.content.data.arrayBuffer()));
+    return (await sink.finish()).size;
+  } catch (error) {
+    await sink.discard();
+    throw error;
+  }
 }

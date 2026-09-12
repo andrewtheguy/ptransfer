@@ -4,6 +4,7 @@ import { TOR_WAIT_TIMEOUT_MS } from '@/lib/tor/serve';
 import { defaultCacheDir } from '../cache-dir';
 import { sendByCode } from '../code/send';
 import { routeDiagnostics } from '../diagnostics';
+import { sendByPin } from '../pin/send';
 import {
   TOR_OPTIONS,
   TOR_OPTIONS_USAGE,
@@ -15,9 +16,13 @@ import { createLinePresenter } from '../ui/line';
 import { UsageError } from '../usage';
 
 /**
- * `ptransfer send (--code | --tor) <path>...`: send files and folders the way
- * the tab's send tab does, in either of the modes a terminal can carry.
+ * `ptransfer send (--pin | --code | --tor) <path>...`: send files and folders
+ * the way the tab's send tab does, in any of its three modes.
  *
+ * - `--pin` is PIN Exchange (`../pin/send.ts`): a short PIN out, which rotates
+ *   while it waits, and the confirmation code the receiver reads back in; the
+ *   codes a Code Exchange would have been carried by hand ride the sealed
+ *   channel the PIN sets up.
  * - `--code` is Code Exchange (`../code/send.ts`): a code out, the receiver's
  *   response back in, then a direct connection, or the fallback the code
  *   names when none opens.
@@ -30,11 +35,17 @@ import { UsageError } from '../usage';
  * it; everything else goes to standard error.
  */
 
-const USAGE = `usage: ptransfer send --code <path>... [options]
+const USAGE = `usage: ptransfer send --pin <path>... [options]
+       ptransfer send --code <path>... [options]
        ptransfer send --tor <path>... [options]
 
 Send files and folders. One file is sent as itself; several, or a folder, go
 as one ZIP that keeps each folder's structure under its name.
+
+--pin prints a short PIN to read out to the receiver, and prints a fresh one
+every couple of minutes until someone takes it. Once they have, they are shown
+a confirmation code: type it in, and nothing about the file leaves this process
+until you have. With --anonymous the whole handshake goes through Tor.
 
 --code prints a code for the receiver to paste into the web app or into
 ptransfer receive --code, then reads the response they give back from standard
@@ -47,11 +58,14 @@ password the receiver needs. The service answers until a receiver takes the
 transfer, or for ${TOR_WAIT_TIMEOUT_MS / 60000} minutes.
 
 options:
+  --pin                    read the receiver a PIN and take back their
+                           confirmation code
   --code                   hand the receiver a code and take back theirs
   --tor                    send over a Tor onion service
-  --anonymous              with --code: relay a file that finds no direct
-                           route through Tor rather than public Nostr relays;
-                           the Tor options below say how to reach it
+  --anonymous              with --pin: carry the handshake, and a file that
+                           finds no direct route, through Tor rather than
+                           public Nostr relays; with --code: the fallback
+                           alone. The Tor options below say how to reach it
 ${TOR_OPTIONS_USAGE}
   -v, --verbose            show diagnostics and the Tor client's own log lines
   -h, --help
@@ -70,6 +84,7 @@ export async function send(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       ...TOR_OPTIONS,
+      pin: { type: 'boolean', default: false },
       code: { type: 'boolean', default: false },
       tor: { type: 'boolean', default: false },
       anonymous: { type: 'boolean', default: false },
@@ -81,11 +96,12 @@ export async function send(argv: string[]): Promise<number> {
     process.stdout.write(USAGE);
     return 0;
   }
-  if (values.code === values.tor) {
-    throw new UsageError('Choose one mode: --code or --tor');
+  const modes = [values.pin, values.code, values.tor].filter(Boolean).length;
+  if (modes !== 1) {
+    throw new UsageError('Choose one mode: --pin, --code or --tor');
   }
-  if (values.anonymous && !values.code) {
-    throw new UsageError('--anonymous goes with --code');
+  if (values.anonymous && values.tor) {
+    throw new UsageError('--anonymous goes with --pin or --code');
   }
   if (positionals.length === 0) {
     throw new UsageError('Give at least one file or folder to send');
@@ -114,6 +130,16 @@ export async function send(argv: string[]): Promise<number> {
     say(
       `Sending ${count(fileCount, 'file', 'files')} (${formatFileSize(content.estimatedSize)}) as ${content.name}`,
     );
+  }
+  if (values.pin) {
+    return await sendByPin({
+      content,
+      anonymous: values.anonymous,
+      torOptions,
+      cacheDir: torOptions.cacheDir ?? defaultCacheDir(),
+      verbose: values.verbose,
+      presenter,
+    });
   }
   if (values.code) {
     return await sendByCode({

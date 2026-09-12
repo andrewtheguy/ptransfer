@@ -312,21 +312,22 @@ describe('the send mode screen', () => {
     expect(frame).toContain('Tor Onion Service');
   });
 
-  it('says PIN Exchange is not here yet rather than starting it', async () => {
+  it('opens on PIN Exchange, as the tab does, and starts it', async () => {
     const root = await tree();
-    const started: unknown[] = [];
+    const started: { mode: string; anonymous: boolean }[] = [];
     const screen = await draw(
       <SendMode
         paths={[join(root, 'notes.txt')]}
-        onStart={(choice) => started.push(choice)}
+        onStart={(choice) =>
+          started.push({ mode: choice.mode, anonymous: choice.anonymous })
+        }
         onCancel={() => {}}
       />,
     );
-    screen.mockInput.pressArrow('up');
+    expect(screen.frame()).toContain('Anonymous signaling off');
     screen.mockInput.pressEnter();
     await screen.settle();
-    expect(screen.frame()).toContain('not supported in the terminal yet');
-    expect(started).toEqual([]);
+    expect(started).toEqual([{ mode: 'pin', anonymous: false }]);
   });
 
   it('starts Code Exchange with the anonymous fallback the a key turns on', async () => {
@@ -341,6 +342,9 @@ describe('the send mode screen', () => {
         onCancel={() => {}}
       />,
     );
+    // The cursor opens on PIN Exchange; Code Exchange is the one under it.
+    screen.mockInput.pressArrow('down');
+    await screen.settle();
     expect(screen.frame()).toContain('Anonymous fallback off');
     screen.mockInput.pressKey('a');
     await screen.settle();
@@ -410,7 +414,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={(what) => accepted.push(what)}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -422,24 +425,43 @@ describe('the receive screen', () => {
     expect(accepted).toEqual([{ kind: 'onion', address: ONION }]);
   });
 
-  it('recognizes a PIN and says PIN Exchange is not here yet', async () => {
-    const refusals: string[] = [];
+  it('reads a PIN off what was typed and takes it', async () => {
+    const accepted: unknown[] = [];
+    const pin = generatePin();
     const screen = await draw(
       <ReceiveInputScreen
         bridge="websocket"
         onBridge={() => {}}
-        onAccept={() => {}}
-        onUnsupported={(message) => refusals.push(message)}
+        onAccept={(what) => accepted.push(what)}
         onCancel={() => {}}
       />,
     );
-    await screen.mockInput.pasteBracketedText(generatePin());
+    await screen.mockInput.pasteBracketedText(pin);
     await screen.settle();
     expect(screen.frame()).toContain('A PIN Exchange PIN');
     screen.mockInput.pressEnter();
     await screen.settle();
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain('not supported in the terminal yet');
+    expect(accepted).toEqual([{ kind: 'pin', pin, anonymous: false }]);
+  });
+
+  it('says an anonymous PIN goes through Tor, and offers the bridge', async () => {
+    const accepted: unknown[] = [];
+    const pin = generatePin('anonymous');
+    const screen = await draw(
+      <ReceiveInputScreen
+        bridge="websocket"
+        onBridge={() => {}}
+        onAccept={(what) => accepted.push(what)}
+        onCancel={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText(pin);
+    await screen.settle();
+    expect(screen.frame()).toContain('anonymous, so its handshake is over Tor');
+    expect(screen.frame()).toContain('Tor bridge');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(accepted).toEqual([{ kind: 'pin', pin, anonymous: true }]);
   });
 
   it('refuses text that is none of the three', async () => {
@@ -448,7 +470,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={() => {}}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -467,7 +488,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={() => {}}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -485,7 +505,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={(what) => taken.push(what)}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -502,7 +521,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={(what) => taken.push(what)}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -524,7 +542,6 @@ describe('the receive screen', () => {
         bridge="webrtc"
         onBridge={() => bridges.push('turned')}
         onAccept={() => {}}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -543,7 +560,6 @@ describe('the receive screen', () => {
         bridge="webrtc"
         onBridge={() => bridges.push('turned')}
         onAccept={() => {}}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -565,7 +581,6 @@ describe('the receive screen', () => {
         bridge="websocket"
         onBridge={() => {}}
         onAccept={() => {}}
-        onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
@@ -749,6 +764,101 @@ describe('the run screen', () => {
     expect(frame).toContain('1. address:');
     expect(frame).toContain('2. password: ABCD-EFGH-JKLM');
     expect(frame).toContain('Press 1 or 2 to copy');
+  });
+
+  it('shows a rotated PIN where the last one was, not beside it', async () => {
+    let rotate: (() => void) | null = null;
+    const screen = await draw(
+      <Run
+        title="Send · PIN Exchange"
+        start={(presenter) => {
+          presenter.hand('AbCDefG23hjk', 'PIN');
+          rotate = () => presenter.hand('mnPQrst45uvw', 'PIN');
+          return new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('PIN: AbCDefG23hjk');
+    act(() => rotate?.());
+    await screen.settle();
+    const frame = screen.frame();
+    expect(frame).toContain('PIN: mnPQrst45uvw');
+    // The one that rotated away is gone, not listed above its replacement.
+    expect(frame).not.toContain('AbCDefG23hjk');
+    expect(frame).toContain('Press c to copy');
+  });
+
+  it('runs what the transfer offers under the key it offered it', async () => {
+    const refreshed: number[] = [];
+    const screen = await draw(
+      <Run
+        title="Send · PIN Exchange"
+        start={(presenter) => {
+          presenter.hand('AbCDefG23hjk', 'PIN');
+          presenter.action('r', 'a fresh PIN', () => refreshed.push(1));
+          return new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('r a fresh PIN');
+    screen.mockInput.pressKey('r');
+    await screen.settle();
+    expect(refreshed).toEqual([1]);
+  });
+
+  it('says why a confirmation code was refused and asks for it again', async () => {
+    const taken: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Send · PIN Exchange"
+        start={async (presenter) => {
+          taken.push(
+            await presenter.readWord(
+              "The receiver's confirmation code: ",
+              (text) => {
+                if (text !== 'RIGHT') throw new Error('That is not the code');
+                return text;
+              },
+            ),
+          );
+          return 0;
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText('WRONG');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(screen.frame()).toContain('That is not the code');
+    expect(taken).toEqual([]);
+    await screen.mockInput.pasteBracketedText('RIGHT');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(taken).toEqual(['RIGHT']);
+  });
+
+  it('answers the first question with the PIN the screen before it took', async () => {
+    const taken: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Receive · PIN Exchange"
+        firstWord="AbCDefG23hjk"
+        start={async (presenter) => {
+          taken.push(
+            await presenter.readWord("The sender's PIN: ", (text) => text),
+          );
+          presenter.status('Searching for sender...');
+          return await new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    expect(taken).toEqual(['AbCDefG23hjk']);
+    // Nothing was asked: the question was already answered.
+    expect(screen.frame()).not.toContain("The sender's PIN");
+    expect(screen.frame()).toContain('Searching for sender');
   });
 
   it('takes a whole response, however far past a field’s own cap it runs', async () => {

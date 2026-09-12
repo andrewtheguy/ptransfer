@@ -449,7 +449,7 @@ The display component focuses on secure and clear communication:
 #### `ConfirmationCodeDisplay` / `ConfirmationCodeInput`
 - **Display (receiver)**: renders the 8 characters grouped `XXXX-XXXX` in large monospace with a copy button, and states plainly that the transfer does not start until the sender enters it.
 - **Input (sender)**: normalizes on every keystroke through `normalizeCrockfordBase32`, so the display hyphen, lowercase entry, and `O`/`0` or `I`/`1` slips all land on the same value. A mismatch shows an inline error and clears the field; the send stays parked.
-- **The expected code is never exposed to the sender's UI.** `usePinSend` holds it in a ref and returns only a `submitConfirmationCode(code): boolean` predicate — showing it would defeat the entire mechanism.
+- **The expected code is never exposed to the sender's UI.** `usePinSend` holds it in a ref and returns only a `submitConfirmationCode(code): boolean` predicate; the CLI holds it in the local that asks for the typed one. Showing it would defeat the entire mechanism.
 
 **Key Parameters:**
 - `MAX_MESSAGE_SIZE`: 2 GiB (maximum P2P transferred payload size; every direct-path stage streams, see Streaming Encryption)
@@ -806,9 +806,9 @@ The shared transfer protocol is one client of it, and the channel is its `Transf
 
 ### React Hooks (`src/hooks/`)
 
-Both WebRTC modes run the Code Exchange session in `src/lib/code-exchange/` — `send.ts` (`startSenderFallback`, `createSenderOffer`, `completeSend`) and `receive.ts` (`acceptOffer`, `buildDirectAttempt`, `receiveOverFallback`, `finishDirectReceive`). The hooks own what differs: where the codes come from, what gates them, and the UI state.
+Both WebRTC modes run the Code Exchange session in `src/lib/code-exchange/` — `send.ts` (`startSenderFallback`, `createSenderOffer`, `completeSend`) and `receive.ts` (`acceptOffer`, `buildDirectAttempt`, `receiveOverFallback`, `finishDirectReceive`). PIN Exchange's own handshake is in `src/lib/pin-exchange/` — `send.ts` (`startPinRendezvous`, `confirmPinClaim`), `receive.ts` (`claimPin`, `pinReceiverConfirmation`, `acceptPinOffer`) and `signaling.ts` (`openPinSignaling`). The hooks own what differs between hosts: where the codes are shown and typed, what gates them, and the UI state; the CLI's `cli/pin/send.ts` and `cli/pin/receive.ts` own the same for a terminal, on the same engine. The steps below are what both of them drive.
 
-**`use-pin-send.ts`** - Sender logic (PIN Exchange):
+**PIN Exchange sender** (`src/lib/pin-exchange/send.ts`, driven by `use-pin-send.ts` or `cli/pin/send.ts`):
 1. Read content; generate transfer salt and ephemeral Nostr identity. For anonymous signaling, start the one Tor client the signaling sockets and the Tor fallback share
 2. Start preparing the fallback at once (`startSenderFallback`): proving the offer's control relays, then the storage ring and the sweep behind it — or, anonymously, the Tor fallback's onion-relay pool. It runs behind the PIN on screen
 3. Rotate: every 2 minutes mint a fresh PIN, start a fresh SPAKE2 run, and publish a plaintext rendezvous event carrying the blinded element (up to 30 minutes)
@@ -818,7 +818,7 @@ Both WebRTC modes run the Code Exchange session in `src/lib/code-exchange/` — 
 7. Publish the sealed offer, republishing every 5 s, and wait up to 60 s for the receiver's sealed answer (`carryOfferForAnswer`)
 8. From there, the Code Exchange session (`completeSend`): verify the answer's confirmation tag, attempt the direct connection with the receiver's `hello` watched on the fallback's control relays, then send over the data channel — or, when no direct route opens, through the fallback the offer named. With no eligible fallback, a `P2PConnectionError` is surfaced so the UI can suggest the offline-QR app ([src/lib/errors.ts](../src/lib/errors.ts))
 
-**`use-pin-receive.ts`** - Receiver logic (PIN Exchange):
+**PIN Exchange receiver** (`src/lib/pin-exchange/receive.ts`, driven by `use-pin-receive.ts` or `cli/pin/receive.ts`):
 1. Derive hints for the current and previous buckets from the PIN's public locator segment and query rendezvous candidates within the maximum 4-minute freshness bound. For anonymous signaling, start the one Tor client the signaling sockets and the Tor fallback share
 2. Structurally validate candidates (author/transfer binding, element validity) — the rendezvous is plaintext, so nothing distinguishes the real one yet
 3. Run the receiver side of the PAKE against each candidate (up to `MAX_CLAIM_CANDIDATES`) and publish one sealed claim each, naming its rendezvous transcript hash as the plaintext target; re-claim replacement rendezvous events from claimed senders while waiting (up to `MAX_CLAIM_ATTEMPTS` total), then wipe the PIN scalar
