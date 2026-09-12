@@ -78,16 +78,15 @@ export async function sendOverTor(options: TorSendOptions): Promise<number> {
     return teardown();
   });
 
-  let lastMessage = '';
+  // The engine's steps are a status, the same as Code Exchange's: the
+  // presenter is what replaces one with the next, and what keeps a step that
+  // only ticks its numbers from filling the screen.
   const setState = (state: TransferState) => {
     if (state.status === 'transferring' && state.progress) {
       presenter.progress(state.progress.current, state.progress.total);
       return;
     }
-    if (state.message && state.message !== lastMessage) {
-      say(state.message);
-      lastMessage = state.message;
-    }
+    if (state.message) presenter.status(state.message);
   };
 
   try {

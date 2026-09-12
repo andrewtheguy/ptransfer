@@ -29,9 +29,12 @@ export function MaskedField({ onSubmit }: { onSubmit(value: string): void }) {
       setTyped((was) => was.slice(0, -1));
       return;
     }
-    // Printable input only: an arrow key's escape sequence is not a password.
+    // One printable character, in whatever alphabet: an arrow key's escape
+    // sequence is not a password and neither is a modified key, but a letter
+    // with an accent on it can be one, and pasting that already works.
     const char = key.sequence;
-    if (char && char.length === 1 && char >= ' ' && char <= '~') {
+    if (key.ctrl || !char) return;
+    if ([...char].length === 1 && !/\p{C}/u.test(char)) {
       setTyped((was) => was + char);
     }
   });

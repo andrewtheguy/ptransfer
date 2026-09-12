@@ -34,10 +34,10 @@ Today it sends and receives files and folders by Code Exchange and over a Tor
 onion service, the tab's modes of the same names run from the same code.
 
 `bun run cli` with no command opens a terminal UI, which is the tab's own
-screens drawn in a terminal: pick files and folders in a browser, then one of
-the tab's three transfer modes; or paste what a sender gave you and let it
-work out which of the three it is. PIN Exchange is listed on both sides and
-says it is not here yet — see [docs/ROADMAP.md](./docs/ROADMAP.md).
+screens drawn in a terminal: pick files and folders in a file browser, then
+one of the tab's three transfer modes; or paste what a sender gave you and
+let it work out which of the three it is. PIN Exchange is listed on both
+sides and says it is not here yet — see [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 Every command below is the line-oriented interface instead, which is what a
 pipe and a script want and what stays out of the terminal UI's way. Code

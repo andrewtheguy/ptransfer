@@ -22,6 +22,11 @@ import { theme } from './theme';
 
 export type SendMode = 'pin' | 'code' | 'tor';
 
+/** Whether a chosen option is one of the three modes, rather than nothing. */
+function isSendMode(value: unknown): value is SendMode {
+  return value === 'pin' || value === 'code' || value === 'tor';
+}
+
 export interface SendChoice {
   mode: 'code' | 'tor';
   content: TransferSource;
@@ -142,8 +147,12 @@ export function SendMode({
           selectedIndex={1}
           options={OPTIONS}
           showDescription
-          onChange={(_, option) => setMode(option?.value as SendMode)}
-          onSelect={(_, option) => start(option?.value as SendMode)}
+          onChange={(_, option) => {
+            if (isSendMode(option?.value)) setMode(option.value);
+          }}
+          onSelect={(_, option) => {
+            if (isSendMode(option?.value)) start(option.value);
+          }}
           style={{ flexGrow: 1 }}
         />
       </box>

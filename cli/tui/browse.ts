@@ -48,27 +48,37 @@ export async function listDirectory(
 ): Promise<Entry[]> {
   const absolute = resolve(dir);
   const found = await readdir(absolute, { withFileTypes: true });
-  const entries: Entry[] = [];
-  for (const item of found) {
-    if (!showHidden && item.name.startsWith('.')) continue;
-    const directory = item.isDirectory();
-    if (!directory && !item.isFile()) continue;
-    const path = join(absolute, item.name);
-    let size: number | null = null;
-    if (!directory) {
-      try {
-        size = (await stat(path)).size;
-      } catch {
-        // It went away between the listing and the stat; it is still worth
-        // showing, just without a size.
-        size = null;
-      }
-    }
-    entries.push({ name: item.name, path, directory, size });
-  }
+  const kept = found
+    .filter((item) => showHidden || !item.name.startsWith('.'))
+    .filter((item) => item.isDirectory() || item.isFile())
+    .map((item) => ({
+      name: item.name,
+      path: join(absolute, item.name),
+      directory: item.isDirectory(),
+    }));
+  // One round of stats rather than thousands in a row: a home directory is
+  // read while someone waits to see it.
+  const entries: Entry[] = await Promise.all(
+    kept.map(async (entry) => ({
+      ...entry,
+      size: entry.directory ? null : await sizeOf(entry.path),
+    })),
+  );
   entries.sort((a, b) => {
     if (a.directory !== b.directory) return a.directory ? -1 : 1;
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
   });
   return entries;
+}
+
+/**
+ * What a file weighs, or null when it went away between the listing and the
+ * stat — it is still worth showing, just without a size.
+ */
+async function sizeOf(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return null;
+  }
 }
