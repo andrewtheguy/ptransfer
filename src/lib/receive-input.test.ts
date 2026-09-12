@@ -5,7 +5,11 @@ import {
   generateMutualOfferBinary,
 } from './code-signaling';
 import { generatePin, PIN_CHARSET } from './crypto';
-import { classifyReceiveText, looksLikePin } from './receive-input';
+import {
+  classifyReceiveText,
+  looksLikeOffer,
+  looksLikePin,
+} from './receive-input';
 import { buildOnionUrl, buildPinUrl } from './receive-link';
 
 const ORIGIN = 'https://ptransfer.example';
@@ -122,6 +126,27 @@ describe('classifyReceiveText', () => {
   test('rejects a truncated offer', () => {
     const encoded = generateMutualClipboardData(buildOfferBinary());
     expect(classifyReceiveText(encoded.slice(0, 4))).toBeNull();
+  });
+
+  test('rejects an offer cut short anywhere, header and all', () => {
+    const encoded = generateMutualClipboardData(buildOfferBinary());
+    // A field or a chat window cuts a code part-way, not down to nothing, and
+    // what is left still carries the PT01 header. Every such piece has to be
+    // refused here: calling one a code only moves the refusal a screen later,
+    // by which time what was pasted is gone.
+    for (let kept = 8; kept < encoded.length; kept += 17) {
+      const cut = encoded.slice(0, kept - (kept % 4));
+      expect(classifyReceiveText(cut)).toBeNull();
+    }
+  });
+
+  test('tells a code cut short apart from text that is no code at all', () => {
+    const encoded = generateMutualClipboardData(buildOfferBinary());
+    expect(looksLikeOffer(encoded)).toBe(true);
+    expect(looksLikeOffer(encoded.slice(0, 1000))).toBe(true);
+    expect(looksLikeOffer('hello there')).toBe(false);
+    expect(looksLikeOffer(generatePin())).toBe(false);
+    expect(looksLikeOffer('')).toBe(false);
   });
 
   test('rejects empty and unrelated input', () => {

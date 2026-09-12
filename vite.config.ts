@@ -7,6 +7,11 @@ import packageMetadata from './package.json';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
+// The terminal UI's tests drive OpenTUI, which loads a native Zig core over
+// FFI and needs Bun or Node 26.4; this run is neither. They are `bun test`
+// files — `bun run test:tui` — and vitest must not try them.
+const TUI_TESTS = '**/*.tui.test.tsx';
+
 function getGitCommitHash(): string {
   // Cloudflare Pages exposes the deployed commit via this env var. Local builds
   // fall back to a placeholder to avoid confusion about which commit is running.
@@ -29,7 +34,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'unit',
-          exclude: [...configDefaults.exclude, INTEGRATION_TESTS],
+          exclude: [...configDefaults.exclude, INTEGRATION_TESTS, TUI_TESTS],
         },
       },
       {

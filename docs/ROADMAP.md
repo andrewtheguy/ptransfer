@@ -97,13 +97,42 @@ no portability layer in between:
 4. **An OpenTUI terminal UI** — `@opentui/core` with its React bindings,
    `@opentui/react`, so the screens are React like the tab's — and one binary
    per release target from `bun build --compile`.
-   - The line-oriented interface of phases 2 and 3 stays for pipes and
-     scripts; the terminal UI is what a command shows at a terminal.
+   - **4a** (done): the screens, on the same engine the line interface runs.
+     `ptransfer` with nothing after it opens it; every command keeps the
+     line-oriented interface of phases 2 and 3 exactly as it was, which is
+     what a pipe, a script and every live test drive, and a terminal UI asked
+     for without a terminal is a usage error rather than a half-drawn screen.
+     - What a transfer shows and asks for goes through one `Presenter`
+       (`cli/ui/presenter.ts`): standard error and standard input on the line
+       (`cli/ui/line.ts`), or the screen (`cli/tui/presenter.ts`). The
+       transfer code itself knows neither, which is what lets the two hosts
+       run the same flows.
+     - The send side mirrors the tab's send tab: a path picker that marks
+       files and folders, then the tab's three modes in the tab's order —
+       PIN Exchange, Code Exchange, Tor Onion Service — with the cursor on
+       Code Exchange, and the tab's two advanced options behind them (the
+       anonymous fallback, and the Tor bridge). The receive side mirrors the
+       tab's receive screen: one field, and the mode read off what is pasted
+       with the tab's own `classifyReceiveText`, with the folder it saves
+       into and the same Tor bridge behind it. The folder is checked where it
+       is chosen, as `--out` is before the bootstrap.
+     - PIN Exchange is listed on both sides and says it is not here yet;
+       phase 3b is what fills it in. A QR chunk is the one input with no
+       answer here, since a terminal has no camera to have scanned one with.
+     - A Code Exchange code is thousands of characters, so it is shown in a
+       box that scrolls, with `c` copying it through OSC 52; a terminal that
+       will not take a clipboard copy says so and leaves the box to select
+       from. A field on screen takes every printable key it is sent, so the
+       screens that have one put their keys where a field leaves them: tab
+       copies beside a field, and the receive screen's folder and bridge are
+       tab and shift-tab.
+   - **4b**: one binary per release target from `bun build --compile`.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
      or Node 26.4 or later; the vitest unit project runs on an older Node, so
      terminal UI components are tested under `bun test` with OpenTUI's
-     `testRender`, and the vitest-tested modules stay free of it.
+     `testRender` — `bun run test:tui`, over `*.tui.test.tsx`, which the
+     vitest run excludes — and the vitest-tested modules stay free of it.
    - The build is a `Bun.build` script, one run per target, that defines
      `process.env.OPENTUI_LIBC` as `glibc` for the Linux targets and carries
      the node-datachannel plugin described below. Cross-building needs every

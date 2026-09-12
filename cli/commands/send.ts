@@ -1,30 +1,17 @@
 import { parseArgs } from 'node:util';
-import { generatePin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
-import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
-import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
-import { serveUntilSent, TOR_WAIT_TIMEOUT_MS } from '@/lib/tor/serve';
-import {
-  TOR_MAX_TRANSFER_BYTES,
-  TOR_MAX_WIRE_BYTES,
-  TOR_SUGGESTED_MAX_BYTES,
-} from '@/lib/tor/transfer';
-import type { OnionService, WebtorClient } from '@/lib/tor/webtor-api';
-import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import { TOR_WAIT_TIMEOUT_MS } from '@/lib/tor/serve';
 import { defaultCacheDir } from '../cache-dir';
 import { sendByCode } from '../code/send';
 import { routeDiagnostics } from '../diagnostics';
-import { onInterrupt } from '../interrupt';
-import { createProgressLine } from '../progress';
 import {
-  bootstrapTor,
-  closeTor,
   TOR_OPTIONS,
   TOR_OPTIONS_USAGE,
-  type TorOptions,
   torOptionsFrom,
 } from '../tor/bootstrap';
 import { openSelection } from '../transfer/selection';
+import { sendOverTor } from '../transfer/tor-send';
+import { createLinePresenter } from '../ui/line';
 import { UsageError } from '../usage';
 
 /**
@@ -105,7 +92,8 @@ export async function send(argv: string[]): Promise<number> {
   }
   const torOptions = torOptionsFrom(values);
   routeDiagnostics(values.verbose);
-  const say = (line: string) => process.stderr.write(`${line}\n`);
+  const presenter = createLinePresenter('Sending');
+  const say = (line: string) => presenter.say(line);
 
   const {
     source: content,
@@ -134,119 +122,13 @@ export async function send(argv: string[]): Promise<number> {
       torOptions,
       cacheDir: torOptions.cacheDir ?? defaultCacheDir(),
       verbose: values.verbose,
-      say,
+      presenter,
     });
   }
-  return await sendOverTor(content, torOptions, values.verbose, say);
-}
-
-/** The Tor mode: an onion service, and its address and password to hand over. */
-async function sendOverTor(
-  content: TransferSource,
-  torOptions: TorOptions,
-  verbose: boolean,
-  say: (line: string) => void,
-): Promise<number> {
-  const fileMetadata = {
-    fileName: content.name,
-    fileSize: content.estimatedSize,
-    mimeType: content.type,
-  };
-  if (fileMetadata.fileSize > TOR_MAX_TRANSFER_BYTES) {
-    throw new Error(
-      `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; ${content.name} is ${formatFileSize(fileMetadata.fileSize)}`,
-    );
-  }
-  if (content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
-    throw new Error(
-      `${content.name} needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows`,
-    );
-  }
-  if (fileMetadata.fileSize > TOR_SUGGESTED_MAX_BYTES) {
-    say(
-      `${content.name} is ${formatFileSize(fileMetadata.fileSize)}. Throughput over a circuit is unpredictable, and a transfer that drops starts over.`,
-    );
-  }
-
-  // The status of the signal that stopped the command, once one has.
-  let interrupted: number | null = null;
-  let client: WebtorClient | null = null;
-  let service: OnionService | null = null;
-  const teardown = async () => {
-    const closingService = service;
-    const closingClient = client;
-    service = null;
-    client = null;
-    await closingService?.close().catch(() => undefined);
-    await closeTor(closingClient);
-  };
-  const uninstall = onInterrupt((status) => {
-    interrupted = status;
-    return teardown();
+  return await sendOverTor({
+    content,
+    torOptions,
+    verbose: values.verbose,
+    presenter,
   });
-
-  const progress = createProgressLine('Sending');
-  let lastMessage = '';
-  const setState = (state: TransferState) => {
-    if (state.status === 'transferring' && state.progress) {
-      progress.update(state.progress.current, state.progress.total);
-      return;
-    }
-    if (state.message && state.message !== lastMessage) {
-      progress.done();
-      say(state.message);
-      lastMessage = state.message;
-    }
-  };
-
-  try {
-    client = await bootstrapTor({
-      ...torOptions,
-      verbose,
-      say,
-    });
-    say('Publishing the onion service...');
-    service = await client.publishOnionService();
-
-    // Two strings out of one address: `onion` is what the handshake binds and
-    // always carries the port, while what the receiver is handed leaves the
-    // port implicit.
-    const onion = `${service.onionAddress}:${TOR_DEFAULT_PORT}`;
-    const password = generatePin();
-    say('');
-    say('Give the receiver this address and password:');
-    say('');
-    process.stdout.write(
-      `address: ${formatOnionAddress(service.onionAddress, TOR_DEFAULT_PORT)}\npassword: ${password}\n`,
-    );
-    say('');
-
-    const metadata: TransferMetadata = {
-      contentType: 'file',
-      fileName: fileMetadata.fileName,
-      fileSize: fileMetadata.fileSize,
-      contentEncoding: wireEncodingFor(content),
-      mimeType: fileMetadata.mimeType,
-    };
-    await serveUntilSent({
-      service,
-      onion,
-      password,
-      metadata,
-      content,
-      fileMetadata,
-      isCancelled: () => interrupted !== null,
-      setState,
-    });
-    progress.done();
-    say(`Sent ${content.name}`);
-    return 0;
-  } catch (error) {
-    progress.done();
-    if (interrupted !== null) return interrupted;
-    throw error;
-  } finally {
-    uninstall();
-    await teardown();
-  }
 }

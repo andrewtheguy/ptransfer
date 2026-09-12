@@ -17,12 +17,21 @@ import { Textarea } from '@/components/ui/textarea';
 import { ANONYMOUS_PIN_LENGTH, PIN_LENGTH } from '@/lib/crypto';
 import {
   classifyReceiveText,
+  looksLikeOffer,
   looksLikeOnionAddress,
   looksLikePin,
   type ReceiveInput as ReceiveInputValue,
 } from '@/lib/receive-input';
 import { isMobileDevice } from '@/lib/utils';
 import { QRScanner, type ScanResult } from './qr-scanner';
+
+/**
+ * A code that starts right and ends wrong. Worth its own words: a code is
+ * carried by hand between two machines, and the way one fails is almost
+ * always that something along the way cut it.
+ */
+const INCOMPLETE_OFFER =
+  "That is the start of the sender's code, but not a whole one — or it is more than an hour old. Copy it again, whole.";
 
 /** How long a PIN may sit unattended in the box before it is wiped. */
 const PIN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -71,6 +80,7 @@ export function ReceiveInput({
   const classified = useMemo(() => classifyReceiveText(value), [value]);
   const pinLike = looksLikePin(value);
   const onionLike = looksLikeOnionAddress(value);
+  const offerLike = useMemo(() => looksLikeOffer(value), [value]);
 
   // Wipe an unattended PIN. Only PINs: an offer code is not a secret, and
   // clearing one out from under someone mid-paste would just lose their work.
@@ -127,6 +137,8 @@ export function ReceiveInput({
       if (pinLike) setError('Invalid PIN — check for typos.');
       else if (onionLike) {
         setError('That onion address is not valid — check for typos.');
+      } else if (offerLike) {
+        setError(INCOMPLETE_OFFER);
       } else {
         setError(
           'Not a PIN, onion address, or sender code. Check that you copied the whole thing.',
@@ -147,7 +159,7 @@ export function ReceiveInput({
     // Drop the PIN out of the DOM the moment it is handed on.
     setValue('');
     onSubmit(classified);
-  }, [classified, onionLike, onSubmit, pinLike, value]);
+  }, [classified, offerLike, onionLike, onSubmit, pinLike, value]);
 
   const handleScan = useCallback(
     (result: ScanResult) => {
@@ -268,6 +280,12 @@ export function ReceiveInput({
             <p className="text-xs text-amber-600 flex items-center">
               <AlertCircle className="h-3 w-3 mr-1" />
               That's one of the sender's QR links — use the Scan tab instead.
+            </p>
+          )}
+          {!classified && offerLike && (
+            <p className="text-xs text-destructive flex items-center">
+              <AlertCircle className="h-3 w-3 mr-1" />
+              {INCOMPLETE_OFFER}
             </p>
           )}
           {!classified && pinLike && (

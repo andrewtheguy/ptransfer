@@ -1,36 +1,16 @@
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { AppendSink } from '@/lib/append-sink';
-import { isValidPin } from '@/lib/crypto';
-import { formatFileSize } from '@/lib/file-utils';
-import { TorFramedStream } from '@/lib/tor/framing';
-import {
-  runTorClientHandshake,
-  sendCancel,
-  sendReady,
-} from '@/lib/tor/handshake';
-import { type OnionAddress, parseOnionAddress } from '@/lib/tor/onion-address';
-import { receiveFileOverTor, TOR_MAX_TRANSFER_BYTES } from '@/lib/tor/transfer';
-import type { WebtorClient } from '@/lib/tor/webtor-api';
+import { parseOnionAddress } from '@/lib/tor/onion-address';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
 import { routeDiagnostics } from '../diagnostics';
-import { onInterrupt } from '../interrupt';
-import { createProgressLine } from '../progress';
-import { readSecret } from '../secret';
 import {
-  bootstrapTor,
-  closeTor,
   TOR_OPTIONS,
   TOR_OPTIONS_USAGE,
-  type TorOptions,
   torOptionsFrom,
 } from '../tor/bootstrap';
-import {
-  createFileSink,
-  destinationFolder,
-  safeFileName,
-} from '../transfer/files';
+import { destinationFolder } from '../transfer/files';
+import { receiveOverTor } from '../transfer/tor-receive';
+import { createLinePresenter } from '../ui/line';
 import { UsageError } from '../usage';
 
 /**
@@ -120,7 +100,7 @@ export async function receive(argv: string[]): Promise<number> {
   }
   const torOptions = torOptionsFrom(values);
   routeDiagnostics(values.verbose);
-  const say = (line: string) => process.stderr.write(`${line}\n`);
+  const presenter = createLinePresenter('Receiving');
   if (!parsed) {
     return await receiveByCode({
       folder,
@@ -128,117 +108,14 @@ export async function receive(argv: string[]): Promise<number> {
       torOptions,
       cacheDir: torOptions.cacheDir ?? defaultCacheDir(),
       verbose: values.verbose,
-      say,
+      presenter,
     });
   }
-  return await receiveOverTor(parsed, folder, torOptions, values.verbose, say);
-}
-
-/** The Tor mode: a circuit to the sender's onion service, and the password. */
-async function receiveOverTor(
-  parsed: OnionAddress,
-  folder: string,
-  torOptions: TorOptions,
-  verbose: boolean,
-  say: (line: string) => void,
-): Promise<number> {
-  const password = await readSecret('Password: ');
-  if (!isValidPin(password)) {
-    throw new UsageError('That is not a valid password; check for typos');
-  }
-
-  // The status of the signal that stopped the command, once one has.
-  let interrupted: number | null = null;
-  let client: WebtorClient | null = null;
-  let framed: TorFramedStream | null = null;
-  // Held here rather than left to receiveFileOverTor, which owns it only once
-  // it runs: a failure before that, or Ctrl-C, still removes the part file.
-  // A finished sink is the saved file and has nothing to discard.
-  let sink: AppendSink | null = null;
-  const teardown = async () => {
-    const closingStream = framed;
-    const closingClient = client;
-    const abandonedSink = sink;
-    framed = null;
-    client = null;
-    sink = null;
-    await closingStream?.close();
-    await abandonedSink?.discard().catch(() => undefined);
-    await closeTor(closingClient);
-  };
-  const uninstall = onInterrupt((status) => {
-    interrupted = status;
-    return teardown();
+  return await receiveOverTor({
+    parsed,
+    folder,
+    torOptions,
+    verbose: values.verbose,
+    presenter,
   });
-  const progress = createProgressLine('Receiving');
-
-  try {
-    client = await bootstrapTor({
-      ...torOptions,
-      verbose,
-      say,
-    });
-    say(`Building a circuit to ${parsed.host}...`);
-    const stream = await client.connectStream(parsed.host, parsed.port);
-    framed = new TorFramedStream(stream);
-
-    say('Authenticating...');
-    const { keys, metadata } = await runTorClientHandshake(
-      framed,
-      password,
-      parsed.onion,
-    );
-    // fileSize is the sender's input size — a progress hint that bounds
-    // nothing on the wire — but a sender offering more than the limit is not
-    // worth connecting a transfer for.
-    if (metadata.fileSize > TOR_MAX_TRANSFER_BYTES) {
-      throw new Error(
-        `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport`,
-      );
-    }
-
-    // A destination conflict is the receiver's problem, not the sender's:
-    // declining leaves the service waiting, so this side can move the file
-    // out of the way and come back.
-    const destination = join(folder, safeFileName(metadata.fileName));
-    let fileSink: AppendSink;
-    try {
-      fileSink = await createFileSink(destination);
-    } catch (error) {
-      await sendCancel(framed);
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)}; move it aside and receive again — the sender is still waiting`,
-      );
-    }
-    sink = fileSink;
-
-    say(
-      `Receiving ${metadata.fileName} (${formatFileSize(metadata.fileSize)})...`,
-    );
-    await sendReady(framed);
-    const payload = await receiveFileOverTor(
-      framed,
-      keys.contentKey,
-      metadata.contentEncoding,
-      fileSink,
-      {
-        estimatedBytes: metadata.fileSize,
-        isCancelled: () => interrupted !== null,
-        onProgress: (current, total) => progress.update(current, total),
-      },
-    );
-    progress.done();
-    // The file is whole: hanging up is the receiver's only word.
-    await framed.close();
-    say(`Saved ${formatFileSize(payload.size)} to ${destination}`);
-    process.stdout.write(`${destination}\n`);
-    return 0;
-  } catch (error) {
-    progress.done();
-    if (interrupted !== null) return interrupted;
-    throw error;
-  } finally {
-    uninstall();
-    await teardown();
-  }
 }

@@ -22,15 +22,20 @@ import { UsageError } from './usage';
  *   bun run cli <command> [options]
  */
 
-const USAGE = `usage: ptransfer <command> [options]
+const USAGE = `usage: ptransfer [command] [options]
+
+With no command, at a terminal, ptransfer opens its terminal UI: pick what to
+send and how to carry it, or paste what a sender gave you.
 
 commands:
   send       send files and folders, by Code Exchange or a Tor onion service
   receive    receive what a sender is sending
   tor-test   bootstrap Tor, publish an onion service, and connect back to it
 
-Run a command with --help for its options, or ptransfer --version for the
-release and the protocol version; a peer needs the same protocol version.
+A command is the line interface: results on standard output, everything else
+on standard error, which is what a script and a pipe want. Run one with --help
+for its options, or ptransfer --version for the release and the protocol
+version; a peer needs the same protocol version.
 `;
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
@@ -49,14 +54,15 @@ async function main(argv: string[]): Promise<number> {
   // Quiet until a command has read its own --verbose.
   routeDiagnostics(false);
   const [command, ...rest] = argv;
-  if (
-    !command ||
-    command === 'help' ||
-    command === '--help' ||
-    command === '-h'
-  ) {
+  if (!command) {
+    // Loaded only now: the terminal UI pulls in React and OpenTUI's native
+    // core, which a piped `ptransfer send` has no use for.
+    const { runTui } = await import('./tui/start');
+    return await runTui();
+  }
+  if (command === 'help' || command === '--help' || command === '-h') {
     process.stdout.write(USAGE);
-    return command ? 0 : 2;
+    return 0;
   }
   if (command === '--version') {
     process.stdout.write(

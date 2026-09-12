@@ -14,6 +14,10 @@
     "moduleDetection": "force",
     "noEmit": true,
 
+    /* The terminal UI is React, rendered by OpenTUI rather than a DOM */
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react",
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
