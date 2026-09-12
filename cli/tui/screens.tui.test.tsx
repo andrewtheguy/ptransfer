@@ -39,7 +39,7 @@ const ONION = 'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion';
  * The candidates here are distinct, as a real gather's are — a repeated one
  * deflates away and would make the code look far shorter than it is.
  */
-function code(candidates: number): string {
+function code(candidates: number, anonymous = false): string {
   const sdp = `v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Nx2R\r\na=ice-pwd:gY0Xx3vBqLpZkE8sWtCfRmDn\r\na=fingerprint:sha-256 8D:4A:2F:9C:1B:6E:73:A0:55:CD:12:EF:34:90:7B:26:48:F1:AC:5D:9E:03:B8:61:2C:D7:4F:8A:15:60:E9:3B\r\na=setup:actpass\r\na=mid:0\r\na=sctp-port:5000\r\n`;
   return generateMutualClipboardData(
     generateMutualOfferBinary(
@@ -57,7 +57,17 @@ function code(candidates: number): string {
         mimeType: 'application/zip',
         publicKey: crypto.getRandomValues(new Uint8Array(65)),
         salt: crypto.getRandomValues(new Uint8Array(16)),
-        relays: ['wss://relay.damus.io', 'wss://nos.lol', 'wss://nostr.wine'],
+        // An anonymous offer names no relays: its pool is a constant both
+        // sides hold, and it is the one kind of code that starts Tor.
+        ...(anonymous
+          ? { anonymous: true }
+          : {
+              relays: [
+                'wss://relay.damus.io',
+                'wss://nos.lol',
+                'wss://nostr.wine',
+              ],
+            }),
       },
     ),
   );
@@ -507,7 +517,7 @@ describe('the receive screen', () => {
     expect(taken).toEqual([]);
   });
 
-  it('names the Tor bridge and turns it over on tab', async () => {
+  it('names the Tor bridge and turns it over on tab, for an onion', async () => {
     const bridges: string[] = [];
     const screen = await draw(
       <ReceiveInputScreen
@@ -518,10 +528,51 @@ describe('the receive screen', () => {
         onCancel={() => {}}
       />,
     );
+    await screen.mockInput.pasteBracketedText(ONION);
+    await screen.settle();
     expect(screen.frame()).toContain('Tor bridge: Snowflake WebRTC');
     screen.mockInput.pressTab();
     await screen.settle();
     expect(bridges).toEqual(['turned']);
+  });
+
+  it('keeps the bridge off the screen until something needs it', async () => {
+    const bridges: string[] = [];
+    const screen = await draw(
+      <ReceiveInputScreen
+        bridge="webrtc"
+        onBridge={() => bridges.push('turned')}
+        onAccept={() => {}}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    // An empty field, and then a code whose fallback is Nostr: neither
+    // starts Tor, so the bridge is a setting with nothing to set.
+    expect(screen.frame()).not.toContain('Tor bridge');
+    await screen.mockInput.pasteBracketedText(code(16));
+    await screen.settle();
+    expect(screen.frame()).toContain('A Code Exchange code');
+    expect(screen.frame()).not.toContain('Tor bridge');
+    screen.mockInput.pressTab();
+    await screen.settle();
+    expect(bridges).toEqual([]);
+  });
+
+  it('names the bridge for an anonymous code, and says why', async () => {
+    const screen = await draw(
+      <ReceiveInputScreen
+        bridge="websocket"
+        onBridge={() => {}}
+        onAccept={() => {}}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText(code(16, true));
+    await screen.settle();
+    expect(screen.frame()).toContain('anonymous, so its fallback is over Tor');
+    expect(screen.frame()).toContain('Tor bridge: Snowflake WebSocket');
   });
 });
 

@@ -1,3 +1,4 @@
+import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import {
   classifyReceiveText,
   looksLikeOffer,
@@ -23,8 +24,10 @@ import { theme } from './theme';
  *
  * Which bridge a Tor receive enters the network through is here as a key, as
  * the send screen's settings are — a non-printing one, since the field has
- * every printable key. Where the file is saved is not a setting here: it is
- * the screen after this one, asked for once there is something to save.
+ * every printable key. It is only shown for what will go through Tor, since
+ * to anything else the bridge is a setting with nothing to set. Where the
+ * file is saved is not a setting here either: it is the screen after this
+ * one, asked for once there is something to save.
  */
 
 /**
@@ -39,10 +42,27 @@ export type Accepted =
   | { kind: 'offer'; code: string }
   | { kind: 'onion'; address: string };
 
+/**
+ * Whether what is in the field will go through Tor. An onion address always
+ * does. A code does only when the sender chose the anonymous fallback, which
+ * the code says itself — a plain one falls back through Nostr, or not at all,
+ * and never starts Tor.
+ */
+function needsTor(found: ReceiveInput | null): boolean {
+  if (found?.kind === 'onion') return true;
+  if (found?.kind !== 'offer') return false;
+  const payload = parseMutualPayload(found.payload);
+  return payload !== null && isAnonymousOffer(payload);
+}
+
 function describe(text: string, found: ReceiveInput | null): string | null {
   if (!text.trim()) return null;
   if (found?.kind === 'pin') return 'A PIN Exchange PIN';
-  if (found?.kind === 'offer') return 'A Code Exchange code';
+  if (found?.kind === 'offer') {
+    return needsTor(found)
+      ? 'A Code Exchange code · anonymous, so its fallback is over Tor'
+      : 'A Code Exchange code';
+  }
   if (found?.kind === 'onion') return `A Tor onion service · ${found.address}`;
   if (found?.kind === 'offer-chunk') {
     return 'One QR chunk of a code — a terminal cannot scan the rest';
@@ -71,7 +91,9 @@ export function ReceiveInputScreen({
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
 
-  const reading = describe(text, classifyReceiveText(text));
+  const found = classifyReceiveText(text);
+  const reading = describe(text, found);
+  const tor = needsTor(found);
 
   // The submitted value rather than the state behind it: a paste and the Enter
   // after it can land in one frame, and the state would still be empty.
@@ -110,13 +132,17 @@ export function ReceiveInputScreen({
 
   useKeyboard((key) => {
     if (key.name === 'escape') onCancel();
-    if (key.name === 'tab') onBridge();
+    if (key.name === 'tab' && tor) onBridge();
   });
 
   return (
     <Screen
       title="Receive"
-      hints={['enter continue', 'tab bridge', 'esc back']}
+      hints={
+        tor
+          ? ['enter continue', 'tab bridge', 'esc back']
+          : ['enter continue', 'esc back']
+      }
     >
       <text fg={theme.heading}>Paste what the sender gave you</text>
       <Note>A PIN, a Code Exchange code, or a .onion address.</Note>
@@ -146,7 +172,7 @@ export function ReceiveInputScreen({
       {reading && <text fg={theme.good}>{reading}</text>}
       {problem && <Problem>{problem}</Problem>}
       <Gap />
-      <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>
+      {tor && <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>}
     </Screen>
   );
 }
