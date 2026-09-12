@@ -144,6 +144,8 @@ no portability layer in between:
      smoke-tests the binary there, then publishes the executables themselves —
      `ptransfer-linux-amd64`, `ptransfer-linux-arm64`, `ptransfer-macos-arm64`
      — on a draft release, whose publishing creates the `v<version>` tag.
+     `install.sh` takes the one that fits the machine it runs on and verifies
+     it against the checksum GitHub published with the release.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
      or Node 26.4 or later; the vitest unit project runs on an older Node, so
