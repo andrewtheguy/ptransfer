@@ -36,6 +36,19 @@ export function Screen({
   );
 }
 
+/**
+ * What a field will hold, in characters.
+ *
+ * OpenTUI's `<input>` caps its own value at a thousand and drops the rest of
+ * a paste without a word, which is under the length of a Code Exchange code —
+ * a code carries the SDP and every ICE candidate gathered, so it has no
+ * ceiling in the protocol and runs past a thousand on any host with more than
+ * a couple of interfaces. This is the same hazard the line interface reads in
+ * raw mode to avoid, a terminal's own line editing holding only 1024 bytes on
+ * macOS; the number here is simply past anything WebRTC signaling produces.
+ */
+export const FIELD_MAX = 1 << 16;
+
 /** A line of explanation under a heading. */
 export function Note({ children }: { children: ReactNode }) {
   return <text fg={theme.muted}>{children}</text>;

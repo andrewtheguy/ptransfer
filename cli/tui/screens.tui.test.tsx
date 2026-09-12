@@ -1,6 +1,10 @@
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  generateMutualClipboardData,
+  generateMutualOfferBinary,
+} from '@/lib/code-signaling';
 import { generatePin } from '@/lib/crypto';
 import type { TestRendererSetup } from '@opentui/core/testing';
 import { testRender } from '@opentui/react/test-utils';
@@ -10,7 +14,7 @@ import { act } from 'react';
 import { App } from './app';
 import { MaskedField } from './masked-field';
 import { Picker } from './picker';
-import { ReceiveInputScreen } from './receive-input';
+import { type Accepted, ReceiveInputScreen } from './receive-input';
 import { Run } from './run';
 import { SendMode } from './send-mode';
 
@@ -26,6 +30,38 @@ import { SendMode } from './send-mode';
  */
 
 const ONION = 'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion';
+
+/**
+ * A Code Exchange code the size a real one is.
+ *
+ * It carries the SDP and every ICE candidate the sender gathered, so its
+ * length follows the host it was made on and has no ceiling in the protocol.
+ * The candidates here are distinct, as a real gather's are — a repeated one
+ * deflates away and would make the code look far shorter than it is.
+ */
+function code(candidates: number): string {
+  const sdp = `v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Nx2R\r\na=ice-pwd:gY0Xx3vBqLpZkE8sWtCfRmDn\r\na=fingerprint:sha-256 8D:4A:2F:9C:1B:6E:73:A0:55:CD:12:EF:34:90:7B:26:48:F1:AC:5D:9E:03:B8:61:2C:D7:4F:8A:15:60:E9:3B\r\na=setup:actpass\r\na=mid:0\r\na=sctp-port:5000\r\n`;
+  return generateMutualClipboardData(
+    generateMutualOfferBinary(
+      { type: 'offer', sdp },
+      Array.from(
+        { length: candidates },
+        (_, i) =>
+          `candidate:${i} 1 udp ${1677729535 - i * 7} ${10 + i}.${(i * 37) % 251}.${(i * 91) % 253}.${(i * 13) % 249} ${40000 + i * 137} typ srflx raddr 192.168.${i}.${i * 3} rport ${54000 + i} generation 0 ufrag N${i}x2R`,
+      ),
+      {
+        createdAt: Date.now(),
+        fileName: 'holiday-photos.zip',
+        fileSize: 128 * 1024 * 1024,
+        contentEncoding: 'identity',
+        mimeType: 'application/zip',
+        publicKey: crypto.getRandomValues(new Uint8Array(65)),
+        salt: crypto.getRandomValues(new Uint8Array(16)),
+        relays: ['wss://relay.damus.io', 'wss://nos.lol', 'wss://nostr.wine'],
+      },
+    ),
+  );
+}
 
 /** Long enough that a bare ESC has been given up on as an escape sequence. */
 const ESCAPE_TIMEOUT_MS = 60;
@@ -371,6 +407,30 @@ describe('the receive screen', () => {
     expect(screen.frame()).toContain('Saving into /tmp/somewhere');
   });
 
+  it('takes a whole code, however far past a field’s own cap it runs', async () => {
+    const taken: Accepted[] = [];
+    const whole = code(16);
+    // Past the thousand characters OpenTUI's own input stops at, which it
+    // drops the rest of a paste for without saying anything.
+    expect(whole.length).toBeGreaterThan(1000);
+    const screen = await draw(
+      <ReceiveInputScreen
+        folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
+        onFolder={() => {}}
+        onBridge={() => {}}
+        onAccept={(what) => taken.push(what)}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText(whole);
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(taken).toEqual([{ kind: 'offer', code: whole }]);
+  });
+
   it('names the Tor bridge and turns it over on shift-tab', async () => {
     const bridges: string[] = [];
     const screen = await draw(
@@ -553,6 +613,30 @@ describe('the run screen', () => {
     expect(frame).toContain('1. address:');
     expect(frame).toContain('2. password: ABCD-EFGH-JKLM');
     expect(frame).toContain('Press 1 or 2 to copy');
+  });
+
+  it('takes a whole response, however far past a field’s own cap it runs', async () => {
+    const whole = code(16);
+    let answered: string | null = null;
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          answered = await presenter.readCode(
+            "Paste the receiver's response: ",
+            async (container) => String(container.length),
+          );
+          return 0;
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText(whole);
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    // A code cut short does not decode, and the screen would be asking again.
+    expect(screen.frame()).not.toContain('not a complete pTransfer code');
+    expect(answered).not.toBeNull();
   });
 
   it('copies on tab while the field for the answer has the keyboard', async () => {

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Presenter } from '../ui/presenter';
 import { MaskedField } from './masked-field';
 import { createTuiPresenter } from './presenter';
-import { Note, Problem, Screen } from './screen';
+import { FIELD_MAX, Note, Problem, Screen } from './screen';
 import { createTransferStore, type Handed } from './store';
 import { theme } from './theme';
 
@@ -275,6 +275,7 @@ function CodeField({
     <input
       key={attempt}
       focused
+      maxLength={FIELD_MAX}
       placeholder="paste here"
       // An input's `onSubmit` is its Enter event, which carries the value;
       // the prop is typed for the textarea's empty event as well, so the

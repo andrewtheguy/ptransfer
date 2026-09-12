@@ -10,7 +10,7 @@ import type { SubmitEvent } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState } from 'react';
 import { shortenPath } from './browse';
-import { Gap, Note, Problem, Screen } from './screen';
+import { FIELD_MAX, Gap, Note, Problem, Screen } from './screen';
 import { theme } from './theme';
 
 /**
@@ -138,6 +138,7 @@ export function ReceiveInputScreen({
       >
         <input
           focused
+          maxLength={FIELD_MAX}
           placeholder="paste here"
           onInput={(value) => {
             setText(value);
