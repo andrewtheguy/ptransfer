@@ -113,9 +113,10 @@ no portability layer in between:
        Code Exchange, and the tab's two advanced options behind them (the
        anonymous fallback, and the Tor bridge). The receive side mirrors the
        tab's receive screen: one field, and the mode read off what is pasted
-       with the tab's own `classifyReceiveText`, with the folder it saves
-       into and the same Tor bridge behind it. The folder is checked where it
-       is chosen, as `--out` is before the bootstrap.
+       with the tab's own `classifyReceiveText`, with the same Tor bridge
+       behind it, and then the folder picker — always asked, and asked once
+       the code is in, since until then there is nothing to save. The folder
+       is checked where it is chosen, as `--out` is before the bootstrap.
      - PIN Exchange is listed on both sides and says it is not here yet;
        phase 3b is what fills it in. A QR chunk is the one input with no
        answer here, since a terminal has no camera to have scanned one with.
@@ -124,8 +125,7 @@ no portability layer in between:
        will not take a clipboard copy says so and leaves the box to select
        from. A field on screen takes every printable key it is sent, so the
        screens that have one put their keys where a field leaves them: tab
-       copies beside a field, and the receive screen's folder and bridge are
-       tab and shift-tab.
+       copies beside a field, and the receive screen's bridge is tab.
    - **4b**: one binary per release target from `bun build --compile`.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,

@@ -15,6 +15,10 @@ import { theme } from './theme';
  * `openSelection` then walks into one ZIP. In `folder` mode nothing is marked
  * and the directory being browsed is itself the answer, which is what `--out`
  * names.
+ *
+ * The keys are the same in both modes: the arrows and Enter move around the
+ * tree, and tab is what finishes — with the marked paths, or with the folder
+ * the browser is standing in.
  */
 
 /** How many rows of the listing are shown at once. */
@@ -25,11 +29,26 @@ export interface PickerProps {
   /** Where the browser opens. */
   start: string;
   title: string;
+  /**
+   * In folder mode, what the folder under Enter has to pass before it is the
+   * answer: it returns the path to use, or throws with why this side will not
+   * save into it. A refusal is shown and the browser stays where it is, so a
+   * folder that cannot be written to is found out about here rather than
+   * after a Tor bootstrap and a handshake.
+   */
+  accept?(directory: string): Promise<string>;
   onDone(chosen: string[]): void;
   onCancel(): void;
 }
 
-export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
+export function Picker({
+  mode,
+  start,
+  title,
+  accept,
+  onDone,
+  onCancel,
+}: PickerProps) {
   const [directory, setDirectory] = useState(start);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -42,6 +61,9 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
   const at = useRef(0);
   const [hidden, setHidden] = useState(false);
   const [marked, setMarked] = useState<ReadonlySet<string>>(new Set());
+  // One folder is being decided on at a time: Enter can land again while the
+  // check on the last one is still out.
+  const deciding = useRef(false);
 
   useEffect(() => {
     let current = true;
@@ -96,6 +118,19 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
     });
   };
 
+  /** Take the folder being browsed, if whoever asked for it will have it. */
+  const decide = async (chosen: string) => {
+    if (deciding.current) return;
+    deciding.current = true;
+    try {
+      onDone([accept ? await accept(chosen) : chosen]);
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      deciding.current = false;
+    }
+  };
+
   const entryAt = (index: number): Entry | null => {
     const shift = above ? 1 : 0;
     if (above && index === 0) return null;
@@ -143,14 +178,10 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
       return;
     }
     if (key.name === 'return') {
-      if (mode === 'folder') {
-        onDone([directory]);
-        return;
-      }
+      // Enter acts on the row the cursor is on, in both modes: `../` climbs
+      // out, a folder opens. Anything else would make the cursor a liar —
+      // it is on `../` and the folder it is in gets taken instead.
       const entry = entryAt(at.current);
-      // Opening a folder is what Enter does, so one can be walked into
-      // without being marked; a file under the cursor has nothing to open,
-      // and marking it is the only thing Enter could have meant.
       if (!entry) {
         if (above) setDirectory(above);
         return;
@@ -159,11 +190,16 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
         setDirectory(entry.path);
         return;
       }
-      toggle(entry);
+      // A file has nothing to open: marking it is the only thing Enter could
+      // have meant, and in folder mode there is nothing to mark.
+      if (mode === 'paths') toggle(entry);
       return;
     }
-    if (key.name === 'tab' && mode === 'paths' && marked.size > 0) {
-      onDone([...marked]);
+    // Tab is what finishes, in both modes: the marked paths, or the folder
+    // being browsed.
+    if (key.name === 'tab') {
+      if (mode === 'folder') void decide(directory);
+      else if (marked.size > 0) onDone([...marked]);
     }
   });
 
@@ -186,7 +222,14 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
               'tab send marked',
               'esc back',
             ]
-          : ['↑↓ move', '→ open', '← up', 'enter use this folder', 'esc back']
+          : [
+              '↑↓ move',
+              '→ open / enter',
+              '← up',
+              'h hidden',
+              'tab save here',
+              'esc back',
+            ]
       }
     >
       <text fg={theme.heading}>{shortenPath(directory, home)}</text>
@@ -223,7 +266,11 @@ export function Picker({ mode, start, title, onDone, onCancel }: PickerProps) {
       )}
       <Gap />
       {failure && <Problem>{failure}</Problem>}
-      {mode === 'paths' && (
+      {mode === 'folder' ? (
+        <text fg={theme.good}>
+          {`Saving into ${shortenPath(directory, home)} · tab to save here`}
+        </text>
+      ) : (
         <text fg={marked.size > 0 ? theme.good : theme.muted}>
           {marked.size === 0
             ? 'Nothing marked yet — space marks the file or folder under the cursor.'

@@ -1,4 +1,4 @@
-import { homedir } from 'node:os';
+import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import {
   classifyReceiveText,
   looksLikeOffer,
@@ -10,7 +10,6 @@ import { TOR_BRIDGE_LABELS, type TorBridge } from '@/lib/tor/bridge';
 import type { SubmitEvent } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState } from 'react';
-import { shortenPath } from './browse';
 import { FIELD_MAX, Gap, Note, Problem, Screen } from './screen';
 import { theme } from './theme';
 
@@ -23,10 +22,12 @@ import { theme } from './theme';
  * tab's own rules; only the QR chunk form has no answer here, because a
  * terminal has no camera to have scanned one with.
  *
- * The two things a receive takes besides what is pasted are here as keys, as
- * the send screen's are: where the file is saved, and which bridge a Tor
- * receive enters the network through. Both are non-printing keys, since the
- * field has every printable one.
+ * Which bridge a Tor receive enters the network through is here as a key, as
+ * the send screen's settings are — a non-printing one, since the field has
+ * every printable key. It is only shown for what will go through Tor, since
+ * to anything else the bridge is a setting with nothing to set. Where the
+ * file is saved is not a setting here either: it is the screen after this
+ * one, asked for once there is something to save.
  */
 
 /**
@@ -41,10 +42,27 @@ export type Accepted =
   | { kind: 'offer'; code: string }
   | { kind: 'onion'; address: string };
 
+/**
+ * Whether what is in the field will go through Tor. An onion address always
+ * does. A code does only when the sender chose the anonymous fallback, which
+ * the code says itself — a plain one falls back through Nostr, or not at all,
+ * and never starts Tor.
+ */
+function needsTor(found: ReceiveInput | null): boolean {
+  if (found?.kind === 'onion') return true;
+  if (found?.kind !== 'offer') return false;
+  const payload = parseMutualPayload(found.payload);
+  return payload !== null && isAnonymousOffer(payload);
+}
+
 function describe(text: string, found: ReceiveInput | null): string | null {
   if (!text.trim()) return null;
   if (found?.kind === 'pin') return 'A PIN Exchange PIN';
-  if (found?.kind === 'offer') return 'A Code Exchange code';
+  if (found?.kind === 'offer') {
+    return needsTor(found)
+      ? 'A Code Exchange code · anonymous, so its fallback is over Tor'
+      : 'A Code Exchange code';
+  }
   if (found?.kind === 'onion') return `A Tor onion service · ${found.address}`;
   if (found?.kind === 'offer-chunk') {
     return 'One QR chunk of a code — a terminal cannot scan the rest';
@@ -58,20 +76,13 @@ function describe(text: string, found: ReceiveInput | null): string | null {
 }
 
 export function ReceiveInputScreen({
-  folder,
-  folderProblem,
   bridge,
-  onFolder,
   onBridge,
   onAccept,
   onUnsupported,
   onCancel,
 }: {
-  folder: string;
-  /** Why nothing can be saved into `folder`, which stops a transfer starting. */
-  folderProblem: string | null;
   bridge: TorBridge;
-  onFolder(): void;
   onBridge(): void;
   onAccept(accepted: Accepted): void;
   onUnsupported(what: string): void;
@@ -80,17 +91,13 @@ export function ReceiveInputScreen({
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
 
-  const reading = describe(text, classifyReceiveText(text));
+  const found = classifyReceiveText(text);
+  const reading = describe(text, found);
+  const tor = needsTor(found);
 
   // The submitted value rather than the state behind it: a paste and the Enter
   // after it can land in one frame, and the state would still be empty.
   const take = (raw: string) => {
-    // A folder that cannot be written to costs a Tor bootstrap and a
-    // handshake to find out about afterwards, so it stops the transfer here.
-    if (folderProblem) {
-      setProblem(folderProblem);
-      return;
-    }
     const found = classifyReceiveText(raw);
     if (!found) {
       setProblem(
@@ -125,24 +132,21 @@ export function ReceiveInputScreen({
 
   useKeyboard((key) => {
     if (key.name === 'escape') onCancel();
-    if (key.name === 'tab') {
-      if (key.shift) onBridge();
-      else onFolder();
-    }
+    if (key.name === 'tab' && tor) onBridge();
   });
 
   return (
     <Screen
       title="Receive"
-      hints={[
-        'enter continue',
-        'tab change folder',
-        'shift-tab bridge',
-        'esc back',
-      ]}
+      hints={
+        tor
+          ? ['enter continue', 'tab bridge', 'esc back']
+          : ['enter continue', 'esc back']
+      }
     >
       <text fg={theme.heading}>Paste what the sender gave you</text>
       <Note>A PIN, a Code Exchange code, or a .onion address.</Note>
+      <Note>Where it is saved is the next screen.</Note>
       <Gap />
       <box
         style={{ border: true, borderColor: theme.border, height: 3 }}
@@ -168,12 +172,7 @@ export function ReceiveInputScreen({
       {reading && <text fg={theme.good}>{reading}</text>}
       {problem && <Problem>{problem}</Problem>}
       <Gap />
-      {folderProblem ? (
-        <Problem>{folderProblem}</Problem>
-      ) : (
-        <Note>{`Saving into ${shortenPath(folder, homedir())}`}</Note>
-      )}
-      <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>
+      {tor && <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>}
     </Screen>
   );
 }

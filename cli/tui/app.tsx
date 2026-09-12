@@ -2,7 +2,7 @@ import { parseOnionAddress } from '@/lib/tor/onion-address';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import type { SelectOption } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
 import { sendByCode } from '../code/send';
@@ -24,7 +24,9 @@ import { type SendChoice, SendMode } from './send-mode';
  * what it adds is where they are shown and where their questions are answered.
  * The send side mirrors the tab's send tab: pick what to send, then one of the
  * three transfer modes. The receive side mirrors the tab's receive screen:
- * one field, and the mode read off what is pasted into it.
+ * one field, the mode read off what is pasted into it, and then where to save
+ * what is coming — that question is always asked, and asked after the code,
+ * since until the code is in there is nothing to save.
  *
  * PIN Exchange is in both, and in both it says it is not here yet: it is one
  * of the three modes, and leaving it out would say it had been dropped.
@@ -42,7 +44,7 @@ type Stage =
   | { name: 'send-pick' }
   | { name: 'send-mode'; paths: string[] }
   | { name: 'receive-ask' }
-  | { name: 'receive-folder' }
+  | { name: 'receive-folder'; accepted: Accepted }
   | { name: 'run'; running: Running }
   | { name: 'unsupported'; message: string; back: Stage };
 
@@ -66,33 +68,10 @@ function torOptionsFor(bridge: TorBridge): TorOptions {
 
 export function App({ onExit }: { onExit(status: number): void }) {
   const [stage, setStage] = useState<Stage>({ name: 'home' });
+  // Where the folder picker opens: the working directory the first time, and
+  // after that wherever the last receive was saved.
   const [folder, setFolder] = useState(process.cwd());
-  const [folderProblem, setFolderProblem] = useState<string | null>(null);
   const [bridge, setBridge] = useState<TorBridge>(DEFAULT_TOR_BRIDGE);
-
-  // The transfer functions take a folder that has already been checked, which
-  // is what the line interface does to `--out` before it bootstraps. The
-  // folder the browser picked, and the working directory this opened in, get
-  // the same check, here rather than after a Tor bootstrap and a handshake.
-  useEffect(() => {
-    let current = true;
-    void (async () => {
-      try {
-        const checked = await destinationFolder(folder);
-        if (!current) return;
-        setFolderProblem(null);
-        if (checked !== folder) setFolder(checked);
-      } catch (error) {
-        if (!current) return;
-        setFolderProblem(
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    })();
-    return () => {
-      current = false;
-    };
-  }, [folder]);
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === 'c') {
@@ -134,10 +113,11 @@ export function App({ onExit }: { onExit(status: number): void }) {
     setStage({ name: 'run', running });
   };
 
-  const startReceive = (accepted: Accepted) => {
-    // The receive screen refuses to accept anything while the folder cannot
-    // be written to, so by here it has been checked.
-    if (folderProblem) return;
+  // `into` has been through `destinationFolder` — the picker will not hand
+  // over a folder that has not — which is the check the line interface does
+  // to `--out` before it bootstraps.
+  const startReceive = (accepted: Accepted, into: string) => {
+    setFolder(into);
     const torOptions = torOptionsFor(bridge);
     if (accepted.kind === 'offer') {
       setStage({
@@ -147,7 +127,7 @@ export function App({ onExit }: { onExit(status: number): void }) {
           firstCode: accepted.code,
           start: (presenter) =>
             receiveByCode({
-              folder,
+              folder: into,
               simulateNoDirect: false,
               torOptions,
               cacheDir: defaultCacheDir(),
@@ -158,14 +138,26 @@ export function App({ onExit }: { onExit(status: number): void }) {
       });
       return;
     }
+    // The address came through `classifyReceiveText`, which parses it, so
+    // this cannot fail; going back to the field is what it would mean if it
+    // did.
     const parsed = parseOnionAddress(accepted.address);
-    if (!parsed) return;
+    if (!parsed) {
+      setStage({ name: 'receive-ask' });
+      return;
+    }
     setStage({
       name: 'run',
       running: {
         title: 'Receive · Tor Onion Service',
         start: (presenter) =>
-          receiveOverTor({ parsed, folder, torOptions, verbose: false, presenter }),
+          receiveOverTor({
+            parsed,
+            folder: into,
+            torOptions,
+            verbose: false,
+            presenter,
+          }),
       },
     });
   };
@@ -219,14 +211,11 @@ export function App({ onExit }: { onExit(status: number): void }) {
     case 'receive-ask':
       return (
         <ReceiveInputScreen
-          folder={folder}
-          folderProblem={folderProblem}
           bridge={bridge}
-          onFolder={() => setStage({ name: 'receive-folder' })}
           onBridge={() =>
             setBridge((was) => (was === 'websocket' ? 'webrtc' : 'websocket'))
           }
-          onAccept={startReceive}
+          onAccept={(accepted) => setStage({ name: 'receive-folder', accepted })}
           onUnsupported={(message) =>
             setStage({ name: 'unsupported', message, back: stage })
           }
@@ -240,9 +229,9 @@ export function App({ onExit }: { onExit(status: number): void }) {
           mode="folder"
           start={folder}
           title="Receive · where to save"
+          accept={destinationFolder}
           onDone={([chosen]) => {
-            if (chosen) setFolder(chosen);
-            setStage({ name: 'receive-ask' });
+            if (chosen) startReceive(stage.accepted, chosen);
           }}
           onCancel={() => setStage({ name: 'receive-ask' })}
         />
