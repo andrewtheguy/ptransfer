@@ -94,8 +94,10 @@ no portability layer in between:
      `src/lib/code-exchange` takes what differs per host as an `ExchangeHost`.
    - **3b** (done): `send --pin <path>...` shows a PIN to read out — a fresh
      one every two minutes, and on demand from the terminal UI — and takes
-     back the confirmation code the receiver shows before anything about the
-     file leaves; `receive --pin` reads a PIN, or a PIN link, and shows that
+     back the confirmation code the receiver shows before the connection offer
+     or a byte of the file leaves — the sealed confirm naming the file goes
+     out first, so the receiver knows what it is being offered when it reads
+     the code out; `receive --pin` reads a PIN, or a PIN link, and shows that
      code. With `--anonymous` the handshake itself rides the onion relay pool,
      which the receiver infers from the PIN's length. The handshake both hosts
      run is in `src/lib/pin-exchange`, which the tab's `usePinSend` and

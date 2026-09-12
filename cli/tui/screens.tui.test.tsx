@@ -789,6 +789,33 @@ describe('the run screen', () => {
     expect(frame).toContain('Press c to copy');
   });
 
+  it('drops the copy note when the PIN it was about rotates away', async () => {
+    let rotate: (() => void) | null = null;
+    const screen = await draw(
+      <Run
+        title="Send · PIN Exchange"
+        start={(presenter) => {
+          presenter.hand('AbCDefG23hjk', 'PIN');
+          rotate = () => presenter.hand('mnPQrst45uvw', 'PIN');
+          return new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    screen.mockInput.pressKey('c');
+    await screen.settle();
+    // The note stands in the hint's place, whichever of the two it is.
+    expect(screen.frame()).not.toContain('Press c to copy');
+    act(() => rotate?.());
+    await screen.settle();
+    // What the clipboard holds is no longer what is on screen, so the note
+    // saying it was copied goes with the PIN it named.
+    const frame = screen.frame();
+    expect(frame).not.toContain('Copied');
+    expect(frame).not.toContain('would not take');
+    expect(frame).toContain('Press c to copy');
+  });
+
   it('runs what the transfer offers under the key it offered it', async () => {
     const refreshed: number[] = [];
     const screen = await draw(

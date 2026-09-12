@@ -45,9 +45,10 @@ import type { Presenter } from '../ui/presenter';
  *
  * The PIN goes to standard output as it is minted — and again every time it
  * rotates, since a printed line cannot be taken back — for the person to read
- * out. Once a receiver has proved it knew one, they are shown a confirmation
- * code; typing that code here is what opens the gate, and nothing about the
- * file leaves this process before it does.
+ * out. Once a receiver has proved it knew one, they are shown what is on
+ * offer by name and size, and a confirmation code; typing that code here is
+ * what opens the gate, and no connection offer and no byte of the file leaves
+ * this process before it does.
  */
 
 /** How long a cancel's word to the receiver is given to leave. */

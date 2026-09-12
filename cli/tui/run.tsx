@@ -54,7 +54,12 @@ export function Run({
   const renderer = useRenderer();
   const [store] = useState(createTransferStore);
   const view = useSyncExternalStore(store.subscribe, store.snapshot);
-  const [copied, setCopied] = useState<string | null>(null);
+  // The note under the values, and the value it is about: a PIN that rotates
+  // takes its own note with it, since what is on the clipboard is then no
+  // longer what is on the screen.
+  const [copied, setCopied] = useState<{ value: string; note: string } | null>(
+    null,
+  );
   const started = useRef(false);
 
   useEffect(() => {
@@ -85,6 +90,11 @@ export function Run({
   }, [store, start, firstCode, firstWord]);
 
   const { prompt, outcome, handed, actions } = view;
+  // The note stands only while the value it names is still on screen.
+  const copiedNote =
+    copied && handed.some((item) => item.value === copied.value)
+      ? copied.note
+      : null;
   // Which handed value the next tab copies, while a field is up.
   const turn = useRef(0);
 
@@ -92,11 +102,12 @@ export function Run({
     const item = handed[index];
     if (!item) return;
     const ok = renderer.copyToClipboardOSC52(item.value);
-    setCopied(
-      ok
+    setCopied({
+      value: item.value,
+      note: ok
         ? `Copied ${item.label ?? 'the code'} to the clipboard.`
         : 'This terminal would not take a clipboard copy; select the text instead.',
-    );
+    });
   };
 
   useKeyboard((key) => {
@@ -172,7 +183,7 @@ export function Run({
               numbered={handed.length > 1}
             />
           ))}
-          <Note>{copied ?? copyHint(Boolean(prompt), handed.length)}</Note>
+          <Note>{copiedNote ?? copyHint(Boolean(prompt), handed.length)}</Note>
         </box>
       )}
       {view.status && !outcome && <text fg={theme.accent}>{view.status}</text>}

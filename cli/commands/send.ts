@@ -44,8 +44,9 @@ as one ZIP that keeps each folder's structure under its name.
 
 --pin prints a short PIN to read out to the receiver, and prints a fresh one
 every couple of minutes until someone takes it. Once they have, they are shown
-a confirmation code: type it in, and nothing about the file leaves this process
-until you have. With --anonymous the whole handshake goes through Tor.
+the name and size of what is on offer, and a confirmation code: type that code
+in, and no connection offer and no byte of the file leaves this process until
+you have. With --anonymous the whole handshake goes through Tor.
 
 --code prints a code for the receiver to paste into the web app or into
 ptransfer receive --code, then reads the response they give back from standard

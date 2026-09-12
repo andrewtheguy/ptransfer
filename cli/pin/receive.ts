@@ -12,7 +12,11 @@ import {
 } from '@/lib/code-exchange/receive';
 import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import { generateMutualAnswerBinary } from '@/lib/code-signaling';
-import { derivePakeSecret, getPinLocator } from '@/lib/crypto';
+import {
+  derivePakeSecret,
+  getPinLocator,
+  wipeBufferSource,
+} from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import { awaitCarriedOffer, type NostrClient } from '@/lib/nostr';
@@ -331,6 +335,9 @@ export async function receiveByPin(
     if (interrupted !== null) return interrupted;
     throw error;
   } finally {
+    // Idempotent backstop for every exit before the claims settled — the
+    // handshake wipes it itself the moment they do.
+    wipeBufferSource(pakeSecret);
     uninstall();
     await teardown();
   }

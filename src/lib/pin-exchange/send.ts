@@ -169,6 +169,9 @@ export interface PinRendezvous {
   /**
    * Mint and publish a fresh PIN immediately, retiring every PIN shown before
    * it, without touching the file, the keys, or the relay connections.
+   *
+   * Never throws: a publish that fails rejects `claimed` instead, since the
+   * PINs this already retired leave nothing for the transfer to go on with.
    */
   refresh(): Promise<void>;
   /**
@@ -538,6 +541,16 @@ export function startPinRendezvous(
         await publishRendezvous();
       } catch (err) {
         console.error('Failed to publish refreshed PIN:', err);
+        // Every PIN shown before this one was retired the moment the refresh
+        // began — that is what a refresh is for — so a failed publish leaves
+        // nothing a receiver could claim against and nothing on screen that
+        // still works. End the rendezvous rather than leave a dead PIN being
+        // read out.
+        giveUp(
+          new Error(
+            'Could not publish a fresh PIN, and the PINs shown before it no longer work. Please start a new transfer.',
+          ),
+        );
       } finally {
         refreshInFlight = false;
       }
