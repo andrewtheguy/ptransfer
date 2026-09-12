@@ -188,10 +188,100 @@ describe('the path picker', () => {
         onCancel={() => {}}
       />,
     );
-    expect(screen.frame()).toContain('enter use this folder');
-    screen.mockInput.pressEnter();
+    expect(screen.frame()).toContain('tab save here');
+    screen.mockInput.pressTab();
     await screen.settle();
     expect(chosen).toEqual([[root]]);
+  });
+
+  it('climbs out on enter over `../` rather than taking the folder', async () => {
+    const root = await tree();
+    const chosen: string[][] = [];
+    const screen = await draw(
+      <Picker
+        mode="folder"
+        start={join(root, 'photos')}
+        title="Receive"
+        onDone={(paths) => chosen.push(paths)}
+        onCancel={() => {}}
+      />,
+    );
+    // The cursor opens on `../`, and Enter there means what it says.
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(chosen).toEqual([]);
+    expect(screen.frame()).toContain('notes.txt');
+    // Down onto `photos/`: Enter walks back into it, still taking nothing.
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(chosen).toEqual([]);
+    screen.mockInput.pressTab();
+    await screen.settle();
+    expect(chosen).toEqual([[join(root, 'photos')]]);
+  });
+
+  it('says which folder tab would save into', async () => {
+    const root = await tree();
+    const screen = await draw(
+      <Picker
+        mode="folder"
+        start={root}
+        title="Receive"
+        onDone={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('tab to save here');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('right');
+    await screen.settle();
+    expect(screen.frame()).toContain('photos · tab to save here');
+  });
+
+  it('hands over the path the check gave back, not the one browsed', async () => {
+    const root = await tree();
+    const chosen: string[][] = [];
+    const screen = await draw(
+      <Picker
+        mode="folder"
+        start={root}
+        title="Receive"
+        accept={async (directory) => `${directory}/checked`}
+        onDone={(paths) => chosen.push(paths)}
+        onCancel={() => {}}
+      />,
+    );
+    screen.mockInput.pressTab();
+    await screen.settle();
+    expect(chosen).toEqual([[`${root}/checked`]]);
+  });
+
+  it('stays where it is and says why a folder was refused', async () => {
+    const root = await tree();
+    const chosen: string[][] = [];
+    const screen = await draw(
+      <Picker
+        mode="folder"
+        start={root}
+        title="Receive"
+        accept={async (directory) => {
+          throw new Error(`Cannot save files in ${directory}`);
+        }}
+        onDone={(paths) => chosen.push(paths)}
+        onCancel={() => {}}
+      />,
+    );
+    screen.mockInput.pressTab();
+    await screen.settle();
+    expect(screen.frame()).toContain('Cannot save files in');
+    expect(chosen).toEqual([]);
+    // The refusal is about the folder that was under Enter, so walking into
+    // another one clears it.
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('right');
+    await screen.settle();
+    expect(screen.frame()).not.toContain('Cannot save files in');
   });
 });
 
@@ -307,10 +397,7 @@ describe('the receive screen', () => {
     const accepted: unknown[] = [];
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {}}
         onBridge={() => {}}
         onAccept={(what) => accepted.push(what)}
         onUnsupported={() => {}}
@@ -329,10 +416,7 @@ describe('the receive screen', () => {
     const refusals: string[] = [];
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {}}
         onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={(message) => refusals.push(message)}
@@ -351,10 +435,7 @@ describe('the receive screen', () => {
   it('refuses text that is none of the three', async () => {
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {}}
         onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={() => {}}
@@ -370,41 +451,17 @@ describe('the receive screen', () => {
     expect(screen.frame()).toContain('not a PIN, a code, or an onion address');
   });
 
-  it('opens the folder picker on tab, even with the field focused', async () => {
-    let asked = 0;
+  it('says where the file is saved is the screen after this one', async () => {
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {
-          asked += 1;
-        }}
         onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
-    screen.mockInput.pressTab();
-    await screen.settle();
-    expect(asked).toBe(1);
-  });
-
-  it('says where the file will be saved', async () => {
-    const screen = await draw(
-      <ReceiveInputScreen
-        folder="/tmp/somewhere"
-        folderProblem={null}
-        bridge="websocket"
-        onFolder={() => {}}
-        onBridge={() => {}}
-        onAccept={() => {}}
-        onUnsupported={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-    expect(screen.frame()).toContain('Saving into /tmp/somewhere');
+    expect(screen.frame()).toContain('Where it is saved is the next screen');
   });
 
   it('takes a whole code, however far past a field’s own cap it runs', async () => {
@@ -415,10 +472,7 @@ describe('the receive screen', () => {
     expect(whole.length).toBeGreaterThan(1000);
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {}}
         onBridge={() => {}}
         onAccept={(what) => taken.push(what)}
         onUnsupported={() => {}}
@@ -435,10 +489,7 @@ describe('the receive screen', () => {
     const taken: Accepted[] = [];
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="websocket"
-        onFolder={() => {}}
         onBridge={() => {}}
         onAccept={(what) => taken.push(what)}
         onUnsupported={() => {}}
@@ -456,14 +507,11 @@ describe('the receive screen', () => {
     expect(taken).toEqual([]);
   });
 
-  it('names the Tor bridge and turns it over on shift-tab', async () => {
+  it('names the Tor bridge and turns it over on tab', async () => {
     const bridges: string[] = [];
     const screen = await draw(
       <ReceiveInputScreen
-        folder="/tmp"
-        folderProblem={null}
         bridge="webrtc"
-        onFolder={() => {}}
         onBridge={() => bridges.push('turned')}
         onAccept={() => {}}
         onUnsupported={() => {}}
@@ -471,30 +519,9 @@ describe('the receive screen', () => {
       />,
     );
     expect(screen.frame()).toContain('Tor bridge: Snowflake WebRTC');
-    screen.mockInput.pressTab({ shift: true });
+    screen.mockInput.pressTab();
     await screen.settle();
     expect(bridges).toEqual(['turned']);
-  });
-
-  it('refuses to start anything while the folder cannot be saved into', async () => {
-    const accepted: unknown[] = [];
-    const screen = await draw(
-      <ReceiveInputScreen
-        folder="/tmp/locked"
-        folderProblem="Cannot save files in /tmp/locked"
-        bridge="websocket"
-        onFolder={() => {}}
-        onBridge={() => {}}
-        onAccept={(what) => accepted.push(what)}
-        onUnsupported={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-    expect(screen.frame()).toContain('Cannot save files in /tmp/locked');
-    await screen.mockInput.pasteBracketedText(ONION);
-    screen.mockInput.pressEnter();
-    await screen.settle();
-    expect(accepted).toEqual([]);
   });
 });
 
@@ -525,7 +552,32 @@ describe('the app', () => {
     expect(screen.frame()).toContain('Paste what the sender gave you');
   });
 
-  it('says so when the folder it opened in cannot be saved into', async () => {
+  it('asks where to save once the code is in, and not before', async () => {
+    const screen = await draw(<App onExit={() => {}} />);
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(screen.frame()).toContain('Paste what the sender gave you');
+    expect(screen.frame()).not.toContain('where to save');
+    await screen.mockInput.pasteBracketedText(ONION);
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(screen.frame()).toContain('where to save');
+    expect(screen.frame()).toContain('tab save here');
+  });
+
+  it('asks where to save a Code Exchange code’s file too', async () => {
+    const screen = await draw(<App onExit={() => {}} />);
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    await screen.mockInput.pasteBracketedText(code(16));
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(screen.frame()).toContain('where to save');
+  });
+
+  it('says so when the folder picked cannot be saved into', async () => {
     const root = await tree();
     const locked = join(root, 'locked');
     await mkdir(locked);
@@ -537,7 +589,15 @@ describe('the app', () => {
       screen.mockInput.pressArrow('down');
       screen.mockInput.pressEnter();
       await screen.settle();
+      await screen.mockInput.pasteBracketedText(ONION);
+      screen.mockInput.pressEnter();
+      await screen.settle();
+      // The picker opens in the working directory, which is the one that
+      // cannot be written to, so taking it is refused there.
+      screen.mockInput.pressTab();
+      await screen.settle();
       expect(screen.frame()).toContain('Cannot save files in');
+      expect(screen.frame()).toContain('where to save');
     } finally {
       process.chdir(was);
       await chmod(locked, 0o700);
