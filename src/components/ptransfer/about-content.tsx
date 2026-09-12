@@ -1,11 +1,17 @@
-import { KeyRound, Lock, QrCode, Shield, Zap } from 'lucide-react';
+import { KeyRound, Lock, QrCode, Shield, Terminal, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   CodeModeIllustration,
   PinModeIllustration,
 } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
-import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
+import {
+  OFFLINE_QR_TRANSFER_URL,
+  PTRANSFER_CLI_DOCS_URL,
+  PTRANSFER_CLI_INSTALL_SH,
+  PTRANSFER_CLI_RELEASES_URL,
+  PTRANSFER_REPO_URL,
+} from '@/lib/constants';
 import { generateTextQRCode } from '@/lib/qr-utils';
 
 const VALUE_PROPS = [
@@ -354,6 +360,11 @@ export function AboutContent() {
                   The sender&apos;s tab must remain open while its onion service
                   is published, and interrupted transfers cannot resume.
                 </li>
+                <li>
+                  Either end can be a terminal instead: the command line
+                  publishes an onion service this page connects to, and connects
+                  to one this page published.
+                </li>
               </ul>
               <SpecList items={TOR_DETAILS} />
             </div>
@@ -378,6 +389,127 @@ export function AboutContent() {
               Secure QR Transfer
             </a>{' '}
             instead.
+          </p>
+        </div>
+      </SectionContainer>
+
+      {/* The command line */}
+      <SectionContainer>
+        <div className="mx-auto max-w-2xl text-center">
+          <h2 className="text-3xl">Also on the command line</h2>
+          <p className="mt-3 text-muted-foreground">
+            <span className="font-medium text-foreground">ptransfer</span> is
+            this app in a terminal. It lives in the same repository and runs the
+            same protocol, crypto and Tor code, so a tab and a terminal are two
+            hosts of one implementation — either end of a transfer can be
+            either.
+          </p>
+        </div>
+        <div className="mx-auto mt-8 max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
+          <p className="flex items-center gap-2 text-lg font-semibold text-foreground">
+            <Terminal className="h-5 w-5 text-primary" />
+            ptransfer
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            One self-contained executable for Linux and macOS, with no language
+            runtime or package manager to install. Run it with no command and it
+            opens a terminal UI — these screens drawn in a terminal, with a file
+            browser, the three transfer modes, and a box to paste whatever a
+            sender handed you. Every command is line-oriented as well, so a
+            script or a pipe can drive both ends. Useful for a server with no
+            browser, a machine you only reach over SSH, or simply when you would
+            rather stay in a terminal.
+          </p>
+          <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-muted-foreground">
+            <li>
+              <span className="font-medium text-foreground">PIN Exchange</span>{' '}
+              works in both directions: hand a PIN from this page to{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                ptransfer receive --pin
+              </code>
+              , or paste a PIN the terminal minted into the receive box here.
+              The confirmation code is read back the same way, and{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                --anonymous
+              </code>{' '}
+              carries the handshake through Tor as this page&apos;s advanced
+              option does.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">
+                Tor Onion Service
+              </span>{' '}
+              works in both directions as well:{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                ptransfer send --tor
+              </code>{' '}
+              publishes an address this page connects to, and{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                ptransfer receive --onion
+              </code>{' '}
+              takes one this tab published.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Code Exchange</span>{' '}
+              works in both directions too, as text: exactly what{' '}
+              <span className="font-medium text-foreground">Copy Data</span>{' '}
+              gives you here and what the{' '}
+              <span className="font-medium text-foreground">Paste</span> tab
+              takes. That is the half of the exchange a terminal can take part
+              in — there is no camera to scan a QR grid with, and the CLI draws
+              none. Both fallbacks work too: the public Nostr relays, and the
+              anonymous Tor one.
+            </li>
+            <li>
+              Sender and receiver interoperate when the protocol version in the
+              footer below matches, whatever release either one is.
+            </li>
+          </ul>
+          <div className="mt-4 space-y-2">
+            <p className="text-xs font-medium text-foreground">
+              Install (Linux and macOS)
+            </p>
+            <code className="block overflow-x-auto rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
+              {PTRANSFER_CLI_INSTALL_SH}
+            </code>
+            <p className="text-xs text-muted-foreground">
+              The installer picks the executable for your machine from the
+              latest{' '}
+              <a
+                href={PTRANSFER_CLI_RELEASES_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2"
+              >
+                release
+              </a>
+              , checks it against its published checksum, and puts it on your{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                PATH
+              </code>{' '}
+              —{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                /usr/local/bin
+              </code>{' '}
+              on Linux, which takes sudo, and{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ~/.local/bin
+              </code>{' '}
+              on macOS, which does not. There is no Windows build: use WSL, or
+              use this page.
+            </p>
+          </div>
+          <p className="mt-4 text-xs text-muted-foreground">
+            Every command, flag and option is documented in{' '}
+            <a
+              href={PTRANSFER_CLI_DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium underline underline-offset-2"
+            >
+              the README
+            </a>
+            .
           </p>
         </div>
       </SectionContainer>
@@ -420,13 +552,14 @@ export function AboutContent() {
         <p className="text-center text-xs text-muted-foreground">
           Source code available for audit at{' '}
           <a
-            href="https://github.com/andrewtheguy/ptransfer"
+            href={PTRANSFER_REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline"
           >
             GitHub
           </a>
+          , where the command line lives beside it
         </p>
       </SectionContainer>
     </div>

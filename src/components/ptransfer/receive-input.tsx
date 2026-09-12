@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { PTRANSFER_CLI_DOCS_URL } from '@/lib/constants';
 import { ANONYMOUS_PIN_LENGTH, PIN_LENGTH } from '@/lib/crypto';
 import {
   classifyReceiveText,
@@ -393,6 +394,21 @@ export function ReceiveInput({
             a relay — you hand a response code back the same way you got theirs.
             If a direct connection cannot be made, an eligible encrypted file up
             to 100 MiB can use the automatic Nostr relay fallback.
+          </p>
+          <p>
+            The sender does not have to be a browser. A PIN, a{' '}
+            <code>.onion</code> address, or a sender code minted by{' '}
+            <a
+              href={PTRANSFER_CLI_DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-foreground underline underline-offset-2"
+            >
+              ptransfer
+            </a>
+            , this app on the command line, is pasted here exactly the same way
+            — the terminal carries Code Exchange as text, since it has no camera
+            to scan a QR grid with.
           </p>
         </CollapsibleContent>
       </Collapsible>
