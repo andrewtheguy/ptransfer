@@ -278,6 +278,17 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
         Case sensitive. Share it over a channel you trust.
       </p>
 
+      {/* The PIN is protocol, not a page feature: any host running it can
+          claim the PIN, so say so rather than let this screen imply a browser
+          is required. */}
+      <p className="text-xs text-muted-foreground text-center">
+        The receiver can use this site or the command line —{' '}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono">
+          ptransfer receive --pin
+        </code>{' '}
+        takes the same PIN.
+      </p>
+
       {/* Quiet resource backstop, not a security deadline: rotation already
           caps each code's life, so there is no urgency to surface here. */}
       <p className="text-xs text-muted-foreground/70 text-center">
