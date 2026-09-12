@@ -2,6 +2,7 @@ import { readCode } from '../code/code-input';
 import { createProgressLine, createStatusLine } from '../progress';
 import { readSecret } from '../secret';
 import type { Presenter } from './presenter';
+import { readWord } from './word';
 
 /**
  * A transfer on standard error and standard input: the line-oriented
@@ -11,7 +12,9 @@ import type { Presenter } from './presenter';
  * The lines a person reads, the engine's status messages and the transfer's
  * progress share one terminal line between them, and end it before handing it
  * over. Only `hand` goes to standard output, which carries nothing else, so a
- * script can read a command's result without filtering.
+ * script can read a command's result without filtering — a PIN that rotates
+ * is written again under its label, since a printed line cannot be taken
+ * back.
  */
 export function createLinePresenter(label: string): Presenter {
   const progress = createProgressLine(label);
@@ -48,6 +51,12 @@ export function createLinePresenter(label: string): Presenter {
     readSecret(prompt) {
       return settle(() => readSecret(prompt));
     },
+    readWord(prompt, accept) {
+      return settle(() => readWord(prompt, accept));
+    },
+    // Nothing to bind a key to: standard input is where a piped answer comes
+    // from, so reading a keystroke here would eat one.
+    action: () => () => {},
     done,
   };
 }

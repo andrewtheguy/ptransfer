@@ -17,6 +17,37 @@ export interface SecretOutput {
   write: (text: string) => unknown;
 }
 
+/**
+ * A filter over raw terminal input that swallows whole escape sequences.
+ *
+ * An arrow key arrives as ESC [ A, and the bracket and the letter are no more
+ * part of what is being typed than the ESC that introduced them — dropping
+ * only the ESC, as a bare printable test does, leaves "[A" in the answer. The
+ * returned function says of each character whether it belonged to a sequence,
+ * and carries its state across calls, since a sequence can be split across
+ * two reads.
+ */
+export function escapeSequenceFilter(): (char: string) => boolean {
+  let state: 'none' | 'introduced' | 'running' = 'none';
+  return (char) => {
+    // ESC [ (CSI) and ESC O (SS3) run on to a final byte in @..~; any other
+    // byte after ESC is a two-character sequence that ends there.
+    if (state === 'introduced') {
+      state = char === '[' || char === 'O' ? 'running' : 'none';
+      return true;
+    }
+    if (state === 'running') {
+      if (char >= '@' && char <= '~') state = 'none';
+      return true;
+    }
+    if (char === '\u001b') {
+      state = 'introduced';
+      return true;
+    }
+    return false;
+  };
+}
+
 export async function readSecret(
   prompt: string,
   input: SecretInput = process.stdin,
@@ -54,6 +85,7 @@ function readAtTerminal(
     // Called on the stream: a real TTY's setRawMode needs its `this`.
     const setRawMode = (mode: boolean) => input.setRawMode?.(mode);
     let typed = '';
+    const inSequence = escapeSequenceFilter();
     const finish = (outcome: () => void) => {
       input.removeListener('data', onData);
       setRawMode(false);
@@ -64,6 +96,7 @@ function readAtTerminal(
     const onData = (chunk: Buffer | string) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       for (const char of text) {
+        if (inSequence(char)) continue;
         switch (char) {
           case '\r':
           case '\n':
@@ -80,8 +113,8 @@ function readAtTerminal(
             typed = typed.slice(0, -1);
             break;
           default:
-            // Printable input only; an arrow key's escape sequence is not
-            // part of a password.
+            // Printable input only; what an escape sequence is made of has
+            // already been swallowed above.
             if (char >= ' ') typed += char;
         }
       }

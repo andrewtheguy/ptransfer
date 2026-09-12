@@ -13,8 +13,11 @@
 
 /** A question the transfer is waiting on an answer to. */
 export interface Prompt {
-  /** A code is pasted and echoed; a secret is typed and never shown. */
-  kind: 'code' | 'secret';
+  /**
+   * A code is pasted and echoed, a word is typed and echoed, and a secret is
+   * typed and never shown.
+   */
+  kind: 'code' | 'secret' | 'word';
   message: string;
   /** Why the last answer was refused, to show above the field. */
   error: string | null;
@@ -30,6 +33,16 @@ export interface Handed {
   value: string;
 }
 
+/**
+ * Something the person may do while the transfer runs, under the key that
+ * does it. Minting a fresh PIN is the only one there is.
+ */
+export interface Action {
+  key: string;
+  label: string;
+  run(): void;
+}
+
 export interface TransferView {
   /** The lines a person reads, oldest first. */
   lines: string[];
@@ -37,6 +50,7 @@ export interface TransferView {
   status: string | null;
   progress: { current: number; total: number } | null;
   handed: Handed[];
+  actions: Action[];
   prompt: Prompt | null;
   /** Set once the transfer has ended: its exit status and, on a failure, why. */
   outcome: { status: number; error: string | null } | null;
@@ -47,6 +61,7 @@ const EMPTY: TransferView = {
   status: null,
   progress: null,
   handed: [],
+  actions: [],
   prompt: null,
   outcome: null,
 };

@@ -67,6 +67,21 @@ describe('readSecret at a terminal', () => {
     expect(output).toEqual(['Password: ', '\n']);
   });
 
+  it('swallows an arrow key whole, bracket and letter with it', async () => {
+    const { input } = terminal();
+    const pending = readSecret('Password: ', input, { write: () => {} });
+    input.push('AB');
+    // Nothing here is echoed, so a bracket and a letter left in the password
+    // would be a password that simply does not work, with nothing to see.
+    input.push('\u001b[A');
+    input.push('\u001b[1;5C');
+    // The introducer and its sequence can arrive in separate reads.
+    input.push('\u001b');
+    input.push('OP');
+    input.push('CDEF\r');
+    expect(await pending).toBe('ABCDEF');
+  });
+
   it('reports Ctrl-C as an interrupt, and Ctrl-D as giving up', async () => {
     const first = terminal();
     const interrupted = readSecret('', first.input, { write: () => {} });

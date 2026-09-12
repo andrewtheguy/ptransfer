@@ -6,7 +6,6 @@ import {
   buildDirectAttempt,
   deriveAnswerKeys,
   eligibleFallbackRelays,
-  type FallbackReceipt,
   fallbackMessage,
   finishDirectReceive,
   type Holder,
@@ -29,7 +28,7 @@ import { onInterrupt } from '../interrupt';
 import { bootstrapTor, type TorOptions } from '../tor/bootstrap';
 import { safeFileName } from '../transfer/files';
 import type { Presenter } from '../ui/presenter';
-import { type CliExchangeHost, createCliHost } from './host';
+import { createCliHost, savedFrom } from './host';
 
 /**
  * `ptransfer receive --code`: Code Exchange from the terminal, the
@@ -255,33 +254,5 @@ export async function receiveByCode(
   } finally {
     uninstall();
     await teardown();
-  }
-}
-
-/**
- * The bytes a fallback saved. The Tor fallback writes through the host's sink,
- * so its file is already in place; the relay fallback hands back what it
- * reassembled in memory, which is written out here the same way.
- */
-async function savedFrom(
-  receipt: FallbackReceipt | 'switched' | null,
-  host: CliExchangeHost,
-): Promise<number> {
-  if (receipt === null || receipt === 'switched') throw new Error('Cancelled');
-  if (receipt.sink) return receipt.content.data.size;
-  const { fileName, fileSize, mimeType } = receipt.content;
-  const sink = await host.createSink({
-    contentType: 'file',
-    fileName,
-    fileSize,
-    contentEncoding: 'identity',
-    mimeType,
-  });
-  try {
-    await sink.append(new Uint8Array(await receipt.content.data.arrayBuffer()));
-    return (await sink.finish()).size;
-  } catch (error) {
-    await sink.discard();
-    throw error;
   }
 }

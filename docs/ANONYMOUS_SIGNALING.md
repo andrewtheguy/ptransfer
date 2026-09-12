@@ -194,8 +194,8 @@ tells nobody anything they could not have learned by watching the transfer.
 | `src/lib/nostr/relays.ts` | `normalizeOnionRelayUrl`, `ANONYMOUS_SIGNALING_RELAYS` |
 | `src/lib/nostr/anonymous-transport.ts` | The Tor-backed `WebSocket` implementation |
 | `src/lib/nostr/client.ts` | Which pool, which validator, which timeouts |
-| `src/hooks/use-pin-send.ts` | `PinSendOptions`; mints the PIN kind that matches the pool |
-| `src/hooks/use-pin-receive.ts` | `PinReceiveOptions` |
+| `src/hooks/use-pin-send.ts`, `cli/pin/send.ts` | `PinSendOptions`; mints the PIN kind that matches the pool |
+| `src/hooks/use-pin-receive.ts`, `cli/pin/receive.ts` | `PinReceiveOptions` |
 | `src/components/ptransfer/send-tab.tsx` | The Advanced options switch |
 | `src/components/ptransfer/anonymous-receive-form.tsx` | The receiver's bridge question |
 | `src/components/ptransfer/tor-bridge-choice.tsx` | The bridge radio group, shared with the Tor mode |

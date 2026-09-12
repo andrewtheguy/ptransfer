@@ -36,18 +36,30 @@ export interface RunProps {
   /** The transfer to run, given the presenter that shows it. */
   start(presenter: Presenter): Promise<number>;
   /**
-   * A code the previous screen already took in, which answers the engine's
-   * first request for one instead of asking again.
+   * An answer the previous screen already took in — a code, or a PIN — which
+   * answers the engine's first request for one instead of asking again.
    */
   firstCode?: string;
+  firstWord?: string;
   onFinished(status: number): void;
 }
 
-export function Run({ title, start, firstCode, onFinished }: RunProps) {
+export function Run({
+  title,
+  start,
+  firstCode,
+  firstWord,
+  onFinished,
+}: RunProps) {
   const renderer = useRenderer();
   const [store] = useState(createTransferStore);
   const view = useSyncExternalStore(store.subscribe, store.snapshot);
-  const [copied, setCopied] = useState<string | null>(null);
+  // The note under the values, and the value it is about: a PIN that rotates
+  // takes its own note with it, since what is on the clipboard is then no
+  // longer what is on the screen.
+  const [copied, setCopied] = useState<{ value: string; note: string } | null>(
+    null,
+  );
   const started = useRef(false);
 
   useEffect(() => {
@@ -55,7 +67,7 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
     // thing to start twice.
     if (started.current) return;
     started.current = true;
-    const presenter = createTuiPresenter(store, { firstCode });
+    const presenter = createTuiPresenter(store, { firstCode, firstWord });
     void (async () => {
       try {
         const status = await start(presenter);
@@ -75,9 +87,14 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
         }));
       }
     })();
-  }, [store, start, firstCode]);
+  }, [store, start, firstCode, firstWord]);
 
-  const { prompt, outcome, handed } = view;
+  const { prompt, outcome, handed, actions } = view;
+  // The note stands only while the value it names is still on screen.
+  const copiedNote =
+    copied && handed.some((item) => item.value === copied.value)
+      ? copied.note
+      : null;
   // Which handed value the next tab copies, while a field is up.
   const turn = useRef(0);
 
@@ -85,11 +102,12 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
     const item = handed[index];
     if (!item) return;
     const ok = renderer.copyToClipboardOSC52(item.value);
-    setCopied(
-      ok
+    setCopied({
+      value: item.value,
+      note: ok
         ? `Copied ${item.label ?? 'the code'} to the clipboard.`
         : 'This terminal would not take a clipboard copy; select the text instead.',
-    );
+    });
   };
 
   useKeyboard((key) => {
@@ -98,7 +116,17 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
       return;
     }
     // Ctrl-C is the app's, not the `c` that copies.
-    if (key.ctrl || handed.length === 0) return;
+    if (key.ctrl) return;
+    // What the transfer itself offers — a fresh PIN is the one there is —
+    // only while no field is up to take the key instead.
+    if (!prompt && !outcome) {
+      const offered = actions.find((action) => action.key === key.name);
+      if (offered) {
+        offered.run();
+        return;
+      }
+    }
+    if (handed.length === 0) return;
     // A field takes every printable key it is sent, so `c` and the digits
     // would be typed into it rather than copy anything — and the sender is
     // handed its code and asked for the answer to it at once, so that is
@@ -126,11 +154,15 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
             ? handed.length > 0
               ? ['enter submit', 'tab copy']
               : ['enter submit']
-            : handed.length > 1
-              ? ['1-9 copy', 'ctrl-c stop']
-              : handed.length === 1
-                ? ['c copy', 'ctrl-c stop']
-                : ['ctrl-c stop']
+            : [
+                ...(handed.length > 1
+                  ? ['1-9 copy']
+                  : handed.length === 1
+                    ? ['c copy']
+                    : []),
+                ...actions.map((action) => `${action.key} ${action.label}`),
+                'ctrl-c stop',
+              ]
       }
     >
       <box style={{ flexDirection: 'column', flexGrow: 1 }}>
@@ -151,7 +183,7 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
               numbered={handed.length > 1}
             />
           ))}
-          <Note>{copied ?? copyHint(Boolean(prompt), handed.length)}</Note>
+          <Note>{copiedNote ?? copyHint(Boolean(prompt), handed.length)}</Note>
         </box>
       )}
       {view.status && !outcome && <text fg={theme.accent}>{view.status}</text>}
@@ -166,7 +198,11 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
             {prompt.kind === 'secret' ? (
               <MaskedField onSubmit={prompt.submit} />
             ) : (
-              <CodeField attempt={prompt.attempt} onSubmit={prompt.submit} />
+              <TypedField
+                attempt={prompt.attempt}
+                placeholder={prompt.kind === 'code' ? 'paste here' : 'type here'}
+                onSubmit={prompt.submit}
+              />
             )}
           </box>
         </box>
@@ -260,15 +296,18 @@ function Bar({ current, total }: { current: number; total: number }) {
 }
 
 /**
- * The field a code is pasted into. A refused code leaves a new `attempt`
- * behind it, which empties the field rather than leaving the bad code to be
- * edited — a code is pasted whole or not at all.
+ * The field an answer is typed or pasted into. A refused answer leaves a new
+ * `attempt` behind it, which empties the field rather than leaving the bad one
+ * to be edited — a code is pasted whole or not at all, and a PIN or a
+ * confirmation code is short enough to type again.
  */
-function CodeField({
+function TypedField({
   attempt,
+  placeholder,
   onSubmit,
 }: {
   attempt: number;
+  placeholder: string;
   onSubmit(value: string): void;
 }) {
   return (
@@ -276,7 +315,7 @@ function CodeField({
       key={attempt}
       focused
       maxLength={FIELD_MAX}
-      placeholder="paste here"
+      placeholder={placeholder}
       // An input's `onSubmit` is its Enter event, which carries the value;
       // the prop is typed for the textarea's empty event as well, so the
       // handler has to be written to take either.

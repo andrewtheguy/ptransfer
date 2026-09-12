@@ -62,6 +62,11 @@
   Tor one) — and `bun run test:live:code:cli-web` runs it between the CLI and a
   headless Chromium tab, both ways; run them after changing `cli/code/`,
   `src/lib/code-exchange/`, `src/lib/webrtc.ts`, or the relay fallback.
+- `bun run test:live:pin:cli` runs PIN Exchange between two CLI processes over
+  the same scenarios, carrying the PIN and the confirmation code between them;
+  run it after changing `cli/pin/` or `src/lib/pin-exchange/`. A change there
+  is a change to the browser tab too — both hosts run that handshake — so the
+  web PIN flow is worth a look as well.
 
 ## Dependencies
 

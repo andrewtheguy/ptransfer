@@ -28,7 +28,8 @@ With no command, at a terminal, ptransfer opens its terminal UI: pick what to
 send and how to carry it, or paste what a sender gave you.
 
 commands:
-  send       send files and folders, by Code Exchange or a Tor onion service
+  send       send files and folders, by PIN Exchange, Code Exchange, or a
+             Tor onion service
   receive    receive what a sender is sending
   tor-test   bootstrap Tor, publish an onion service, and connect back to it
 

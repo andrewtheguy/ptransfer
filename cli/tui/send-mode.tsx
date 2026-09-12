@@ -18,10 +18,10 @@ import { theme } from './theme';
  * order and with the same names, so that what a person learns in one place
  * holds in the other.
  *
- * PIN Exchange is listed because it is one of the three, not because the
- * terminal can run it yet; choosing it says so. The two advanced options the
- * tab offers behind these modes are here as keys: the anonymous fallback that
- * `--anonymous` turns on, and the bridge that `--bridge` chooses.
+ * The cursor opens on PIN Exchange, as the tab does. The two advanced options
+ * the tab offers behind these modes are here as keys: what `--anonymous` turns
+ * on — the whole handshake through Tor for a PIN, the fallback alone for a
+ * code — and the bridge that `--bridge` chooses.
  */
 
 export type SendMode = 'pin' | 'code' | 'tor';
@@ -32,7 +32,7 @@ function isSendMode(value: unknown): value is SendMode {
 }
 
 export interface SendChoice {
-  mode: 'code' | 'tor';
+  mode: SendMode;
   content: TransferSource;
   anonymous: boolean;
   bridge: TorBridge;
@@ -41,7 +41,7 @@ export interface SendChoice {
 const OPTIONS: SelectOption[] = [
   {
     name: 'PIN Exchange',
-    description: 'Carry a short PIN — not supported in the terminal yet',
+    description: 'Read out a short PIN, then compare a confirmation code',
     value: 'pin',
   },
   {
@@ -67,7 +67,7 @@ export function SendMode({
 }) {
   const [opened, setOpened] = useState<Selection | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [mode, setMode] = useState<SendMode>('code');
+  const [mode, setMode] = useState<SendMode>('pin');
   const [refusal, setRefusal] = useState<string | null>(null);
   // What the two keys set, read back when a transfer starts. A key and the
   // Enter that starts the transfer can arrive in one terminal read, and state
@@ -116,12 +116,6 @@ export function SendMode({
   });
 
   const start = (chosen: SendMode) => {
-    if (chosen === 'pin') {
-      setRefusal(
-        'PIN Exchange is not supported in the terminal yet. Use Code Exchange, or run PIN Exchange in the web app.',
-      );
-      return;
-    }
     if (!opened) return;
     if (chosen === 'tor') {
       const no = torSendRefusal(opened.source);
@@ -133,13 +127,19 @@ export function SendMode({
     onStart({ mode: chosen, content: opened.source, ...settings.current });
   };
 
-  const usesTor = mode === 'tor' || (mode === 'code' && anonymous);
+  const usesTor = mode === 'tor' || anonymous;
   const caution = opened && mode === 'tor' ? torSendCaution(opened.source) : null;
 
   return (
     <Screen
       title="Send"
-      hints={['↑↓ choose', 'enter start', 'a anonymous fallback', 'b bridge', 'esc back']}
+      hints={[
+        '↑↓ choose',
+        'enter start',
+        mode === 'pin' ? 'a anonymous signaling' : 'a anonymous fallback',
+        'b bridge',
+        'esc back',
+      ]}
     >
       {failure ? (
         <Problem>{failure}</Problem>
@@ -161,9 +161,8 @@ export function SendMode({
       <box style={{ height: 8 }}>
         <select
           focused
-          // Code Exchange, not the PIN Exchange listed above it: the cursor
-          // opens on the mode a terminal can actually run.
-          selectedIndex={1}
+          // The tab's own default.
+          selectedIndex={0}
           options={OPTIONS}
           showDescription
           onChange={(_, option) => {
@@ -176,6 +175,13 @@ export function SendMode({
         />
       </box>
       <Gap />
+      {mode === 'pin' && (
+        <Note>
+          {anonymous
+            ? 'Anonymous signaling on: the handshake, and a file that finds no direct route, go through Tor.'
+            : 'Anonymous signaling off: the handshake goes over public Nostr relays.'}
+        </Note>
+      )}
       {mode === 'code' && (
         <Note>
           {anonymous

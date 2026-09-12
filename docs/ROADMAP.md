@@ -92,8 +92,17 @@ no portability layer in between:
      the Rust CLI did, so concurrent senders keep each other's verdicts — and
      with `--anonymous` the Tor one. The engine in
      `src/lib/code-exchange` takes what differs per host as an `ExchangeHost`.
-   - **3b**: PIN Exchange, which carries the same codes over its sealed Nostr
-     channel.
+   - **3b** (done): `send --pin <path>...` shows a PIN to read out — a fresh
+     one every two minutes, and on demand from the terminal UI — and takes
+     back the confirmation code the receiver shows before the connection offer
+     or a byte of the file leaves — the sealed confirm naming the file goes
+     out first, so the receiver knows what it is being offered when it reads
+     the code out; `receive --pin` reads a PIN, or a PIN link, and shows that
+     code. With `--anonymous` the handshake itself rides the onion relay pool,
+     which the receiver infers from the PIN's length. The handshake both hosts
+     run is in `src/lib/pin-exchange`, which the tab's `usePinSend` and
+     `usePinReceive` and the CLI's `cli/pin` drive; the codes it carries are
+     the Code Exchange session of phase 3a, sealed.
 4. **An OpenTUI terminal UI** — `@opentui/core` with its React bindings,
    `@opentui/react`, so the screens are React like the tab's — and one binary
    per release target from `bun build --compile`.
@@ -109,17 +118,19 @@ no portability layer in between:
        run the same flows.
      - The send side mirrors the tab's send tab: a path picker that marks
        files and folders, then the tab's three modes in the tab's order —
-       PIN Exchange, Code Exchange, Tor Onion Service — with the cursor on
-       Code Exchange, and the tab's two advanced options behind them (the
-       anonymous fallback, and the Tor bridge). The receive side mirrors the
+       PIN Exchange, Code Exchange, Tor Onion Service — with the cursor where
+       the tab's own is, on PIN Exchange, and the tab's two advanced options
+       behind them (what `--anonymous` turns on, and the Tor bridge). The receive side mirrors the
        tab's receive screen: one field, and the mode read off what is pasted
        with the tab's own `classifyReceiveText`, with the same Tor bridge
        behind it, and then the folder picker — always asked, and asked once
        the code is in, since until then there is nothing to save. The folder
        is checked where it is chosen, as `--out` is before the bootstrap.
-     - PIN Exchange is listed on both sides and says it is not here yet;
-       phase 3b is what fills it in. A QR chunk is the one input with no
-       answer here, since a terminal has no camera to have scanned one with.
+     - The cursor opens on PIN Exchange, as the tab does, and its PIN is the
+       one thing the screens are worth most to: it rotates in place rather
+       than being printed again, and `r` mints a fresh one — the tab's
+       "Generate a new PIN" button. A QR chunk is the one input with no answer
+       here, since a terminal has no camera to have scanned one with.
      - A Code Exchange code is thousands of characters, so it is shown in a
        box that scrolls, with `c` copying it through OSC 52; a terminal that
        will not take a clipboard copy says so and leaves the box to select
