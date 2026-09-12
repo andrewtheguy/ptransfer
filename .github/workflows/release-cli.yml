@@ -1,0 +1,100 @@
+# Builds the CLI as one self-contained executable per release target and, on a
+# version tag, publishes them as a GitHub release.
+#
+# A tag `v<version>` must match the `package.json` version: that is the release
+# version of the web app and the CLI, and `ptransfer --version` prints it.
+# `bun install` installs only the running machine's native packages — OpenTUI's
+# core and node-datachannel's addon — so each target builds on its own runner
+# and the binary is smoke-tested where it was built. Run by hand, the workflow
+# builds and keeps the binaries as artifacts without releasing anything.
+
+name: Release CLI
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bunx tsc -b
+      - name: Tag names the package version
+        if: github.ref_type == 'tag'
+        run: |
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            runs-on: ubuntu-24.04
+          - target: bun-linux-arm64
+            runs-on: ubuntu-24.04-arm
+          - target: bun-darwin-arm64
+            runs-on: macos-15
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run build:cli -- --target ${{ matrix.target }}
+      - name: Smoke test, away from the checkout
+        run: |
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/dist/cli/ptransfer" --version
+          "$GITHUB_WORKSPACE/dist/cli/ptransfer" send --help > /dev/null
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          name="ptransfer-${TARGET#bun-}"
+          mkdir -p assets
+          tar -C dist/cli -czf "assets/$name.tar.gz" ptransfer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: assets/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: cd assets && sha256sum ./*.tar.gz | sed "s|\./||" > SHA256SUMS && cat SHA256SUMS
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* --verify-tag --title "$TAG" --generate-notes
+          fi

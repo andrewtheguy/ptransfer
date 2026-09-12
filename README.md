@@ -34,6 +34,13 @@ Today it sends and receives files and folders in all three of the tab's
 transfer modes — PIN Exchange, Code Exchange, and a Tor onion service — run
 from the same code.
 
+Each release ships it as one self-contained executable for Linux x64, Linux
+arm64 and Apple silicon macOS, under
+[Releases](https://github.com/andrewtheguy/ptransfer/releases): unpack
+`ptransfer-<os>-<arch>.tar.gz` and put `ptransfer` on your `PATH`. The
+commands below run it from a checkout as `bun run cli`; the executable takes
+the same commands as `ptransfer`. `bun run build:cli` builds it locally.
+
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
 one of the tab's three transfer modes; or paste what a sender gave you and

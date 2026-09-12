@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "cli": "bun cli/main.ts",
+    "build:cli": "bun scripts/build-cli.ts",
     "lint": "biome check --reporter=rdjson",
     "preview": "vite preview",
     "test": "bun run test:unit",
