@@ -58,7 +58,16 @@ if (unknown.length > 0 || SCENARIOS.size === 0) {
   );
 }
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 8 * 60_000);
+const KNOWN_BRIDGES = ['websocket', 'webrtc'];
 const BRIDGE = process.env.BRIDGE ?? 'websocket';
+// Checked here rather than left to the CLI: the anonymous scenario runs last,
+// so an unusable value would otherwise surface minutes in, as a sender that
+// exited before showing a PIN.
+if (!KNOWN_BRIDGES.includes(BRIDGE)) {
+  throw new Error(
+    `BRIDGE must be ${KNOWN_BRIDGES.join(' or ')}, not ${JSON.stringify(BRIDGE)}`,
+  );
+}
 const VERBOSE = process.env.VERBOSE === '1' ? ['--verbose'] : [];
 
 // Through realpath: on macOS the temporary directory is reached through a

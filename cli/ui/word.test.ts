@@ -111,6 +111,28 @@ describe('readWord at a terminal', () => {
     expect(output.join('')).toBe('PIN: \nPIN: W7KQ\n');
   });
 
+  it('swallows an arrow key whole, bracket and letter with it', async () => {
+    const { input } = terminal();
+    const output: string[] = [];
+    const pending = readWord('PIN: ', (text) => text, input, {
+      write: (t) => output.push(t),
+    });
+    input.push('W7');
+    // Arrow up, arrow left, and a modified arrow whose parameters run on —
+    // none of them is a character of the PIN, and none is echoed.
+    input.push('\u001b[A');
+    input.push('\u001b[D');
+    input.push('\u001b[1;5C');
+    // The introducer and its sequence can arrive in separate reads.
+    input.push('\u001b');
+    input.push('[B');
+    // Alt-b, which is ESC and one character rather than a sequence.
+    input.push('\u001bb');
+    input.push('KQ\r');
+    expect(await pending).toBe('W7KQ');
+    expect(output.join('')).toBe('PIN: W7KQ\n');
+  });
+
   it('reports Ctrl-C as an interrupt, and Ctrl-D as giving up', async () => {
     const first = terminal();
     const interrupted = readWord('', (t) => t, first.input, {

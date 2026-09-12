@@ -1,5 +1,9 @@
 import { InterruptedError } from '../interrupt';
-import type { SecretInput, SecretOutput } from '../secret';
+import {
+  escapeSequenceFilter,
+  type SecretInput,
+  type SecretOutput,
+} from '../secret';
 
 /**
  * Reading one short answer from standard input: a PIN Exchange PIN, or the
@@ -59,6 +63,9 @@ function readAtTerminal<T>(
     // Called on the stream: a real TTY's setRawMode needs its `this`.
     const setRawMode = (mode: boolean) => input.setRawMode?.(mode);
     let typed = '';
+    // An arrow key's bracket and letter are no more part of a PIN than the
+    // ESC that introduced them.
+    let inSequence = escapeSequenceFilter();
 
     const listen = () => {
       setRawMode(true);
@@ -72,6 +79,7 @@ function readAtTerminal<T>(
     };
     const ask = () => {
       typed = '';
+      inSequence = escapeSequenceFilter();
       output.write(prompt);
       listen();
     };
@@ -104,6 +112,7 @@ function readAtTerminal<T>(
     const onData = (chunk: Buffer | string) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       for (const char of text) {
+        if (inSequence(char)) continue;
         switch (char) {
           case '\r':
           case '\n':
@@ -123,8 +132,8 @@ function readAtTerminal<T>(
             }
             break;
           default:
-            // Printable input only; an arrow key's escape sequence is not
-            // part of a PIN or a confirmation code.
+            // Printable input only; what an escape sequence is made of has
+            // already been swallowed above.
             if (char >= ' ') {
               typed += char;
               output.write(char);

@@ -281,7 +281,10 @@ export function usePinSend(): UsePinSendReturn {
         try {
           claim = await session.claimed;
         } finally {
-          refreshPinRef.current = null;
+          // The ref belongs to whichever run is current, as in the outer
+          // finally: a superseded run clearing it would take away the button
+          // the replacement's PIN is being refreshed by.
+          if (!superseded()) refreshPinRef.current = null;
         }
 
         if (abandoned()) return;
