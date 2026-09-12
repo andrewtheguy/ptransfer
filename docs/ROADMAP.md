@@ -57,9 +57,9 @@ no portability layer in between:
   `~/Library/Caches/ptransfer` on macOS.
 - **Terminal**: results on standard output, everything else on standard
   error, a password typed in raw mode or piped in, and ANSI escapes.
-- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`, `bun-darwin-x64`
-  and `bun-darwin-arm64` — the platforms Bun, OpenTUI and node-datachannel
-  all ship prebuilt.
+- **Release targets**: `bun-linux-x64`, `bun-linux-arm64` and
+  `bun-darwin-arm64` — platforms Bun, OpenTUI and node-datachannel all ship
+  prebuilt. Intel macOS is not built.
 
 1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
    Bun-hosted loader for the same webtor-wasm Tor client, a directory
@@ -137,7 +137,13 @@ no portability layer in between:
        from. A field on screen takes every printable key it is sent, so the
        screens that have one put their keys where a field leaves them: tab
        copies beside a field, and the receive screen's bridge is tab.
-   - **4b**: one binary per release target from `bun build --compile`.
+   - **4b** (done): one binary per release target from `bun build --compile`,
+     by `bun run build:cli` (`scripts/build-cli.ts`). The `Release CLI`
+     workflow is run by hand, takes its version from `CLI_VERSION` and refuses
+     a version already tagged, builds each target on its own runner and
+     smoke-tests the binary there, then publishes the executables themselves —
+     `ptransfer-linux-amd64`, `ptransfer-linux-arm64`, `ptransfer-macos-arm64`
+     — on a draft release, whose publishing creates the `v<version>` tag.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
      or Node 26.4 or later; the vitest unit project runs on an older Node, so
@@ -146,9 +152,11 @@ no portability layer in between:
      vitest run excludes — and the vitest-tested modules stay free of it.
    - The build is a `Bun.build` script, one run per target, that defines
      `process.env.OPENTUI_LIBC` as `glibc` for the Linux targets and carries
-     the node-datachannel plugin described below. Cross-building needs every
-     target's native packages installed on the build machine
-     (`bun install --os=<os> --cpu=<cpu>`), or one build per target in CI.
+     the node-datachannel plugin described below; the Tor client's wasm is
+     imported `with { type: 'file' }`, which the bundler embeds on its own.
+     The script refuses a target whose OpenTUI core and node-datachannel
+     addon are not installed, since `bun install` only installs the host's,
+     which is why the release builds each target on its own machine.
 
 Why a JavaScript CLI is viable at all, checked under Bun 1.4 so the later
 phases rest on something measured rather than assumed — the first two before

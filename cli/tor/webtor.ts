@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import webtorBinary from '@andrewtheguy/webtor-wasm/webtor_wasm_bg.wasm' with {
+  type: 'file',
+};
 import type { WebtorModule } from '@/lib/tor/webtor-api';
 
 /**
@@ -10,8 +12,12 @@ import type { WebtorModule } from '@/lib/tor/webtor-api';
  * Bun provides as globals, so the only difference from `src/lib/tor/webtor.ts`
  * is where the binary comes from. The generated glue would `fetch` it next to
  * the module, which under Bun means a `file:` URL; reading the bytes ourselves
- * is one less thing that has to work, and it is also how a single-binary
- * build will embed them later.
+ * is one less thing that has to work.
+ *
+ * The `type: 'file'` import is the seam between the two ways the CLI runs: as
+ * `bun cli/main.ts` it is the path of the file in `node_modules`, and inside a
+ * `bun build --compile` binary it is the path of the copy embedded in the
+ * executable, which `readFile` reads the same way.
  */
 
 let modulePromise: Promise<WebtorModule> | undefined;
@@ -22,10 +28,7 @@ export function loadWebtor(): Promise<WebtorModule> {
       const module = (await import(
         '@andrewtheguy/webtor-wasm'
       )) as unknown as WebtorModule;
-      const binary = fileURLToPath(
-        import.meta.resolve('@andrewtheguy/webtor-wasm/webtor_wasm_bg.wasm'),
-      );
-      await module.default({ module_or_path: await readFile(binary) });
+      await module.default({ module_or_path: await readFile(webtorBinary) });
       return module;
     } catch (error: unknown) {
       modulePromise = undefined;

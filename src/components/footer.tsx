@@ -4,7 +4,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { APP_VERSION, GIT_COMMIT_HASH } from '@/lib/app-version';
+import { GIT_COMMIT_HASH } from '@/lib/build-commit';
 import { PROTOCOL_VERSION } from '@/lib/protocol-version';
 
 interface FooterLabelProps {
@@ -64,7 +64,7 @@ export function Footer() {
               className="inline-flex items-center gap-1.5 rounded-sm px-0.5 py-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Version compatibility notice"
             >
-              <span>{`v${APP_VERSION}`}</span>
+              <span>{`Protocol ${PROTOCOL_VERSION}`}</span>
               <Info className="h-3.5 w-3.5" />
             </button>
           </DropdownMenuTrigger>
@@ -76,7 +76,7 @@ export function Footer() {
             Sender and receiver need the same protocol version. Apps and CLIs of
             different releases work together when it matches.
             <div className="mt-1 text-muted-foreground">
-              {`Protocol ${PROTOCOL_VERSION} · v${APP_VERSION} (${GIT_COMMIT_HASH})`}
+              {`Build ${GIT_COMMIT_HASH}`}
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
