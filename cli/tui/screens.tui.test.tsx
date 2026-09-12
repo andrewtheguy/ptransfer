@@ -324,7 +324,7 @@ describe('the send mode screen', () => {
         onCancel={() => {}}
       />,
     );
-    expect(screen.frame()).toContain('Anonymous signaling off');
+    expect(screen.frame()).toContain('[ ] Anonymous signaling (experimental)');
     screen.mockInput.pressEnter();
     await screen.settle();
     expect(started).toEqual([{ mode: 'pin', anonymous: false }]);
@@ -345,13 +345,42 @@ describe('the send mode screen', () => {
     // The cursor opens on PIN Exchange; Code Exchange is the one under it.
     screen.mockInput.pressArrow('down');
     await screen.settle();
-    expect(screen.frame()).toContain('Anonymous fallback off');
+    expect(screen.frame()).toContain('[ ] Anonymous signaling and relay');
     screen.mockInput.pressKey('a');
     await screen.settle();
-    expect(screen.frame()).toContain('Anonymous fallback on');
+    expect(screen.frame()).toContain('[x] Anonymous signaling and relay');
     screen.mockInput.pressEnter();
     await screen.settle();
     expect(started).toEqual([{ mode: 'code', anonymous: true }]);
+  });
+
+  it('leaves the anonymous option off the Tor mode, which has none', async () => {
+    const root = await tree();
+    const started: { mode: string; anonymous: boolean }[] = [];
+    const screen = await draw(
+      <SendMode
+        paths={[join(root, 'notes.txt')]}
+        onStart={(choice) =>
+          started.push({ mode: choice.mode, anonymous: choice.anonymous })
+        }
+        onCancel={() => {}}
+      />,
+    );
+    // Turned on where it exists, then carried down to the row that has no
+    // such option: the row is gone, and so is what it would have turned on.
+    screen.mockInput.pressKey('a');
+    await screen.settle();
+    expect(screen.frame()).toContain('[x] Anonymous signaling');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    await screen.settle();
+    expect(screen.frame()).not.toContain('Anonymous signaling');
+    // And the key does nothing here, rather than changing an unseen setting.
+    screen.mockInput.pressKey('a');
+    await screen.settle();
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(started).toEqual([{ mode: 'tor', anonymous: false }]);
   });
 
   it('starts on the setting the key changed, even in one batch with enter', async () => {

@@ -2,10 +2,16 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CachedRelay } from '@/lib/nostr-file/relay-pool';
 import type { FileLock } from '../file-lock';
-import { openRelayStore } from './relay-store';
+import {
+  createRelayStore,
+  memoryRelayStore,
+  openRelayStore,
+  RELAY_CACHE_ENV,
+  relayCacheDir,
+} from './relay-store';
 
 function relay(url: string, lastCheckedAt: number | null = null): CachedRelay {
   return {
@@ -146,4 +152,79 @@ describe('openRelayStore', () => {
     );
     expect(file.relays).toHaveLength(60);
   }, 30_000);
+});
+
+describe('where the relay cache lives', () => {
+  afterEach(() => {
+    delete process.env[RELAY_CACHE_ENV];
+  });
+
+  it('is the cache directory when the environment says nothing', () => {
+    expect(relayCacheDir('/var/cache/ptransfer')).toBe('/var/cache/ptransfer');
+    process.env[RELAY_CACHE_ENV] = '   ';
+    expect(relayCacheDir('/var/cache/ptransfer')).toBe('/var/cache/ptransfer');
+  });
+
+  it('is nowhere when the environment turns it off, however it is spelt', () => {
+    for (const value of ['off', 'OFF', ' Off ']) {
+      process.env[RELAY_CACHE_ENV] = value;
+      expect(relayCacheDir('/var/cache/ptransfer')).toBeNull();
+    }
+  });
+
+  it('is the directory the environment names, as an absolute path', () => {
+    process.env[RELAY_CACHE_ENV] = ' /tmp/relays ';
+    expect(relayCacheDir('/var/cache/ptransfer')).toBe('/tmp/relays');
+    process.env[RELAY_CACHE_ENV] = 'relays';
+    expect(relayCacheDir('/var/cache/ptransfer')).toBe(
+      resolve(process.cwd(), 'relays'),
+    );
+  });
+
+  it('leaves no file behind when it is off', async () => {
+    const dir = await cacheDir();
+    process.env[RELAY_CACHE_ENV] = 'off';
+    const store = createRelayStore(dir);
+    await store.update((cache) => {
+      cache.relays = [relay('wss://one.example')];
+    });
+    expect((await store.read()).relays).toHaveLength(1);
+    expect(await readdir(dir)).toEqual([]);
+  });
+});
+
+describe('memoryRelayStore', () => {
+  it('keeps what a change leaves, for as long as it is held', async () => {
+    const store = memoryRelayStore();
+    expect((await store.read()).relays).toEqual([]);
+    const kept = await store.update((cache) => {
+      cache.relays = [relay('wss://one.example')];
+      return cache.relays.length;
+    });
+    expect(kept).toBe(1);
+    expect((await store.read()).relays[0]?.url).toBe('wss://one.example');
+    // A second store is a second run: it starts from nothing.
+    expect((await memoryRelayStore().read()).relays).toEqual([]);
+  });
+
+  it('hands back a copy, so a reader cannot change what is held', async () => {
+    const store = memoryRelayStore();
+    await store.update((cache) => {
+      cache.relays = [relay('wss://one.example')];
+    });
+    const read = await store.read();
+    read.relays = [];
+    expect((await store.read()).relays).toHaveLength(1);
+  });
+
+  it('rejects with what a change throws, rather than keeping it', async () => {
+    const store = memoryRelayStore();
+    const boom = new Error('no');
+    await expect(
+      store.update(() => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+    expect((await store.read()).relays).toEqual([]);
+  });
 });

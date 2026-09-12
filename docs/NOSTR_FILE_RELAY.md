@@ -26,7 +26,9 @@ pieces.
 This document is the architecture reference and the wire specification for
 this path, which the browser tab runs from `src/lib` and the CLI in `cli/` runs
 from the same code — keeping the same relay-health records in
-`relay-cache.json` under the user's cache directory rather than IndexedDB.
+`relay-cache.json` under the user's cache directory rather than IndexedDB,
+or wherever `PTRANSFER_RELAY_CACHE` names, or in memory for one run when it
+is `off`.
 Nothing on the wire depends on the cache either way: it changes which candidates are tried first, never what is
 published or how it is read back. An offer names no relays when its sender could not
 prove enough of them, or when it is an anonymous offer, and then there is no
@@ -466,7 +468,7 @@ sequenceDiagram
 | `src/lib/nostr-file/events.ts` | Chunk/probe event construction and fetch filters |
 | `src/lib/nostr-file/manifest.ts` | Manifest schema/validation |
 | `src/lib/nostr-file/relay-pool.ts` | NIP-66/65 discovery, health probes, batch selection; the relay cache's records and `RelayPoolStorage` |
-| `src/lib/nostr-file/relay-cache-idb.ts`, `cli/code/relay-store.ts` | The relay cache in IndexedDB (tab) and in a file under `flock` (CLI); every change one read-modify-write |
+| `src/lib/nostr-file/relay-cache-idb.ts`, `cli/code/relay-store.ts` | The relay cache in IndexedDB (tab) and in a file under `flock` (CLI), or in memory for one run where `PTRANSFER_RELAY_CACHE` is `off`; every change one read-modify-write |
 | `src/lib/nostr-file/pool.ts`, `mock-pool.ts` | `NostrFilePool` abstraction + in-memory relay network for tests |
 | `src/lib/nostr-file/transfer-pool.ts` | `createTransferPool`: SimplePool with guaranteed socket teardown |
 | `src/lib/nostr-file/upload.ts` | Publish-with-retry, control/storage relay resolution, and background storage preparation |

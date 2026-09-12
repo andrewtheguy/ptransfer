@@ -70,6 +70,13 @@ options:
 ${TOR_OPTIONS_USAGE}
   -v, --verbose            show diagnostics and the Tor client's own log lines
   -h, --help
+
+environment:
+  PTRANSFER_RELAY_CACHE    where to keep what earlier transfers learned about
+                           the public Nostr relays: a directory of your own,
+                           or off to keep it in memory for this run alone
+                           (default: relay-cache.json in the cache directory
+                           above)
 `;
 
 /** How many left-out paths are named before the rest are only counted. */

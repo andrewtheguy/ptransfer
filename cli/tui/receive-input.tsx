@@ -22,10 +22,13 @@ import { theme } from './theme';
  * tab's own rules; only the QR chunk form has no answer here, because a
  * terminal has no camera to have scanned one with.
  *
- * Which bridge a Tor receive enters the network through is here as a key, as
- * the send screen's settings are — a non-printing one, since the field has
- * every printable key. It is only shown for what will go through Tor, since
- * to anything else the bridge is a setting with nothing to set. Where the
+ * Which bridge a Tor receive enters the network through is a row under the
+ * field, carrying its own key, as the send screen's settings do — a
+ * non-printing key, since the field has every printable one. It is shown only
+ * for what will go through Tor, since to anything else the bridge is a
+ * setting with nothing to set, and it comes with the line saying what Tor
+ * covers for what was pasted: a bootstrap costs minutes, and that is the
+ * question somebody is answering when they decide to spend them. Where the
  * file is saved is not a setting here either: it is the screen after this
  * one, asked for once there is something to save.
  */
@@ -56,6 +59,22 @@ function needsTor(found: ReceiveInput | null): boolean {
   if (found?.kind !== 'offer') return false;
   const payload = parseMutualPayload(found.payload);
   return payload !== null && isAnonymousOffer(payload);
+}
+
+/**
+ * What Tor covers for what is in the field. The three differ, and saying so
+ * wrongly would be worse than saying nothing: a PIN's handshake goes through
+ * Tor and its file does not, a code's file does and only when no direct route
+ * opens, and an onion address is Tor from end to end.
+ */
+function torHint(found: ReceiveInput | null): string {
+  if (found?.kind === 'pin') {
+    return 'Signaling over Tor, so relays never see an IP. Slow to start.';
+  }
+  if (found?.kind === 'offer') {
+    return 'No direct route? The file comes over Tor instead. Slow; up to 100 MiB.';
+  }
+  return "The file comes over Tor, from the sender's onion service. Slow to start.";
 }
 
 function describe(text: string, found: ReceiveInput | null): string | null {
@@ -145,11 +164,7 @@ export function ReceiveInputScreen({
   return (
     <Screen
       title="Receive"
-      hints={
-        tor
-          ? ['enter continue', 'tab bridge', 'esc back']
-          : ['enter continue', 'esc back']
-      }
+      hints={['enter continue', 'esc back']}
     >
       <text fg={theme.heading}>Paste what the sender gave you</text>
       <Note>A PIN, a Code Exchange code, or a .onion address.</Note>
@@ -179,7 +194,14 @@ export function ReceiveInputScreen({
       {reading && <text fg={theme.good}>{reading}</text>}
       {problem && <Problem>{problem}</Problem>}
       <Gap />
-      {tor && <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>}
+      {tor && (
+        <>
+          <Note>{torHint(found)}</Note>
+          <text fg={theme.heading}>
+            {`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}   tab to change`}
+          </text>
+        </>
+      )}
     </Screen>
   );
 }

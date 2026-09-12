@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { RELAY_CACHE_VERSION } from '@/lib/nostr-file/constants';
 import {
   emptyRelayCache,
@@ -34,6 +34,9 @@ import { type FileLock, fileLock } from '../file-lock';
  * file, or one of another version, is an empty cache, and a change that
  * cannot take the lock or write its result is applied and dropped. The file
  * holds relay URLs and verdicts, nothing about any transfer.
+ *
+ * Where it lives is `PTRANSFER_RELAY_CACHE`'s to say; `createRelayStore` is
+ * the entry point that reads it.
  */
 
 const CACHE_FILE = 'relay-cache.json';
@@ -115,4 +118,68 @@ export function openRelayStore(
       return result;
     },
   };
+}
+
+/** The environment variable that moves the relay cache, or turns it off. */
+export const RELAY_CACHE_ENV = 'PTRANSFER_RELAY_CACHE';
+
+/**
+ * Where this run keeps the relay cache: the directory `PTRANSFER_RELAY_CACHE`
+ * names, nowhere at all when it is `off`, and otherwise `cacheDir` — beside
+ * the Tor directory seed, which is what `--cache-dir` moves.
+ *
+ * The two move separately because they are not the same kind of thing. The
+ * directory seed is a download worth reusing; the relay cache is a record of
+ * what this machine has learned about which public relays work, and somebody
+ * who wants a run to leave none of it behind, or to keep it somewhere of
+ * their own, says so here rather than moving the seed along with it. A
+ * relative path is taken from the working directory, unlike `XDG_CACHE_HOME`,
+ * which the spec says to ignore when it is one: this was asked for by name.
+ */
+export function relayCacheDir(cacheDir: string): string | null {
+  const asked = process.env[RELAY_CACHE_ENV]?.trim();
+  if (!asked) return cacheDir;
+  if (asked.toLowerCase() === 'off') return null;
+  return resolve(asked);
+}
+
+/**
+ * A relay cache for one run and no longer: what this transfer proves leads
+ * its own later probes, and goes with the process. `read` hands back a copy
+ * that has been through the same parsers a file's contents would have, so
+ * nothing can tell it from the file store except by looking for the file.
+ */
+export function memoryRelayStore(): RelayPoolStorage {
+  const held = emptyRelayCache();
+  // Neither method waits for anything; both are promises because the storage
+  // they stand in for is a file. A `change` that throws rejects rather than
+  // throwing where it was called, which is what the file store does with one.
+  return {
+    read() {
+      return Promise.resolve({
+        state: parseRelayPoolState(
+          held.state && storedRelayPoolState(held.state),
+        ),
+        relays: parseRelayHealth(storedRelayHealth(held.relays)),
+      });
+    },
+    // The change is applied to what is held, which is what keeps it: the file
+    // store's `change` mutates the cache it was handed in the same way.
+    update(change) {
+      try {
+        return Promise.resolve(change(held));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    },
+  };
+}
+
+/**
+ * The relay cache this run will use, wherever the environment asks for it.
+ * A transfer never sees which of the two it got.
+ */
+export function createRelayStore(cacheDir: string): RelayPoolStorage {
+  const dir = relayCacheDir(cacheDir);
+  return dir === null ? memoryRelayStore() : openRelayStore(dir);
 }
