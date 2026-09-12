@@ -3,14 +3,15 @@ import type { ExchangeHost } from '@/lib/code-exchange/host';
 import type { FallbackReceipt } from '@/lib/code-exchange/receive';
 import { createFileSink } from '../transfer/files';
 import { loadRtcPeerConnection } from '../webrtc';
-import { openRelayStore } from './relay-store';
+import { createRelayStore } from './relay-store';
 
 /**
  * The CLI as a Code Exchange host: node-datachannel's `RTCPeerConnection`,
- * the relay cache in a file under the cache directory, and a received file
- * written to a part file beside its destination that takes the destination's
- * name once the transfer checks out. The browser tab's counterpart is
- * `src/lib/code-exchange/browser-host.ts`.
+ * the relay cache wherever `relay-store.ts` puts it — a file under the cache
+ * directory, unless `PTRANSFER_RELAY_CACHE` says otherwise — and a received
+ * file written to a part file beside its destination that takes the
+ * destination's name once the transfer checks out. The browser tab's
+ * counterpart is `src/lib/code-exchange/browser-host.ts`.
  */
 export interface CliExchangeHost extends ExchangeHost {
   /**
@@ -27,10 +28,13 @@ export async function createCliHost(options: {
 }): Promise<CliExchangeHost> {
   const peerConnection = await loadRtcPeerConnection();
   const unfinished = new Set<AppendSink>();
+  // One cache for the host rather than one per call: a cache kept in memory
+  // is only worth anything for as long as somebody holds it.
+  const relays = createRelayStore(options.cacheDir);
 
   return {
     peerConnection,
-    relayStorage: () => openRelayStore(options.cacheDir),
+    relayStorage: () => relays,
     async createSink() {
       if (options.destination === null) {
         throw new Error('A sending side has nowhere to save a file');

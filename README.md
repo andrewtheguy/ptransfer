@@ -144,7 +144,10 @@ the network, and prints how long each step took. `send` and `receive` bootstrap
 the same way, from the same cache. A Code Exchange sender keeps the relay
 cache there too — what earlier transfers learned about which public Nostr
 relays work, the records the tab keeps in IndexedDB — in
-`relay-cache.json`.
+`relay-cache.json`. That one moves on its own:
+`PTRANSFER_RELAY_CACHE=<directory>` puts it somewhere else, and
+`PTRANSFER_RELAY_CACHE=off` keeps it in memory for one run, so nothing about
+which relays this machine has probed is left on disk.
 
 ## Browser Requirements
 

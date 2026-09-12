@@ -13,10 +13,12 @@
   is the CLI's release version and says nothing about compatibility. It is what
   the `Release CLI` workflow, run by hand, publishes binaries under and tags
   `v<version>`, so releasing the same version twice is refused. Bump it by patch only, once per
-  branch, for a breaking change to the CLI that is not on the wire (a flag or
-  output, stored data such as a cache format); a wire change alone does not
-  bump it, and a change only the tab sees never does. A release may bump it
-  with no change of either kind.
+  branch, whenever a CLI user or a script can see the change — a flag or an
+  environment variable, added or altered; what a command prints; what a
+  terminal UI screen shows; stored data such as a cache format — whether or
+  not it breaks anything. A wire change alone does not bump it, and a change
+  only the tab sees never does. A release may bump it with no change of
+  either kind.
 - The web app has no release version: it is deployed straight from a commit, so
   the commit is its identity — `GIT_COMMIT_HASH` in `src/lib/build-commit.ts`,
   from the deploy's environment, shown in the footer beside the protocol
