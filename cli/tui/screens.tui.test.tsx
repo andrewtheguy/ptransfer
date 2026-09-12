@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generatePin } from '@/lib/crypto';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import type { ReactNode } from 'react';
 import { act } from 'react';
 import { App } from './app';
+import { MaskedField } from './masked-field';
 import { Picker } from './picker';
 import { ReceiveInputScreen } from './receive-input';
 import { Run } from './run';
@@ -212,6 +213,57 @@ describe('the send mode screen', () => {
     await screen.settle();
     expect(started).toEqual([{ mode: 'code', anonymous: true }]);
   });
+
+  it('starts on the setting the key changed, even in one batch with enter', async () => {
+    const root = await tree();
+    const started: { anonymous: boolean; bridge: string }[] = [];
+    const screen = await draw(
+      <SendMode
+        paths={[join(root, 'notes.txt')]}
+        onStart={(choice) =>
+          started.push({ anonymous: choice.anonymous, bridge: choice.bridge })
+        }
+        onCancel={() => {}}
+      />,
+    );
+    // No settle between them: both keys are handled before React has
+    // committed anything the first one changed.
+    screen.mockInput.pressKey('a');
+    screen.mockInput.pressKey('b');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(started).toEqual([{ anonymous: true, bridge: 'webrtc' }]);
+  });
+});
+
+describe('the masked field', () => {
+  it('submits what was typed, even when enter lands in the same batch', async () => {
+    const given: string[] = [];
+    const screen = await draw(<MaskedField onSubmit={(v) => given.push(v)} />);
+    screen.mockInput.pressKey('a');
+    screen.mockInput.pressKey('b');
+    screen.mockInput.pressKey('c');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(given).toEqual(['abc']);
+  });
+
+  it('submits a pasted password without a frame drawn in between', async () => {
+    const given: string[] = [];
+    const screen = await draw(<MaskedField onSubmit={(v) => given.push(v)} />);
+    await screen.mockInput.pasteBracketedText('ABCD-EFGH-JKLM');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(given).toEqual(['ABCD-EFGH-JKLM']);
+  });
+
+  it('draws a dot per character and never the password', async () => {
+    const screen = await draw(<MaskedField onSubmit={() => {}} />);
+    await screen.mockInput.pasteBracketedText('secret');
+    await screen.settle();
+    expect(screen.frame()).toContain('••••••');
+    expect(screen.frame()).not.toContain('secret');
+  });
 });
 
 describe('the receive screen', () => {
@@ -220,7 +272,10 @@ describe('the receive screen', () => {
     const screen = await draw(
       <ReceiveInputScreen
         folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
         onFolder={() => {}}
+        onBridge={() => {}}
         onAccept={(what) => accepted.push(what)}
         onUnsupported={() => {}}
         onCancel={() => {}}
@@ -239,7 +294,10 @@ describe('the receive screen', () => {
     const screen = await draw(
       <ReceiveInputScreen
         folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
         onFolder={() => {}}
+        onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={(message) => refusals.push(message)}
         onCancel={() => {}}
@@ -258,7 +316,10 @@ describe('the receive screen', () => {
     const screen = await draw(
       <ReceiveInputScreen
         folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
         onFolder={() => {}}
+        onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={() => {}}
         onCancel={() => {}}
@@ -278,9 +339,12 @@ describe('the receive screen', () => {
     const screen = await draw(
       <ReceiveInputScreen
         folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
         onFolder={() => {
           asked += 1;
         }}
+        onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={() => {}}
         onCancel={() => {}}
@@ -295,13 +359,57 @@ describe('the receive screen', () => {
     const screen = await draw(
       <ReceiveInputScreen
         folder="/tmp/somewhere"
+        folderProblem={null}
+        bridge="websocket"
         onFolder={() => {}}
+        onBridge={() => {}}
         onAccept={() => {}}
         onUnsupported={() => {}}
         onCancel={() => {}}
       />,
     );
     expect(screen.frame()).toContain('Saving into /tmp/somewhere');
+  });
+
+  it('names the Tor bridge and turns it over on shift-tab', async () => {
+    const bridges: string[] = [];
+    const screen = await draw(
+      <ReceiveInputScreen
+        folder="/tmp"
+        folderProblem={null}
+        bridge="webrtc"
+        onFolder={() => {}}
+        onBridge={() => bridges.push('turned')}
+        onAccept={() => {}}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('Tor bridge: Snowflake WebRTC');
+    screen.mockInput.pressTab({ shift: true });
+    await screen.settle();
+    expect(bridges).toEqual(['turned']);
+  });
+
+  it('refuses to start anything while the folder cannot be saved into', async () => {
+    const accepted: unknown[] = [];
+    const screen = await draw(
+      <ReceiveInputScreen
+        folder="/tmp/locked"
+        folderProblem="Cannot save files in /tmp/locked"
+        bridge="websocket"
+        onFolder={() => {}}
+        onBridge={() => {}}
+        onAccept={(what) => accepted.push(what)}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('Cannot save files in /tmp/locked');
+    await screen.mockInput.pasteBracketedText(ONION);
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(accepted).toEqual([]);
   });
 });
 
@@ -330,6 +438,25 @@ describe('the app', () => {
     screen.mockInput.pressEnter();
     await screen.settle();
     expect(screen.frame()).toContain('Paste what the sender gave you');
+  });
+
+  it('says so when the folder it opened in cannot be saved into', async () => {
+    const root = await tree();
+    const locked = join(root, 'locked');
+    await mkdir(locked);
+    await chmod(locked, 0o500);
+    const was = process.cwd();
+    process.chdir(locked);
+    try {
+      const screen = await draw(<App onExit={() => {}} />);
+      screen.mockInput.pressArrow('down');
+      screen.mockInput.pressEnter();
+      await screen.settle();
+      expect(screen.frame()).toContain('Cannot save files in');
+    } finally {
+      process.chdir(was);
+      await chmod(locked, 0o700);
+    }
   });
 
   it('leaves with the status a shell gives an interrupted process', async () => {
@@ -366,7 +493,7 @@ describe('the run screen', () => {
     const frame = screen.frame();
     expect(frame).toContain('Give the receiver this code:');
     expect(frame).toContain(`code · ${code.length} characters`);
-    expect(frame).toContain('Press c to copy it to the clipboard');
+    expect(frame).toContain('Press tab to copy it to the clipboard');
     expect(frame).toContain('Checking relays for the fallback');
     expect(frame).toContain("Paste the receiver's response");
     // The code is far longer than the screen, so only its start is on it.
@@ -426,5 +553,23 @@ describe('the run screen', () => {
     expect(frame).toContain('1. address:');
     expect(frame).toContain('2. password: ABCD-EFGH-JKLM');
     expect(frame).toContain('Press 1 or 2 to copy');
+  });
+
+  it('copies on tab while the field for the answer has the keyboard', async () => {
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand('PT01'.repeat(300));
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    expect(screen.frame()).toContain('Press tab to copy it to the clipboard');
+    screen.mockInput.pressTab();
+    await screen.settle();
+    // The hint is replaced by what the copy did, whichever way it went.
+    expect(screen.frame()).not.toContain('Press tab to copy');
   });
 });

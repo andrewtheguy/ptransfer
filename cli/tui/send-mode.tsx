@@ -1,8 +1,12 @@
 import { formatFileSize } from '@/lib/file-utils';
-import { TOR_BRIDGE_LABELS, type TorBridge } from '@/lib/tor/bridge';
+import {
+  DEFAULT_TOR_BRIDGE,
+  TOR_BRIDGE_LABELS,
+  type TorBridge,
+} from '@/lib/tor/bridge';
 import type { SelectOption } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TransferSource } from '@/lib/transfer-source';
 import { openSelection, type Selection } from '../transfer/selection';
 import { torSendCaution, torSendRefusal } from '../transfer/tor-send';
@@ -64,9 +68,22 @@ export function SendMode({
   const [opened, setOpened] = useState<Selection | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [mode, setMode] = useState<SendMode>('code');
-  const [anonymous, setAnonymous] = useState(false);
-  const [bridge, setBridge] = useState<TorBridge>('websocket');
   const [refusal, setRefusal] = useState<string | null>(null);
+  // What the two keys set, read back when a transfer starts. A key and the
+  // Enter that starts the transfer can arrive in one terminal read, and state
+  // the key changed has not been committed by the time Enter is handled — the
+  // transfer would start on the setting the person just turned off. The state
+  // beside it is only what the screen draws.
+  const settings = useRef<{ anonymous: boolean; bridge: TorBridge }>({
+    anonymous: false,
+    bridge: DEFAULT_TOR_BRIDGE,
+  });
+  const [{ anonymous, bridge }, setShown] = useState(settings.current);
+
+  const change = (next: Partial<typeof settings.current>) => {
+    settings.current = { ...settings.current, ...next };
+    setShown(settings.current);
+  };
 
   useEffect(() => {
     let current = true;
@@ -90,9 +107,11 @@ export function SendMode({
       onCancel();
       return;
     }
-    if (key.name === 'a') setAnonymous((was) => !was);
+    if (key.name === 'a') change({ anonymous: !settings.current.anonymous });
     if (key.name === 'b') {
-      setBridge((was) => (was === 'websocket' ? 'webrtc' : 'websocket'));
+      change({
+        bridge: settings.current.bridge === 'websocket' ? 'webrtc' : 'websocket',
+      });
     }
   });
 
@@ -111,7 +130,7 @@ export function SendMode({
         return;
       }
     }
-    onStart({ mode: chosen, content: opened.source, anonymous, bridge });
+    onStart({ mode: chosen, content: opened.source, ...settings.current });
   };
 
   const usesTor = mode === 'tor' || (mode === 'code' && anonymous);

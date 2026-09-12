@@ -1,6 +1,6 @@
 import { decodePasteBytes } from '@opentui/core';
 import { useKeyboard, usePaste } from '@opentui/react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { theme } from './theme';
 
 /**
@@ -11,22 +11,34 @@ import { theme } from './theme';
  * whatever is recording the screen, so this reads the keys itself and draws a
  * dot per character. Pasting works, since a password is as likely to arrive
  * through a chat window as to be typed.
+ *
+ * What has been typed lives in a ref rather than in state: a paste and the
+ * Enter after it, or the last character and the Enter after it, can arrive in
+ * one terminal read, and state changed by the first has not been committed
+ * when the second is handled — a password would go in short, or empty. The
+ * state alongside it is only the length, which is all the screen draws.
  */
 export function MaskedField({ onSubmit }: { onSubmit(value: string): void }) {
-  const [typed, setTyped] = useState('');
+  const typed = useRef('');
+  const [length, setLength] = useState(0);
+
+  const change = (next: string) => {
+    typed.current = next;
+    setLength(next.length);
+  };
 
   usePaste((event) => {
     const text = decodePasteBytes(event.bytes).replace(/\s+/g, '');
-    if (text) setTyped((was) => was + text);
+    if (text) change(typed.current + text);
   });
 
   useKeyboard((key) => {
     if (key.name === 'return') {
-      if (typed) onSubmit(typed);
+      if (typed.current) onSubmit(typed.current);
       return;
     }
     if (key.name === 'backspace') {
-      setTyped((was) => was.slice(0, -1));
+      change(typed.current.slice(0, -1));
       return;
     }
     // One printable character, in whatever alphabet: an arrow key's escape
@@ -35,13 +47,13 @@ export function MaskedField({ onSubmit }: { onSubmit(value: string): void }) {
     const char = key.sequence;
     if (key.ctrl || !char) return;
     if ([...char].length === 1 && !/\p{C}/u.test(char)) {
-      setTyped((was) => was + char);
+      change(typed.current + char);
     }
   });
 
   return (
     <text fg={theme.heading}>
-      {typed ? '•'.repeat(typed.length) : ' '}
+      {length > 0 ? '•'.repeat(length) : ' '}
       <span fg={theme.accent}>{'▌'}</span>
     </text>
   );

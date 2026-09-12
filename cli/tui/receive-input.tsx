@@ -5,6 +5,7 @@ import {
   looksLikePin,
   type ReceiveInput,
 } from '@/lib/receive-input';
+import { TOR_BRIDGE_LABELS, type TorBridge } from '@/lib/tor/bridge';
 import type { SubmitEvent } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState } from 'react';
@@ -20,6 +21,11 @@ import { theme } from './theme';
  * there is nothing to ask. This is the tab's own `classifyReceiveText` on the
  * tab's own rules; only the QR chunk form has no answer here, because a
  * terminal has no camera to have scanned one with.
+ *
+ * The two things a receive takes besides what is pasted are here as keys, as
+ * the send screen's are: where the file is saved, and which bridge a Tor
+ * receive enters the network through. Both are non-printing keys, since the
+ * field has every printable one.
  */
 
 export type Accepted =
@@ -43,13 +49,20 @@ function describe(text: string, found: ReceiveInput | null): string | null {
 
 export function ReceiveInputScreen({
   folder,
+  folderProblem,
+  bridge,
   onFolder,
+  onBridge,
   onAccept,
   onUnsupported,
   onCancel,
 }: {
   folder: string;
+  /** Why nothing can be saved into `folder`, which stops a transfer starting. */
+  folderProblem: string | null;
+  bridge: TorBridge;
   onFolder(): void;
+  onBridge(): void;
   onAccept(accepted: Accepted): void;
   onUnsupported(what: string): void;
   onCancel(): void;
@@ -62,6 +75,12 @@ export function ReceiveInputScreen({
   // The submitted value rather than the state behind it: a paste and the Enter
   // after it can land in one frame, and the state would still be empty.
   const take = (raw: string) => {
+    // A folder that cannot be written to costs a Tor bootstrap and a
+    // handshake to find out about afterwards, so it stops the transfer here.
+    if (folderProblem) {
+      setProblem(folderProblem);
+      return;
+    }
     const found = classifyReceiveText(raw);
     if (!found) {
       setProblem(
@@ -94,13 +113,21 @@ export function ReceiveInputScreen({
 
   useKeyboard((key) => {
     if (key.name === 'escape') onCancel();
-    if (key.name === 'tab') onFolder();
+    if (key.name === 'tab') {
+      if (key.shift) onBridge();
+      else onFolder();
+    }
   });
 
   return (
     <Screen
       title="Receive"
-      hints={['enter continue', 'tab change folder', 'esc back']}
+      hints={[
+        'enter continue',
+        'tab change folder',
+        'shift-tab bridge',
+        'esc back',
+      ]}
     >
       <text fg={theme.heading}>Paste what the sender gave you</text>
       <Note>A PIN, a Code Exchange code, or a .onion address.</Note>
@@ -128,7 +155,12 @@ export function ReceiveInputScreen({
       {reading && <text fg={theme.good}>{reading}</text>}
       {problem && <Problem>{problem}</Problem>}
       <Gap />
-      <Note>{`Saving into ${shortenPath(folder, homedir())}`}</Note>
+      {folderProblem ? (
+        <Problem>{folderProblem}</Problem>
+      ) : (
+        <Note>{`Saving into ${shortenPath(folder, homedir())}`}</Note>
+      )}
+      <Note>{`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}`}</Note>
     </Screen>
   );
 }

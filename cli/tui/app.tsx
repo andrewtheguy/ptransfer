@@ -1,12 +1,13 @@
 import { parseOnionAddress } from '@/lib/tor/onion-address';
-import type { TorBridge } from '@/lib/tor/bridge';
+import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import type { SelectOption } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
 import { sendByCode } from '../code/send';
 import type { TorOptions } from '../tor/bootstrap';
+import { destinationFolder } from '../transfer/files';
 import { receiveOverTor } from '../transfer/tor-receive';
 import { sendOverTor } from '../transfer/tor-send';
 import type { Presenter } from '../ui/presenter';
@@ -58,7 +59,7 @@ const HOME: SelectOption[] = [
   },
 ];
 
-/** Tor's defaults, with the bridge the send screen chose. */
+/** Tor's defaults, with the bridge the screen before this one chose. */
 function torOptionsFor(bridge: TorBridge): TorOptions {
   return { refreshDirectory: false, bridge };
 }
@@ -66,6 +67,32 @@ function torOptionsFor(bridge: TorBridge): TorOptions {
 export function App({ onExit }: { onExit(status: number): void }) {
   const [stage, setStage] = useState<Stage>({ name: 'home' });
   const [folder, setFolder] = useState(process.cwd());
+  const [folderProblem, setFolderProblem] = useState<string | null>(null);
+  const [bridge, setBridge] = useState<TorBridge>(DEFAULT_TOR_BRIDGE);
+
+  // The transfer functions take a folder that has already been checked, which
+  // is what the line interface does to `--out` before it bootstraps. The
+  // folder the browser picked, and the working directory this opened in, get
+  // the same check, here rather than after a Tor bootstrap and a handshake.
+  useEffect(() => {
+    let current = true;
+    void (async () => {
+      try {
+        const checked = await destinationFolder(folder);
+        if (!current) return;
+        setFolderProblem(null);
+        if (checked !== folder) setFolder(checked);
+      } catch (error) {
+        if (!current) return;
+        setFolderProblem(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [folder]);
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === 'c') {
@@ -108,7 +135,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
   };
 
   const startReceive = (accepted: Accepted) => {
-    const torOptions = torOptionsFor('websocket');
+    // The receive screen refuses to accept anything while the folder cannot
+    // be written to, so by here it has been checked.
+    if (folderProblem) return;
+    const torOptions = torOptionsFor(bridge);
     if (accepted.kind === 'offer') {
       setStage({
         name: 'run',
@@ -190,7 +220,12 @@ export function App({ onExit }: { onExit(status: number): void }) {
       return (
         <ReceiveInputScreen
           folder={folder}
+          folderProblem={folderProblem}
+          bridge={bridge}
           onFolder={() => setStage({ name: 'receive-folder' })}
+          onBridge={() =>
+            setBridge((was) => (was === 'websocket' ? 'webrtc' : 'websocket'))
+          }
           onAccept={startReceive}
           onUnsupported={(message) =>
             setStage({ name: 'unsupported', message, back: stage })

@@ -78,22 +78,10 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
   }, [store, start, firstCode]);
 
   const { prompt, outcome, handed } = view;
+  // Which handed value the next tab copies, while a field is up.
+  const turn = useRef(0);
 
-  useKeyboard((key) => {
-    if (outcome && (key.name === 'return' || key.name === 'escape')) {
-      onFinished(outcome.status);
-      return;
-    }
-    // A field has the keyboard while one is up; copying waits its turn. And
-    // Ctrl-C is the app's, not the `c` that copies.
-    if (prompt || key.ctrl || handed.length === 0) return;
-    const digit = key.sequence ?? '';
-    const index =
-      key.name === 'c'
-        ? handed.length - 1
-        : /^[1-9]$/.test(digit)
-          ? Number(digit) - 1
-          : -1;
+  const copy = (index: number) => {
     const item = handed[index];
     if (!item) return;
     const ok = renderer.copyToClipboardOSC52(item.value);
@@ -102,6 +90,30 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
         ? `Copied ${item.label ?? 'the code'} to the clipboard.`
         : 'This terminal would not take a clipboard copy; select the text instead.',
     );
+  };
+
+  useKeyboard((key) => {
+    if (outcome && (key.name === 'return' || key.name === 'escape')) {
+      onFinished(outcome.status);
+      return;
+    }
+    // Ctrl-C is the app's, not the `c` that copies.
+    if (key.ctrl || handed.length === 0) return;
+    // A field takes every printable key it is sent, so `c` and the digits
+    // would be typed into it rather than copy anything — and the sender is
+    // handed its code and asked for the answer to it at once, so that is
+    // exactly when the code needs copying. Tab is the key that copies there,
+    // stepping through the values when there is more than one.
+    if (prompt) {
+      if (key.name !== 'tab') return;
+      const index = turn.current % handed.length;
+      turn.current = index + 1;
+      copy(index);
+      return;
+    }
+    const digit = key.sequence ?? '';
+    if (key.name === 'c') copy(handed.length - 1);
+    else if (/^[1-9]$/.test(digit)) copy(Number(digit) - 1);
   });
 
   return (
@@ -111,7 +123,9 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
         outcome
           ? ['enter quit']
           : prompt
-            ? ['enter submit']
+            ? handed.length > 0
+              ? ['enter submit', 'tab copy']
+              : ['enter submit']
             : handed.length > 1
               ? ['1-9 copy', 'ctrl-c stop']
               : handed.length === 1
@@ -137,12 +151,7 @@ export function Run({ title, start, firstCode, onFinished }: RunProps) {
               numbered={handed.length > 1}
             />
           ))}
-          <Note>
-            {copied ??
-              (handed.length > 1
-                ? 'Press 1 or 2 to copy one to the clipboard.'
-                : 'Press c to copy it to the clipboard.')}
-          </Note>
+          <Note>{copied ?? copyHint(Boolean(prompt), handed.length)}</Note>
         </box>
       )}
       {view.status && !outcome && <text fg={theme.accent}>{view.status}</text>}
@@ -219,6 +228,21 @@ function HandedValue({
       </scrollbox>
     </box>
   );
+}
+
+/**
+ * Which key copies a handed value, and what that key is depends on whether a
+ * field is up: the field has every printable key, and tab is what is left.
+ */
+function copyHint(asking: boolean, count: number): string {
+  if (asking) {
+    return count > 1
+      ? 'Press tab to copy each of them in turn.'
+      : 'Press tab to copy it to the clipboard.';
+  }
+  return count > 1
+    ? 'Press 1 or 2 to copy one to the clipboard.'
+    : 'Press c to copy it to the clipboard.';
 }
 
 function Bar({ current, total }: { current: number; total: number }) {
