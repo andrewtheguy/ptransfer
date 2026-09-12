@@ -36,11 +36,25 @@ from the same code.
 
 Each release ships it as one self-contained executable for Linux x64, Linux
 arm64 and Apple silicon macOS, under
-[Releases](https://github.com/andrewtheguy/ptransfer/releases): download
-`ptransfer-linux-amd64`, `ptransfer-linux-arm64` or `ptransfer-macos-arm64`,
-`chmod +x` it, and put it on your `PATH` as `ptransfer`. The commands below run
-it from a checkout as `bun run cli`; the executable takes the same commands as
-`ptransfer`. `bun run build:cli` builds it locally.
+[Releases](https://github.com/andrewtheguy/ptransfer/releases). The installer
+picks the one for the machine it runs on, checks it against the checksum GitHub
+published for it, and puts it on your `PATH` as `ptransfer`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.sh | bash
+```
+
+On Linux that is `/usr/local/bin` and takes sudo; on macOS it is
+`~/.local/bin` and takes none. Arguments go after `bash -s --`: a release tag
+installs that release instead of the latest, `--prerelease` takes the newest
+prerelease, and `--download-only` leaves the binary in the current directory
+rather than installing it. By hand, download
+`ptransfer-linux-amd64`, `ptransfer-linux-arm64` or `ptransfer-macos-arm64`
+and `chmod +x` it.
+
+The commands below run it from a checkout as `bun run cli`; the executable
+takes the same commands as `ptransfer`. `bun run build:cli` builds it
+locally.
 
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
