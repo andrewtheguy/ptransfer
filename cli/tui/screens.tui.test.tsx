@@ -431,6 +431,31 @@ describe('the receive screen', () => {
     expect(taken).toEqual([{ kind: 'offer', code: whole }]);
   });
 
+  it('says a code arrived in part rather than calling it no code at all', async () => {
+    const taken: Accepted[] = [];
+    const screen = await draw(
+      <ReceiveInputScreen
+        folder="/tmp"
+        folderProblem={null}
+        bridge="websocket"
+        onFolder={() => {}}
+        onBridge={() => {}}
+        onAccept={(what) => taken.push(what)}
+        onUnsupported={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    // The PT01 header survives a cut, so this is what a code looks like when
+    // something along the way stopped carrying it.
+    await screen.mockInput.pasteBracketedText(code(16).slice(0, 1000));
+    await screen.settle();
+    expect(screen.frame()).toContain('not a whole one');
+    expect(screen.frame()).not.toContain('A Code Exchange code');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(taken).toEqual([]);
+  });
+
   it('names the Tor bridge and turns it over on shift-tab', async () => {
     const bridges: string[] = [];
     const screen = await draw(

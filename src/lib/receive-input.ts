@@ -1,5 +1,9 @@
 import { extractChunkParam } from './chunk-utils';
-import { isValidBinaryPayload, parseClipboardPayload } from './code-signaling';
+import {
+  isValidBinaryPayload,
+  parseClipboardPayload,
+  parseMutualPayload,
+} from './code-signaling';
 import { classifyPin, PIN_CHARSET, PIN_LENGTHS, type PinKind } from './crypto';
 import { extractOnionFromUrl, extractPinFromUrl } from './receive-link';
 import { parseOnionAddress } from './tor/onion-address';
@@ -57,6 +61,21 @@ export function looksLikeOnionAddress(text: string): boolean {
 }
 
 /**
+ * Whether the text is a PT01 container, whole or not.
+ *
+ * Lets the input box tell "that is a code, but not all of it arrived" apart
+ * from "that is not a code at all", which classifyReceiveText alone cannot
+ * express — the distinction looksLikePin and looksLikeOnionAddress draw for
+ * the other two. A code runs to thousands of characters and travels through
+ * chat windows that wrap it and fields that cut it, so arriving in part is
+ * the likeliest way one arrives wrong.
+ */
+export function looksLikeOffer(text: string): boolean {
+  const payload = parseClipboardPayload(text.trim());
+  return payload !== null && isValidBinaryPayload(payload);
+}
+
+/**
  * Identify pasted or scanned receiver input, or null if it is none of a PIN, an
  * onion address, or an offer.
  *
@@ -87,8 +106,14 @@ export function classifyReceiveText(text: string): ReceiveInput | null {
   const param = extractChunkParam(trimmed);
   if (param) return { kind: 'offer-chunk', param };
 
+  // The PT01 header alone is not a code: a container cut short or older than
+  // its two seed buckets carries it too, and calling one an offer here only
+  // moves the refusal to a screen later, where what is pasted is gone. This
+  // asks of a code exactly what taking it in asks — the CLI's `decodeCode`
+  // and the browser's own `parseMutualPayload` — so a screen accepts what the
+  // next step will take, and nothing else.
   const payload = parseClipboardPayload(trimmed);
-  if (payload && isValidBinaryPayload(payload)) {
+  if (payload && isValidBinaryPayload(payload) && parseMutualPayload(payload)) {
     return { kind: 'offer', payload };
   }
 

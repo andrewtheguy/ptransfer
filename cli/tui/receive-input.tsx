@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import {
   classifyReceiveText,
+  looksLikeOffer,
   looksLikeOnionAddress,
   looksLikePin,
   type ReceiveInput,
@@ -28,6 +29,14 @@ import { theme } from './theme';
  * field has every printable one.
  */
 
+/**
+ * A code that starts right and ends wrong. Worth its own words: a code is
+ * carried by hand between two machines, and the way one fails is almost
+ * always that something along the way cut it.
+ */
+const INCOMPLETE =
+  'That is the start of a code, but not a whole one — or it is more than an hour old. Copy it again, whole.';
+
 export type Accepted =
   | { kind: 'offer'; code: string }
   | { kind: 'onion'; address: string };
@@ -44,6 +53,7 @@ function describe(text: string, found: ReceiveInput | null): string | null {
   if (looksLikeOnionAddress(text)) {
     return 'That looks like an onion address, but it does not check out';
   }
+  if (looksLikeOffer(text)) return INCOMPLETE;
   return null;
 }
 
@@ -84,9 +94,11 @@ export function ReceiveInputScreen({
     const found = classifyReceiveText(raw);
     if (!found) {
       setProblem(
-        raw.trim()
-          ? 'That is not a PIN, a code, or an onion address. Check it was copied whole.'
-          : 'Paste what the sender gave you.',
+        !raw.trim()
+          ? 'Paste what the sender gave you.'
+          : looksLikeOffer(raw)
+            ? INCOMPLETE
+            : 'That is not a PIN, a code, or an onion address. Check it was copied whole.',
       );
       return;
     }
