@@ -139,9 +139,11 @@ no portability layer in between:
        copies beside a field, and the receive screen's bridge is tab.
    - **4b** (done): one binary per release target from `bun build --compile`,
      by `bun run build:cli` (`scripts/build-cli.ts`). The `Release CLI`
-     workflow builds each target on its own runner, smoke-tests the binary
-     there, and on a `v<version>` tag matching `CLI_VERSION` publishes them
-     as `ptransfer-<os>-<arch>.tar.gz` with a `SHA256SUMS`.
+     workflow is run by hand, takes its version from `CLI_VERSION` and refuses
+     a version already tagged, builds each target on its own runner and
+     smoke-tests the binary there, then publishes the executables themselves —
+     `ptransfer-linux-amd64`, `ptransfer-linux-arm64`, `ptransfer-macos-arm64`
+     — on a draft release, whose publishing creates the `v<version>` tag.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,
      or Node 26.4 or later; the vitest unit project runs on an older Node, so

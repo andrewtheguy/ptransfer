@@ -1,101 +1,157 @@
-# Builds the CLI as one self-contained executable per release target and, on a
-# version tag, publishes them as a GitHub release.
+# Builds the CLI as one self-contained executable per release target and
+# publishes them as a GitHub release, run by hand off whatever branch is being
+# released. The version is `CLI_VERSION`, read from `package.json`; the run
+# refuses to go on if its tag already exists, so a release is a version bump
+# away. The tag itself is created when the draft is published at the end.
 #
-# A tag `v<version>` must match the `package.json` version: that is the CLI's
-# release version, `CLI_VERSION`, and `ptransfer --version` prints it. The web
-# app is released from its commit and has no number here.
 # `bun install` installs only the running machine's native packages — OpenTUI's
 # core and node-datachannel's addon — so each target builds on its own runner
-# and the binary is smoke-tested where it was built. Run by hand, the workflow
-# builds and keeps the binaries as artifacts without releasing anything.
+# and the binary is smoke-tested where it was built, away from the checkout so
+# that no stray `node_modules` can stand in for something it failed to embed.
 
-name: Release CLI
+name: Release CLI (Manual)
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  check:
-    runs-on: ubuntu-24.04
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.new }}
+      is_prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
       - run: bun install --frozen-lockfile
+
       - run: bun run lint
+
       - run: bunx tsc -b
-      - name: Tag names the CLI version
-        if: github.ref_type == 'tag'
+
+      - name: Determine version
+        id: version
         run: |
           version="$(bun -e 'console.log(require("./package.json").version)')"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match the CLI version $version" >&2
+          if [ -z "$version" ]; then
+            echo "::error::Could not parse version from package.json"
+            exit 1
+          fi
+          tag="v$version"
+          echo "Release tag: $tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "new=$tag" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abort if tag already exists
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.version.outputs.new }}" | grep -q .; then
+            echo "::error::Tag ${{ steps.version.outputs.new }} already exists on remote. Bump the version in package.json first."
             exit 1
           fi
 
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "${{ steps.version.outputs.new }}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx true; then
+            echo "Deleting stale draft release ${{ steps.version.outputs.new }}"
+            gh release delete "${{ steps.version.outputs.new }}" --yes
+          fi
+          gh release create "${{ steps.version.outputs.new }}" \
+            --draft \
+            --target "${{ github.sha }}" \
+            --title "Release ${{ steps.version.outputs.new }}" \
+            --generate-notes \
+            ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }}
+
   build:
-    needs: check
+    needs: setup
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: bun-linux-x64
-            runs-on: ubuntu-24.04
-          - target: bun-linux-arm64
-            runs-on: ubuntu-24.04-arm
-          - target: bun-darwin-arm64
-            runs-on: macos-latest
-    runs-on: ${{ matrix.runs-on }}
+          - runner: ubuntu-latest
+            target: bun-linux-x64
+            label: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            label: linux-arm64
+          - runner: macos-latest
+            target: bun-darwin-arm64
+            label: macos-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
       - run: bun install --frozen-lockfile
-      - run: bun run build:cli -- --target ${{ matrix.target }}
-      - name: Smoke test, away from the checkout
-        run: |
-          cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/dist/cli/ptransfer" --version
-          "$GITHUB_WORKSPACE/dist/cli/ptransfer" send --help > /dev/null
-      - name: Package
+
+      - name: Build
+        run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/ptransfer-${{ matrix.label }}"
+
+      - name: Smoke test the binary
+        working-directory: ${{ runner.temp }}
         env:
-          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.setup.outputs.version }}
         run: |
-          name="ptransfer-${TARGET#bun-}"
-          mkdir -p assets
-          tar -C dist/cli -czf "assets/$name.tar.gz" ptransfer
-      - uses: actions/upload-artifact@v4
+          binary="$GITHUB_WORKSPACE/dist/cli/ptransfer-${{ matrix.label }}"
+          got="$("$binary" --version)"
+          echo "binary reports: $got"
+          case "$got" in
+            "ptransfer $VERSION "*) ;;
+            *)
+              echo "::error::expected 'ptransfer $VERSION (protocol N)'"
+              exit 1
+              ;;
+          esac
+          "$binary" send --help > /dev/null
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: assets/*.tar.gz
+          name: ptransfer-${{ matrix.label }}
+          path: dist/cli/ptransfer-${{ matrix.label }}
           if-no-files-found: error
 
-  release:
-    needs: build
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
+  create-release:
+    needs: [setup, build]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: assets
+          pattern: ptransfer-*
+          path: artifacts
           merge-multiple: true
-      - name: Checksums
-        run: cd assets && sha256sum ./*.tar.gz | sed "s|\./||" > SHA256SUMS && cat SHA256SUMS
-      - name: Create or update the release
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Upload artifacts to draft release
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" assets/* --clobber
-          else
-            gh release create "$TAG" assets/* --verify-tag --title "$TAG" --generate-notes
-          fi
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ needs.setup.outputs.release_tag }}" artifacts/* --clobber
+
+      - name: Publish release (remove draft, creates the tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ needs.setup.outputs.release_tag }}" --draft=false

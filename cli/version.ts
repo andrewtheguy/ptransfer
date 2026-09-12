@@ -1,8 +1,9 @@
 import packageMetadata from '../package.json';
 
 /**
- * The CLI's release version, and what a `v<version>` tag publishes binaries
- * for. It is the `package.json` version, which nothing else releases on: the
+ * The CLI's release version: what the `Release CLI` workflow publishes binaries
+ * under, and the `v<version>` tag it creates when it does. It is the
+ * `package.json` version, which nothing else releases on: the
  * web app carries no number of its own, only the commit it was built from in
  * `src/lib/build-commit.ts`.
  *

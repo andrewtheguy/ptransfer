@@ -11,7 +11,8 @@
   `docs/` specify), only once per branch, and never for anything else.
 - The `package.json` version, exported as `CLI_VERSION` in `cli/version.ts`,
   is the CLI's release version and says nothing about compatibility. It is what
-  a `v<version>` tag publishes binaries for. Bump it by patch only, once per
+  the `Release CLI` workflow, run by hand, publishes binaries under and tags
+  `v<version>`, so releasing the same version twice is refused. Bump it by patch only, once per
   branch, for a breaking change to the CLI that is not on the wire (a flag or
   output, stored data such as a cache format); a wire change alone does not
   bump it, and a change only the tab sees never does. A release may bump it
