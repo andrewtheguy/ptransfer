@@ -140,7 +140,7 @@ no portability layer in between:
    - **4b** (done): one binary per release target from `bun build --compile`,
      by `bun run build:cli` (`scripts/build-cli.ts`). The `Release CLI`
      workflow builds each target on its own runner, smoke-tests the binary
-     there, and on a `v<version>` tag matching `package.json` publishes them
+     there, and on a `v<version>` tag matching `CLI_VERSION` publishes them
      as `ptransfer-<os>-<arch>.tar.gz` with a `SHA256SUMS`.
    - OpenTUI draws through a native Zig core it loads over FFI, from a
      prebuilt package per target (`@opentui/core-<os>-<arch>`). It needs Bun,

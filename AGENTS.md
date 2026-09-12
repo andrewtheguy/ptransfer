@@ -3,17 +3,23 @@
 ## Compatibility and versioning
 
 - Strict no backward compatibility or legacy code path under any circumstances;
-  bump a version to signal a breaking change instead. There are two, and they
-  move independently.
+  bump a version to signal a breaking change instead. There are two numbers,
+  and they move independently; the web app has no number at all.
 - `PROTOCOL_VERSION` in `src/lib/protocol-version.ts` is the compatibility
   version: two peers interoperate exactly when it matches. Bump it by one
   whenever what goes on the wire changes (anything the protocol documents in
   `docs/` specify), only once per branch, and never for anything else.
-- The `package.json` version is the release version of the web app and the
-  CLI and says nothing about compatibility. Bump it by patch only, once per
-  branch, for a breaking change that is not on the wire (a CLI flag or output,
-  stored data such as a cache format); a wire change alone does not bump it.
-  A release may bump it with no change of either kind.
+- The `package.json` version, exported as `CLI_VERSION` in `cli/version.ts`,
+  is the CLI's release version and says nothing about compatibility. It is what
+  a `v<version>` tag publishes binaries for. Bump it by patch only, once per
+  branch, for a breaking change to the CLI that is not on the wire (a flag or
+  output, stored data such as a cache format); a wire change alone does not
+  bump it, and a change only the tab sees never does. A release may bump it
+  with no change of either kind.
+- The web app has no release version: it is deployed straight from a commit, so
+  the commit is its identity — `GIT_COMMIT_HASH` in `src/lib/build-commit.ts`,
+  from the deploy's environment, shown in the footer beside the protocol
+  version. Never give it a number of its own.
 - Bump `TOR_HANDSHAKE_VERSION` in `src/lib/tor/handshake.ts` whenever the Tor
   handshake frames specified in `docs/TOR_TRANSPORT.md` change, together with
   `PROTOCOL_VERSION`, and leave it alone otherwise; it travels on the wire and

@@ -1,11 +1,11 @@
 import { PROTOCOL_VERSION } from '@/lib/protocol-version';
-import packageMetadata from '../package.json';
 import { receive } from './commands/receive';
 import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
 import { routeDiagnostics } from './diagnostics';
 import { INTERRUPTED_STATUS, InterruptedError } from './interrupt';
 import { UsageError } from './usage';
+import { CLI_VERSION } from './version';
 
 /**
  * The pTransfer command line, on Bun.
@@ -67,7 +67,7 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command === '--version') {
     process.stdout.write(
-      `ptransfer ${packageMetadata.version} (protocol ${PROTOCOL_VERSION})\n`,
+      `ptransfer ${CLI_VERSION} (protocol ${PROTOCOL_VERSION})\n`,
     );
     return 0;
   }

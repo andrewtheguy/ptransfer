@@ -3,7 +3,6 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { configDefaults, defineConfig } from 'vitest/config';
-import packageMetadata from './package.json';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
@@ -48,7 +47,6 @@ export default defineConfig({
     ],
   },
   define: {
-    __APP_VERSION__: JSON.stringify(packageMetadata.version),
     __GIT_COMMIT_HASH__: JSON.stringify(getGitCommitHash()),
   },
   server: {

@@ -142,11 +142,12 @@ Support is feature-detected at runtime; on an unsupported browser, receiving a P
 
 ## Version Compatibility
 
-Sender and receiver need the same **protocol version**. It is separate from the
-release version: the web app and CLI releases can move on without it, and two
-releases on the same protocol version work together. The web app shows both in
-the footer's version menu; `ptransfer --version` prints both for the CLI.
-Between two protocol versions, compatibility is not guaranteed.
+Sender and receiver need the same **protocol version**. It is separate from a
+release: releases move on without it, and two of them on the same protocol
+version work together. The web app shows it in the footer's version menu, over
+the commit that tab was built from; `ptransfer --version` prints it beside the
+CLI's release version. Between two protocol versions, compatibility is not
+guaranteed.
 
 The web app and the CLI in `cli/` are one codebase, so they share one protocol
 version, `PROTOCOL_VERSION` in `src/lib/protocol-version.ts`, and it moves with
@@ -156,6 +157,11 @@ Exchange and the shared transfer layer in
 its own document — so that a change to it is a deliberate one. The protocol
 version itself is not sent; the Tor handshake alone carries a version of its
 own on the wire and refuses a mismatch.
+
+Only the CLI carries a release number, the `package.json` version its binaries
+are tagged and published under, which moves when something a CLI user depends
+on changes. The web app has none: it is deployed from a commit, and that commit
+is what the footer names.
 
 ## How It Works
 
