@@ -6,6 +6,7 @@ import {
 } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
 import {
+  BEAM_RS_URL,
   OFFLINE_QR_TRANSFER_URL,
   PTRANSFER_CLI_DOCS_URL,
   PTRANSFER_CLI_INSTALL_SH,
@@ -29,7 +30,8 @@ const COMMON_DETAILS = [
   },
   {
     label: 'Size limits:',
-    value: '2 GiB over direct WebRTC; 100 MiB for relay and Tor file paths',
+    value:
+      '2 GiB over direct WebRTC; 100 MiB for relay and Tor file paths. For larger files, use beam-rs',
   },
 ] as const;
 
@@ -489,14 +491,30 @@ export function AboutContent() {
               </code>{' '}
               —{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                /usr/local/bin
-              </code>{' '}
-              on Linux, which takes sudo, and{' '}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 ~/.local/bin
               </code>{' '}
-              on macOS, which does not. There is no Windows build: use WSL, or
-              use this page.
+              on both Linux and macOS, with no sudo — and warns when another{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer
+              </code>{' '}
+              earlier on your{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                PATH
+              </code>{' '}
+              would run instead. There is no Windows build: use WSL, or use this
+              page.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              For a command line on Windows, or for files larger than 2 GiB, use{' '}
+              <a
+                href={BEAM_RS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2"
+              >
+                beam-rs
+              </a>
+              .
             </p>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">

@@ -1,6 +1,9 @@
 // Offline QR transfer app, suggested when a direct P2P connection can't be made.
 export const OFFLINE_QR_TRANSFER_URL = 'https://qrsecure.kuvi.dev/transfer';
 
+/** Suggested for files over 2 GiB, or for a command line on Windows. */
+export const BEAM_RS_URL = 'https://github.com/andrewtheguy/beam-rs';
+
 /**
  * This repository: the web app and the command line are the same source, so
  * there is one place to point at for both.

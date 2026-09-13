@@ -41,7 +41,7 @@ A command-line host for the same `src/lib` code the browser tab runs, so a
 change to the web app is a change to the CLI by construction. It replaces the
 retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
 
-**Unix only.** The CLI runs on Linux (glibc) and macOS, on x64 and arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux.
+**Unix only.** The CLI runs on Linux (glibc) and macOS, on x64 and arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux. A Windows command line, and files larger than 2 GiB, are what [beam-rs](https://github.com/andrewtheguy/beam-rs) is for.
 Every piece is written for a Unix process directly, with no Windows branch and
 no portability layer in between:
 
