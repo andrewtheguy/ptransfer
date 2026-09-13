@@ -11,8 +11,11 @@ The protocol version is `PROTOCOL_VERSION` in `src/lib/protocol-version.ts`,
 separate from the app's release version. Two peers on the same protocol version
 interoperate whatever releases they run; two on different ones are not
 guaranteed to. It is bumped for any change this document or another protocol
-document specifies, and it is not sent, so no peer checks it. Some
-divergences announce themselves: a changed domain separator or transcript
+document specifies. PIN Exchange sends it in the rendezvous (§4.3) and the
+claim (§4.5), and each side refuses the other's on a mismatch with both
+numbers named, rather than failing later as a timeout once the handshake
+reaches a step the two releases do not share. Other
+divergences announce themselves too: a changed domain separator or transcript
 field list lands the two sides on different keys or digests, so the PAKE seals
 refuse to open and the confirmation codes disagree, and a changed event kind
 means the receiver simply never finds the rendezvous. Others — rotation
@@ -288,6 +291,7 @@ back:
 ```json
 {
   "type": "rendezvous",
+  "protocolVersion": <PROTOCOL_VERSION>,
   "transferId": "<16 hex>",
   "senderPubkey": "<64 hex, MUST equal the event author>",
   "pakeMessage": "<base64 of pA, 33 bytes>",
@@ -300,7 +304,12 @@ back:
 confirm rather than appearing in the plaintext rendezvous.
 
 Receivers MUST reject a rendezvous whose payload does not name the event's own
-author, or whose element is not a valid non-identity point.
+author, whose element is not a valid non-identity point, or whose
+`protocolVersion` is not their own. A receiver left with no claimable
+candidate because the one it found is on another protocol SHOULD say so,
+naming both versions (or "an older protocol" when the field is absent); it
+MUST NOT refuse a compatible candidate on that account, since hints collide
+across unrelated transfers.
 
 Receivers MUST also reject one whose `created_at` did not fall in a bucket the
 sender still honors:
@@ -346,6 +355,13 @@ dependent on key ordering, and JSON string escaping keeps a field value from
 forging a delimiter into its neighbor. `relays` canonicalizes to `[]` when
 absent.
 
+`protocolVersion` is deliberately **not** in the canonical array. This hash is
+also the claim's plaintext `target` (§4.5), which the sender routes on before it
+opens anything; a receiver on another protocol must still land on the target
+the sender expects, or its claim is dropped unrouted and the sealed version
+check that names the mismatch never runs. The version needs no cover here: the
+sealed claim carries the receiver's own, and that is the one the sender acts on.
+
 ### 4.5 Claim (receiver → sender)
 
 Kind `24243`. Tags, in order: `p` = sender pubkey, `t` = `transferId`,
@@ -367,6 +383,7 @@ The sealed body, under the claim key:
 ```json
 {
   "type": "claim",
+  "protocolVersion": <PROTOCOL_VERSION>,
   "transferId": "…",
   "senderNonce": "<echo of the rendezvous nonce>",
   "receiverNonce": "<base64 of 16 fresh random bytes>",
@@ -381,7 +398,13 @@ The sealed body, under the claim key:
 active and its budget remains; a claim naming a spent, expired, or foreign
 target costs nothing and is dropped. Then: consume the element, spend one unit
 of `CLAIM_VERIFY_LIMIT` (100 per generation — this is the online-guessing
-meter), finish the PAKE against `pB`, and try the seal. A body that opens *and*
+meter), finish the PAKE against `pB`, and try the seal. A body that opens with
+`type` `claim` and this transfer id but a `protocolVersion` other than the
+sender's own — checked before the transcript hash, whose field list another
+protocol need not share — ends the transfer with an error naming both versions
+(or "an older protocol" when the field is absent): only a claimant that knew
+the PIN can seal one, so it is the receiver the person meant, and no compatible
+claim is coming. A body that opens *and*
 matches the publication's nonce, the transfer id, the sender's own pubkey, the
 claim event's author, and the publication's transcript hash locks the transfer.
 Re-check the bucket after the asynchronous verification so a boundary crossing
@@ -776,6 +799,7 @@ Input — salt is 32 bytes of `0x07`:
 ```json
 {
   "type": "rendezvous",
+  "protocolVersion": 2,
   "transferId": "a1b2c3d4e5f60718",
   "senderPubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "pakeMessage": "ApAkEeLeMeNtBase64==",

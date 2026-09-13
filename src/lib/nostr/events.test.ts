@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PIN_ACTIVE_BUCKETS, PIN_ROTATION_MS } from '../crypto/constants';
 import { getPinBucket } from '../crypto/pin';
+import { PROTOCOL_VERSION } from '../protocol-version';
 import {
   createHandshakeEvent,
   createRendezvousEvent,
@@ -32,6 +33,7 @@ describe('Nostr events', () => {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const payload: RendezvousPayload = {
       type: 'rendezvous',
+      protocolVersion: PROTOCOL_VERSION,
       transferId: 'transfer-id',
       senderPubkey: publicKey,
       pakeMessage: uint8ArrayToBase64(new Uint8Array(33).fill(2)),
@@ -70,6 +72,7 @@ describe('Nostr events', () => {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const payload: RendezvousPayload = {
       type: 'rendezvous',
+      protocolVersion: PROTOCOL_VERSION,
       transferId: 'transfer-id',
       senderPubkey: publicKey,
       pakeMessage: uint8ArrayToBase64(new Uint8Array(33).fill(2)),

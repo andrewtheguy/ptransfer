@@ -277,18 +277,11 @@ download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local install_dir
-    local needs_sudo=false
-
-    if [ "$OS" = "macos" ]; then
-        install_dir="${HOME}/.local/bin"
-        mkdir -p "$install_dir"
-    else
-        install_dir="/usr/local/bin"
-        if [ "$(id -u)" -ne 0 ]; then
-            needs_sudo=true
-        fi
-    fi
+    # The same place on both systems, and one the user owns: a copy anywhere
+    # else is a second ptransfer, and whichever comes first on PATH is the one
+    # that runs.
+    local install_dir="${HOME}/.local/bin"
+    mkdir -p "$install_dir"
 
     local final_path="${install_dir}/ptransfer"
 
@@ -297,27 +290,27 @@ download_and_install() {
     download_binary "$temp_binary"
     chmod +x "$temp_binary"
 
-    if [ "$needs_sudo" = true ]; then
-        if ! sudo mv "$temp_binary" "$final_path"; then
-            print_error "Failed to install binary to ${final_path}"
-            exit 1
-        fi
-    else
-        if ! mv "$temp_binary" "$final_path"; then
-            print_error "Failed to install binary to ${final_path}"
-            exit 1
-        fi
+    if ! mv "$temp_binary" "$final_path"; then
+        print_error "Failed to install binary to ${final_path}"
+        exit 1
     fi
 
     rm -rf "$temp_dir"
 
     print_info "Binary installed successfully to ${final_path}"
 
-    if [ "$OS" = "macos" ]; then
-        case ":$PATH:" in
-            *":${install_dir}:"*) ;;
-            *) print_warn "Make sure ${install_dir} is in your PATH" ;;
-        esac
+    case ":$PATH:" in
+        *":${install_dir}:"*) ;;
+        *) print_warn "Make sure ${install_dir} is in your PATH" ;;
+    esac
+
+    # Another ptransfer earlier on PATH runs instead of this one, whatever
+    # this one's version is.
+    local found
+    found=$(command -v ptransfer 2>/dev/null || true)
+    if [ -n "$found" ] && [ "$found" != "$final_path" ]; then
+        print_warn "${found} comes before ${final_path} on your PATH and runs instead of it."
+        print_warn "Remove it (for example: rm ${found}, with sudo if it needs it)."
     fi
 }
 
@@ -343,9 +336,7 @@ show_usage() {
     echo ""
     echo "Supported platforms: Linux (amd64, arm64), macOS (arm64)"
     echo ""
-    echo "Install locations:"
-    echo "  Linux:  /usr/local/bin (requires sudo)"
-    echo "  macOS:  ~/.local/bin (no sudo required)"
+    echo "Install location: ~/.local/bin (no sudo required)"
 }
 
 # Main installation function
@@ -388,16 +379,6 @@ install() {
     fi
 }
 
-# Check if sudo is available for installation (Linux only)
-check_privileges() {
-    if [ "$OS" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
-        if ! command -v sudo >/dev/null 2>&1; then
-            print_error "sudo is required to install to /usr/local/bin. Please install sudo or run as root."
-            exit 1
-        fi
-    fi
-}
-
 # Main execution
 main() {
     parse_args "$@"
@@ -407,7 +388,6 @@ main() {
         print_info "Starting ptransfer download..."
     else
         print_info "Starting ptransfer installation..."
-        check_privileges
     fi
 
     install

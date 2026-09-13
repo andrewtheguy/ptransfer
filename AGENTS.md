@@ -26,7 +26,9 @@
 - Bump `TOR_HANDSHAKE_VERSION` in `src/lib/tor/handshake.ts` whenever the Tor
   handshake frames specified in `docs/TOR_TRANSPORT.md` change, together with
   `PROTOCOL_VERSION`, and leave it alone otherwise; it travels on the wire and
-  is refused on a mismatch. No other version is sent on the wire.
+  is refused on a mismatch. The only other version sent on the wire is
+  `PROTOCOL_VERSION` itself, in the PIN Exchange rendezvous and claim, where a
+  mismatch is refused too.
 
 ## Layout
 

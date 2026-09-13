@@ -44,8 +44,9 @@ published for it, and puts it on your `PATH` as `ptransfer`:
 curl -fsSL https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.sh | bash
 ```
 
-On Linux that is `/usr/local/bin` and takes sudo; on macOS it is
-`~/.local/bin` and takes none. Arguments go after `bash -s --`: a release tag
+That is `~/.local/bin` on both, with no sudo, and the installer warns when
+another `ptransfer` earlier on your `PATH` would run instead of it. Arguments go
+after `bash -s --`: a release tag
 installs that release instead of the latest, `--prerelease` takes the newest
 prerelease, and `--download-only` leaves the binary in the current directory
 rather than installing it. By hand, download

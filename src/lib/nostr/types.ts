@@ -94,6 +94,11 @@ export type TransferState = TransferStateError | TransferStateOther;
  */
 export interface RendezvousPayload {
   type: 'rendezvous';
+  /**
+   * The sender's `PROTOCOL_VERSION`. A receiver claims only a rendezvous on
+   * its own, and says why when the one it found is on another.
+   */
+  protocolVersion: number;
   transferId: string;
   /** Nostr pubkey of the sender; must equal the rendezvous event author. */
   senderPubkey: string;
@@ -131,6 +136,11 @@ export interface TransferMetadata {
  */
 export interface ClaimPayload {
   type: 'claim';
+  /**
+   * The receiver's `PROTOCOL_VERSION`. A sender whose seal opened on a claim
+   * from another protocol ends the transfer and says why.
+   */
+  protocolVersion: number;
   transferId: string;
   /** Echo of the rendezvous nonce for the PIN generation the receiver used. */
   senderNonce: string;

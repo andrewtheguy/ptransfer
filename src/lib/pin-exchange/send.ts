@@ -39,6 +39,7 @@ import {
   type TransferMetadata,
   uint8ArrayToBase64,
 } from '@/lib/nostr';
+import { PROTOCOL_VERSION } from '@/lib/protocol-version';
 
 /**
  * The sending half of a PIN Exchange handshake: the rotating rendezvous a
@@ -238,6 +239,7 @@ export function startPinRendezvous(
     const nonce = generateHandshakeNonce();
     const payload: RendezvousPayload = {
       type: 'rendezvous',
+      protocolVersion: PROTOCOL_VERSION,
       transferId,
       senderPubkey: publicKey,
       pakeMessage: uint8ArrayToBase64(pakeMessage),
@@ -416,6 +418,7 @@ export function startPinRendezvous(
           // then try the claim seal. A wrong PIN lands on a different root key
           // and the seal simply refuses to open.
           let verified: VerifiedClaim | null = null;
+          let refused: Error | null = null;
           try {
             const rootKey = await finishPake(
               'sender',
@@ -437,6 +440,19 @@ export function startPinRendezvous(
             );
 
             const p = opened as Partial<ClaimPayload>;
+
+            // A seal that opened is a claimant that knew the PIN, so a claim
+            // from a release on another protocol is the receiver the person
+            // meant, and waiting for a compatible one would only strand them.
+            // Checked before the transcript hash, whose field list another
+            // protocol may not share.
+            if (
+              p.type === 'claim' &&
+              p.transferId === transferId &&
+              p.protocolVersion !== PROTOCOL_VERSION
+            ) {
+              refused = new Error(mismatchedProtocol('receiver', p));
+            }
 
             // Invalid claims are ignored, never fatal: transfer tags are
             // public, so aborting here would let anyone deny the transfer. The
@@ -470,6 +486,11 @@ export function startPinRendezvous(
           }
 
           if (settled || isCancelled()) return;
+          if (refused) {
+            giveUp(refused);
+            retireGenerations(() => false);
+            return;
+          }
           if (verified) {
             settled = true;
             cleanup();
@@ -654,6 +675,22 @@ export async function confirmPinClaim(options: {
   );
 
   return { expectedCode, signalsKey };
+}
+
+/**
+ * What a peer on another protocol is told about it: both numbers where the
+ * peer sent one, since matching them is the whole fix, and an older release
+ * that sends none is simply older.
+ */
+export function mismatchedProtocol(
+  peer: 'sender' | 'receiver',
+  payload: { protocolVersion?: unknown },
+): string {
+  const theirs =
+    typeof payload.protocolVersion === 'number'
+      ? `protocol ${payload.protocolVersion}`
+      : 'an older protocol';
+  return `The ${peer} is running a pTransfer release on ${theirs}, and this one is on protocol ${PROTOCOL_VERSION}. Update both sides to releases on the same protocol, then start a new transfer.`;
 }
 
 /**

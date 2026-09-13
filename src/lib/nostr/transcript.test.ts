@@ -54,6 +54,17 @@ describe('Rendezvous transcript hash', () => {
     ).not.toBe(base);
   });
 
+  it('leaves the protocol version out, so a claim from another protocol still routes', async () => {
+    // The digest is the claim's routing target; a peer on another protocol
+    // has to land on the same one for its sealed version to be read at all.
+    expect(
+      await computeRendezvousTranscriptHash(
+        { ...payload, protocolVersion: payload.protocolVersion + 1 },
+        SALT,
+      ),
+    ).toBe(await computeRendezvousTranscriptHash(payload, SALT));
+  });
+
   it('cannot be forged by shifting text across field boundaries', async () => {
     // JSON escaping is what makes the canonical form injective: moving a
     // separator-looking substring from one field into the next must not

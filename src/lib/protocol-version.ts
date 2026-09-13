@@ -6,9 +6,11 @@
  * release is `CLI_VERSION`, a tab is the commit it was built from, and
  * neither says anything about which peers work together.
  *
- * It does not travel on the wire. Every divergence it stands for already
- * fails closed, as each protocol document explains; this is the number a
- * person compares before a transfer. The Tor handshake's own
- * `TOR_HANDSHAKE_VERSION` is the one version that is sent and checked.
+ * PIN Exchange sends it in the rendezvous and the claim, and a mismatch is
+ * refused with both numbers named: there a divergence would otherwise only
+ * surface as a wait that times out, once the handshake is past the point both
+ * releases share. Code Exchange does not send it, since every divergence
+ * there already fails closed, as its protocol document explains. The Tor
+ * handshake's own `TOR_HANDSHAKE_VERSION` is sent and checked beside it.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
