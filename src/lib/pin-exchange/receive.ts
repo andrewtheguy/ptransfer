@@ -41,6 +41,8 @@ import {
   sealHandshakePayload,
   type TransferMetadata,
 } from '@/lib/nostr';
+import { PROTOCOL_VERSION } from '@/lib/protocol-version';
+import { mismatchedProtocol } from './send';
 
 /**
  * The receiving half of a PIN Exchange handshake: finding the sender by the
@@ -208,6 +210,10 @@ export async function claimPin(
   // sender's current and previous rotation both match our hints and share a
   // transferId — claim only the newest generation).
   let sawExpiredCandidate = false;
+  // A sender on another protocol, kept only to say so if nothing else is
+  // claimable. The hint collides across unrelated transfers, so this cannot
+  // refuse on its own: a compatible candidate beside it is still claimed.
+  let otherProtocol: Partial<RendezvousPayload> | null = null;
   const sortedEvents = [...events].sort(
     (a, b) => (b.created_at || 0) - (a.created_at || 0),
   );
@@ -235,6 +241,7 @@ export async function claimPin(
     const candidate = parsed.payload as Partial<RendezvousPayload>;
     if (
       candidate.type !== 'rendezvous' ||
+      candidate.protocolVersion !== PROTOCOL_VERSION ||
       candidate.transferId !== parsed.transferId ||
       candidate.senderPubkey !== event.pubkey ||
       typeof candidate.nonce !== 'string' ||
@@ -281,13 +288,27 @@ export async function claimPin(
     }
 
     const candidate = parseClaimableRendezvous(event);
-    if (!candidate) continue;
+    if (!candidate) {
+      const published = parseRendezvousEvent(event)?.payload as
+        | Partial<RendezvousPayload>
+        | undefined;
+      if (
+        published?.type === 'rendezvous' &&
+        published.protocolVersion !== PROTOCOL_VERSION
+      ) {
+        otherProtocol ??= published;
+      }
+      continue;
+    }
     if (rendezvousCandidates.has(candidate.payload.transferId)) continue;
 
     rendezvousCandidates.set(candidate.payload.transferId, candidate);
   }
 
   if (rendezvousCandidates.size === 0) {
+    if (otherProtocol) {
+      throw new Error(mismatchedProtocol('sender', otherProtocol));
+    }
     throw new Error(
       sawExpiredCandidate
         ? 'This PIN has expired. Enter the code currently shown on the sender.'
@@ -351,6 +372,7 @@ export async function claimPin(
 
       const claimPayload: ClaimPayload = {
         type: 'claim',
+        protocolVersion: PROTOCOL_VERSION,
         transferId: rc.payload.transferId,
         senderNonce: rc.payload.nonce,
         receiverNonce,

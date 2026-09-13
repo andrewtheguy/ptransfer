@@ -20,6 +20,7 @@ export const VECTOR_SALT = new Uint8Array(32).fill(7);
 export const RENDEZVOUS_VECTOR = {
   payload: {
     type: 'rendezvous',
+    protocolVersion: 2,
     transferId: 'a1b2c3d4e5f60718',
     senderPubkey: 'a'.repeat(64),
     pakeMessage: 'ApAkEeLeMeNtBase64==',

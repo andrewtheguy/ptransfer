@@ -39,6 +39,12 @@ async function sha256Hex(canonical: string): Promise<string> {
  * Canonicalization is a JSON array rather than an object: element order is
  * fixed here instead of depending on key ordering, and JSON string escaping
  * means no field value can forge a delimiter into another field.
+ *
+ * `protocolVersion` is deliberately left out. The digest is also the claim's
+ * plaintext routing target, so a receiver on another protocol must still
+ * compute the one this sender expects: that is what lets the sender open its
+ * sealed claim and refuse it by version, instead of dropping it unrouted and
+ * leaving both sides to time out.
  */
 export async function computeRendezvousTranscriptHash(
   payload: RendezvousPayload,
