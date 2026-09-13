@@ -1,4 +1,4 @@
-import { MAX_MESSAGE_SIZE, SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
+import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferMetadata } from '@/lib/nostr';
 import { TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';
@@ -8,11 +8,13 @@ import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
  * What an offer says about `content`, or why it cannot be offered at all.
  *
  * The same checks whichever way the offer travels, since it is the same
- * offer: a name, a finite size within the direct path's limit, and a single
- * file that is not empty.
+ * offer: a name, a finite size within the direct path's limit — the host's
+ * `maxTransferBytes`, or the payload format's own where that is lower — and a
+ * single file that is not empty.
  */
 export function describeSendSource(
   content: TransferSource,
+  maxTransferBytes: number,
 ): { metadata: TransferMetadata } | { error: string } {
   const fileName = (content.name || '').trim();
   if (!fileName) return { error: 'Missing file name' };
@@ -31,8 +33,13 @@ export function describeSendSource(
     return { error: 'File is empty' };
   }
 
-  if (fileSize > MAX_MESSAGE_SIZE || content.estimatedSize > MAX_MESSAGE_SIZE) {
-    return { error: `File exceeds ${formatFileSize(MAX_MESSAGE_SIZE)} limit` };
+  if (fileSize > maxTransferBytes || content.estimatedSize > maxTransferBytes) {
+    return { error: `File exceeds ${formatFileSize(maxTransferBytes)} limit` };
+  }
+  if (content.estimatedSize > content.maxWireBytes) {
+    return {
+      error: `A ZIP of several files can hold at most ${formatFileSize(content.maxWireBytes)}; this selection is ${formatFileSize(content.estimatedSize)}. Send the largest files on their own.`,
+    };
   }
 
   return {

@@ -72,14 +72,13 @@ export interface PinSendOptions {
 export async function sendByPin(options: PinSendOptions): Promise<number> {
   const { content, anonymous, presenter } = options;
   const say = (line: string) => presenter.say(line);
-  const described = describeSendSource(content);
-  if ('error' in described) throw new Error(described.error);
-  const { metadata } = described;
-
   const host = await createCliHost({
     cacheDir: options.cacheDir,
     destination: null,
   });
+  const described = describeSendSource(content, host.maxTransferBytes);
+  if ('error' in described) throw new Error(described.error);
+  const { metadata } = described;
 
   // The PIN's length is what tells the receiver which relay pool to look on,
   // so the kind and the pool are decided together and never separately.
@@ -335,6 +334,7 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
     // inside it still has to bind it to this offer before anything in it is
     // acted on.
     await completeSend({
+      host,
       offer,
       answer: readAnswer(answerCode),
       content,

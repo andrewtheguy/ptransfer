@@ -22,7 +22,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import type { TransferMode } from '@/contexts/send-context';
 import { useSend } from '@/contexts/send-context';
-import { MAX_MESSAGE_SIZE } from '@/lib/crypto';
+import { BROWSER_MAX_TRANSFER_BYTES } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import {
   projectedWireBytesFor,
@@ -93,7 +93,7 @@ export function SendTab() {
   // learn its selected fallback cannot carry the file.
   const sizeLimit = usesTorTransport
     ? TOR_MAX_TRANSFER_BYTES
-    : MAX_MESSAGE_SIZE;
+    : BROWSER_MAX_TRANSFER_BYTES;
   const isOverLimit = totalSize > sizeLimit;
   // Well under that ceiling, a Tor transfer is worth a word about — not
   // because it will be slow, but because it might be. Advice either way: the

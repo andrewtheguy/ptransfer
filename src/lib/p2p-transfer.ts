@@ -53,7 +53,8 @@ import {
   decryptChunk,
   ENCRYPTION_CHUNK_SIZE,
   encryptChunk,
-  MAX_MESSAGE_SIZE,
+  MAX_CHUNKS,
+  MAX_TRANSFER_BYTES,
   parseChunkMessage,
 } from '@/lib/crypto';
 import type { ChannelEndReason, ChannelMessage } from '@/lib/duplex-channel';
@@ -128,13 +129,6 @@ const MAX_REASON_LENGTH = 200;
  */
 const ABORT_SEND_GRACE_MS = 1000;
 
-/**
- * The chunk index is a 2-byte big-endian field on the wire, so a transfer can
- * span at most 65536 chunks (indices 0-65535). Totals beyond this cannot be
- * represented and are rejected before any allocation or processing.
- */
-const MAX_CHUNKS = 0x10000; // 65536
-
 /** One control message, as it travels in a text message. */
 export type ControlMessage =
   | { t: 'end'; chunks: number; bytes: number }
@@ -186,7 +180,7 @@ export function parseControl(text: string): ControlMessage | null {
       return {
         t: 'end',
         chunks: readCount(m.chunks, MAX_CHUNKS, 'chunks'),
-        bytes: readCount(m.bytes, MAX_MESSAGE_SIZE, 'bytes'),
+        bytes: readCount(m.bytes, MAX_TRANSFER_BYTES, 'bytes'),
       };
     case 'abort':
       return {
@@ -228,17 +222,17 @@ function resolveStallTimeoutMs(value: number | undefined): number {
 }
 
 /**
- * Coerce a caller-supplied wire ceiling. A transport may lower the protocol
- * limit but never raise it, and an unusable value falls back to the protocol
- * limit rather than removing the bound.
+ * Coerce a caller-supplied wire ceiling. A host or a transport may lower the
+ * protocol limit but never raise it, and an unusable value falls back to the
+ * protocol limit rather than removing the bound.
  */
 function resolveMaxWireBytes(value: number | undefined): number {
   return typeof value === 'number' &&
     Number.isFinite(value) &&
     value > 0 &&
-    value < MAX_MESSAGE_SIZE
+    value < MAX_TRANSFER_BYTES
     ? value
-    : MAX_MESSAGE_SIZE;
+    : MAX_TRANSFER_BYTES;
 }
 
 /** Minimum spacing between intermediate onProgress emissions. */
@@ -321,10 +315,11 @@ export interface SendOptions {
    */
   onProgress?: (current: number, total: number) => void;
   /**
-   * Ceiling on the wire bytes this transport allows, defaulting to
-   * MAX_MESSAGE_SIZE. It is the transport's ceiling, not the selection's: the
-   * source was already checked against its input size, but a deflated payload
-   * or a generated ZIP only reveals its wire length as it is produced. The Tor
+   * Ceiling on the wire bytes this host and transport allow, defaulting to
+   * MAX_TRANSFER_BYTES; the source's own `maxWireBytes` lowers it further. It
+   * is the ceiling on what is produced, not on the selection: the source was
+   * already checked against its input size, but a deflated payload or a
+   * generated ZIP only reveals its wire length as it is produced. The Tor
    * transport sets a far smaller one.
    */
   maxWireBytes?: number;
@@ -352,7 +347,10 @@ export async function sendFileOverLink(
   const { isCancelled } = opts;
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
-  const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
+  const maxWireBytes = Math.min(
+    resolveMaxWireBytes(opts.maxWireBytes),
+    source.maxWireBytes,
+  );
   const progressTotal = source.size ?? source.estimatedSize;
   const encoding = wireEncodingFor(source);
 
@@ -557,7 +555,7 @@ export interface ReceiverOptions {
   estimatedBytes?: number;
   /**
    * Ceiling on both the wire bytes accepted and the inflated output,
-   * defaulting to MAX_MESSAGE_SIZE. The inflated bound is the
+   * defaulting to MAX_TRANSFER_BYTES. The inflated bound is the
    * decompression-bomb guard: the in-band `end` byte count only covers the
    * compressed wire bytes.
    */

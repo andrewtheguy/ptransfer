@@ -452,7 +452,8 @@ The display component focuses on secure and clear communication:
 - **The expected code is never exposed to the sender's UI.** `usePinSend` holds it in a ref and returns only a `submitConfirmationCode(code): boolean` predicate; the CLI holds it in the local that asks for the typed one. Showing it would defeat the entire mechanism.
 
 **Key Parameters:**
-- `MAX_MESSAGE_SIZE`: 2 GiB (maximum P2P transferred payload size; every direct-path stage streams, see Streaming Encryption)
+- `MAX_TRANSFER_BYTES`: 8 GiB (the most one P2P transfer can carry — 65 536 full 128 KiB chunks — and the CLI's ceiling; every direct-path stage streams, see Streaming Encryption)
+- `BROWSER_MAX_TRANSFER_BYTES`: 2 GiB (the browser tab's P2P ceiling; each host's is its `ExchangeHost.maxTransferBytes`)
 - `ENCRYPTION_CHUNK_SIZE`: 128 KiB (application-level encryption chunk size for both P2P modes; the Nostr fallback uses `NOSTR_FILE_CHUNK_SIZE` = 48 KiB)
 - `PIN_ROTATION_MS`: 2 minutes (fresh PIN + SPAKE2 run + rendezvous event cadence)
 - `PIN_ACTIVE_BUCKETS`: 2 (only the sender's current and immediately previous buckets are honored, by both sides; `PIN_TTL_MS` = 4 minutes is the resulting maximum possible age)
@@ -948,7 +949,8 @@ Both receive modes reject duplicate, out-of-order, malformed, and oversized encr
 
 | Limit | Value | Rationale |
 |-------|-------|-----------|
-| Max P2P selected input and wire payload | 2 GiB (`MAX_MESSAGE_SIZE`) | The selection is checked before wire encoding, and the sender and receiver also enforce the same ceiling on encoded bytes as they are produced. A near-limit incompressible file or ZIP can therefore pass the input check but fail if deflate or archive overhead pushes its wire form over 2 GiB. Multi-file/folder sends are zipped directly into the encrypted data channel, and the receiver writes plaintext to an adaptive memory/OPFS sink. |
+| Max P2P selected input and wire payload | 2 GiB in the tab (`BROWSER_MAX_TRANSFER_BYTES`), 8 GiB in the CLI (`MAX_TRANSFER_BYTES`) | Each host's `ExchangeHost.maxTransferBytes`. The selection is checked before wire encoding, and the sender and receiver also enforce the same ceiling on encoded bytes as they are produced. A near-limit incompressible file or ZIP can therefore pass the input check but fail if deflate or archive overhead pushes its wire form over it. A receiver refuses an offer over its own ceiling before acting on it, so a tab turns down a CLI's 5 GiB file before anything moves. 8 GiB is as far as the 2-byte chunk index reaches. Multi-file/folder sends are zipped directly into the encrypted data channel; the tab writes plaintext to an adaptive memory/OPFS sink, the CLI to a part file beside the destination. |
+| Generated ZIP | Under 4 GiB (`ZIP_MAX_BYTES`) | fflate writes no zip64 records, so every size and offset in the archive is a 32-bit field. A multi-file/folder selection over it is refused up front, and the sender stops producing past it. Only the CLI can reach it; the tab's ceiling is lower. |
 | P2P in-memory receive threshold | 100 MiB (`MEMORY_SINK_MAX_BYTES`) | Payloads at or below the threshold stay in memory; larger P2P payloads require OPFS. `FileSystemFileHandle.createWritable` is feature-detected at runtime. |
 | Nostr relay fallback payload | 100 MiB (`SLOW_TRANSPORT_MAX_BYTES`) | Hard cap because this fallback materializes the source, compressed payload, and assembled result in memory. |
 | Tor transport payload | 100 MiB (`SLOW_TRANSPORT_MAX_BYTES`) | Hard cap for both the Tor Onion Service mode and Code Exchange's anonymous fallback; a small wire-size margin accommodates compression or ZIP overhead. |

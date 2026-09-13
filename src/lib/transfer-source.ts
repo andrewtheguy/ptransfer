@@ -25,6 +25,13 @@ export interface TransferSource {
    */
   projectedWireBytes: number;
   /**
+   * The most wire bytes this payload's own format can hold, whatever the
+   * transfer allows: a generated ZIP cannot address past 4 GiB, while a
+   * single file has no ceiling of its own (Infinity). The sender enforces the
+   * lower of this and the transfer's ceiling as the bytes are produced.
+   */
+  maxWireBytes: number;
+  /**
    * True when the flow that produced this payload already compressed it (the
    * multiple file/folder flow ships a ZIP whose entries are deflated). Drives
    * the no-recompress rule: precompressed payloads travel as-is, everything
@@ -64,6 +71,7 @@ export function createFileTransferSource(file: File): TransferSource {
     size: file.size,
     estimatedSize: file.size,
     projectedWireBytes: deflateUpperBound(file.size),
+    maxWireBytes: Number.POSITIVE_INFINITY,
     precompressed: false,
     stream: () => file.stream(),
   };

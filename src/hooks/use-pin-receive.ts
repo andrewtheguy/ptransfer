@@ -224,6 +224,7 @@ export function usePinReceive(): UsePinReceiveReturn {
           client: nostr,
           pakeSecret: pinMaterial.pakeSecret,
           locator: pinMaterial.locator,
+          maxTransferBytes: BROWSER_EXCHANGE_HOST.maxTransferBytes,
           isCancelled: abandoned,
           report: (update) => {
             if (!abandoned()) setState(update);
@@ -295,6 +296,7 @@ export function usePinReceive(): UsePinReceiveReturn {
         const offer = await acceptPinOffer(offerCode, {
           metadata,
           anonymous: options.anonymous,
+          maxTransferBytes: BROWSER_EXCHANGE_HOST.maxTransferBytes,
         });
 
         const keys = await deriveAnswerKeys(offer);

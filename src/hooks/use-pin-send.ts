@@ -189,7 +189,10 @@ export function usePinSend(): UsePinSendReturn {
       const relays = pinSignalingRelays(options.anonymous);
 
       try {
-        const described = describeSendSource(content);
+        const described = describeSendSource(
+          content,
+          BROWSER_EXCHANGE_HOST.maxTransferBytes,
+        );
         if ('error' in described) {
           setState({ status: 'error', message: described.error });
           return;
@@ -424,6 +427,7 @@ export function usePinSend(): UsePinSendReturn {
         // tag inside it still has to bind it to this offer before anything in
         // it is acted on.
         await completeSend({
+          host: BROWSER_EXCHANGE_HOST,
           offer,
           answer: readAnswer(answerCode),
           content,

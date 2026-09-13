@@ -261,7 +261,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
         const offerStep = createPendingStep<ReadOffer>();
         offerStepRef.current = offerStep;
-        const offer: AcceptedOffer = acceptOffer(await offerStep.promise);
+        const offer: AcceptedOffer = acceptOffer(
+          await offerStep.promise,
+          BROWSER_EXCHANGE_HOST.maxTransferBytes,
+        );
         if (abandoned()) return;
 
         const anonymous = offer.fallback === 'anonymous';

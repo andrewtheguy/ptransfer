@@ -149,12 +149,23 @@ export const SALT_LENGTH = 16;
 // encryption overhead stays safe.
 export const ENCRYPTION_CHUNK_SIZE = 128 * 1024; // 128 KiB
 
-// Application cap on selected plaintext input (one file, or the total files
-// used to generate a ZIP). Every P2P stage streams: the sender encrypts lazy
-// 128 KiB wire chunks and the receiver writes plaintext to adaptive scratch
-// storage. The cap stays below the 2-byte chunk-index capacity; payloads over
-// MEMORY_SINK_MAX_BYTES require OPFS on the receiver.
-export const MAX_MESSAGE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GiB
+// The chunk index is a 2-byte big-endian field on the wire, so a transfer can
+// span at most 65536 chunks (indices 0-65535).
+export const MAX_CHUNKS = 0x10000; // 65536
+
+// The most a P2P transfer can carry: every chunk full. This is the protocol's
+// ceiling rather than a host's choice, and it is the CLI's limit — a terminal
+// writes straight to the destination file, so nothing short of the chunk index
+// holds it back. Every P2P stage streams: the sender encrypts lazy 128 KiB wire
+// chunks and the receiver appends plaintext as they authenticate.
+export const MAX_TRANSFER_BYTES = MAX_CHUNKS * ENCRYPTION_CHUNK_SIZE; // 8 GiB
+
+// The browser tab's cap on a P2P transfer, below the protocol's: a tab keeps
+// what it receives in scratch storage (OPFS above MEMORY_SINK_MAX_BYTES) until
+// it is saved, and a tab sender's selection comes through the same page. A
+// host enforces its own cap on both what it offers and what it accepts, so a
+// tab refuses a larger offer from a CLI before any byte of it moves.
+export const BROWSER_MAX_TRANSFER_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 // Payloads at or below this size are buffered in memory during transfer;
 // larger payloads require OPFS scratch storage.
@@ -167,7 +178,7 @@ export const MEMORY_SINK_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 //
 //   - Both paths push bytes through third parties at a fraction of a data
 //     channel's speed, and neither can resume, so a transfer that dies two
-//     thirds of the way through starts over. MAX_MESSAGE_SIZE stops meaning
+//     thirds of the way through starts over. A P2P transfer cap stops meaning
 //     anything on them long before it is reached.
 //   - A payload this size or smaller is received entirely in memory, so these
 //     paths never depend on OPFS `createWritable` — which some engines shipped

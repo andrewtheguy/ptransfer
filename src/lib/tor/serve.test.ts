@@ -66,6 +66,7 @@ describe('serveUntilSent', () => {
       size: total,
       estimatedSize: total,
       projectedWireBytes: total,
+      maxWireBytes: Number.POSITIVE_INFINITY,
       precompressed: true,
       stream: () =>
         new ReadableStream<Uint8Array>({

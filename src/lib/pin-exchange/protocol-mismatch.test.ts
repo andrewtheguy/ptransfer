@@ -10,6 +10,7 @@ import {
   generateTransferId,
   getPinBucket,
   getPinLocator,
+  MAX_TRANSFER_BYTES,
   startPake,
 } from '@/lib/crypto';
 import {
@@ -179,6 +180,7 @@ describe('PIN Exchange across protocol versions', () => {
         client: relay.client,
         pakeSecret: await derivePakeSecret(pin),
         locator: getPinLocator(pin),
+        maxTransferBytes: MAX_TRANSFER_BYTES,
         isCancelled: () => false,
         report: () => {},
       }),
