@@ -32,6 +32,7 @@ function zipOf(data: Uint8Array): TransferSource {
     size: data.length,
     estimatedSize: data.length,
     projectedWireBytes: data.length,
+    maxWireBytes: Number.POSITIVE_INFINITY,
     precompressed: true,
     stream: () => new Blob([data as BlobPart]).stream(),
   };

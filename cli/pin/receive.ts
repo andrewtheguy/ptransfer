@@ -15,6 +15,7 @@ import { generateMutualAnswerBinary } from '@/lib/code-signaling';
 import {
   derivePakeSecret,
   getPinLocator,
+  MAX_TRANSFER_BYTES,
   wipeBufferSource,
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
@@ -177,10 +178,13 @@ export async function receiveByPin(
     if (!client) return interrupted ?? 1;
     const nostr = client;
 
+    // The host takes the destination the confirm names, so the claim is held
+    // to the CLI host's ceiling before there is one.
     const session = await claimPin({
       client: nostr,
       pakeSecret,
       locator,
+      maxTransferBytes: MAX_TRANSFER_BYTES,
       isCancelled,
       report: (update) => show(update.message),
     });
@@ -229,7 +233,11 @@ export async function receiveByPin(
     if (isCancelled()) return interrupted ?? 1;
 
     show('The sender confirmed — connecting...');
-    const offer = await acceptPinOffer(offerCode, { metadata, anonymous });
+    const offer = await acceptPinOffer(offerCode, {
+      metadata,
+      anonymous,
+      maxTransferBytes: host.maxTransferBytes,
+    });
     const relayFallback = eligibleFallbackRelays(offer);
     if (options.simulateNoDirect && !relayFallback) {
       throw new Error(

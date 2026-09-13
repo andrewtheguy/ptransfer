@@ -59,18 +59,17 @@ export interface CodeSendOptions {
 export async function sendByCode(options: CodeSendOptions): Promise<number> {
   const { content, anonymous, presenter } = options;
   const say = (line: string) => presenter.say(line);
-  const described = describeSendSource(content);
+  const host = await createCliHost({
+    cacheDir: options.cacheDir,
+    destination: null,
+  });
+  const described = describeSendSource(content, host.maxTransferBytes);
   if ('error' in described) throw new Error(described.error);
   const { metadata } = described;
   // The fallback's ceiling is checked on the selection, before an offer asks
   // for a fallback that could not carry it.
   const torRefusal = anonymous ? torFallbackRefusal(content) : null;
   if (torRefusal) throw new Error(torRefusal);
-
-  const host = await createCliHost({
-    cacheDir: options.cacheDir,
-    destination: null,
-  });
 
   // The status of the signal that stopped the command, once one has.
   let interrupted: number | null = null;
@@ -205,6 +204,7 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     }
 
     await completeSend({
+      host,
       offer,
       answer,
       content,

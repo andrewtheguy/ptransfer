@@ -16,7 +16,6 @@ import {
   isValidPakeMessage,
   MAX_CLAIM_ATTEMPTS,
   MAX_CLAIM_CANDIDATES,
-  MAX_MESSAGE_SIZE,
   PIN_HINT_LOOKBACK_BUCKETS,
   startPake,
   wipeBufferSource,
@@ -127,6 +126,12 @@ export interface PinClaimOptions {
   pakeSecret: Uint8Array;
   /** The PIN's public locator segment, which the rendezvous hint is keyed by. */
   locator: string;
+  /**
+   * The largest file this side accepts, its host's `maxTransferBytes`. A
+   * larger one is refused as soon as the confirm names it, before a code is
+   * shown.
+   */
+  maxTransferBytes: number;
   isCancelled: () => boolean;
   report: (update: PinClaimReport) => void;
 }
@@ -667,9 +672,9 @@ export async function claimPin(
   if (isCancelled()) return null;
 
   const { candidate, metadata } = winner;
-  if (metadata.fileSize > MAX_MESSAGE_SIZE) {
+  if (metadata.fileSize > options.maxTransferBytes) {
     throw new Error(
-      `Transfer rejected: Size (${formatFileSize(metadata.fileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
+      `Transfer rejected: Size (${formatFileSize(metadata.fileSize)}) exceeds limit (${formatFileSize(options.maxTransferBytes)})`,
     );
   }
 
@@ -737,9 +742,17 @@ export async function pinReceiverConfirmation(
  */
 export async function acceptPinOffer(
   offerCode: Uint8Array,
-  expected: { metadata: TransferMetadata; anonymous: boolean },
+  expected: {
+    metadata: TransferMetadata;
+    anonymous: boolean;
+    /** The same ceiling the claim was held to. */
+    maxTransferBytes: number;
+  },
 ): Promise<AcceptedOffer> {
-  const offer = acceptOffer(await readOffer(offerCode));
+  const offer = acceptOffer(
+    await readOffer(offerCode),
+    expected.maxTransferBytes,
+  );
   if (!sameTransferMetadata(offer.metadata, expected.metadata)) {
     throw new Error(
       "The sender's connection offer describes a different file than it confirmed. Start a new transfer.",

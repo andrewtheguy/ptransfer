@@ -19,6 +19,7 @@ import {
   generateMutualAnswerBinary,
   generateMutualClipboardData,
 } from '@/lib/code-signaling';
+import { MAX_TRANSFER_BYTES } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
@@ -75,9 +76,12 @@ export async function receiveByCode(
   const { presenter } = options;
   const say = (line: string) => presenter.say(line);
 
+  // The host that will receive it takes the destination the offer names, so
+  // the offer is held to the CLI host's ceiling before there is one.
   const offer: AcceptedOffer = await presenter.readCode(
     "Paste the sender's code: ",
-    async (container) => acceptOffer(await readOffer(container)),
+    async (container) =>
+      acceptOffer(await readOffer(container), MAX_TRANSFER_BYTES),
   );
   const { fileName, fileSize } = offer.metadata;
   const destination = join(options.folder, safeFileName(fileName));

@@ -13,7 +13,6 @@ import {
   deriveAnswerConfirmation,
   deriveSharedSecretKey,
   generateECDHKeyPair,
-  MAX_MESSAGE_SIZE,
   SLOW_TRANSPORT_MAX_BYTES,
   TRANSFER_EXPIRATION_MS,
 } from '@/lib/crypto';
@@ -123,12 +122,13 @@ export interface AcceptedOffer {
 
 /**
  * Check an offer's session and description, and settle which fallback it
- * asks for. Throws with the reason on anything this side will not act on.
+ * asks for. Throws with the reason on anything this side will not act on,
+ * including a file over this host's `maxTransferBytes`.
  */
-export function acceptOffer({
-  payload,
-  transcriptHash,
-}: ReadOffer): AcceptedOffer {
+export function acceptOffer(
+  { payload, transcriptHash }: ReadOffer,
+  maxTransferBytes: number,
+): AcceptedOffer {
   if (Date.now() - payload.createdAt > TRANSFER_EXPIRATION_MS) {
     throw new Error('Offer expired. Ask sender to create a new one.');
   }
@@ -147,9 +147,9 @@ export function acceptOffer({
   ) {
     throw new Error('Invalid offer: missing or invalid file metadata');
   }
-  if (fileSize > MAX_MESSAGE_SIZE) {
+  if (fileSize > maxTransferBytes) {
     throw new Error(
-      `Transfer rejected: Size (${formatFileSize(fileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
+      `Transfer rejected: Size (${formatFileSize(fileSize)}) exceeds limit (${formatFileSize(maxTransferBytes)})`,
     );
   }
 
@@ -326,6 +326,7 @@ export async function buildDirectAttempt(opts: {
     sink,
     {
       estimatedBytes: offer.metadata.fileSize,
+      maxWireBytes: opts.host.maxTransferBytes,
       onProgress: opts.onProgress,
     },
   );

@@ -492,6 +492,8 @@ const TOR_FALLBACK_MESSAGE =
   'No direct connection — relaying the file through Tor instead';
 
 export interface CompleteSendOptions {
+  /** Whose `maxTransferBytes` bounds the bytes the direct route sends. */
+  host: ExchangeHost;
   offer: SenderOffer;
   /** The response, parsed by `readAnswer`; verified here before use. */
   answer: SignalingPayload;
@@ -655,6 +657,7 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     onProgress: (current, total) => {
       if (!isCancelled()) report(transferring(current, total));
     },
+    maxWireBytes: opts.host.maxTransferBytes,
     isCancelled,
   });
 

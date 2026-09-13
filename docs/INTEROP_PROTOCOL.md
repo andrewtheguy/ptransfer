@@ -579,8 +579,8 @@ carries the authoritative count.
 Whether a ZIP's entries are stored or deflated is the archiver's choice and
 not part of this document; only the outer `contentEncoding` is.
 
-Receivers MUST bound inflate **output** at `MAX_MESSAGE_SIZE` and abort beyond
-it, as a decompression-bomb guard.
+Receivers MUST bound inflate **output** at their transfer ceiling (§7.5) and
+abort beyond it, as a decompression-bomb guard.
 
 ---
 
@@ -630,7 +630,8 @@ additional authenticated data**, so a receiver rejects a chunk whose index was
 altered or whose ciphertext was swapped with another chunk's.
 
 Indices start at 0 and increase by one. The 2-byte field caps a transfer at
-65 536 chunks (`MAX_CHUNKS`).
+65 536 chunks (`MAX_CHUNKS`), and so at `MAX_TRANSFER_BYTES` = 65 536 × 128 KiB
+= 8 GiB of wire bytes.
 
 ### 7.2 Control messages
 
@@ -648,7 +649,7 @@ and every one goes from the sender to the receiver:
 ```
 
 - `chunks` and `bytes` are non-negative integers, `chunks` at most
-  `MAX_CHUNKS` and `bytes` at most `MAX_MESSAGE_SIZE`. A message of a type
+  `MAX_CHUNKS` and `bytes` at most `MAX_TRANSFER_BYTES`. A message of a type
   defined here whose fields are malformed is a protocol violation (§7.6).
 - A text message that is not a JSON object with a `t` defined here is not
   addressed to the transfer, and a peer MUST ignore it: the link may carry
@@ -695,9 +696,19 @@ Receivers **append in reliable arrival order**. There is no positional or
 out-of-order write path: no wire payload has a length known up front, so an
 index cannot be turned into an offset. A receiver MUST reject a chunk whose
 index is not the next expected one, a duplicate index, a short chunk before the
-final one, a malformed length, and a transfer that exceeds `MAX_MESSAGE_SIZE`.
+final one, a malformed length, and a transfer that exceeds its ceiling.
 Once `end` has checked out it has stopped reading the transport, so anything
 sent after it is never seen.
+
+Each peer holds transfers to a **ceiling** of its own, never above
+`MAX_TRANSFER_BYTES`: the browser tab to `BROWSER_MAX_TRANSFER_BYTES` (2 GiB),
+the CLI to `MAX_TRANSFER_BYTES` itself. The ceiling is not announced or
+negotiated. A sender refuses a selection over its own and stops producing wire
+bytes past it. A receiver refuses an offer whose `fileSize` is over its own
+before it acts on it — in PIN Exchange as soon as the confirm names the file,
+before a confirmation code is shown — and, during the transfer, wire bytes or
+inflated output past it. So a peer with a lower ceiling turns a larger file
+down before any byte of it moves, rather than failing partway.
 
 There is **no whole-file checksum and no manifest**. Integrity rests entirely
 on per-chunk AES-GCM authentication with the authenticated index, plus the
@@ -760,7 +771,8 @@ A steadily progressing transfer of any size never trips it.
 | `AES_TAG_LENGTH` | 16 bytes |
 | `ENCRYPTION_CHUNK_SIZE` | 128 KiB |
 | `MAX_CHUNKS` | 65 536 |
-| `MAX_MESSAGE_SIZE` | 2 GiB |
+| `MAX_TRANSFER_BYTES` | 8 GiB (`MAX_CHUNKS` × `ENCRYPTION_CHUNK_SIZE`) |
+| `BROWSER_MAX_TRANSFER_BYTES` | 2 GiB |
 | `RECEIVE_BACKLOG_MAX_BYTES` | 256 MiB |
 | `abort` reason | at most 200 characters |
 

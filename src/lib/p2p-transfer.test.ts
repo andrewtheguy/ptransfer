@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { installOpfsMock, type OpfsMock } from '../test/opfs-mock';
 import type { AppendSink } from './append-sink';
-import { ENCRYPTION_CHUNK_SIZE, encryptChunk } from './crypto';
+import {
+  ENCRYPTION_CHUNK_SIZE,
+  encryptChunk,
+  MAX_CHUNKS,
+  MAX_TRANSFER_BYTES,
+} from './crypto';
 import { createDataChannelDuplex } from './data-channel';
 import type {
   ChannelEndReason,
@@ -72,6 +77,7 @@ function zipSource(data: Uint8Array, size: number | null = data.length) {
     size,
     estimatedSize: data.length,
     projectedWireBytes: data.length,
+    maxWireBytes: Number.POSITIVE_INFINITY,
     precompressed: true,
     stream: () => new Blob([data as BlobPart]).stream(),
   } satisfies TransferSource;
@@ -233,6 +239,22 @@ describe('parseControl', () => {
     expect(() => parseControl('{"t":"end","chunks":1,"bytes":"9"}')).toThrow();
   });
 
+  it('reads counts up to what the chunk index can reach, and no further', () => {
+    expect(
+      parseControl(
+        `{"t":"end","chunks":${MAX_CHUNKS},"bytes":${MAX_TRANSFER_BYTES}}`,
+      ),
+    ).toEqual({ t: 'end', chunks: MAX_CHUNKS, bytes: MAX_TRANSFER_BYTES });
+    expect(() =>
+      parseControl(
+        `{"t":"end","chunks":${MAX_CHUNKS},"bytes":${MAX_TRANSFER_BYTES + 1}}`,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseControl(`{"t":"end","chunks":${MAX_CHUNKS + 1},"bytes":9}`),
+    ).toThrow();
+  });
+
   it('caps an abort reason and tolerates a missing one', () => {
     const long = parseControl(
       encodeControl({ t: 'abort', reason: 'x'.repeat(500) }),
@@ -325,6 +347,26 @@ describe('sendFileOverLink', () => {
       { t: 'end', chunks: 3, bytes: data.length },
     ]);
     expect(peer.listeners()).toBe(0);
+  });
+
+  it("stops a source at its own format's ceiling, below the transfer's", async () => {
+    const key = await makeKey();
+    const peer = scriptedLink();
+    const source: TransferSource = {
+      ...zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 2)),
+      maxWireBytes: ENCRYPTION_CHUNK_SIZE,
+    };
+
+    await expect(sendFileOverLink(peer.link, key, source)).rejects.toThrow(
+      'Generated payload exceeds the transfer size limit',
+    );
+    expect(peer.chunks()).toBe(1);
+    expect(peer.controls()).toEqual([
+      {
+        t: 'abort',
+        reason: 'Generated payload exceeds the transfer size limit',
+      },
+    ]);
   });
 
   it('reports progress as the transport takes each chunk', async () => {

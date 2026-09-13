@@ -35,6 +35,7 @@ export async function openFileSource(path: string): Promise<TransferSource> {
     size: info.size,
     estimatedSize: info.size,
     projectedWireBytes: deflateUpperBound(info.size),
+    maxWireBytes: Number.POSITIVE_INFINITY,
     precompressed: false,
     // A fresh read each time: a receiver that declines leaves the service
     // waiting, and the next one gets the file from the start. It was named on

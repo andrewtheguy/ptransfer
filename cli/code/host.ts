@@ -1,6 +1,7 @@
 import type { AppendSink } from '@/lib/append-sink';
 import type { ExchangeHost } from '@/lib/code-exchange/host';
 import type { FallbackReceipt } from '@/lib/code-exchange/receive';
+import { MAX_TRANSFER_BYTES } from '@/lib/crypto';
 import { createFileSink } from '../transfer/files';
 import { loadRtcPeerConnection } from '../webrtc';
 import { createRelayStore } from './relay-store';
@@ -10,8 +11,9 @@ import { createRelayStore } from './relay-store';
  * the relay cache wherever `relay-store.ts` puts it — a file under the cache
  * directory, unless `PTRANSFER_RELAY_CACHE` says otherwise — and a received
  * file written to a part file beside its destination that takes the
- * destination's name once the transfer checks out. The browser tab's
- * counterpart is `src/lib/code-exchange/browser-host.ts`.
+ * destination's name once the transfer checks out, which is also why it takes
+ * as much as the protocol can carry. The browser tab's counterpart is
+ * `src/lib/code-exchange/browser-host.ts`.
  */
 export interface CliExchangeHost extends ExchangeHost {
   /**
@@ -34,6 +36,7 @@ export async function createCliHost(options: {
 
   return {
     peerConnection,
+    maxTransferBytes: MAX_TRANSFER_BYTES,
     relayStorage: () => relays,
     async createSink() {
       if (options.destination === null) {

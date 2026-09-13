@@ -1,3 +1,4 @@
+import { BROWSER_MAX_TRANSFER_BYTES } from '@/lib/crypto';
 import { createIndexedDbRelayPool } from '@/lib/nostr-file/relay-cache-idb';
 import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { ExchangeHost } from './host';
@@ -14,6 +15,7 @@ export const BROWSER_EXCHANGE_HOST: ExchangeHost = {
   get peerConnection() {
     return RTCPeerConnection;
   },
+  maxTransferBytes: BROWSER_MAX_TRANSFER_BYTES,
   relayStorage: createIndexedDbRelayPool,
   createSink: (metadata) => createAdaptiveAppendSink(metadata.fileSize),
 };

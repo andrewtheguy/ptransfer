@@ -104,6 +104,13 @@ const ZIP_PER_ENTRY_BYTES = 160;
 const ZIP_TRAILER_BYTES = 128;
 
 /**
+ * The largest archive this writer can produce correctly. fflate writes no
+ * zip64 records: every size and offset in its headers, data descriptors and
+ * end-of-central-directory is a 32-bit field, which silently wraps past it.
+ */
+export const ZIP_MAX_BYTES = 0xffffffff;
+
+/**
  * An upper bound on the archive a selection will produce. Every entry is
  * deflated individually, so each contributes its own deflate bound as well as
  * its share of the ZIP's bookkeeping — which is what makes a selection of many
@@ -211,6 +218,7 @@ export function createZipTransferSource(
     // Not the input total: every entry carries a header pair and its path, so
     // a selection of many tiny files occupies far more than its file sizes.
     projectedWireBytes: zipWireUpperBound(entries),
+    maxWireBytes: ZIP_MAX_BYTES,
     // The entries are deflated below, so the transfer pipeline must not
     // compress this payload again (the no-recompress rule).
     precompressed: true,

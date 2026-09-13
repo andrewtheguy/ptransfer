@@ -193,7 +193,10 @@ export function useCodeSend(): UseCodeSendReturn {
       const anonymous = options.anonymousRelay;
 
       try {
-        const described = describeSendSource(content);
+        const described = describeSendSource(
+          content,
+          BROWSER_EXCHANGE_HOST.maxTransferBytes,
+        );
         if ('error' in described) {
           setState({ status: 'error', message: described.error });
           return;
@@ -308,6 +311,7 @@ export function useCodeSend(): UseCodeSendReturn {
         // sweep runs on behind the P2P transfer, as it does behind a relayed
         // one; the final teardown ends it.
         await completeSend({
+          host: BROWSER_EXCHANGE_HOST,
           offer,
           answer,
           content,
