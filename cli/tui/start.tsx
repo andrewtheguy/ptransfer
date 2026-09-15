@@ -15,10 +15,6 @@ import { App } from './app';
  * Diagnostics are silenced whatever `--verbose` would have done: shared code
  * logs its asides with `console.log`, and a line written behind the renderer's
  * back lands in the middle of the screen.
- *
- * The mouse is left to the terminal: with mouse reporting on, a drag goes to
- * the app instead of selecting, and selecting a value to paste elsewhere is
- * how a code leaves a terminal the clipboard copy does not reach.
  */
 export async function runTui(): Promise<number> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -30,7 +26,6 @@ export async function runTui(): Promise<number> {
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     targetFps: 30,
-    useMouse: false,
   });
   // A transfer's own signal handler leaves with `process.exit`, which unwinds
   // nothing here, so the terminal is put back from the exit itself rather than

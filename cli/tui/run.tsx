@@ -229,9 +229,8 @@ export function Run({
  * thousands of characters and would fill the screen and push everything else
  * off it, so anything that does not fit on a line goes in a box of its own
  * that scrolls, with its length named — the clipboard is how it is meant to
- * leave, and the box is there to prove it is whole. The app takes no mouse, so
- * a value short enough for a line is selected with the terminal's own
- * selection when the terminal will not take a clipboard copy.
+ * leave, and the box is there to prove it is whole and to be selected from
+ * when the terminal will not take a clipboard copy.
  */
 function HandedValue({
   item,
@@ -259,7 +258,9 @@ function HandedValue({
       titleColor={theme.muted}
     >
       <scrollbox style={{ flexGrow: 1 }}>
-        <text fg={theme.good}>{item.value}</text>
+        <text fg={theme.good} selectable>
+          {item.value}
+        </text>
       </scrollbox>
     </box>
   );
