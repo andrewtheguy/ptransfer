@@ -965,6 +965,31 @@ describe('the run screen', () => {
     expect(screen.frame()).not.toContain('Press tab to copy');
   });
 
+  it('copies the whole code from a drag that starts on its box and ends past it', async () => {
+    const code = 'PT01'.repeat(300);
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const title = rows.findIndex((line) => line.includes('code · 1200'));
+    const field = rows.findIndex((line) => line.includes('paste here'));
+    expect(title).toBeGreaterThan(-1);
+    expect(field).toBeGreaterThan(title);
+    // From the box's title row, which is no text, down to the field for the
+    // answer: the drag crosses the note and the question on the way, and what
+    // is copied is the code and nothing else.
+    await screen.mockMouse.drag(40, title, 40, field);
+    await screen.settle();
+    expect(screen.frame()).toContain('Copied the code to the clipboard');
+  });
+
   it('copies a one-line value a drag selects, without its label', async () => {
     const screen = await draw(
       <Run
@@ -978,11 +1003,11 @@ describe('the run screen', () => {
     );
     const rows = screen.frame().split('\n');
     const row = rows.findIndex((line) => line.includes('address: abcdef'));
-    const column = rows[row]?.indexOf('abcdef') ?? -1;
+    const column = rows[row]?.indexOf('address:') ?? -1;
     expect(row).toBeGreaterThan(-1);
-    // From the value's first character to past its last: the label before it
-    // is not selectable, so the whole value and nothing else is what is taken.
-    await screen.mockMouse.drag(column, row, column + 30, row);
+    // From the label to past the value's last character: the label is not
+    // selectable, so the whole value and nothing else is what is taken.
+    await screen.mockMouse.drag(column, row, column + 40, row);
     await screen.settle();
     expect(screen.frame()).toContain('Copied address to the clipboard');
   });
