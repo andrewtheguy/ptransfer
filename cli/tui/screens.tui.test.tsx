@@ -990,6 +990,41 @@ describe('the run screen', () => {
     expect(screen.frame()).toContain('Copied the code to the clipboard');
   });
 
+  it('copies from where a drag into repeated text starts to the end', async () => {
+    const code = 'PT01'.repeat(300);
+    const sent: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    screen.renderer.copyToClipboardOSC52 = (text: string) => {
+      sent.push(text);
+      return true;
+    };
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('PT01PT01'));
+    const line = rows[row] ?? '';
+    const column = line.indexOf('PT01');
+    // The box wraps the code at its width, and the scrollbar draws over the
+    // last column of it.
+    const perRow = line.indexOf('▀') - column + 1;
+    expect(perRow).toBeGreaterThan(0);
+    const field = rows.findIndex((line) => line.includes('paste here'));
+    // From ten characters into the third row, out past the bottom of the
+    // box: the code repeats every four characters, so the run selected also
+    // sits at its start, and what is copied must begin where the drag did.
+    await screen.mockMouse.drag(column + 10, row + 2, 40, field);
+    await screen.settle();
+    expect(sent).toEqual([code.slice(2 * perRow + 10)]);
+    expect(screen.frame()).toContain('Copied the selection to the clipboard');
+  });
+
   it('copies a one-line value a drag selects, without its label', async () => {
     const screen = await draw(
       <Run

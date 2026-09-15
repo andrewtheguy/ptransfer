@@ -300,9 +300,10 @@ function HandedValue({
       if (!from || !own || !frame) return;
       if (!selection.selectedRenderables.includes(own)) return;
       const part = own.getSelectedText().replace(/\n/g, '');
-      if (part === '') return;
+      const local = own.getSelection();
+      if (part === '' || !local) return;
       const edge = oneLine ? 0 : 1;
-      const taken = widen(item.value, part, [from, selection.focus], {
+      const taken = widen(item.value, local.start, part, [from, selection.focus], {
         top: frame.y + edge,
         bottom: frame.y + frame.height - 1 - edge,
       });
@@ -351,21 +352,22 @@ function HandedValue({
 }
 
 /**
- * What a drag took of `value`, given the `part` its text says was selected,
- * the two `ends` of the drag on the screen and the rows the value is shown
- * in: past the bottom row the drag takes the value to its end, and above the
- * top row from its start. The drag's ends are where the pointer was, not
- * where the selection says its anchor is: the box scrolls under a drag that
- * leaves it, and the anchor moves with the text.
+ * What a drag took of `value`, given the `part` its text says was selected
+ * and the offset `at` it starts at — the text's own, since a value can hold
+ * the same run of characters more than once — the two `ends` of the drag on
+ * the screen and the rows the value is shown in: past the bottom row the drag
+ * takes the value to its end, and above the top row from its start. The
+ * drag's ends are where the pointer was, not where the selection says its
+ * anchor is: the box scrolls under a drag that leaves it, and the anchor
+ * moves with the text.
  */
 function widen(
   value: string,
+  at: number,
   part: string,
   ends: [{ x: number; y: number }, { x: number; y: number }],
   rows: { top: number; bottom: number },
 ): string {
-  const at = value.indexOf(part);
-  if (at < 0) return part;
   const [first, last] = [...ends].sort((a, b) => a.y - b.y || a.x - b.x);
   const from = first.y < rows.top ? 0 : at;
   const to = last.y > rows.bottom ? value.length : at + part.length;
