@@ -941,6 +941,112 @@ describe('the run screen', () => {
     expect(answered).not.toBeNull();
   });
 
+  it('copies what a drag over a long code selects', async () => {
+    const code = 'PT01'.repeat(300);
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('PT01PT01'));
+    const column = rows[row]?.indexOf('PT01') ?? -1;
+    expect(row).toBeGreaterThan(-1);
+    await screen.mockMouse.drag(column, row, column + 7, row);
+    await screen.settle();
+    // Part of the code is what the drag took, and the note says so rather
+    // than calling it the code.
+    expect(screen.frame()).toContain('Copied the selection to the clipboard');
+    expect(screen.frame()).not.toContain('Press tab to copy');
+  });
+
+  it('copies the whole code from a drag that starts on its box and ends past it', async () => {
+    const code = 'PT01'.repeat(300);
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const title = rows.findIndex((line) => line.includes('code · 1200'));
+    const field = rows.findIndex((line) => line.includes('paste here'));
+    expect(title).toBeGreaterThan(-1);
+    expect(field).toBeGreaterThan(title);
+    // From the box's title row, which is no text, down to the field for the
+    // answer: the drag crosses the note and the question on the way, and what
+    // is copied is the code and nothing else.
+    await screen.mockMouse.drag(40, title, 40, field);
+    await screen.settle();
+    expect(screen.frame()).toContain('Copied the code to the clipboard');
+  });
+
+  it('copies from where a drag into repeated text starts to the end', async () => {
+    const code = 'PT01'.repeat(300);
+    const sent: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    screen.renderer.copyToClipboardOSC52 = (text: string) => {
+      sent.push(text);
+      return true;
+    };
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('PT01PT01'));
+    const line = rows[row] ?? '';
+    const column = line.indexOf('PT01');
+    // The box wraps the code at its width, and the scrollbar draws over the
+    // last column of it.
+    const perRow = line.indexOf('▀') - column + 1;
+    expect(perRow).toBeGreaterThan(0);
+    const field = rows.findIndex((line) => line.includes('paste here'));
+    // From ten characters into the third row, out past the bottom of the
+    // box: the code repeats every four characters, so the run selected also
+    // sits at its start, and what is copied must begin where the drag did.
+    await screen.mockMouse.drag(column + 10, row + 2, 40, field);
+    await screen.settle();
+    expect(sent).toEqual([code.slice(2 * perRow + 10)]);
+    expect(screen.frame()).toContain('Copied the selection to the clipboard');
+  });
+
+  it('copies a one-line value a drag selects, without its label', async () => {
+    const screen = await draw(
+      <Run
+        title="Receive · Tor"
+        start={async (presenter) => {
+          presenter.hand('abcdefghijklmnop.onion', 'address');
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('address: abcdef'));
+    const column = rows[row]?.indexOf('address:') ?? -1;
+    expect(row).toBeGreaterThan(-1);
+    // From the label to past the value's last character: the label is not
+    // selectable, so the whole value and nothing else is what is taken.
+    await screen.mockMouse.drag(column, row, column + 40, row);
+    await screen.settle();
+    expect(screen.frame()).toContain('Copied address to the clipboard');
+  });
+
   it('copies on tab while the field for the answer has the keyboard', async () => {
     const screen = await draw(
       <Run

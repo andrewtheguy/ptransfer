@@ -1,5 +1,12 @@
 import { formatFileSize } from '@/lib/file-utils';
-import type { SubmitEvent } from '@opentui/core';
+import {
+  type BoxRenderable,
+  CliRenderEvents,
+  type MouseEvent,
+  type Selection,
+  type SubmitEvent,
+  type TextRenderable,
+} from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Presenter } from '../ui/presenter';
@@ -30,6 +37,14 @@ const LONG_VALUE = 5;
 
 /** The width of the progress bar, in columns. */
 const BAR = 40;
+
+/**
+ * What a copy that the terminal refused leaves behind. The mouse is the
+ * app's, so selecting with the terminal instead takes the modifier every
+ * terminal keeps for that.
+ */
+const NOT_TAKEN =
+  'This terminal would not take a clipboard copy; hold shift (option on a Mac) and drag to select with the terminal instead.';
 
 export interface RunProps {
   title: string;
@@ -106,7 +121,7 @@ export function Run({
       value: item.value,
       note: ok
         ? `Copied ${item.label ?? 'the code'} to the clipboard.`
-        : 'This terminal would not take a clipboard copy; select the text instead.',
+        : NOT_TAKEN,
     });
   };
 
@@ -181,6 +196,7 @@ export function Run({
               item={item}
               index={index}
               numbered={handed.length > 1}
+              onCopied={(note) => setCopied({ value: item.value, note })}
             />
           ))}
           <Note>{copiedNote ?? copyHint(Boolean(prompt), handed.length)}</Note>
@@ -229,40 +245,133 @@ export function Run({
  * thousands of characters and would fill the screen and push everything else
  * off it, so anything that does not fit on a line goes in a box of its own
  * that scrolls, with its length named — the clipboard is how it is meant to
- * leave, and the box is there to prove it is whole. The app takes no mouse, so
- * a value short enough for a line is selected with the terminal's own
- * selection when the terminal will not take a clipboard copy.
+ * leave, and the box is there to prove it is whole. Either kind is selectable,
+ * and a drag over one copies what it selects, under a note that says so.
  */
 function HandedValue({
   item,
   index,
   numbered,
+  onCopied,
 }: {
   item: Handed;
   index: number;
   numbered: boolean;
+  onCopied(note: string): void;
 }) {
+  const renderer = useRenderer();
   const { width } = useTerminalDimensions();
+  const box = useRef<BoxRenderable | null>(null);
+  const text = useRef<TextRenderable | null>(null);
   const label = `${numbered ? `${index + 1}. ` : ''}${item.label ?? 'code'}`;
-  if (item.value.length <= width - label.length - 6) {
+  const oneLine = item.value.length <= width - label.length - 6;
+
+  // A drag over the value copies what it took. The mouse is the app's, so the
+  // terminal's own selection does not run, and a drag that only highlighted
+  // would be a selection that copied nothing.
+  //
+  // A selection only starts on selectable text, and a drag meant to take the
+  // whole value as often starts on its label, its border or the blank after
+  // it, so a press on any of those starts one on the value's text; the
+  // renderer clears the selection after a press it was left to handle, so
+  // the press is claimed. A press on the text itself has already started
+  // one, and reaches here on its way up. Where the press landed is kept: a
+  // drag that leaves the box sweeps up every text it crosses on the way, and
+  // it is the value it started on's to copy.
+  const pressed = useRef<{ x: number; y: number } | null>(null);
+  const startOnValue = (event: MouseEvent) => {
+    if (event.button !== 0 || !text.current) return;
+    pressed.current = { x: event.x, y: event.y };
+    if (event.target === text.current) return;
+    renderer.startSelection(text.current, event.x, event.y);
+    event.preventDefault();
+  };
+  // What is copied is what the value's own text has selected, widened to the
+  // value's end or start when the drag left the box below or above: the rows
+  // past the box are the value's own rows that are not on screen, and a drag
+  // past them means all of them. The text wraps in its box, and the selection
+  // may carry those breaks, which the value never had.
+  useEffect(() => {
+    const onSelection = (selection: Selection) => {
+      const from = pressed.current;
+      pressed.current = null;
+      const own = text.current;
+      const frame = box.current;
+      if (!from || !own || !frame) return;
+      if (!selection.selectedRenderables.includes(own)) return;
+      const part = own.getSelectedText().replace(/\n/g, '');
+      const local = own.getSelection();
+      if (part === '' || !local) return;
+      const edge = oneLine ? 0 : 1;
+      const taken = widen(item.value, local.start, part, [from, selection.focus], {
+        top: frame.y + edge,
+        bottom: frame.y + frame.height - 1 - edge,
+      });
+      const ok = renderer.copyToClipboardOSC52(taken);
+      const what =
+        taken === item.value ? (item.label ?? 'the code') : 'the selection';
+      onCopied(ok ? `Copied ${what} to the clipboard.` : NOT_TAKEN);
+    };
+    renderer.on(CliRenderEvents.SELECTION, onSelection);
+    return () => {
+      renderer.off(CliRenderEvents.SELECTION, onSelection);
+    };
+  }, [renderer, item.value, item.label, oneLine, onCopied]);
+
+  if (oneLine) {
+    // The label is its own text so that a drag over the value takes the
+    // value alone.
     return (
-      <text>
-        <span fg={theme.muted}>{`${label}: `}</span>
-        <span fg={theme.good}>{item.value}</span>
-      </text>
+      <box
+        ref={box}
+        style={{ flexDirection: 'row' }}
+        onMouseDown={startOnValue}
+      >
+        <text fg={theme.muted}>{`${label}: `}</text>
+        <text ref={text} fg={theme.good} selectable>
+          {item.value}
+        </text>
+      </box>
     );
   }
   return (
     <box
+      ref={box}
       style={{ border: true, borderColor: theme.border, height: LONG_VALUE + 2 }}
       title={` ${label} · ${item.value.length} characters `}
       titleColor={theme.muted}
+      onMouseDown={startOnValue}
     >
       <scrollbox style={{ flexGrow: 1 }}>
-        <text fg={theme.good}>{item.value}</text>
+        <text ref={text} fg={theme.good} selectable>
+          {item.value}
+        </text>
       </scrollbox>
     </box>
   );
+}
+
+/**
+ * What a drag took of `value`, given the `part` its text says was selected
+ * and the offset `at` it starts at — the text's own, since a value can hold
+ * the same run of characters more than once — the two `ends` of the drag on
+ * the screen and the rows the value is shown in: past the bottom row the drag
+ * takes the value to its end, and above the top row from its start. The
+ * drag's ends are where the pointer was, not where the selection says its
+ * anchor is: the box scrolls under a drag that leaves it, and the anchor
+ * moves with the text.
+ */
+function widen(
+  value: string,
+  at: number,
+  part: string,
+  ends: [{ x: number; y: number }, { x: number; y: number }],
+  rows: { top: number; bottom: number },
+): string {
+  const [first, last] = [...ends].sort((a, b) => a.y - b.y || a.x - b.x);
+  const from = first.y < rows.top ? 0 : at;
+  const to = last.y > rows.bottom ? value.length : at + part.length;
+  return value.slice(from, to);
 }
 
 /**
