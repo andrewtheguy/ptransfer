@@ -941,6 +941,52 @@ describe('the run screen', () => {
     expect(answered).not.toBeNull();
   });
 
+  it('copies what a drag over a long code selects', async () => {
+    const code = 'PT01'.repeat(300);
+    const screen = await draw(
+      <Run
+        title="Send · Code Exchange"
+        start={async (presenter) => {
+          presenter.hand(code);
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('PT01PT01'));
+    const column = rows[row]?.indexOf('PT01') ?? -1;
+    expect(row).toBeGreaterThan(-1);
+    await screen.mockMouse.drag(column, row, column + 7, row);
+    await screen.settle();
+    // Part of the code is what the drag took, and the note says so rather
+    // than calling it the code.
+    expect(screen.frame()).toContain('Copied the selection to the clipboard');
+    expect(screen.frame()).not.toContain('Press tab to copy');
+  });
+
+  it('copies a one-line value a drag selects, without its label', async () => {
+    const screen = await draw(
+      <Run
+        title="Receive · Tor"
+        start={async (presenter) => {
+          presenter.hand('abcdefghijklmnop.onion', 'address');
+          return await presenter.readCode('Paste it: ', async () => 0);
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    const rows = screen.frame().split('\n');
+    const row = rows.findIndex((line) => line.includes('address: abcdef'));
+    const column = rows[row]?.indexOf('abcdef') ?? -1;
+    expect(row).toBeGreaterThan(-1);
+    // From the value's first character to past its last: the label before it
+    // is not selectable, so the whole value and nothing else is what is taken.
+    await screen.mockMouse.drag(column, row, column + 30, row);
+    await screen.settle();
+    expect(screen.frame()).toContain('Copied address to the clipboard');
+  });
+
   it('copies on tab while the field for the answer has the keyboard', async () => {
     const screen = await draw(
       <Run

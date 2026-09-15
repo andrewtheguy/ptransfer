@@ -1,5 +1,5 @@
 import { formatFileSize } from '@/lib/file-utils';
-import type { SubmitEvent } from '@opentui/core';
+import { CliRenderEvents, type Selection, type SubmitEvent } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Presenter } from '../ui/presenter';
@@ -30,6 +30,14 @@ const LONG_VALUE = 5;
 
 /** The width of the progress bar, in columns. */
 const BAR = 40;
+
+/**
+ * What a copy that the terminal refused leaves behind. The mouse is the
+ * app's, so selecting with the terminal instead takes the modifier every
+ * terminal keeps for that.
+ */
+const NOT_TAKEN =
+  'This terminal would not take a clipboard copy; hold shift (option on a Mac) and drag to select with the terminal instead.';
 
 export interface RunProps {
   title: string;
@@ -106,9 +114,33 @@ export function Run({
       value: item.value,
       note: ok
         ? `Copied ${item.label ?? 'the code'} to the clipboard.`
-        : 'This terminal would not take a clipboard copy; select the text instead.',
+        : NOT_TAKEN,
     });
   };
+
+  // A drag over a value copies what it took. The mouse is the app's, so the
+  // terminal's own selection does not run, and a drag that only highlighted
+  // would be a selection that copied nothing. A long value wraps in its box,
+  // and the selection may carry those breaks, which the value never had.
+  useEffect(() => {
+    const onSelection = (selection: Selection) => {
+      const text = selection.getSelectedText().replace(/\n/g, '');
+      if (text === '') return;
+      const item = handed.find((each) => each.value.includes(text));
+      if (!item) return;
+      const ok = renderer.copyToClipboardOSC52(text);
+      const what =
+        text === item.value ? (item.label ?? 'the code') : 'the selection';
+      setCopied({
+        value: item.value,
+        note: ok ? `Copied ${what} to the clipboard.` : NOT_TAKEN,
+      });
+    };
+    renderer.on(CliRenderEvents.SELECTION, onSelection);
+    return () => {
+      renderer.off(CliRenderEvents.SELECTION, onSelection);
+    };
+  }, [renderer, handed]);
 
   useKeyboard((key) => {
     if (outcome && (key.name === 'return' || key.name === 'escape')) {
@@ -229,8 +261,8 @@ export function Run({
  * thousands of characters and would fill the screen and push everything else
  * off it, so anything that does not fit on a line goes in a box of its own
  * that scrolls, with its length named — the clipboard is how it is meant to
- * leave, and the box is there to prove it is whole and to be selected from
- * when the terminal will not take a clipboard copy.
+ * leave, and the box is there to prove it is whole. Either kind is selectable,
+ * and a drag over one copies what it selects.
  */
 function HandedValue({
   item,
@@ -244,11 +276,15 @@ function HandedValue({
   const { width } = useTerminalDimensions();
   const label = `${numbered ? `${index + 1}. ` : ''}${item.label ?? 'code'}`;
   if (item.value.length <= width - label.length - 6) {
+    // The label is its own text so that a drag over the value takes the
+    // value alone.
     return (
-      <text>
-        <span fg={theme.muted}>{`${label}: `}</span>
-        <span fg={theme.good}>{item.value}</span>
-      </text>
+      <box style={{ flexDirection: 'row' }}>
+        <text fg={theme.muted}>{`${label}: `}</text>
+        <text fg={theme.good} selectable>
+          {item.value}
+        </text>
+      </box>
     );
   }
   return (
