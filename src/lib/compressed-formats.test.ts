@@ -20,6 +20,12 @@ describe('isCompressedFormat', () => {
   it('leaves everything else to be compressed', () => {
     expect(isCompressedFormat('notes.txt', 'text/plain')).toBe(false);
     expect(isCompressedFormat('image.bmp', 'image/bmp')).toBe(false);
+    // Raw PCM audio is audio, but not compressed.
+    expect(isCompressedFormat('take.wav', 'audio/wav')).toBe(false);
+    expect(isCompressedFormat('take.wav', 'audio/x-wav')).toBe(false);
+    expect(isCompressedFormat('take.aiff', 'audio/aiff')).toBe(false);
+    expect(isCompressedFormat('raw', 'audio/L16; rate=44100')).toBe(false);
+    expect(isCompressedFormat('take.wav', '')).toBe(false);
     expect(isCompressedFormat('data', 'application/octet-stream')).toBe(false);
     expect(isCompressedFormat('.mp4', '')).toBe(false);
     expect(isCompressedFormat('mp4/notes', '')).toBe(false);

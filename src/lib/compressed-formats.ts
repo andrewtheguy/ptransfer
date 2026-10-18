@@ -5,8 +5,26 @@
  * sniffing its bytes, so both hosts decide alike before anything is read.
  */
 
-/** Every audio and video format worth sending is compressed. */
+/**
+ * Audio and video formats are compressed, all but the ones listed in
+ * `UNCOMPRESSED_MIME_TYPES`.
+ */
 const COMPRESSED_MIME_PREFIXES = ['audio/', 'video/'];
+
+/** Raw PCM audio, which deflate does shrink. */
+const UNCOMPRESSED_MIME_TYPES = new Set([
+  'audio/wav',
+  'audio/wave',
+  'audio/x-wav',
+  'audio/vnd.wave',
+  'audio/aiff',
+  'audio/x-aiff',
+  'audio/l8',
+  'audio/l16',
+  'audio/l20',
+  'audio/l24',
+  'audio/pcm',
+]);
 
 const COMPRESSED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -101,6 +119,7 @@ const COMPRESSED_EXTENSIONS = new Set([
  */
 export function isCompressedFormat(name: string, mimeType: string): boolean {
   const type = mimeType.split(';')[0].trim().toLowerCase();
+  if (UNCOMPRESSED_MIME_TYPES.has(type)) return false;
   if (
     COMPRESSED_MIME_TYPES.has(type) ||
     COMPRESSED_MIME_PREFIXES.some((prefix) => type.startsWith(prefix))
