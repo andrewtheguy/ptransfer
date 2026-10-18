@@ -3,7 +3,7 @@ import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
 import { runTorServiceHandshake } from './handshake';
-import { sendFileOverTor } from './transfer';
+import { sendFileOverTor, torWireEncoding } from './transfer';
 import type { OnionService } from './webtor-api';
 
 /**
@@ -152,7 +152,10 @@ async function serveConnection(
   // the transfer polices itself: a receiver that stops draining the circuit
   // trips the stall window in sendFileOverTor.
   const handshake = await withTimeout(
-    runTorServiceHandshake(framed, password, onion, metadata),
+    runTorServiceHandshake(framed, password, onion, {
+      ...metadata,
+      contentEncoding: torWireEncoding(content),
+    }),
     TOR_HANDSHAKE_TIMEOUT_MS,
     `The peer went quiet for ${TOR_HANDSHAKE_TIMEOUT_MS / 1000}s without authenticating`,
   );

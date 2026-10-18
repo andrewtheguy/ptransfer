@@ -1,5 +1,4 @@
 import type { NostrFileTransferStats } from '../nostr-file/stats';
-import type { WireEncoding } from '../transfer-source';
 
 // Rendezvous must be a regular event so a receiver can fetch a PIN that was
 // published before it connected. Handshake and signaling events are live-only
@@ -121,8 +120,6 @@ export interface TransferMetadata {
   fileName: string;
   /** Input size of the payload; a progress hint, never the wire length. */
   fileSize: number;
-  /** 'deflate-raw' payloads are inflated by the receiver after decryption. */
-  contentEncoding: WireEncoding;
   mimeType: string;
 }
 

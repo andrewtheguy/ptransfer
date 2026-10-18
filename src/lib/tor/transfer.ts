@@ -11,7 +11,11 @@ import {
   sendFileOverLink,
   type TransferLink,
 } from '@/lib/p2p-transfer';
-import type { TransferSource, WireEncoding } from '@/lib/transfer-source';
+import {
+  type TransferSource,
+  type WireEncoding,
+  wireEncodingFor,
+} from '@/lib/transfer-source';
 import { LINGER_TIMEOUT_MS, type TorFramedStream } from './framing';
 
 /**
@@ -181,6 +185,15 @@ export function createTorLink(framed: TorFramedStream): TorLink {
 }
 
 /**
+ * How `source` travels over Tor, which is slow enough that every byte saved
+ * is time saved: compressed (see `wireEncodingFor`). The handshake tells the
+ * receiver, and `sendFileOverTor` sends it so.
+ */
+export function torWireEncoding(source: TransferSource): WireEncoding {
+  return wireEncodingFor(source, true);
+}
+
+/**
  * Send `source` over an authenticated Tor stream. Returns the wire byte count
  * once every frame has been written and the receiver has hung up — or, when
  * the receiver never does, after the linger window, which is reported rather
@@ -190,11 +203,13 @@ export async function sendFileOverTor(
   framed: TorFramedStream,
   contentKey: CryptoKey,
   source: TransferSource,
-  opts: Omit<SendOptions, 'maxWireBytes'> = {},
+  opts: Omit<SendOptions, 'compressed' | 'maxWireBytes'> = {},
 ): Promise<number> {
   const link = createTorLink(framed);
   const wireBytes = await sendFileOverLink(link, contentKey, source, {
     ...opts,
+    // As `torWireEncoding` told the receiver.
+    compressed: true,
     maxWireBytes: TOR_MAX_WIRE_BYTES,
   });
   try {

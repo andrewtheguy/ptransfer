@@ -1,8 +1,10 @@
+import { isCompressedFormat } from './compressed-formats';
+
 /**
  * A repeatable, lazily-opened payload for the P2P transfer pipeline.
  *
  * `size` is null when the source does not determine its final length up front
- * (for example, a ZIP compressed while it is being sent). `estimatedSize` is
+ * (for example, a ZIP packaged while it is being sent). `estimatedSize` is
  * only a progress/storage hint; the transfer protocol validates the actual
  * byte count at end of stream.
  */
@@ -13,8 +15,8 @@ export interface TransferSource {
   estimatedSize: number;
   /**
    * An upper bound on what this payload will occupy on the wire, which is not
-   * `estimatedSize`: a single file is deflated (and incompressible input comes
-   * out slightly *larger*), and a generated ZIP adds a header pair and the
+   * `estimatedSize`: a single file may be deflated (and incompressible input
+   * comes out slightly *larger*), and a generated ZIP adds a header pair and the
    * entry path for every file it contains.
    *
    * The wire ceiling both peers enforce is a fixed constant, so a selection
@@ -25,26 +27,42 @@ export interface TransferSource {
    */
   projectedWireBytes: number;
   /**
-   * True when the flow that produced this payload already compressed it (the
-   * multiple file/folder flow ships a ZIP whose entries are deflated). Drives
-   * the no-recompress rule: precompressed payloads travel as-is, everything
-   * else is deflated on the wire.
+   * True for a generated ZIP (the multiple file/folder flow). An archive does
+   * its own compression, entry by entry, so the wire never deflates it (the
+   * no-recompress rule).
    */
-  precompressed: boolean;
-  stream: () => ReadableStream<Uint8Array>;
+  archive: boolean;
+  /**
+   * Open the payload. `compressed` asks an archive to deflate its entries
+   * rather than store them; a single file ignores it, since its compression
+   * happens on the wire (see `wireEncodingFor`).
+   */
+  stream: (compressed: boolean) => ReadableStream<Uint8Array>;
 }
 
 /** How payload bytes travel on the wire between peers. */
 export type WireEncoding = 'deflate-raw' | 'identity';
 
 /**
- * The compression rule, flow-based rather than content-sniffed: a payload
- * from the multiple file/folder flow is already compressed and is never
- * recompressed ('identity'); every other payload — single-file transfers —
- * is deflated behind the scenes ('deflate-raw') and restored on receipt.
+ * The compression rule, decided by flow and file type rather than by
+ * sniffing content. Whether to compress at all is the transport's call: a
+ * direct WebRTC connection carries the payload as it is, since deflating
+ * costs more time than a fast link saves, while a slow transport — Tor, or
+ * the Nostr relay fallback — passes `compressed`. Compressed, a single file
+ * is deflated on the wire ('deflate-raw') and restored on receipt, unless its
+ * format is compressed already (`isCompressedFormat`: audio, video, and the
+ * like), which deflate cannot shrink; an archive has already deflated its
+ * entries as it was opened and travels as-is ('identity').
  */
-export function wireEncodingFor(source: TransferSource): WireEncoding {
-  return source.precompressed ? 'identity' : 'deflate-raw';
+export function wireEncodingFor(
+  source: TransferSource,
+  compressed: boolean,
+): WireEncoding {
+  return compressed &&
+    !source.archive &&
+    !isCompressedFormat(source.name, source.type)
+    ? 'deflate-raw'
+    : 'identity';
 }
 
 /**
@@ -64,7 +82,7 @@ export function createFileTransferSource(file: File): TransferSource {
     size: file.size,
     estimatedSize: file.size,
     projectedWireBytes: deflateUpperBound(file.size),
-    precompressed: false,
+    archive: false,
     stream: () => file.stream(),
   };
 }

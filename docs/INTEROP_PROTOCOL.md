@@ -451,7 +451,6 @@ MUST reject metadata that is not shaped as §4.7 requires.
   "contentType": "file",
   "fileName": "<non-empty string>",
   "fileSize": <non-negative number>,
-  "contentEncoding": "deflate-raw" | "identity",
   "mimeType": "<string>"
 }
 ```
@@ -460,15 +459,15 @@ MUST reject metadata that is not shaped as §4.7 requires.
 - `fileSize` is the **input** size — a progress hint only. It is never the wire
   length, and never a bound on the payload; the wire byte count is
   authenticated in band by `end` (§7.4).
-- `contentEncoding` is how the payload bytes travel (§6). A receiver MUST reject
-  any value other than the two above.
+- How the payload bytes travel is not metadata: it is the transport's, and
+  over the direct WebRTC route the payload is never compressed (§6).
 
 Metadata digest, bound into the confirmation code:
 
 ```
-label     = "ptransfer:nostr-metadata-transcript:v2"
+label     = "ptransfer:nostr-metadata-transcript:v3"
 canonical = JSON.stringify([ label, contentType, fileName, fileSize,
-                             contentEncoding, mimeType ])
+                             mimeType ])
 hash      = hex(SHA-256(utf8(canonical)))
 ```
 
@@ -518,7 +517,7 @@ On top of what Code Exchange itself checks, a PIN receiver MUST refuse an
 offer that:
 
 - describes a different file than the confirm delivered — `fileName`,
-  `fileSize`, `contentEncoding`, and `mimeType` must all equal the confirm's
+  `fileSize`, and `mimeType` must all equal the confirm's
   metadata (§4.7), which is what the confirmation code attests to; or
 - asks for a fallback on the other side of the PIN's privacy line. A standard
   PIN's offer names clearnet `relays` or no fallback; an anonymous PIN's
@@ -563,24 +562,37 @@ code = crockfordBase32(bits)                    # 8 characters
 
 ## 6. Wire encoding
 
-The compression rule is **flow-based, never content-sniffed**:
+Whether the payload is compressed is the **transport's** call, and what is
+compressed follows the flow and the file's type — never its sniffed content:
 
-| Payload | `contentEncoding` |
-|---|---|
-| A single file | `deflate-raw` |
-| A generated ZIP (multiple files or a folder) | `identity` |
+| Transport | Payload | Wire encoding |
+|---|---|---|
+| Direct WebRTC (PIN Exchange, Code Exchange) | anything | `identity` |
+| Tor, Nostr relay | a single file of a compressed format | `identity` |
+| Tor, Nostr relay | any other single file | `deflate-raw` |
+| any | a generated ZIP (multiple files or a folder) | `identity` |
 
-A single file is deflated on the fly with **raw DEFLATE** (RFC 1951 — no zlib
-or gzip wrapper) and inflated by the receiver. A ZIP is already compressed
-entry by entry and is never recompressed. Either way the final wire length is
-unknown during signaling, which is why `fileSize` is only a hint and `end`
-carries the authoritative count.
+A direct connection is fast enough that deflating costs more time than it
+saves, so over the WebRTC data channel of this document the payload always
+travels as it is, and the receiver stores what arrives without inflating it.
+The slow transports — the Tor transport ([TOR_TRANSPORT.md](TOR_TRANSPORT.md))
+and the Nostr file relay ([NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md)) — name
+their encoding in their own handshake or manifest. There a single file is
+deflated with **raw DEFLATE** (RFC 1951 — no zlib or gzip wrapper) and
+inflated by the receiver, unless its format is compressed already: audio,
+video, compressed images, archives and ZIP-based documents, judged by MIME
+type and file extension (`isCompressedFormat` in
+[`src/lib/compressed-formats.ts`](../src/lib/compressed-formats.ts)). A ZIP
+does its own compression and is never deflated again. Either way the final
+wire length is unknown during signaling, which is why `fileSize` is only a
+hint and `end` carries the authoritative count.
 
 Whether a ZIP's entries are stored or deflated is the archiver's choice and
-not part of this document; only the outer `contentEncoding` is.
+not part of this document. This one stores them for the direct route and for
+an entry of a compressed format, and deflates the rest.
 
-Receivers MUST bound inflate **output** at `MAX_MESSAGE_SIZE` and abort beyond
-it, as a decompression-bomb guard.
+A receiver of a deflated payload MUST bound inflate **output** at
+`MAX_MESSAGE_SIZE` and abort beyond it, as a decompression-bomb guard.
 
 ---
 
@@ -821,13 +833,12 @@ Input:
   "contentType": "file",
   "fileName": "quarterly-report.pdf",
   "fileSize": 1048576,
-  "contentEncoding": "deflate-raw",
   "mimeType": "application/pdf"
 }
 ```
 
 ```
-d71c5d4c12479dfb7e1e4f7c9fd169cddd73206e8c369d49a98f7b726a025f84
+44e4c2c7577ded8f19477a823a8caebb2b9b559d1c77c0aa44cc218001ba2c83
 ```
 
 Both vectors are pinned in

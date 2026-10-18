@@ -2,7 +2,7 @@ import { MAX_MESSAGE_SIZE, SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferMetadata } from '@/lib/nostr';
 import { TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';
-import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import type { TransferSource } from '@/lib/transfer-source';
 
 /**
  * What an offer says about `content`, or why it cannot be offered at all.
@@ -40,7 +40,6 @@ export function describeSendSource(
       contentType: 'file',
       fileName,
       fileSize,
-      contentEncoding: wireEncodingFor(content),
       mimeType: content.type || 'application/octet-stream',
     },
   };

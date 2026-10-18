@@ -133,8 +133,8 @@ export async function send(argv: string[]): Promise<number> {
     for (const path of shown) say(`  ${path}`);
     if (more > 0) say(`  and ${more} more`);
   }
-  // Only the multiple file/folder flow is precompressed: it is a ZIP.
-  if (content.precompressed) {
+  // Only the multiple file/folder flow is an archive: a ZIP.
+  if (content.archive) {
     say(
       `Sending ${count(fileCount, 'file', 'files')} (${formatFileSize(content.estimatedSize)}) as ${content.name}`,
     );

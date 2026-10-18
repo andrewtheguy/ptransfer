@@ -11,10 +11,11 @@ export type PayloadCompression = 'deflate' | 'none';
  * instead of each chunk lets a highly compressible file collapse into a few
  * chunks rather than one event per 48 KiB of plaintext.
  *
- * The rule is flow-based, not content-sniffed: a `precompressed` payload came
- * out of the multiple file/folder flow as a ZIP whose entries are already
- * deflated and is never recompressed ('none'); every other payload — a
- * single-file transfer — is always deflated, whether or not that shrinks it.
+ * The caller decides, by flow and file type rather than by sniffing content
+ * (see `wireEncodingFor`): a `precompressed` payload — a ZIP whose entries
+ * are already deflated, or a file whose format is compressed, such as audio
+ * or video — is never recompressed ('none'); every other payload is always
+ * deflated, whether or not that shrinks it.
  */
 export function compressPayload(
   data: Uint8Array,
@@ -23,9 +24,10 @@ export function compressPayload(
   payload: Uint8Array;
   compression: PayloadCompression;
 } {
-  return precompressed
-    ? { payload: data, compression: 'none' }
-    : { payload: deflateSync(data), compression: 'deflate' };
+  if (precompressed) return { payload: data, compression: 'none' };
+  // The fastest level: this runs on the page's own thread, over the whole
+  // file at once, and it is time the transfer waits on.
+  return { payload: deflateSync(data, { level: 1 }), compression: 'deflate' };
 }
 
 /**

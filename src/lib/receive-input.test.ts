@@ -29,7 +29,6 @@ function buildOfferBinary(): Uint8Array {
     createdAt: Date.now(),
     fileName: 'test.txt',
     fileSize: 1024,
-    contentEncoding: 'deflate-raw',
     mimeType: 'text/plain',
     publicKey,
     salt: new Uint8Array(16).fill(2),

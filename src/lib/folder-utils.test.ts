@@ -169,14 +169,91 @@ describe('createZipTransferSource', () => {
     expect(source.type).toBe('application/zip');
     expect(source.size).toBeNull();
     expect(source.estimatedSize).toBe(11 + big.length);
-    // Entries are already deflated; the transfer pipeline must not
-    // recompress this payload.
-    expect(source.precompressed).toBe(true);
+    // The archive does its own compression; the transfer pipeline must not
+    // deflate this payload again.
+    expect(source.archive).toBe(true);
 
-    const entries = unzipSync(await readAll(source.stream()));
+    const entries = unzipSync(await readAll(source.stream(true)));
     expect(Object.keys(entries).sort()).toEqual(['big.bin', 'hello.txt']);
     expect(new TextDecoder().decode(entries['hello.txt'])).toBe('hello world');
     expect(entries['big.bin']).toEqual(big);
+  });
+
+  it('stores every entry, as it is, when opened uncompressed', async () => {
+    const text = new TextEncoder().encode('the same line\n'.repeat(500));
+    const expected: Record<string, Uint8Array> = {
+      'notes.txt': text,
+      'ünï/empty.bin': new Uint8Array(0),
+    };
+    const archive = await readAll(
+      createZipTransferSource(
+        Object.entries(expected).map(([path, bytes]) => ({
+          path,
+          size: bytes.length,
+          lastModified: 0,
+          stream: () => new Blob([bytes as BlobPart]).stream(),
+        })),
+        'stored',
+      ).stream(false),
+    );
+
+    const view = new DataView(
+      archive.buffer,
+      archive.byteOffset,
+      archive.byteLength,
+    );
+    const central = readCentralEntries(archive);
+    expect(central.size).toBe(2);
+    for (const [name, bytes] of Object.entries(expected)) {
+      const entry = central.get(name);
+      if (!entry) throw new Error(`missing central entry for ${name}`);
+      expect(entry.method, `compression method for ${name}`).toBe(0);
+      expect(entry.compressedSize).toBe(bytes.length);
+      expect(entry.uncompressedSize).toBe(bytes.length);
+      expect(entry.crc, `central CRC for ${name}`).toBe(crc32(bytes));
+      expect(entry.madeOn).toBe(3);
+      expect(entry.externalAttrs >>> 16).toBe(0o100644);
+      const nameLength = view.getUint16(entry.localOffset + 26, true);
+      const extraLength = view.getUint16(entry.localOffset + 28, true);
+      const dataOffset = entry.localOffset + 30 + nameLength + extraLength;
+      expect(
+        archive.subarray(dataOffset, dataOffset + bytes.length),
+        `stored bytes for ${name}`,
+      ).toEqual(bytes);
+    }
+    const unpacked = unzipSync(archive);
+    for (const [name, bytes] of Object.entries(expected)) {
+      expect(unpacked[name]).toEqual(bytes);
+    }
+  });
+
+  it('stores an entry whose format is compressed already, even opened compressed', async () => {
+    const text = new TextEncoder().encode('the same line\n'.repeat(500));
+    const archive = await readAll(
+      createZipTransferSource(
+        [
+          {
+            path: 'clip.MP4',
+            size: text.length,
+            lastModified: 0,
+            stream: () => new Blob([text as BlobPart]).stream(),
+          },
+          {
+            path: 'notes.txt',
+            size: text.length,
+            lastModified: 0,
+            stream: () => new Blob([text as BlobPart]).stream(),
+          },
+        ],
+        'mixed',
+      ).stream(true),
+    );
+    const central = readCentralEntries(archive);
+    expect(central.get('clip.MP4')?.method).toBe(0);
+    expect(central.get('notes.txt')?.method).toBe(8);
+    const unpacked = unzipSync(archive);
+    expect(unpacked['clip.MP4']).toEqual(text);
+    expect(unpacked['notes.txt']).toEqual(text);
   });
 
   it('emits ZIP bytes before later file data is available', async () => {
@@ -203,7 +280,7 @@ describe('createZipTransferSource', () => {
       pickedZipEntries([first, second]),
       'bundle',
     )
-      .stream()
+      .stream(true)
       .getReader();
     const firstOutput = await reader.read();
 
@@ -229,7 +306,7 @@ describe('createZipTransferSource', () => {
       pickedZipEntries(files),
       'many-small-files',
     )
-      .stream()
+      .stream(true)
       .getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -273,7 +350,7 @@ describe('createZipTransferSource', () => {
     const files = [new File([emfPrefix as BlobPart], 'image.emf')];
 
     const archive = await readAll(
-      createZipTransferSource(pickedZipEntries(files), 'emf').stream(),
+      createZipTransferSource(pickedZipEntries(files), 'emf').stream(true),
     );
     await expectDeflatedEntriesWithValidCrc(archive, {
       'image.emf': emfPrefix,
@@ -288,7 +365,7 @@ describe('createZipTransferSource', () => {
     });
 
     const source = createZipTransferSource(pickedZipEntries([file]), 'folder');
-    const entries = unzipSync(await readAll(source.stream()));
+    const entries = unzipSync(await readAll(source.stream(true)));
     expect(Object.keys(entries)).toEqual(['folder/sub/a.txt']);
   });
 
@@ -299,7 +376,7 @@ describe('createZipTransferSource', () => {
       createZipTransferSource(
         [entryOf('ünï/cødé.txt', 2), entryOf('plain.txt', 2)],
         'names',
-      ).stream(),
+      ).stream(true),
     );
     const entries = readCentralEntries(archive);
     for (const entry of entries.values()) {
@@ -315,13 +392,13 @@ describe('createZipTransferSource', () => {
 
   it('stores a file dated before 1980, which a ZIP header cannot record', async () => {
     const source = createZipTransferSource([entryOf('epoch.txt', 3, 0)], 'old');
-    const entries = unzipSync(await readAll(source.stream()));
+    const entries = unzipSync(await readAll(source.stream(true)));
     expect(entries['epoch.txt']).toEqual(new Uint8Array(3));
   });
 
   it('produces a valid empty archive for no files', async () => {
     const source = createZipTransferSource([], 'empty');
-    const entries = unzipSync(await readAll(source.stream()));
+    const entries = unzipSync(await readAll(source.stream(true)));
     expect(Object.keys(entries)).toEqual([]);
   });
 
@@ -373,7 +450,7 @@ describe('createZipTransferSource', () => {
       [entryOf('photos/a\\b.txt', 1), entryOf('c\\.\\d.txt', 1)],
       'backslash',
     );
-    const entries = unzipSync(await readAll(source.stream()));
+    const entries = unzipSync(await readAll(source.stream(true)));
     expect(Object.keys(entries).sort()).toEqual([
       'c\\.\\d.txt',
       'photos/a\\b.txt',

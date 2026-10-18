@@ -5,7 +5,6 @@ import {
   CONTROL_RELAY_COUNT,
   MIN_CONTROL_RELAYS,
 } from './nostr-file/constants';
-import type { WireEncoding } from './transfer-source';
 
 /** Relays an offer may name, at most. */
 export const OFFER_RELAY_COUNT = CONTROL_RELAY_COUNT;
@@ -87,8 +86,6 @@ export interface SignalingPayload {
   fileName?: string;
   /** Input size of the payload; a progress hint, never the wire length. */
   fileSize?: number;
-  /** 'deflate-raw' payloads are inflated by the receiver after decryption. */
-  contentEncoding?: WireEncoding;
   mimeType?: string;
   salt?: number[]; // Salt for content encryption key derivation (from ECDH shared secret)
   /**
@@ -332,13 +329,7 @@ export function isValidSignalingPayload(
 
 /** The fields only an offer describes: what it is sending, and the salt every
  * derivation off the exchange uses. */
-const OFFER_ONLY_FIELDS = [
-  'fileName',
-  'fileSize',
-  'contentEncoding',
-  'mimeType',
-  'salt',
-] as const;
+const OFFER_ONLY_FIELDS = ['fileName', 'fileSize', 'mimeType', 'salt'] as const;
 
 /**
  * Offer-only means every offer-only field, not just the ones that steer a
@@ -414,7 +405,6 @@ export function generateMutualOfferBinary(
     createdAt: number;
     fileName: string;
     fileSize: number;
-    contentEncoding: WireEncoding;
     mimeType: string;
     publicKey: Uint8Array; // ECDH public key (65 bytes)
     salt: Uint8Array; // Salt for AES key derivation
@@ -434,7 +424,6 @@ export function generateMutualOfferBinary(
     createdAt: metadata.createdAt,
     fileName: metadata.fileName,
     fileSize: metadata.fileSize,
-    contentEncoding: metadata.contentEncoding,
     mimeType: metadata.mimeType,
     publicKey: Array.from(metadata.publicKey),
     salt: Array.from(metadata.salt),

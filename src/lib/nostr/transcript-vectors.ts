@@ -35,8 +35,7 @@ export const METADATA_VECTOR = {
     contentType: 'file',
     fileName: 'quarterly-report.pdf',
     fileSize: 1048576,
-    contentEncoding: 'deflate-raw',
     mimeType: 'application/pdf',
   } satisfies TransferMetadata,
-  digest: 'd71c5d4c12479dfb7e1e4f7c9fd169cddd73206e8c369d49a98f7b726a025f84',
+  digest: '44e4c2c7577ded8f19477a823a8caebb2b9b559d1c77c0aa44cc218001ba2c83',
 } as const;

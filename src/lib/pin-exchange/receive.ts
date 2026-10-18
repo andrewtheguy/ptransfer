@@ -521,9 +521,7 @@ export async function claimPin(
             typeof m.mimeType !== 'string' ||
             typeof m.fileSize !== 'number' ||
             !Number.isFinite(m.fileSize) ||
-            m.fileSize < 0 ||
-            (m.contentEncoding !== 'deflate-raw' &&
-              m.contentEncoding !== 'identity')
+            m.fileSize < 0
           ) {
             continue;
           }

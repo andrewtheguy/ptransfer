@@ -133,7 +133,7 @@ export function acceptOffer({
     throw new Error('Offer expired. Ask sender to create a new one.');
   }
 
-  const { fileName, fileSize, contentEncoding, mimeType, salt } = payload;
+  const { fileName, fileSize, mimeType, salt } = payload;
   if (!salt) {
     throw new Error('Invalid offer: missing encryption salt');
   }
@@ -142,8 +142,7 @@ export function acceptOffer({
     !mimeType ||
     typeof fileSize !== 'number' ||
     !Number.isFinite(fileSize) ||
-    fileSize < 0 ||
-    (contentEncoding !== 'deflate-raw' && contentEncoding !== 'identity')
+    fileSize < 0
   ) {
     throw new Error('Invalid offer: missing or invalid file metadata');
   }
@@ -163,7 +162,6 @@ export function acceptOffer({
       contentType: 'file',
       fileName,
       fileSize,
-      contentEncoding,
       mimeType,
     },
     salt: new Uint8Array(salt),
@@ -182,7 +180,6 @@ export function sameTransferMetadata(
     a.contentType === b.contentType &&
     a.fileName === b.fileName &&
     a.fileSize === b.fileSize &&
-    a.contentEncoding === b.contentEncoding &&
     a.mimeType === b.mimeType
   );
 }
@@ -317,18 +314,13 @@ export async function buildDirectAttempt(opts: {
   }
   sinkHolder.current = sink;
 
-  // Streaming receiver: decrypts each chunk into the sink as it arrives
-  // (inflating deflated payloads in between) and resolves once the sender's
-  // `end` checks out against what it stored.
-  const receiver = createTransferReceiver(
-    keys.key,
-    offer.metadata.contentEncoding,
-    sink,
-    {
-      estimatedBytes: offer.metadata.fileSize,
-      onProgress: opts.onProgress,
-    },
-  );
+  // Streaming receiver: decrypts each chunk into the sink as it arrives and
+  // resolves once the sender's `end` checks out against what it stored. A
+  // direct connection is not worth compressing for, so nothing is inflated.
+  const receiver = createTransferReceiver(keys.key, 'identity', sink, {
+    estimatedBytes: offer.metadata.fileSize,
+    onProgress: opts.onProgress,
+  });
 
   const rtc = new WebRTCConnection(
     opts.host.peerConnection,

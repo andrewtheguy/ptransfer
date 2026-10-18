@@ -8,7 +8,7 @@ import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
 import { serveUntilSent } from '@/lib/tor/serve';
 import { TOR_MAX_TRANSFER_BYTES, TOR_MAX_WIRE_BYTES } from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor';
-import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import type { TransferSource } from '@/lib/transfer-source';
 
 /**
  * Sending a file over a v3 onion service this browser tab publishes.
@@ -153,7 +153,6 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
           contentType: 'file',
           fileName,
           fileSize,
-          contentEncoding: wireEncodingFor(content),
           mimeType,
         };
 

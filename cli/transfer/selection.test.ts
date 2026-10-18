@@ -53,7 +53,7 @@ async function readAll(
 
 async function unpack(paths: string[]): Promise<Record<string, string>> {
   const { source } = await openSelection(paths);
-  const entries = unzipSync(await readAll(source.stream()));
+  const entries = unzipSync(await readAll(source.stream(true)));
   return Object.fromEntries(
     Object.entries(entries).map(([name, bytes]) => [
       name,
@@ -78,7 +78,7 @@ describe('openSelection', () => {
     const { notes } = await tree();
     const { source, fileCount } = await openSelection([notes]);
     expect(source.name).toBe('notes.txt');
-    expect(source.precompressed).toBe(false);
+    expect(source.archive).toBe(false);
     expect(fileCount).toBe(1);
   });
 
@@ -87,7 +87,7 @@ describe('openSelection', () => {
     const { source, fileCount } = await openSelection([photos]);
     expect(source.name).toMatch(/^photos_\d{14}\.zip$/);
     expect(source.type).toBe('application/zip');
-    expect(source.precompressed).toBe(true);
+    expect(source.archive).toBe(true);
     expect(source.estimatedSize).toBe(5);
     expect(fileCount).toBe(2);
     expect(await unpack([photos])).toEqual({
@@ -119,8 +119,8 @@ describe('openSelection', () => {
   it('streams the archive afresh for each receiver', async () => {
     const { photos } = await tree();
     const { source } = await openSelection([photos]);
-    const first = await readAll(source.stream());
-    expect(await readAll(source.stream())).toEqual(first);
+    const first = await readAll(source.stream(true));
+    expect(await readAll(source.stream(true))).toEqual(first);
   });
 
   it('stores a file dated 1970, before any ZIP date', async () => {
@@ -212,16 +212,16 @@ describe('openSelection', () => {
     let { source } = await openSelection([photos]);
     await writeFile(join(dir, 'other.jpg'), 'bee');
     await rename(join(dir, 'other.jpg'), b);
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(true))).rejects.toThrow(changed);
 
     ({ source } = await openSelection([photos]));
     await writeFile(b, 'bumblebee');
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(true))).rejects.toThrow(changed);
 
     ({ source } = await openSelection([photos]));
     await rm(b);
     await symlink(notes, b);
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(true))).rejects.toThrow(changed);
   });
 
   it('refuses a file name Windows would unpack outside the folder', async () => {

@@ -81,9 +81,19 @@ interface ClaimBody {
   onion: string;
 }
 
+/**
+ * What the Tor transport says about a file: the description every mode
+ * shares, and how its bytes travel, which on Tor is compressed (see
+ * `wireEncodingFor`).
+ */
+export interface TorTransferMetadata extends TransferMetadata {
+  /** 'deflate-raw' payloads are inflated by the receiver after decryption. */
+  contentEncoding: WireEncoding;
+}
+
 /** The same binding, plus what the receiver is about to be handed. */
 interface ConfirmBody extends ClaimBody {
-  metadata: TransferMetadata;
+  metadata: TorTransferMetadata;
 }
 
 /** How a client's connection to the onion service ended. */
@@ -99,7 +109,7 @@ export type ServiceHandshake =
 /** What the receiver holds once the service proved it knows the password. */
 export interface ClientHandshake {
   keys: TorSessionKeys;
-  metadata: TransferMetadata;
+  metadata: TorTransferMetadata;
 }
 
 /**
@@ -115,7 +125,7 @@ export async function runTorServiceHandshake(
   framed: TorFramedStream,
   password: string,
   onion: string,
-  metadata: TransferMetadata,
+  metadata: TorTransferMetadata,
 ): Promise<ServiceHandshake> {
   const hello = await receiveFrame(framed);
   if (hello.type !== 'hello') throw new Error('Expected a hello frame');
@@ -301,7 +311,7 @@ function decodePakeMessage(encoded: string): Uint8Array {
  * the peer's word, so every field is checked before it reaches a sink, a
  * progress bar, or a file name.
  */
-function parseMetadata(metadata: TransferMetadata): TransferMetadata {
+function parseMetadata(metadata: TorTransferMetadata): TorTransferMetadata {
   if (!metadata || typeof metadata !== 'object') {
     throw new Error('The sender sent no transfer metadata');
   }
