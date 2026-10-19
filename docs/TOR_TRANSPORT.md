@@ -10,7 +10,7 @@ This document is the **wire specification** for that mode. The browser tab
 and the CLI in `cli/` (`send --tor`, `receive --onion`) both run it from
 `src/lib`, so there is one implementation; where the code and this document
 disagree, this document is what the code is meant to do. The handshake carries
-its own version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
+its own version, `TOR_HANDSHAKE_VERSION` (currently `3`), in the `hello` and `offer`
 frames, and a mismatch is **refused rather than negotiated**: two builds
 that differ on the frames fail closed at the first exchange instead of part way
 through a transfer. Bump it for any change to the frames, together with the protocol version

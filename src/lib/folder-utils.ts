@@ -13,6 +13,8 @@ export interface ZipEntry {
    * in it, like `photos/2026/a.jpg`, keeps that folder when unpacked.
    */
   path: string;
+  /** Its MIME type, empty when unknown. */
+  type: string;
   size: number;
   /** Modification time, in milliseconds since the epoch. */
   lastModified: number;
@@ -342,7 +344,7 @@ async function writeZip(
         for (const file of entries) {
           // A file whose format is compressed already would not shrink.
           const entry =
-            compressed && !isCompressedFormat(file.path, '')
+            compressed && !isCompressedFormat(file.path, file.type)
               ? new ZipNativeDeflate(file.path)
               : new ZipStored(file.path);
           entry.mtime = zipMtime(file.lastModified);

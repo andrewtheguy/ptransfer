@@ -14,6 +14,7 @@ import { pickedZipEntries } from './picked-files';
 function entryOf(path: string, size: number, lastModified = 0): ZipEntry {
   return {
     path,
+    type: '',
     size,
     lastModified,
     stream: () => new Blob([new Uint8Array(size)]).stream(),
@@ -189,6 +190,7 @@ describe('createZipTransferSource', () => {
       createZipTransferSource(
         Object.entries(expected).map(([path, bytes]) => ({
           path,
+          type: '',
           size: bytes.length,
           lastModified: 0,
           stream: () => new Blob([bytes as BlobPart]).stream(),
@@ -234,12 +236,14 @@ describe('createZipTransferSource', () => {
         [
           {
             path: 'clip.MP4',
+            type: '',
             size: text.length,
             lastModified: 0,
             stream: () => new Blob([text as BlobPart]).stream(),
           },
           {
             path: 'notes.txt',
+            type: '',
             size: text.length,
             lastModified: 0,
             stream: () => new Blob([text as BlobPart]).stream(),
@@ -254,6 +258,20 @@ describe('createZipTransferSource', () => {
     const unpacked = unzipSync(archive);
     expect(unpacked['clip.MP4']).toEqual(text);
     expect(unpacked['notes.txt']).toEqual(text);
+  });
+
+  it('knows an entry compressed already by its MIME type, with no extension', async () => {
+    const text = new TextEncoder().encode('the same line\n'.repeat(500));
+    const clip = new File([text as BlobPart], 'clip', { type: 'video/mp4' });
+    const notes = new File([text as BlobPart], 'notes');
+    const archive = await readAll(
+      createZipTransferSource(pickedZipEntries([clip, notes]), 'mixed').stream(
+        true,
+      ),
+    );
+    const central = readCentralEntries(archive);
+    expect(central.get('clip')?.method).toBe(0);
+    expect(central.get('notes')?.method).toBe(8);
   });
 
   it('emits ZIP bytes before later file data is available', async () => {

@@ -135,7 +135,7 @@ export function chosenFileStream(
  * unit tests run under Node, which has none, and fall back to the generic
  * type. The receiver only ever uses it as a label.
  */
-function mimeTypeOf(path: string): string {
+export function mimeTypeOf(path: string): string {
   const sniffed =
     typeof Bun === 'undefined' ? '' : Bun.file(path).type.split(';')[0];
   return sniffed || 'application/octet-stream';
