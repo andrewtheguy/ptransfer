@@ -311,7 +311,7 @@ export function SendTab() {
                 {selectedFiles.length} file
                 {selectedFiles.length !== 1 ? 's' : ''} •{' '}
                 {formatFileSize(totalSize)}
-                {willZip && ' • Will be compressed into a ZIP archive'}
+                {willZip && ' • Will be packaged as a ZIP archive'}
               </span>
               <div className="flex gap-2 flex-shrink-0">
                 <Button
@@ -357,8 +357,8 @@ export function SendTab() {
                   Drop files here or click to select
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Multiple files will be compressed into a ZIP archive &bull;
-                  Max size: {formatFileSize(sizeLimit)}
+                  Multiple files will be packaged as a ZIP archive &bull; Max
+                  size: {formatFileSize(sizeLimit)}
                 </p>
               </div>
             </button>

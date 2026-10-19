@@ -9,7 +9,8 @@ export async function readSourceFully(
   source: TransferSource,
   isCancelled: () => boolean,
 ): Promise<Uint8Array> {
-  const reader = source.stream().getReader();
+  // The relay is a slow transport, so an archive deflates its entries.
+  const reader = source.stream(true).getReader();
   const parts: Uint8Array[] = [];
   let total = 0;
   try {

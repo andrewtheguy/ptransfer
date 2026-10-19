@@ -141,9 +141,9 @@ export async function sendFileLive(
     const fileHash = uint8ArrayToBase64(await sha256(data));
     stats.phaseMs.hash = Date.now() - hashStarted;
     // One deflate pass over the whole file before chunking, so a compressible
-    // file collapses into few chunks. A payload the multi-file/folder flow
-    // already compressed (a ZIP with deflated entries) travels as-is instead of
-    // being recompressed.
+    // file collapses into few chunks. A payload that is compressed already (a
+    // ZIP with deflated entries, or a file such as a video whose format is
+    // compressed) travels as-is instead of being recompressed.
     const compressStarted = Date.now();
     const { payload, compression } = compressPayload(data, meta.precompressed);
     stats.phaseMs.compress = Date.now() - compressStarted;

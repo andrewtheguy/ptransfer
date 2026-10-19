@@ -16,9 +16,11 @@
  *
  * Wire protocol (INTEROP_PROTOCOL.md §7):
  *   - The payload bytes are the source's wire encoding (see
- *     `wireEncodingFor`): a single-file source is deflated on the fly
- *     ('deflate-raw') and restored by the receiver, while a source the
- *     multi-file/folder flow already compressed travels as-is ('identity').
+ *     `wireEncodingFor`). The transport decides whether to compress: a
+ *     direct WebRTC connection carries every payload as it is ('identity'),
+ *     while on Tor a single-file source is deflated on the fly
+ *     ('deflate-raw') and restored by the receiver, and a ZIP from the
+ *     multi-file/folder flow deflates its own entries and travels as-is.
  *     Either way the final wire length is unknown during signaling.
  *   - Binary messages are content chunks produced by `encryptChunk`:
  *       [2-byte chunk index (big-endian)][12-byte nonce][ciphertext][16-byte tag]
@@ -315,6 +317,12 @@ function abortReasonFor(error: unknown): string {
 
 export interface SendOptions {
   /**
+   * Whether this transport is worth compressing for: false on a direct WebRTC
+   * connection, true on a slow one. Decides the wire encoding (see
+   * `wireEncodingFor`), which the receiver must have been told.
+   */
+  compressed: boolean;
+  /**
    * Called with the wire bytes handed to the transport, and the total. The
    * transport's backpressure is what admits them, so this tracks what the
    * link has accepted, not what this side has produced.
@@ -347,14 +355,14 @@ export async function sendFileOverLink(
   link: TransferLink,
   key: CryptoKey,
   source: TransferSource,
-  opts: SendOptions = {},
+  opts: SendOptions,
 ): Promise<number> {
   const { isCancelled } = opts;
   const reportProgress = paceProgress(opts.onProgress);
   const stallTimeoutMs = resolveStallTimeoutMs(opts.stallTimeoutMs);
   const maxWireBytes = resolveMaxWireBytes(opts.maxWireBytes);
   const progressTotal = source.size ?? source.estimatedSize;
-  const encoding = wireEncodingFor(source);
+  const encoding = wireEncodingFor(source, opts.compressed);
 
   /** Chunks handed to the link. */
   let sent = 0;
@@ -423,7 +431,7 @@ export async function sendFileOverLink(
 
   const openReader = () =>
     (encoding === 'deflate-raw'
-      ? source.stream().pipeThrough(
+      ? source.stream(opts.compressed).pipeThrough(
           // lib.dom types the deflater's writable as BufferSource, which the
           // invariant pipeThrough signature rejects even though every chunk
           // (a Uint8Array) is one.
@@ -431,7 +439,7 @@ export async function sendFileOverLink(
             'deflate-raw',
           ) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>,
         )
-      : source.stream()
+      : source.stream(opts.compressed)
     ).getReader();
   // Opened inside the cleanup scope below: a source that fails to open still
   // releases the link and tells the receiver.

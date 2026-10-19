@@ -102,7 +102,6 @@ describe('Transfer metadata hash', () => {
     const variants: TransferMetadata[] = [
       { ...metadata, fileName: 'quarterly-report.exe' },
       { ...metadata, fileSize: 1048577 },
-      { ...metadata, contentEncoding: 'identity' },
       { ...metadata, mimeType: 'text/html' },
     ];
 

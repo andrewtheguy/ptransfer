@@ -149,19 +149,22 @@ relay* below covers what happens then.
 The plaintext (file or ZIP, materialized in memory, ≤ 100 MiB) is passed through
 `compressPayload`, then the resulting payload is split into
 `NOSTR_FILE_CHUNK_SIZE` = 48 KiB chunks. A single-file payload is deflated once as a
-whole; a multi-file/folder ZIP is already compressed and travels unchanged. Each chunk
-then goes through:
+whole, at the fastest level, unless its format is compressed already (audio, video,
+and the like — the rule of
+[`INTEROP_PROTOCOL.md` §6](./INTEROP_PROTOCOL.md#6-wire-encoding)); a multi-file/folder
+ZIP is already compressed and travels unchanged. Each chunk then goes through:
 
 ```
-[whole-file deflate for a single file | identity for a generated ZIP]
+[whole-file deflate for a single file | identity for a compressed format or a generated ZIP]
     → chunk → AES-256-GCM (nonce ‖ ciphertext ‖ tag) → Z85
 ```
 
 - Compressing before chunking means a highly compressible single file collapses into a
-  few chunks instead of one event per 48 KiB of plaintext. Single files are always
-  deflated, even when the output is slightly larger; only payloads from the
-  multi-file/folder ZIP flow use `compression: 'none'`, because their entries have
-  already been deflated and the archive is never recompressed.
+  few chunks instead of one event per 48 KiB of plaintext. Single files are
+  deflated even when the output is slightly larger; only a file whose format is
+  compressed already and a payload from the multi-file/folder ZIP flow use
+  `compression: 'none'`, because there deflate has nothing left to remove. The
+  choice is by MIME type and extension, never by sniffing the bytes.
   The manifest carries `payloadSize` (the chunked byte count) next to `fileSize`; the
   receiver assembles `payloadSize` bytes, inflates with the output bounded by
   `fileSize` (decompression-bomb guard, exact-size match required), then verifies the

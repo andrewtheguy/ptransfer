@@ -80,7 +80,6 @@ export async function savedFrom(
     contentType: 'file',
     fileName,
     fileSize,
-    contentEncoding: 'identity',
     mimeType,
   });
   try {

@@ -16,7 +16,7 @@ import {
   type ZipEntry,
 } from '@/lib/folder-utils';
 import type { TransferSource } from '@/lib/transfer-source';
-import { chosenFileStream, openFileSource } from './files';
+import { chosenFileStream, mimeTypeOf, openFileSource } from './files';
 
 /**
  * The paths `send` was given, as one transfer source, by the rule the tab
@@ -195,6 +195,7 @@ function diskEntry(
 ): ZipEntry {
   return {
     path: inArchive,
+    type: mimeTypeOf(path),
     size: info.size,
     lastModified: info.mtimeMs,
     // A fresh read each time, as for a single file: a receiver that declines

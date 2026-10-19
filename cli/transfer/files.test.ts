@@ -19,7 +19,7 @@ import { createOnionStreamPair } from '@/lib/tor/mock-stream';
 import { serveUntilSent } from '@/lib/tor/serve';
 import { receiveFileOverTor } from '@/lib/tor/transfer';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
-import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import type { TransferSource } from '@/lib/transfer-source';
 import {
   createFileSink,
   destinationFolder,
@@ -55,11 +55,11 @@ describe('openFileSource', () => {
     expect(source.name).toBe('notes.txt');
     expect(source.size).toBe(data.length);
     expect(source.estimatedSize).toBe(data.length);
-    expect(source.precompressed).toBe(false);
+    expect(source.archive).toBe(false);
     expect(source.projectedWireBytes).toBeGreaterThan(data.length);
-    expect(await readAll(source.stream())).toEqual(data);
+    expect(await readAll(source.stream(false))).toEqual(data);
     // A receiver that declined leaves the next one a fresh read.
-    expect(await readAll(source.stream())).toEqual(data);
+    expect(await readAll(source.stream(false))).toEqual(data);
   });
 
   it('refuses what is not a regular file', async () => {
@@ -78,15 +78,15 @@ describe('openFileSource', () => {
     let source = await openFileSource(path);
     await writeFile(join(dir, 'other.txt'), 'notes');
     await rename(join(dir, 'other.txt'), path);
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(false))).rejects.toThrow(changed);
 
     source = await openFileSource(path);
     await writeFile(path, 'longer notes');
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(false))).rejects.toThrow(changed);
 
     source = await openFileSource(path);
     await rm(path);
-    await expect(readAll(source.stream())).rejects.toThrow(changed);
+    await expect(readAll(source.stream(false))).rejects.toThrow(changed);
   });
 
   it('follows a symbolic link named on the command line', async () => {
@@ -95,7 +95,7 @@ describe('openFileSource', () => {
     const link = join(dir, 'link.txt');
     await symlink(path, link);
     const source = await openFileSource(link);
-    expect(new TextDecoder().decode(await readAll(source.stream()))).toBe(
+    expect(new TextDecoder().decode(await readAll(source.stream(false)))).toBe(
       'notes',
     );
   });
@@ -268,7 +268,6 @@ function serveToFile(content: TransferSource, destination: string) {
     contentType: 'file',
     fileName: content.name,
     fileSize: content.estimatedSize,
-    contentEncoding: wireEncodingFor(content),
     mimeType: content.type,
   };
   const [serviceSide, clientSide] = createOnionStreamPair();

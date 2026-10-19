@@ -22,6 +22,7 @@ export const supportsFolderSelection =
 export function pickedZipEntries(files: readonly File[]): ZipEntry[] {
   return files.map((file) => ({
     path: file.webkitRelativePath || file.name,
+    type: file.type,
     size: file.size,
     lastModified: file.lastModified,
     stream: () => file.stream(),

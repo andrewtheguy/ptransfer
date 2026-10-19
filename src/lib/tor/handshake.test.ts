@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { TransferMetadata } from '@/lib/nostr';
 import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import { createFileTransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
@@ -10,9 +9,14 @@ import {
   type ServiceHandshake,
   sendCancel,
   sendReady,
+  type TorTransferMetadata,
 } from './handshake';
 import { createOnionStreamPair } from './mock-stream';
-import { receiveFileOverTor, sendFileOverTor } from './transfer';
+import {
+  receiveFileOverTor,
+  sendFileOverTor,
+  torWireEncoding,
+} from './transfer';
 
 const ONION =
   'zrmxlosp6cvmkhxwhx7267wkvqyztsrmloqw76eu4fhn2gsbg5zk4kad.onion:9735';
@@ -20,7 +24,7 @@ const OTHER =
   'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion:9735';
 const PASSWORD = 'ABCDEFGHJKLA';
 
-function metadata(): TransferMetadata {
+function metadata(): TorTransferMetadata {
   return {
     contentType: 'file',
     fileName: 'report.pdf',
@@ -166,11 +170,11 @@ describe('a Tor transfer end to end', () => {
     const source = createFileTransferSource(file);
 
     const [service, client] = pair();
-    const serviceMetadata: TransferMetadata = {
+    const serviceMetadata: TorTransferMetadata = {
       contentType: 'file',
       fileName: source.name,
       fileSize: source.estimatedSize,
-      contentEncoding: 'deflate-raw',
+      contentEncoding: torWireEncoding(source),
       mimeType: source.type,
     };
 

@@ -183,7 +183,7 @@ export function SendMode({
         <Note>Reading what was marked...</Note>
       ) : (
         <text fg={theme.good}>
-          {opened.source.precompressed
+          {opened.source.archive
             ? `${opened.fileCount} files · ${formatFileSize(opened.source.estimatedSize)} as ${opened.source.name}`
             : `${opened.source.name} · ${formatFileSize(opened.source.estimatedSize)}`}
         </text>

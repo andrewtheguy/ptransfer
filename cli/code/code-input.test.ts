@@ -19,7 +19,6 @@ function offerCode(): string {
         createdAt: Date.now(),
         fileName: 'notes.txt',
         fileSize: 5,
-        contentEncoding: 'deflate-raw',
         mimeType: 'text/plain',
         publicKey,
         salt: new Uint8Array(16).fill(7),

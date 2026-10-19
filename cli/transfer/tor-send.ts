@@ -9,7 +9,7 @@ import {
   TOR_SUGGESTED_MAX_BYTES,
 } from '@/lib/tor/transfer';
 import type { OnionService, WebtorClient } from '@/lib/tor/webtor-api';
-import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
+import type { TransferSource } from '@/lib/transfer-source';
 import { onInterrupt } from '../interrupt';
 import { bootstrapTor, closeTor, type TorOptions } from '../tor/bootstrap';
 import type { Presenter } from '../ui/presenter';
@@ -117,7 +117,6 @@ export async function sendOverTor(options: TorSendOptions): Promise<number> {
       contentType: 'file',
       fileName: fileMetadata.fileName,
       fileSize: fileMetadata.fileSize,
-      contentEncoding: wireEncodingFor(content),
       mimeType: fileMetadata.mimeType,
     };
     await serveUntilSent({

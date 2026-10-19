@@ -10,7 +10,7 @@ This document is the **wire specification** for that mode. The browser tab
 and the CLI in `cli/` (`send --tor`, `receive --onion`) both run it from
 `src/lib`, so there is one implementation; where the code and this document
 disagree, this document is what the code is meant to do. The handshake carries
-its own version, `TOR_HANDSHAKE_VERSION` (currently `2`), in the `hello` and `offer`
+its own version, `TOR_HANDSHAKE_VERSION` (currently `3`), in the `hello` and `offer`
 frames, and a mismatch is **refused rather than negotiated**: two builds
 that differ on the frames fail closed at the first exchange instead of part way
 through a transfer. Bump it for any change to the frames, together with the protocol version
@@ -151,12 +151,15 @@ another even if the keys ever collided. Every field is verified by the opener.
 | claim | `{ type: "claim", version, onion }` |
 | confirm | `{ type: "confirm", version, onion, metadata }` |
 
-`metadata` is the same `TransferMetadata` the other modes carry — `contentType`
-(always `file`), `fileName`, `fileSize`, `contentEncoding`, `mimeType`.
-`fileSize` is the sender's *input* size, a progress hint and never the wire
-length; `contentEncoding` is one of `deflate-raw` or `identity` under the same
-flow-based rule as every other mode (a single file deflates, a generated ZIP
-does not).
+`metadata` is the `TransferMetadata` the other modes carry — `contentType`
+(always `file`), `fileName`, `fileSize`, `mimeType` — plus the
+`contentEncoding` this transport sends the payload in. `fileSize` is the
+sender's *input* size, a progress hint and never the wire length;
+`contentEncoding` is one of `deflate-raw` or `identity` under the rule for a
+slow transport (a single file deflates unless its format is compressed
+already, a generated ZIP does not; see
+[`INTEROP_PROTOCOL.md` §6](./INTEROP_PROTOCOL.md#6-wire-encoding)). A receiver
+rejects any other value.
 
 ### Key schedule
 
@@ -241,7 +244,8 @@ additional authenticated data, written as the stream takes them, then an `end`
 with the chunk and byte counts — or an `abort` from the sender, with its
 reason. Nothing travels back: the receiver verifies every chunk and the final
 counts on its own and hangs up. A single file is deflated on the wire and restored on
-receipt; a generated ZIP travels as-is. See
+receipt, unless its format is compressed already; a generated ZIP, whose
+entries are deflated unless their format is compressed already, travels as-is. See
 [`INTEROP_PROTOCOL.md` §7](./INTEROP_PROTOCOL.md#7-transfer) for that layer.
 
 ## Limits

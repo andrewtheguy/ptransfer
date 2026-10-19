@@ -110,7 +110,6 @@ JSON, with these fields:
 | `confirm` | base64 of the 16-byte tag (§3.2) | answer only, **required** |
 | `fileName` | non-empty string | offer only |
 | `fileSize` | non-negative integer, the **input** size | offer only |
-| `contentEncoding` | `"deflate-raw"` \| `"identity"` | offer only |
 | `mimeType` | string | offer only |
 | `salt` | array of 16 byte values | offer only |
 | `relays` | array of `wss://` URLs | offer only, optional |
@@ -129,13 +128,12 @@ Rules both sides enforce:
 - `relays` and `anon` are mutually exclusive: they select the two alternative
   fallbacks, and an offer carrying both would ask the receiver to choose.
 - An offer must describe what it is offering — `salt`, `fileName`, `fileSize`,
-  `contentEncoding` — and a receiver refuses one that does not. Where it does
+  `mimeType` — and a receiver refuses one that does not. Where it does
   so is not fixed here — the container may be checked up front or as the
   fields are acted on — and no sender produces such an offer.
-- `contentEncoding` follows the flow-based rule of
-  [INTEROP_PROTOCOL.md §6](./INTEROP_PROTOCOL.md#6-wire-encoding): a single
-  file is `deflate-raw`, a generated ZIP is `identity`. Any other value is
-  rejected.
+- The offer names no wire encoding. The direct route never compresses, and
+  each fallback names its own (see
+  [INTEROP_PROTOCOL.md §6](./INTEROP_PROTOCOL.md#6-wire-encoding)).
 - `fileSize` is a progress hint, never a bound. The authoritative wire count is
   the transfer's `end`.
 

@@ -13,7 +13,11 @@ import type { NostrFilePool } from '@/lib/nostr-file/pool';
 import type { RelaySession } from '@/lib/nostr-file/session';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
-import { runTorClientHandshake, sendReady } from './handshake';
+import {
+  runTorClientHandshake,
+  sendReady,
+  type TorTransferMetadata,
+} from './handshake';
 import {
   type OnionAddress,
   parseOnionAddress,
@@ -268,14 +272,13 @@ function firstMismatch(
   if (offered.fileName !== expected.fileName) return 'name';
   if (offered.fileSize !== expected.fileSize) return 'size';
   if (offered.mimeType !== expected.mimeType) return 'type';
-  if (offered.contentEncoding !== expected.contentEncoding) return 'encoding';
   if (offered.contentType !== expected.contentType) return 'content type';
   return null;
 }
 
 export interface AnonymousRelayReceipt {
   payload: Blob;
-  metadata: TransferMetadata;
+  metadata: TorTransferMetadata;
   /** The storage behind `payload`, for the caller to discard when done. */
   sink: AppendSink;
 }

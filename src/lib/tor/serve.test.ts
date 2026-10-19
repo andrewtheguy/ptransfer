@@ -66,7 +66,7 @@ describe('serveUntilSent', () => {
       size: total,
       estimatedSize: total,
       projectedWireBytes: total,
-      precompressed: true,
+      archive: true,
       stream: () =>
         new ReadableStream<Uint8Array>({
           async pull(controller) {
@@ -86,7 +86,6 @@ describe('serveUntilSent', () => {
       contentType: 'file',
       fileName: source.name,
       fileSize: total,
-      contentEncoding: 'identity',
       mimeType: source.type,
     };
 

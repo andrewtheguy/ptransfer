@@ -41,7 +41,6 @@ describe('Code Exchange Signaling Utils', () => {
       createdAt: Date.now(),
       fileName: 'test.txt',
       fileSize: 1024,
-      contentEncoding: 'deflate-raw' as const,
       mimeType: 'text/plain',
       publicKey: mockPublicKey,
       salt: mockSalt,
@@ -65,7 +64,6 @@ describe('Code Exchange Signaling Utils', () => {
     expect(parsed?.candidates).toHaveLength(1);
     expect(parsed?.candidates[0]).toBe(mockCandidates[0]);
     expect(parsed?.fileName).toBe(metadata.fileName);
-    expect(parsed?.contentEncoding).toBe(metadata.contentEncoding);
     expect(parsed?.publicKey).toEqual(Array.from(mockPublicKey));
   });
 
@@ -98,7 +96,6 @@ describe('Code Exchange Signaling Utils', () => {
       salt: mockSalt,
       fileName: 'secret-file-name.txt',
       fileSize: 100,
-      contentEncoding: 'deflate-raw' as const,
       mimeType: 'text/plain',
     };
 
@@ -172,7 +169,6 @@ describe('offer-borne fallback relays', () => {
     createdAt: Date.now(),
     fileName: 'test.txt',
     fileSize: 1024,
-    contentEncoding: 'deflate-raw' as const,
     mimeType: 'text/plain',
     publicKey,
     salt,
@@ -235,7 +231,6 @@ describe('offer-borne fallback relays', () => {
     const offerOnly = {
       fileName: 'other.pdf',
       fileSize: 1,
-      contentEncoding: 'identity',
       mimeType: 'text/plain',
       salt: Array.from(new Uint8Array(16)),
     };
@@ -309,7 +304,6 @@ describe('the anonymous fallback flag', () => {
     createdAt: Date.now(),
     fileName: 'test.txt',
     fileSize: 1024,
-    contentEncoding: 'deflate-raw' as const,
     mimeType: 'text/plain',
     publicKey,
     salt: new Uint8Array(16).fill(2),
@@ -407,7 +401,6 @@ describe('answer confirmation tag', () => {
       createdAt: Date.now(),
       fileName,
       fileSize: 1024,
-      contentEncoding: 'identity' as const,
       mimeType: 'text/plain',
       publicKey: senderKeys.publicKeyBytes,
       salt,

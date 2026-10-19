@@ -53,7 +53,6 @@ function code(candidates: number, anonymous = false): string {
         createdAt: Date.now(),
         fileName: 'holiday-photos.zip',
         fileSize: 128 * 1024 * 1024,
-        contentEncoding: 'identity',
         mimeType: 'application/zip',
         publicKey: crypto.getRandomValues(new Uint8Array(65)),
         salt: crypto.getRandomValues(new Uint8Array(16)),

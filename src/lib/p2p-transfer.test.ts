@@ -72,7 +72,7 @@ function zipSource(data: Uint8Array, size: number | null = data.length) {
     size,
     estimatedSize: data.length,
     projectedWireBytes: data.length,
-    precompressed: true,
+    archive: true,
     stream: () => new Blob([data as BlobPart]).stream(),
   } satisfies TransferSource;
 }
@@ -188,6 +188,7 @@ const tick = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Run a whole transfer over a duplex channel pair, as the hooks do. */
 async function roundTrip(
   source: TransferSource,
+  compressed: boolean,
   encoding: WireEncoding,
 ): Promise<{ wireBytes: number; blob: Blob }> {
   const key = await makeKey();
@@ -198,7 +199,9 @@ async function roundTrip(
   const [senderChannel, receiverChannel] = channelPair();
   receiver.attach(receiverChannel);
 
-  const wireBytes = await sendFileOverLink(senderChannel, key, source);
+  const wireBytes = await sendFileOverLink(senderChannel, key, source, {
+    compressed,
+  });
   const blob = await receiver.done;
   return { wireBytes, blob };
 }
@@ -243,7 +246,7 @@ describe('parseControl', () => {
 });
 
 describe('sendFileOverLink', () => {
-  it('deflates a single-file source on the wire and the receiver restores it', async () => {
+  it('deflates a single-file source on a compressed link and the receiver restores it', async () => {
     // Compressible so the deflated wire stream is visibly smaller.
     const data = new TextEncoder().encode(
       'the same line of text, over and over\n'.repeat(8_000),
@@ -251,20 +254,66 @@ describe('sendFileOverLink', () => {
     const source = createFileTransferSource(
       new File([data as BlobPart], 'notes.txt', { type: 'text/plain' }),
     );
-    expect(source.precompressed).toBe(false);
+    expect(source.archive).toBe(false);
 
-    const { wireBytes, blob } = await roundTrip(source, 'deflate-raw');
+    const { wireBytes, blob } = await roundTrip(source, true, 'deflate-raw');
 
     expect(wireBytes).toBeLessThan(data.length / 10);
     expect(blob.size).toBe(data.length);
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
   });
 
-  it('never recompresses a precompressed source: the wire carries its exact bytes', async () => {
+  it('carries a single-file source as it is on an uncompressed link', async () => {
+    // Compressible, so a deflated wire stream would be visibly smaller.
+    const data = new TextEncoder().encode(
+      'the same line of text, over and over\n'.repeat(8_000),
+    );
+    const source = createFileTransferSource(
+      new File([data as BlobPart], 'notes.txt', { type: 'text/plain' }),
+    );
+
+    const { wireBytes, blob } = await roundTrip(source, false, 'identity');
+
+    expect(wireBytes).toBe(data.length);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
+  });
+
+  it('never deflates a file whose format is compressed already', async () => {
+    // Compressible bytes, so only the file's type keeps them from deflate.
+    const data = new TextEncoder().encode('not really a video\n'.repeat(8_000));
+    const source = createFileTransferSource(
+      new File([data as BlobPart], 'clip.mp4', { type: 'video/mp4' }),
+    );
+
+    const { wireBytes, blob } = await roundTrip(source, true, 'identity');
+
+    expect(wireBytes).toBe(data.length);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
+  });
+
+  it('opens an archive compressed only on a compressed link', async () => {
+    const opened: boolean[] = [];
+    const data = makePlaintext(100);
+    const source: TransferSource = {
+      ...zipSource(data, null),
+      stream: (compressed) => {
+        opened.push(compressed);
+        return new Blob([data as BlobPart]).stream();
+      },
+    };
+
+    await roundTrip(source, true, 'identity');
+    await roundTrip(source, false, 'identity');
+
+    expect(opened).toEqual([true, false]);
+  });
+
+  it('never recompresses an archive: the wire carries its exact bytes', async () => {
     const data = makePlaintext(ENCRYPTION_CHUNK_SIZE + 1234);
 
     const { wireBytes, blob } = await roundTrip(
       zipSource(data, null),
+      true,
       'identity',
     );
 
@@ -272,7 +321,7 @@ describe('sendFileOverLink', () => {
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
   });
 
-  it('sends a full chunk before an unknown-size precompressed source has finished producing', async () => {
+  it('sends a full chunk before an unknown-size archive has finished producing', async () => {
     const key = await makeKey();
     let releaseRemainder!: () => void;
     let remainderReleased = false;
@@ -298,7 +347,9 @@ describe('sendFileOverLink', () => {
     };
     const peer = scriptedLink();
 
-    const sending = sendFileOverLink(peer.link, key, source);
+    const sending = sendFileOverLink(peer.link, key, source, {
+      compressed: false,
+    });
     await tick();
     expect(peer.chunks()).toBe(1);
     expect(remainderReleased).toBe(false);
@@ -317,7 +368,7 @@ describe('sendFileOverLink', () => {
     const peer = scriptedLink();
 
     await expect(
-      sendFileOverLink(peer.link, key, zipSource(data)),
+      sendFileOverLink(peer.link, key, zipSource(data), { compressed: false }),
     ).resolves.toBe(data.length);
 
     expect(peer.chunks()).toBe(3);
@@ -334,6 +385,7 @@ describe('sendFileOverLink', () => {
     const progress: number[] = [];
 
     await sendFileOverLink(peer.link, key, zipSource(data), {
+      compressed: false,
       onProgress: (current) => progress.push(current),
     });
 
@@ -356,7 +408,7 @@ describe('sendFileOverLink', () => {
       senderChannel,
       key,
       zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 3)),
-      { isCancelled: () => cancelled },
+      { compressed: false, isCancelled: () => cancelled },
     );
     await tick();
     cancelled = true;
@@ -379,9 +431,9 @@ describe('sendFileOverLink', () => {
       },
     };
 
-    await expect(sendFileOverLink(peer.link, key, source)).rejects.toThrow(
-      'The file is no longer readable',
-    );
+    await expect(
+      sendFileOverLink(peer.link, key, source, { compressed: false }),
+    ).rejects.toThrow('The file is no longer readable');
     expect(peer.listeners()).toBe(0);
     expect(peer.controls().at(-1)?.t).toBe('abort');
   });
@@ -395,6 +447,7 @@ describe('sendFileOverLink', () => {
       senderChannel,
       key,
       zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 3)),
+      { compressed: false },
     );
     await tick();
 
@@ -420,7 +473,7 @@ describe('sendFileOverLink', () => {
         senderChannel,
         key,
         zipSource(makePlaintext(ENCRYPTION_CHUNK_SIZE * 2)),
-        { stallTimeoutMs: 20 },
+        { compressed: false, stallTimeoutMs: 20 },
       ),
     ).rejects.toThrow('Transfer stalled');
     // The one chunk that got out, then the abort — which does not wait its
@@ -441,6 +494,7 @@ describe('sendFileOverLink', () => {
 
     await expect(
       sendFileOverLink(senderChannel, key, zipSource(makePlaintext(100)), {
+        compressed: false,
         stallTimeoutMs: 20,
       }),
     ).rejects.toThrow('stopped draining');
@@ -468,6 +522,7 @@ describe('sendFileOverLink', () => {
       senderChannel,
       key,
       zipSource(data),
+      { compressed: false },
     );
     const blob = await received;
     expect(wireBytes).toBe(data.length);
@@ -483,6 +538,7 @@ describe('sendFileOverLink', () => {
       senderChannel,
       key,
       zipSource(makePlaintext(100)),
+      { compressed: false },
     );
     await tick();
     expect(senderEnd.sent).toHaveLength(2);
@@ -520,9 +576,12 @@ describe('sendFileOverLink', () => {
     }, 1);
 
     try {
-      const wireBytes = await sendFileOverLink(senderChannel, key, {
-        ...zipSource(data),
-      });
+      const wireBytes = await sendFileOverLink(
+        senderChannel,
+        key,
+        { ...zipSource(data) },
+        { compressed: false },
+      );
       const blob = await receiver.done;
       expect(wireBytes).toBe(data.length);
       expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);

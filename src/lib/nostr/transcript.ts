@@ -6,7 +6,7 @@ import type { RendezvousPayload, TransferMetadata } from './types';
  * newer one.
  */
 const TRANSCRIPT_LABEL = 'ptransfer:nostr-rendezvous-transcript:v4';
-const METADATA_LABEL = 'ptransfer:nostr-metadata-transcript:v2';
+const METADATA_LABEL = 'ptransfer:nostr-metadata-transcript:v3';
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -83,7 +83,6 @@ export async function computeTransferMetadataHash(
     metadata.contentType,
     metadata.fileName,
     metadata.fileSize,
-    metadata.contentEncoding,
     metadata.mimeType,
   ]);
 

@@ -49,7 +49,7 @@ import {
   deriveOnionPassword,
   serveOverAnonymousRelay,
 } from '@/lib/tor/code-relay';
-import type { TransferSource } from '@/lib/transfer-source';
+import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
 import { WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 import { lingerAfterSend } from './hang-up';
@@ -396,7 +396,6 @@ export async function createSenderOffer(opts: {
       createdAt,
       fileName: metadata.fileName,
       fileSize: metadata.fileSize,
-      contentEncoding: metadata.contentEncoding,
       mimeType: metadata.mimeType,
       publicKey: ecdhKeyPair.publicKeyBytes,
       salt,
@@ -514,7 +513,7 @@ export interface CompleteSendOptions {
 export async function completeSend(opts: CompleteSendOptions): Promise<void> {
   const { offer, answer, content, metadata, fallback, isCancelled, report } =
     opts;
-  const { fileName, fileSize, mimeType, contentEncoding } = metadata;
+  const { fileName, fileSize, mimeType } = metadata;
   const fileMetadata = { fileName, fileSize, mimeType };
   const { rtc, salt } = offer;
 
@@ -652,6 +651,8 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
   // Encrypted chunks as the channel takes them, then `end`; complete once
   // all of it has left this side's buffer.
   await sendFileOverLink(channel, key, content, {
+    // Deflating costs more time than a direct connection saves.
+    compressed: false,
     onProgress: (current, total) => {
       if (!isCancelled()) report(transferring(current, total));
     },
@@ -740,7 +741,6 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
           contentType: 'file',
           fileName,
           fileSize,
-          contentEncoding,
           mimeType,
         },
         fileMetadata,
@@ -835,7 +835,12 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
       try {
         await sendFileLive(
           data,
-          { fileName, mimeType, precompressed: content.precompressed },
+          {
+            fileName,
+            mimeType,
+            // The relay compresses the whole payload by the same rule.
+            precompressed: wireEncodingFor(content, true) === 'identity',
+          },
           {
             pool,
             session,

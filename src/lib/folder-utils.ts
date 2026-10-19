@@ -1,4 +1,5 @@
 import { type FlateError, Zip, ZipPassThrough } from 'fflate';
+import { isCompressedFormat } from './compressed-formats';
 import { deflateUpperBound, type TransferSource } from './transfer-source';
 
 /**
@@ -12,6 +13,8 @@ export interface ZipEntry {
    * in it, like `photos/2026/a.jpg`, keeps that folder when unpacked.
    */
   path: string;
+  /** Its MIME type, empty when unknown. */
+  type: string;
   size: number;
   /** Modification time, in milliseconds since the epoch. */
   lastModified: number;
@@ -25,6 +28,35 @@ const ZIP_ORIGIN_UNIX = 3;
  * bits, here a regular file readable by all and writable by its owner.
  */
 const ZIP_REGULAR_FILE_ATTRS = (0o100644 << 16) >>> 0;
+
+/**
+ * Mark `entry` as made on Unix, as an ordinary file. fflate's default origin
+ * is MS-DOS, and Info-ZIP's unzip — what a Linux system unpacks with — reads
+ * the name of an MS-DOS entry as code page 437 even when the entry is flagged
+ * UTF-8, so every non-ASCII name came out mangled. A picked file has no mode
+ * to carry, so every entry gets the same one.
+ */
+function madeOnUnix(entry: ZipPassThrough): void {
+  entry.os = ZIP_ORIGIN_UNIX;
+  entry.attrs = ZIP_REGULAR_FILE_ATTRS;
+}
+
+/**
+ * ZIP entry stored as it is, for a transport that is not worth compressing
+ * for. Its bytes reach ondata as they are pushed, so it is flushed as soon as
+ * the last of them is.
+ */
+class ZipStored extends ZipPassThrough {
+  readonly flushed = Promise.resolve();
+
+  constructor(filename: string) {
+    super(filename);
+    madeOnUnix(this);
+  }
+
+  /** Nothing runs behind a stored entry to stop. */
+  terminate(): void {}
+}
 
 /**
  * ZIP entry compressed with the native CompressionStream.
@@ -50,13 +82,7 @@ class ZipNativeDeflate extends ZipPassThrough {
     super(filename);
     // Written into the local header at zip.add() time, so set before adding.
     this.compression = 8;
-    // Made on Unix, as an ordinary file. fflate's default origin is MS-DOS,
-    // and Info-ZIP's unzip — what a Linux system unpacks with — reads the
-    // name of an MS-DOS entry as code page 437 even when the entry is flagged
-    // UTF-8, so every non-ASCII name came out mangled. A picked file has no
-    // mode to carry, so every entry gets the same one.
-    this.os = ZIP_ORIGIN_UNIX;
-    this.attrs = ZIP_REGULAR_FILE_ATTRS;
+    madeOnUnix(this);
     const deflater = new CompressionStream('deflate-raw');
     this.deflateWriter = deflater.writable.getWriter();
     this.flushed = this.pump(deflater.readable);
@@ -104,8 +130,9 @@ const ZIP_PER_ENTRY_BYTES = 160;
 const ZIP_TRAILER_BYTES = 128;
 
 /**
- * An upper bound on the archive a selection will produce. Every entry is
- * deflated individually, so each contributes its own deflate bound as well as
+ * An upper bound on the archive a selection will produce, whether its entries
+ * are stored or deflated. A deflated entry can come out larger than a stored
+ * one, so each contributes its own deflate bound as well as
  * its share of the ZIP's bookkeeping — which is what makes a selection of many
  * tiny files cost far more on the wire than the sum of its file sizes.
  */
@@ -183,8 +210,9 @@ function checkEntryPaths(entries: readonly ZipEntry[]): void {
  * Works with both folder selection and multi-file selection.
  *
  * Opening the source starts archive generation: entries are deflated with the
- * native CompressionStream and each ZIP output chunk is handed directly to
- * the transfer consumer. The TransformStream writer supplies backpressure, so
+ * native CompressionStream when it is opened compressed, and stored
+ * otherwise or when the entry's format is compressed already, and each ZIP output chunk is handed directly to the transfer
+ * consumer. The TransformStream writer supplies backpressure, so
  * neither the selected files nor the generated archive are materialized.
  *
  * @param entries - The files, each under the path it takes in the archive
@@ -211,22 +239,23 @@ export function createZipTransferSource(
     // Not the input total: every entry carries a header pair and its path, so
     // a selection of many tiny files occupies far more than its file sizes.
     projectedWireBytes: zipWireUpperBound(entries),
-    // The entries are deflated below, so the transfer pipeline must not
-    // compress this payload again (the no-recompress rule).
-    precompressed: true,
-    stream: () => createZipStream(entries),
+    // Any compression is the entries' own, so the transfer pipeline must not
+    // deflate this payload again (the no-recompress rule).
+    archive: true,
+    stream: (compressed) => createZipStream(entries, compressed),
   };
 }
 
 function createZipStream(
   entries: readonly ZipEntry[],
+  compressed: boolean,
 ): ReadableStream<Uint8Array> {
   const transform = new TransformStream<Uint8Array, Uint8Array>();
   const writer = transform.writable.getWriter();
 
   void (async () => {
     try {
-      await writeZip(entries, writer);
+      await writeZip(entries, compressed, writer);
     } catch (error: unknown) {
       await writer.abort(error).catch(() => {});
       return;
@@ -252,6 +281,7 @@ export function zipMtime(lastModified: number): number {
 
 async function writeZip(
   entries: readonly ZipEntry[],
+  compressed: boolean,
   writer: WritableStreamDefaultWriter<Uint8Array>,
 ): Promise<void> {
   let failure: Error | null = null;
@@ -259,7 +289,7 @@ async function writeZip(
   // Only ever cancelled from outside. Under Bun, `getReader()` returns a
   // reader type that the global `ReadableStreamDefaultReader` does not match.
   let activeReader: { cancel(reason?: unknown): Promise<void> } | null = null;
-  let activeEntry: ZipNativeDeflate | null = null;
+  let activeEntry: ZipNativeDeflate | ZipStored | null = null;
 
   const ended = new Promise<void>((resolve, reject) => {
     // Cancelling the transfer's reader errors the TransformStream writable.
@@ -312,7 +342,11 @@ async function writeZip(
     void (async () => {
       try {
         for (const file of entries) {
-          const entry = new ZipNativeDeflate(file.path);
+          // A file whose format is compressed already would not shrink.
+          const entry =
+            compressed && !isCompressedFormat(file.path, file.type)
+              ? new ZipNativeDeflate(file.path)
+              : new ZipStored(file.path);
           entry.mtime = zipMtime(file.lastModified);
           zip.add(entry);
           activeEntry = entry;
@@ -325,7 +359,7 @@ async function writeZip(
               const { done, value } = await reader.read();
               if (done) {
                 entry.push(new Uint8Array(0), true);
-                // Wait for the deflater to flush and for every emitted chunk
+                // Wait for the entry to flush and for every emitted chunk
                 // to reach the consumer before adding the next entry, so
                 // backpressure also applies at file boundaries.
                 await entry.flushed;
