@@ -102,9 +102,19 @@ export function TorAddressDisplay({
 
       <p className="text-xs text-muted-foreground">
         On the receiving side, scan or paste the address into pTransfer&apos;s
-        receive page and the password into the field that appears — or run{' '}
+        receive page and the password into the field that appears — or, on{' '}
+        {/* A new tab: following it here would take the onion service down. */}
+        <a
+          href="/cli"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium underline underline-offset-2 hover:text-foreground"
+        >
+          the command line
+        </a>
+        , run{' '}
         <code className="rounded bg-muted px-1 py-0.5 font-mono">
-          ptransfer tor receive {address}
+          ptransfer receive --onion {address}
         </code>{' '}
         and enter the password when prompted.
       </p>

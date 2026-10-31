@@ -1,4 +1,12 @@
-import { Download, Lock, Send, Shield, Zap } from 'lucide-react';
+import {
+  ArrowRight,
+  Download,
+  Lock,
+  Send,
+  Shield,
+  Terminal,
+  Zap,
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { PTransferIllustration } from '@/components/illustrations';
 import { SectionContainer } from '@/components/section-container';
@@ -46,7 +54,16 @@ export function Hero() {
             </Button>
           </div>
 
-          <ul className="mt-8 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-muted-foreground md:justify-start">
+          <Link
+            to="/cli"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
+          >
+            <Terminal className="h-4 w-4" />
+            Prefer a terminal? Get the command line app
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+
+          <ul className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-muted-foreground md:justify-start">
             {VALUE_PROPS.map(({ icon: Icon, label }) => (
               <li key={label} className="inline-flex items-center gap-1.5">
                 <Icon className="h-4 w-4 text-primary" />

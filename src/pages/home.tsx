@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   Download,
   FileUp,
   KeyRound,
@@ -6,12 +7,20 @@ import {
   Send,
   Share2,
   Shield,
+  Terminal,
   Zap,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Hero } from '@/components/hero';
 import { SectionContainer } from '@/components/section-container';
+import {
+  CopyCommand,
+  TerminalCommand,
+  TerminalComment,
+  TerminalWindow,
+} from '@/components/terminal';
 import { Button } from '@/components/ui/button';
+import { PTRANSFER_CLI_INSTALL_SH } from '@/lib/constants';
 
 const STEPS = [
   {
@@ -128,6 +137,41 @@ export function HomePage() {
           >
             Learn how it stays secure →
           </Link>
+        </div>
+      </SectionContainer>
+
+      {/* Command line */}
+      <SectionContainer>
+        <div className="grid items-center gap-8 rounded-3xl border bg-card p-6 shadow-sm sm:p-10 md:grid-cols-2">
+          <div className="min-w-0">
+            <span className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
+              <Terminal className="h-3.5 w-3.5" />
+              Linux and macOS
+            </span>
+            <h2 className="mt-4 text-3xl">Also in your terminal</h2>
+            <p className="mt-3 text-muted-foreground">
+              <span className="font-medium text-foreground">ptransfer</span>{' '}
+              brings these screens to your terminal: run it, pick files, and
+              choose a mode, or paste what a sender gave you. Either end of a
+              transfer can be a browser tab or a terminal, and every mode is a
+              command too, for scripts and servers you reach over SSH.
+            </p>
+            <Button asChild variant="outline" className="mt-6 gap-2">
+              <Link to="/cli">
+                Get the command line app
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </div>
+          <div className="min-w-0 space-y-3">
+            <TerminalWindow title="~">
+              <TerminalCommand>ptransfer</TerminalCommand>
+              <TerminalComment>
+                opens the terminal UI: pick files, then PIN, Code or Tor
+              </TerminalComment>
+            </TerminalWindow>
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />
+          </div>
         </div>
       </SectionContainer>
 
