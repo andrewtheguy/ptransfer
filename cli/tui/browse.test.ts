@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listDirectory, parentOf, shortenPath } from './browse';
 
@@ -47,21 +47,27 @@ describe('listDirectory', () => {
   });
 });
 
+// The system's own root and separator: `/` here, `C:\\` and `\\` on Windows.
+const ROOT = resolve('/');
+const HOME = join(ROOT, 'home', 'user');
+
 describe('parentOf', () => {
   it('climbs one directory', () => {
-    expect(parentOf('/home/user/codes')).toBe('/home/user');
+    expect(parentOf(join(HOME, 'codes'))).toBe(HOME);
   });
 
   it('stops at the root', () => {
-    expect(parentOf('/')).toBeNull();
+    expect(parentOf(ROOT)).toBeNull();
   });
 });
 
 describe('shortenPath', () => {
   it('writes the home directory as a tilde', () => {
-    expect(shortenPath('/home/user/codes', '/home/user')).toBe('~/codes');
-    expect(shortenPath('/home/user', '/home/user')).toBe('~');
-    expect(shortenPath('/etc', '/home/user')).toBe('/etc');
-    expect(shortenPath('/home/userdata', '/home/user')).toBe('/home/userdata');
+    expect(shortenPath(join(HOME, 'codes'), HOME)).toBe(`~${sep}codes`);
+    expect(shortenPath(HOME, HOME)).toBe('~');
+    const elsewhere = join(ROOT, 'etc');
+    expect(shortenPath(elsewhere, HOME)).toBe(elsewhere);
+    const sibling = join(ROOT, 'home', 'userdata');
+    expect(shortenPath(sibling, HOME)).toBe(sibling);
   });
 });

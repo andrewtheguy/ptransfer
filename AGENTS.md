@@ -42,9 +42,13 @@
   both typed by `src/lib/tor/webtor-api.ts`; the rule they share, such as the
   directory freshness rule in `src/lib/tor/directory-policy.ts`, stays in
   `src/lib` with no platform API in it.
-- `cli/` is Unix only: Linux and macOS, never Windows. Use what a Unix process
-  has — signals, atomic rename, the XDG directories, `/` as the only separator —
-  directly, with no Windows branch. Its terminal UI is OpenTUI with the React
+- `cli/` runs on Linux, macOS and Windows. Use what each system has directly,
+  and where they differ — stop signals, file name rules and `MAX_PATH`, the
+  cache directory, the kernel lock in `cli/file-lock.ts` — branch on
+  `process.platform` in the one module the difference belongs to, with no
+  portability layer. Build paths with `node:path`, never by hand with `/`; a
+  Windows check that the CI VM cannot exercise is checked by hand there (see
+  phase 5 of `docs/ROADMAP.md`). Its terminal UI is OpenTUI with the React
   bindings, in `cli/tui`, and `ptransfer` with no command opens it; every
   command stays line-oriented, which is what pipes, scripts and the live tests
   drive. What a transfer shows and asks for goes through the `Presenter` in

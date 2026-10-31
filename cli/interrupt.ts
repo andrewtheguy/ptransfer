@@ -5,17 +5,39 @@
  * leaves with the status a shell gives a process that signal ended — 128
  * plus its number. A teardown that hangs — a client still bootstrapping has
  * nothing to close — is not waited on for long.
+ *
+ * On Windows, Ctrl-C is SIGINT too, Ctrl-Break is SIGBREAK, and closing the
+ * console window is SIGHUP, after which Windows allows the process a few
+ * seconds; SIGTERM never arrives there, since `taskkill` ends a process
+ * without telling it.
  */
 
 const TEARDOWN_GRACE_MS = 3000;
 
-const STOP_SIGNALS = {
+const STOP_SIGNALS: Partial<Record<NodeJS.Signals, number>> = {
   SIGINT: 130,
   SIGTERM: 143,
   SIGHUP: 129,
-} as const satisfies Partial<Record<NodeJS.Signals, number>>;
+  ...(process.platform === 'win32' ? { SIGBREAK: 149 } : {}),
+};
 
-export const INTERRUPTED_STATUS = STOP_SIGNALS.SIGINT;
+export const INTERRUPTED_STATUS = 130;
+
+/** The SIGINT handler of the teardown installed now, if any. */
+let installedInterrupt: (() => void) | null = null;
+
+/**
+ * Stop the running transfer as Ctrl-C would, from inside: the terminal UI
+ * reads Ctrl-C as a key. It runs the installed teardown directly rather than
+ * signalling this process, which on Windows ends the process at once with no
+ * handler run. False when no transfer has a teardown installed.
+ */
+export function interrupt(): boolean {
+  const handler = installedInterrupt;
+  if (!handler) return false;
+  handler();
+  return true;
+}
 
 /**
  * Ctrl-C that arrived as a keystroke rather than a signal — a prompt in raw
@@ -41,6 +63,9 @@ export function onInterrupt(
   const uninstall = () => {
     for (const [signal, handler] of installed) {
       process.removeListener(signal, handler);
+      if (signal === 'SIGINT' && installedInterrupt === handler) {
+        installedInterrupt = null;
+      }
     }
   };
   for (const [signal, status] of Object.entries(STOP_SIGNALS) as [
@@ -67,6 +92,7 @@ export function onInterrupt(
     };
     installed.push([signal, handler]);
     process.on(signal, handler);
+    if (signal === 'SIGINT') installedInterrupt = handler;
   }
   return uninstall;
 }

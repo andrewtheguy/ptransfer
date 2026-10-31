@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import type { AppendSink } from '@/lib/append-sink';
 import {
   buildDirectAttempt,
@@ -36,7 +35,7 @@ import type { WebRTCConnection } from '@/lib/webrtc';
 import { createCliHost, savedFrom } from '../code/host';
 import { onInterrupt } from '../interrupt';
 import { bootstrapTor, type TorOptions } from '../tor/bootstrap';
-import { safeFileName } from '../transfer/files';
+import { savePath } from '../transfer/files';
 import type { Presenter } from '../ui/presenter';
 
 /**
@@ -188,7 +187,7 @@ export async function receiveByPin(
 
     const { metadata } = session;
     const fileName = metadata.fileName || 'unknown';
-    const destination = join(options.folder, safeFileName(fileName));
+    const destination = savePath(options.folder, fileName);
     const host = await createCliHost({
       cacheDir: options.cacheDir,
       destination,

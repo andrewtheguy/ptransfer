@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
@@ -15,7 +14,7 @@ import { onInterrupt } from '../interrupt';
 import { bootstrapTor, closeTor, type TorOptions } from '../tor/bootstrap';
 import type { Presenter } from '../ui/presenter';
 import { UsageError } from '../usage';
-import { createFileSink, safeFileName } from './files';
+import { createFileSink, savePath } from './files';
 
 /**
  * Receiving from a Tor onion service, the counterpart of the tab's
@@ -94,7 +93,7 @@ export async function receiveOverTor(
     // A destination conflict is the receiver's problem, not the sender's:
     // declining leaves the service waiting, so this side can move the file
     // out of the way and come back.
-    const destination = join(folder, safeFileName(metadata.fileName));
+    const destination = savePath(folder, metadata.fileName);
     let fileSink: AppendSink;
     try {
       fileSink = await createFileSink(destination);

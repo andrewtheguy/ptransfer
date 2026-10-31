@@ -28,7 +28,9 @@ which the tab fills in `browser-host.ts` and the CLI in `cli/code/host.ts`.
 `cli/webrtc.ts` raises libdatachannel's SCTP send and receive buffers to
 8 MiB: its defaults allow about a megabyte in flight per round trip, which held
 a CLI connection under 10 MiB/s at a 50 ms round trip.
-It runs the same webtor-wasm Tor client under Bun, on Linux and macOS only.
+It runs the same webtor-wasm Tor client under Bun, on Linux, macOS and
+Windows; a Windows binary is not released yet (phase 5 of the
+[roadmap](ROADMAP.md)).
 What it ships today is Code Exchange and Tor send and receive of files and
 folders, and a Tor self-check; PIN Exchange is on the
 [roadmap](ROADMAP.md).

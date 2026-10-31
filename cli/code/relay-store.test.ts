@@ -173,8 +173,9 @@ describe('where the relay cache lives', () => {
   });
 
   it('is the directory the environment names, as an absolute path', () => {
-    process.env[RELAY_CACHE_ENV] = ' /tmp/relays ';
-    expect(relayCacheDir('/var/cache/ptransfer')).toBe('/tmp/relays');
+    const absolute = resolve('/tmp/relays');
+    process.env[RELAY_CACHE_ENV] = ` ${absolute} `;
+    expect(relayCacheDir('/var/cache/ptransfer')).toBe(absolute);
     process.env[RELAY_CACHE_ENV] = 'relays';
     expect(relayCacheDir('/var/cache/ptransfer')).toBe(
       resolve(process.cwd(), 'relays'),

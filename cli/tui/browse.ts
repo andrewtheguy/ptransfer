@@ -1,5 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 /**
  * Reading a directory for the path picker.
@@ -10,8 +10,9 @@ import { dirname, join, resolve } from 'node:path';
  * second `stat` on files alone — a directory's weight is only known once it is
  * walked, which is what continuing to the mode screen does.
  *
- * Unix only, as the rest of `cli/` is: `/` is the only separator and the root
- * is the only directory that is its own parent.
+ * Paths are the system's own: `/`-separated with one root on Linux and
+ * macOS, `\`-separated with a root per drive on Windows. A root is the
+ * directory that is its own parent.
  */
 
 export interface Entry {
@@ -35,7 +36,9 @@ export function parentOf(dir: string): string | null {
 export function shortenPath(path: string, home: string): string {
   if (!home) return path;
   if (path === home) return '~';
-  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+  return path.startsWith(`${home}${sep}`)
+    ? `~${path.slice(home.length)}`
+    : path;
 }
 
 /**

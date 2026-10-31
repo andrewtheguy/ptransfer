@@ -1,5 +1,4 @@
 import {
-  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -20,11 +19,13 @@ import { serveUntilSent } from '@/lib/tor/serve';
 import { receiveFileOverTor } from '@/lib/tor/transfer';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
 import type { TransferSource } from '@/lib/transfer-source';
+import { ACCESS_CHECKS_BYPASSED, denyAccess } from '../testing/deny-access';
 import {
   createFileSink,
   destinationFolder,
   openFileSource,
   safeFileName,
+  savePath,
 } from './files';
 
 let dir: string;
@@ -124,52 +125,169 @@ describe('destinationFolder', () => {
     await expect(destinationFolder(file)).rejects.toThrow('Not a folder');
   });
 
-  it.skipIf(process.getuid?.() === 0)(
+  it.skipIf(ACCESS_CHECKS_BYPASSED)(
     'refuses a folder it cannot create files in',
     async () => {
       const locked = join(dir, 'locked');
       await mkdir(locked);
-      await chmod(locked, 0o500);
-      await expect(destinationFolder(locked)).rejects.toThrow(
-        `Cannot save files in ${locked}`,
-      );
+      const restore = await denyAccess(locked, 'write');
+      try {
+        await expect(destinationFolder(locked)).rejects.toThrow(
+          `Cannot save files in ${locked}`,
+        );
+      } finally {
+        await restore();
+      }
     },
   );
+
+  it('leaves nothing behind in a folder it takes', async () => {
+    const inbox = join(dir, 'inbox');
+    await mkdir(inbox);
+    await destinationFolder(inbox);
+    await expect(readdir(inbox)).resolves.toEqual([]);
+  });
 });
 
-describe('safeFileName', () => {
+describe('safeFileName on Linux and macOS', () => {
+  const unix = (name: string) => safeFileName(name, false);
+
   it('keeps an ordinary name', () => {
-    expect(safeFileName('report.pdf')).toBe('report.pdf');
+    expect(unix('report.pdf')).toBe('report.pdf');
   });
 
   it('keeps only the last path segment', () => {
-    expect(safeFileName('../../etc/passwd')).toBe('passwd');
+    expect(unix('../../etc/passwd')).toBe('passwd');
   });
 
   it('keeps a backslash, an ordinary character in a Unix file name', () => {
-    expect(safeFileName('a\\b.txt')).toBe('a\\b.txt');
-    expect(safeFileName('..\\..\\x')).toBe('..\\..\\x');
+    expect(unix('a\\b.txt')).toBe('a\\b.txt');
+    expect(unix('..\\..\\x')).toBe('..\\..\\x');
+  });
+
+  it('keeps what only Windows refuses', () => {
+    expect(unix('a:b?.txt')).toBe('a:b?.txt');
+    expect(unix('CON')).toBe('CON');
+    expect(unix('trailing.')).toBe('trailing.');
   });
 
   it('fits a long name into 255 bytes, keeping its extension', () => {
     const bytes = (name: string) => new TextEncoder().encode(name).length;
-    const ascii = safeFileName(`${'a'.repeat(300)}.pdf`);
+    const ascii = unix(`${'a'.repeat(300)}.pdf`);
     expect(bytes(ascii)).toBe(255);
     expect(ascii.endsWith('.pdf')).toBe(true);
     // 255 UTF-16 units from another system are up to 765 bytes here; no
     // character is cut in half.
-    const wide = safeFileName(`${'日'.repeat(251)}.txt`);
+    const wide = unix(`${'日'.repeat(251)}.txt`);
     expect(bytes(wide)).toBeLessThanOrEqual(255);
     expect(wide).toBe(`${'日'.repeat(83)}.txt`);
-    expect(safeFileName('a'.repeat(255))).toBe('a'.repeat(255));
+    expect(unix('a'.repeat(255))).toBe('a'.repeat(255));
   });
 
   it('strips control characters and refuses to name nothing', () => {
-    expect(safeFileName('a\u0000b\n.txt')).toBe('ab.txt');
-    expect(safeFileName('a\u009bb.txt')).toBe('ab.txt');
-    expect(safeFileName('')).toBe('received');
-    expect(safeFileName('..')).toBe('received');
-    expect(safeFileName('/')).toBe('received');
+    expect(unix('a\u0000b\n.txt')).toBe('ab.txt');
+    expect(unix('a\u009bb.txt')).toBe('ab.txt');
+    expect(unix('')).toBe('received');
+    expect(unix('..')).toBe('received');
+    expect(unix('/')).toBe('received');
+  });
+});
+
+describe('safeFileName on Windows', () => {
+  const windows = (name: string) => safeFileName(name, true);
+
+  it('keeps an ordinary name', () => {
+    expect(windows('report.pdf')).toBe('report.pdf');
+  });
+
+  it('keeps only the last path segment, whichever separator was used', () => {
+    expect(windows('../../etc/passwd')).toBe('passwd');
+    expect(windows('C:\\Users\\me\\a.txt')).toBe('a.txt');
+    expect(windows('..\\..\\x')).toBe('x');
+  });
+
+  it('replaces what a Windows file name cannot hold', () => {
+    // A colon would name an alternate data stream of a file called `a`.
+    expect(windows('a:b.txt')).toBe('a_b.txt');
+    expect(windows('<a>|"b"?*.txt')).toBe('_a___b___.txt');
+  });
+
+  it('drops trailing dots and spaces, which Win32 would drop on its own', () => {
+    expect(windows('trailing.')).toBe('trailing');
+    expect(windows('notes.txt. . ')).toBe('notes.txt');
+    expect(windows('...')).toBe('received');
+  });
+
+  it('keeps clear of the reserved device names, with any extension', () => {
+    expect(windows('CON')).toBe('_CON');
+    expect(windows('con.txt')).toBe('_con.txt');
+    expect(windows('NUL.tar.gz')).toBe('_NUL.tar.gz');
+    expect(windows('com1')).toBe('_com1');
+    expect(windows('LPT9.log')).toBe('_LPT9.log');
+    expect(windows('COM¹')).toBe('_COM¹');
+    expect(windows('conin$')).toBe('_conin$');
+    expect(windows('CON .txt')).toBe('_CON .txt');
+    // Only the whole stem is reserved.
+    expect(windows('console.log')).toBe('console.log');
+    expect(windows('COM10')).toBe('COM10');
+  });
+
+  it('fits a long name into 255 UTF-16 units, keeping its extension', () => {
+    const ascii = windows(`${'a'.repeat(300)}.pdf`);
+    expect(ascii.length).toBe(255);
+    expect(ascii.endsWith('.pdf')).toBe(true);
+    // Counted in UTF-16 units, not bytes: 251 CJK characters fit as they are.
+    expect(windows(`${'日'.repeat(251)}.txt`)).toBe(`${'日'.repeat(251)}.txt`);
+    // An astral character is two units, and is not cut in half.
+    const astral = windows(`${'😀'.repeat(200)}.txt`);
+    expect(astral.length).toBeLessThanOrEqual(255);
+    expect(astral).toBe(`${'😀'.repeat(125)}.txt`);
+  });
+
+  it('does not end a cut name on a dot or a space', () => {
+    // Cut at 255 units, it would end on the space.
+    const cut = windows(`${'a'.repeat(254)} ${'b'.repeat(50)}`);
+    expect(cut).toBe('a'.repeat(254));
+  });
+
+  it('strips control characters and refuses to name nothing', () => {
+    expect(windows('a\u0000b\n.txt')).toBe('ab.txt');
+    expect(windows('')).toBe('received');
+    expect(windows('..')).toBe('received');
+    expect(windows('\\')).toBe('received');
+  });
+});
+
+describe('savePath', () => {
+  it('is the safe name in the folder on Linux and macOS, at any depth', () => {
+    const deep = `/${'d'.repeat(300)}`;
+    const name = `${'a'.repeat(250)}.pdf`;
+    expect(savePath(deep, name, false)).toBe(
+      join(deep, safeFileName(name, false)),
+    );
+  });
+
+  it('keeps a Windows path within MAX_PATH by cutting the name', () => {
+    const folder = `C:${'\\x'.repeat(50)}`;
+    const saved = savePath(folder, `${'a'.repeat(300)}.pdf`, true);
+    expect(saved.length).toBe(259);
+    expect(saved.endsWith('.pdf')).toBe(true);
+  });
+
+  it('leaves a short Windows name alone', () => {
+    const folder = 'C:\\Users\\me\\Downloads';
+    expect(savePath(folder, 'report.pdf', true)).toBe(
+      join(folder, 'report.pdf'),
+    );
+  });
+
+  it('still gives a name that says what it is in a folder near the limit', () => {
+    const folder = `C:${'\\x'.repeat(125)}`;
+    const name = savePath(folder, `${'a'.repeat(100)}.tar.gz`, true).slice(
+      join(folder, '_').length - 1,
+    );
+    expect(name.length).toBe(32);
+    expect(name.endsWith('.gz')).toBe(true);
   });
 });
 

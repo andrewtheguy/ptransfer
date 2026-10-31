@@ -1,7 +1,5 @@
 import type { Dirent, Stats } from 'node:fs';
 import {
-  access,
-  constants,
   type FileHandle,
   open,
   readdir,
@@ -16,7 +14,12 @@ import {
   type ZipEntry,
 } from '@/lib/folder-utils';
 import type { TransferSource } from '@/lib/transfer-source';
-import { chosenFileStream, mimeTypeOf, openFileSource } from './files';
+import {
+  chosenFileStream,
+  mimeTypeOf,
+  openFileSource,
+  openNoFollow,
+} from './files';
 
 /**
  * The paths `send` was given, as one transfer source, by the rule the tab
@@ -140,8 +143,9 @@ async function walk(
  * A file named on the command line as a ZIP entry. It is checked for
  * readability now: the archive is only generated once a receiver has
  * connected, and a file that cannot be read would fail the transfer after a
- * Tor bootstrap and a handshake, where there is no resume. Someone named it,
- * so a symbolic link to it is followed.
+ * Tor bootstrap and a handshake, where there is no resume. Opening it is
+ * the check: `access` asks about mode bits, which on Windows say nothing of
+ * the file's ACL. Someone named it, so a symbolic link to it is followed.
  */
 async function namedEntry(
   path: string,
@@ -149,7 +153,7 @@ async function namedEntry(
   info: Stats,
 ): Promise<ZipEntry> {
   try {
-    await access(path, constants.R_OK);
+    await (await open(path, 'r')).close();
   } catch {
     throw new Error(`Cannot read ${path}`);
   }
@@ -168,7 +172,7 @@ async function walkedEntry(
 ): Promise<ZipEntry> {
   let handle: FileHandle;
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await openNoFollow(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ELOOP' || code === 'ENOENT') throw changedWhileRead(path);

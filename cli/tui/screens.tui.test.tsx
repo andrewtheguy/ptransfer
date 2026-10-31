@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import type { TestRendererSetup } from '@opentui/core/testing';
 import { testRender } from '@opentui/react/test-utils';
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { ReactNode } from 'react';
+import { ACCESS_CHECKS_BYPASSED, denyAccess } from '../testing/deny-access';
 import { act } from 'react';
 import { App } from './app';
 import { MaskedField } from './masked-field';
@@ -104,6 +105,16 @@ async function draw(node: ReactNode): Promise<Screen> {
   };
   await settle();
   return { ...setup, settle, frame: setup.captureCharFrame };
+}
+
+/**
+ * The frame's text with the box and the line breaks taken out, for a line the
+ * screen wraps where a path is long — a temporary folder on Windows is.
+ */
+function unwrapped(frame: string): string {
+  return frame
+    .replace(/[│┌┐└┘─]/g, ' ')
+    .replace(/\s+/g, ' ');
 }
 
 /** A directory holding one folder and two files, for the picker to list. */
@@ -245,7 +256,7 @@ describe('the path picker', () => {
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('right');
     await screen.settle();
-    expect(screen.frame()).toContain('photos · tab to save here');
+    expect(unwrapped(screen.frame())).toContain('photos · tab to save here');
   });
 
   it('hands over the path the check gave back, not the one browsed', async () => {
@@ -671,11 +682,13 @@ describe('the app', () => {
     expect(screen.frame()).toContain('where to save');
   });
 
-  it('says so when the folder picked cannot be saved into', async () => {
+  it.skipIf(ACCESS_CHECKS_BYPASSED)(
+    'says so when the folder picked cannot be saved into',
+    async () => {
     const root = await tree();
     const locked = join(root, 'locked');
     await mkdir(locked);
-    await chmod(locked, 0o500);
+    const restore = await denyAccess(locked, 'write');
     const was = process.cwd();
     process.chdir(locked);
     try {
@@ -694,7 +707,7 @@ describe('the app', () => {
       expect(screen.frame()).toContain('where to save');
     } finally {
       process.chdir(was);
-      await chmod(locked, 0o700);
+      await restore();
     }
   });
 

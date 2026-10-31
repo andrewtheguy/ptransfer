@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
  *   bun scripts/build-cli.ts [--target <target>] [--outfile <path>]
  *
  * The target defaults to the machine the script runs on, and the executable
- * to `dist/cli/ptransfer`. Three native pieces have to end up inside it, and
+ * to `dist/cli/ptransfer`, `dist/cli/ptransfer.exe` for Windows. Three native pieces have to end up inside it, and
  * each needs the build machine to hold the target's copy:
  *
  * - The Tor client's wasm, which `cli/tor/webtor.ts` imports `with { type:
@@ -40,6 +40,10 @@ const TARGETS = {
     addon: '@node-datachannel/darwin-arm64',
     tui: '@opentui/core-darwin-arm64',
   },
+  'bun-windows-x64': {
+    addon: '@node-datachannel/win32-x64-msvc',
+    tui: '@opentui/core-win32-x64',
+  },
 } as const;
 
 type Target = keyof typeof TARGETS;
@@ -50,7 +54,9 @@ const ROOT = resolve(import.meta.dirname, '..');
 const ADDON_LOADER = /node-datachannel\/dist\/esm\/lib\/node-datachannel\.mjs$/;
 
 function hostTarget(): Target {
-  const target = `bun-${process.platform}-${process.arch}`;
+  // Bun names Windows targets `windows`, where Node's platform is `win32`.
+  const os = process.platform === 'win32' ? 'windows' : process.platform;
+  const target = `bun-${os}-${process.arch}`;
   if (!(target in TARGETS)) {
     throw new Error(`No release target for this machine: ${target}`);
   }
@@ -80,7 +86,13 @@ async function main(): Promise<void> {
       `Unknown target ${target}; one of ${Object.keys(TARGETS).join(', ')}`,
     );
   }
-  const outfile = resolve(ROOT, values.outfile);
+  // Bun adds `.exe` for a Windows target on its own; named here, the path
+  // printed is the one written.
+  const named = resolve(ROOT, values.outfile);
+  const outfile =
+    target.startsWith('bun-windows-') && !named.endsWith('.exe')
+      ? `${named}.exe`
+      : named;
   const addon = resolvePackage(TARGETS[target].addon, target);
   resolvePackage(TARGETS[target].tui, target);
 
