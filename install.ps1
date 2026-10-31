@@ -48,7 +48,9 @@ function Get-Release {
     }
     if ($Prerelease) {
         Info 'Fetching the latest prerelease...'
-        $found = Invoke-RestMethod -UseBasicParsing "$Api`?per_page=30" |
+        # In parentheses: Windows PowerShell 5.1 sends a JSON array down the
+        # pipeline as one object, which Where-Object would pass whole.
+        $found = (Invoke-RestMethod -UseBasicParsing "$Api`?per_page=30") |
             Where-Object { $_.prerelease } | Select-Object -First 1
         if (-not $found) { Fail 'Could not find any prerelease on GitHub' }
         return $found

@@ -309,7 +309,10 @@ export async function destinationFolder(path: string): Promise<string> {
   } catch {
     throw new Error(`Cannot save files in ${path}`);
   }
-  await rm(probe, { force: true });
+  // The folder has answered the question; a probe that will not go away —
+  // on Windows, a scanner holding the new file open — is not a reason to
+  // refuse it.
+  await rm(probe, { force: true }).catch(() => undefined);
   return absolute;
 }
 

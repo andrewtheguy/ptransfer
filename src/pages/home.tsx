@@ -20,7 +20,10 @@ import {
   TerminalWindow,
 } from '@/components/terminal';
 import { Button } from '@/components/ui/button';
-import { PTRANSFER_CLI_INSTALL_SH } from '@/lib/constants';
+import {
+  PTRANSFER_CLI_INSTALL_PS1,
+  PTRANSFER_CLI_INSTALL_SH,
+} from '@/lib/constants';
 
 const STEPS = [
   {
@@ -170,7 +173,14 @@ export function HomePage() {
                 opens the terminal UI: pick files, then PIN, Code or Tor
               </TerminalComment>
             </TerminalWindow>
+            <p className="text-xs font-medium text-muted-foreground">
+              Linux and macOS
+            </p>
             <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />
+            <p className="text-xs font-medium text-muted-foreground">
+              Windows, in PowerShell
+            </p>
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} />
           </div>
         </div>
       </SectionContainer>
