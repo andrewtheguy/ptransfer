@@ -372,21 +372,42 @@ export async function sendFileOverLink(
   let flushing = false;
 
   // Everything that ends the transfer early lands here, once. Every wait
-  // below races it.
+  // below gives way to it.
   let failure: Error | null = null;
   /** Whether the link or the peer ended it, so there is nobody to tell. */
   let peerGone = false;
-  let rejectFailed!: (error: Error) => void;
-  const failed = new Promise<never>((_, reject) => {
-    rejectFailed = reject;
-  });
-  failed.catch(() => undefined);
+  /** Rejects the waits in progress, told once when the transfer fails. */
+  const waits = new Set<(error: Error) => void>();
 
   const fail = (error: Error, byPeer = false) => {
     if (failure) return;
     failure = error;
     peerGone = byPeer;
-    rejectFailed(error);
+    for (const reject of waits) reject(error);
+    waits.clear();
+  };
+
+  /**
+   * `pending`, unless the transfer fails first. Not a race against one
+   * promise that settles on failure: each such race stays attached to it, and
+   * keeps what it resolved with — every chunk read from the source — reachable
+   * until the transfer ends, which on success is the whole file.
+   */
+  const unlessFailed = <T>(pending: Promise<T>): Promise<T> => {
+    if (failure) return Promise.reject(failure);
+    return new Promise<T>((resolve, reject) => {
+      waits.add(reject);
+      pending.then(
+        (value) => {
+          waits.delete(reject);
+          resolve(value);
+        },
+        (error: unknown) => {
+          waits.delete(reject);
+          reject(error);
+        },
+      );
+    });
   };
 
   // Every wait on the link is bounded by the idle window: a link that will
@@ -402,7 +423,7 @@ export async function sendFileOverLink(
       );
     }, stallTimeoutMs);
     try {
-      return await Promise.race([pending, failed]);
+      return await unlessFailed(pending);
     } finally {
       clearTimeout(stallTimer);
       stallTimer = null;
@@ -474,7 +495,7 @@ export async function sendFileOverLink(
       if (failure) throw failure;
       // A source can take its time — a ZIP entry being compressed — and a
       // link that ends meanwhile must not wait on it.
-      const { done, value } = await Promise.race([reader.read(), failed]);
+      const { done, value } = await unlessFailed(reader.read());
       if (done) break;
 
       let offset = 0;
