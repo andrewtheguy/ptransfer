@@ -1,8 +1,15 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listDirectory, parentOf, shortenPath } from './browse';
+import {
+  DRIVES,
+  driveEntries,
+  listDirectory,
+  parentOf,
+  shortenPath,
+} from './browse';
 
 async function tree(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'ptransfer-browse-'));
@@ -40,6 +47,18 @@ describe('listDirectory', () => {
     expect(shown.map((entry) => entry.name)).toContain('.hidden');
   });
 
+  it.skipIf(process.platform !== 'win32')(
+    'leaves out what has the hidden attribute on Windows unless asked for',
+    async () => {
+      const root = await tree();
+      execFileSync('attrib', ['+h', join(root, 'zeta')]);
+      const names = (entries: { name: string }[]) =>
+        entries.map((entry) => entry.name);
+      expect(names(await listDirectory(root, false))).not.toContain('zeta');
+      expect(names(await listDirectory(root, true))).toContain('zeta');
+    },
+  );
+
   it('leaves out a symbolic link, which a transfer would not carry', async () => {
     const root = await tree();
     const entries = await listDirectory(root, true);
@@ -47,21 +66,63 @@ describe('listDirectory', () => {
   });
 });
 
-// The system's own root and separator: `/` here, `C:\\` and `\\` on Windows.
-const ROOT = resolve('/');
-const HOME = join(ROOT, 'home', 'user');
-
-describe('parentOf', () => {
+describe('parentOf on Linux and macOS', () => {
   it('climbs one directory', () => {
-    expect(parentOf(join(HOME, 'codes'))).toBe(HOME);
+    expect(parentOf('/home/user/codes', false)).toBe('/home/user');
   });
 
   it('stops at the root', () => {
-    expect(parentOf(ROOT)).toBeNull();
+    expect(parentOf('/', false)).toBeNull();
+  });
+});
+
+describe('parentOf on Windows', () => {
+  it('climbs one directory', () => {
+    expect(parentOf('C:\\Users\\user', true)).toBe('C:\\Users');
+  });
+
+  it('climbs from a drive root to the drives, and stops there', () => {
+    expect(parentOf('C:\\', true)).toBe(DRIVES);
+    expect(parentOf(DRIVES, true)).toBeNull();
+  });
+
+  it('climbs from a network share to the drives', () => {
+    expect(parentOf('\\\\server\\share\\docs', true)).toBe(
+      '\\\\server\\share\\',
+    );
+    expect(parentOf('\\\\server\\share\\', true)).toBe(DRIVES);
+  });
+});
+
+describe('driveEntries', () => {
+  it('lists each mounted letter as its root', () => {
+    // A, C and Z.
+    const mask = (1 << 0) | (1 << 2) | (1 << 25);
+    expect(driveEntries(mask, ['C:\\Users'])).toEqual([
+      { name: 'A:', path: 'A:\\', directory: true, size: null },
+      { name: 'C:', path: 'C:\\', directory: true, size: null },
+      { name: 'Z:', path: 'Z:\\', directory: true, size: null },
+    ]);
+  });
+
+  it('adds the network share the picker was opened on', () => {
+    expect(driveEntries(1 << 2, ['\\\\server\\share\\docs'])).toEqual([
+      { name: 'C:', path: 'C:\\', directory: true, size: null },
+      {
+        name: '\\\\server\\share',
+        path: '\\\\server\\share\\',
+        directory: true,
+        size: null,
+      },
+    ]);
   });
 });
 
 describe('shortenPath', () => {
+  // The system's own root and separator: `/` here, `C:\\` and `\\` on Windows.
+  const ROOT = resolve('/');
+  const HOME = join(ROOT, 'home', 'user');
+
   it('writes the home directory as a tilde', () => {
     expect(shortenPath(join(HOME, 'codes'), HOME)).toBe(`~${sep}codes`);
     expect(shortenPath(HOME, HOME)).toBe('~');

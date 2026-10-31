@@ -221,13 +221,25 @@ behind a portability layer:
        deny entry does not bind it — Windows' root.
      - The cache moved to `%LOCALAPPDATA%\ptransfer\cache`, and
        `cli/main.ts` no longer refuses Windows.
-   - **5b**: the terminal on Windows. The path picker stops at a drive's
-     root; it needs the drives, and UNC paths, at the top. Then a hands-on
-     check in Windows Terminal and the older console host, from a desktop
-     session (ssh lands in session 0, with no console to test): a password
-     typed in raw mode, Ctrl-C and Ctrl-Break during a transfer, closing the
-     window mid-transfer, and OSC 52 copying, which Windows Terminal takes and
-     the console host does not.
+   - **5b**: the terminal on Windows.
+     - Done: the path picker climbs past a drive's root to the drives —
+       every letter `GetLogicalDrives` reports, and the network share it was
+       opened on, which nothing else leads back to. Nothing is marked or saved
+       into there, only opened. A directory is shown with `\`, and what has the
+       hidden attribute is hidden alongside dot files, which takes a Windows
+       home directory's `NTUSER.DAT` files and `AppData` out of the listing.
+     - Done, in a pseudo console (ConPTY, what Windows Terminal draws
+       through) that `ssh -tt` gives the CI VM's sshd, receiving a Tor
+       transfer from another machine: the password typed in raw mode, neither
+       echoed nor taking arrow keys as text, and Ctrl-C at it; Ctrl-C,
+       Ctrl-Break and the console closing mid-transfer, each leaving no part
+       file and exiting 130, 149, and with the receiver gone; and the terminal
+       UI drawn, driven through to the same transfer, its password masked,
+       and cancelled with Ctrl-C mid-transfer.
+     - Left, from a desktop session, since ssh has no console of the older
+       kind and no clipboard: the same in the console host, which
+       `ptransfer.exe` opened from Explorer gets, and OSC 52 copying, which
+       Windows Terminal takes and the console host does not.
    - **5c**: shipping. A `windows-latest` job in the `Release CLI` workflow,
      smoke-tested in PowerShell, publishing `ptransfer-windows-amd64.exe`;
      an `install.ps1` that checks the download with `Get-FileHash` against

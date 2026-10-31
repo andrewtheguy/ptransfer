@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse, sep } from 'node:path';
 import {
   generateMutualClipboardData,
   generateMutualOfferBinary,
@@ -139,8 +139,8 @@ describe('the path picker', () => {
       />,
     );
     const frame = screen.frame();
-    expect(frame.indexOf('photos/')).toBeLessThan(frame.indexOf('notes.txt'));
-    expect(frame).toContain('[ ] photos/');
+    expect(frame.indexOf(`photos${sep}`)).toBeLessThan(frame.indexOf('notes.txt'));
+    expect(frame).toContain(`[ ] photos${sep}`);
     expect(frame).toContain('2.0 KiB');
     expect(frame).toContain('Nothing marked yet');
   });
@@ -240,6 +240,44 @@ describe('the path picker', () => {
     await screen.settle();
     expect(chosen).toEqual([[join(root, 'photos')]]);
   });
+
+  it.skipIf(process.platform !== 'win32')(
+    'climbs from a drive root to the drives on Windows, and opens one',
+    async () => {
+      const drive = parse(await tree()).root;
+      const chosen: string[][] = [];
+      const screen = await draw(
+        <Picker
+          mode="folder"
+          start={drive}
+          title="Receive"
+          onDone={(paths) => chosen.push(paths)}
+          onCancel={() => {}}
+        />,
+      );
+      screen.mockInput.pressArrow('left');
+      await screen.settle();
+      expect(screen.frame()).toContain('Drives');
+      expect(screen.frame()).toContain(drive);
+      expect(screen.frame()).not.toContain(`..${sep}`);
+      // There is no folder to save into among the drives.
+      screen.mockInput.pressTab();
+      await screen.settle();
+      expect(chosen).toEqual([]);
+      expect(screen.frame()).toContain('Open a drive');
+      // The cursor opens on the first drive; walk to the one we came from.
+      const letters = screen.frame().match(/[A-Z]:\\/g) ?? [];
+      for (const letter of letters) {
+        if (letter === drive) break;
+        screen.mockInput.pressArrow('down');
+      }
+      screen.mockInput.pressEnter();
+      await screen.settle();
+      screen.mockInput.pressTab();
+      await screen.settle();
+      expect(chosen).toEqual([[drive]]);
+    },
+  );
 
   it('says which folder tab would save into', async () => {
     const root = await tree();
