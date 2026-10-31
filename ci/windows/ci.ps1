@@ -42,7 +42,9 @@ if ($env:BUN_INSTALL_CACHE_DIR) { Write-Host "   BUN_INSTALL_CACHE_DIR=$env:BUN_
 # bunx alias.
 Invoke-Step 'install' { & bun install --frozen-lockfile }
 Invoke-Step 'type check' { & bun x tsc -b }
-Invoke-Step 'cli unit tests' { & bun x vitest run --project unit cli/ }
+# Under Bun, by `--bun`, as the CLI itself runs; vitest's launcher asks for
+# Node, which runs them on a machine that has it.
+Invoke-Step 'cli unit tests' { & bun x --bun vitest run --project unit cli/ }
 Invoke-Step 'terminal UI tests' { & bun run test:tui }
 Invoke-Step 'build' { & bun run build:cli -- --outfile dist\cli\ptransfer-windows-amd64.exe }
 

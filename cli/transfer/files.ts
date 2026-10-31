@@ -160,9 +160,9 @@ export async function openNoFollow(path: string): Promise<FileHandle> {
 }
 
 /**
- * What the file says it is, from its extension. Bun keeps the table; the
- * unit tests run under Node, which has none, and fall back to the generic
- * type. The receiver only ever uses it as a label.
+ * What the file says it is, from its extension. Bun keeps the table; Node,
+ * which runs the unit tests where it is installed, has none, and falls back
+ * to the generic type. The receiver only ever uses it as a label.
  */
 export function mimeTypeOf(path: string): string {
   const sniffed =
