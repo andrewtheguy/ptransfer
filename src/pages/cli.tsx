@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   BEAM_RS_URL,
   PTRANSFER_CLI_DOCS_URL,
+  PTRANSFER_CLI_INSTALL_PS1,
   PTRANSFER_CLI_INSTALL_SH,
   PTRANSFER_CLI_RELEASES_URL,
 } from '@/lib/constants';
@@ -292,7 +293,7 @@ export function CliPage() {
           <div className="flex min-w-0 flex-col items-center text-center md:items-start md:text-left">
             <span className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
               <Terminal className="h-3.5 w-3.5" />
-              Linux and macOS
+              Linux, macOS and Windows
             </span>
             <h1 className="mt-5 text-balance bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-transparent">
               pTransfer in your terminal
@@ -318,7 +319,8 @@ export function CliPage() {
                 ~/.local/bin
               </code>{' '}
               without sudo, after checking the download against its published
-              checksum.
+              checksum. On Windows, the PowerShell installer is under Install
+              below.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3 md:justify-start">
               <Button asChild variant="outline" className="gap-2">
@@ -502,8 +504,8 @@ export function CliPage() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl">Install</h2>
           <p className="mt-3 text-muted-foreground">
-            One executable for Linux x64, Linux arm64 and Apple silicon macOS,
-            with no runtime or package manager to install.
+            One executable for Linux x64, Linux arm64, Apple silicon macOS and
+            Windows x64, with no runtime or package manager to install.
           </p>
         </div>
         <div className="mx-auto mt-8 max-w-5xl space-y-6 rounded-2xl border bg-card p-6 shadow-sm">
@@ -531,6 +533,36 @@ export function CliPage() {
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
+              Windows, in PowerShell
+            </p>
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} />
+            <p className="text-xs text-muted-foreground">
+              Checks the download the same way, installs to{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                %LOCALAPPDATA%\Programs\ptransfer
+              </code>{' '}
+              without administrator rights, and adds that folder to your{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                PATH
+              </code>
+              . Its terminal UI is for Windows Terminal; the older console host
+              is not supported, though the commands work there. Its options,{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                -Prerelease
+              </code>
+              ,{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                -DownloadOnly
+              </code>{' '}
+              and{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                -Tag
+              </code>
+              , are in the README.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-foreground">
               Newest prerelease
             </p>
             <CopyCommand
@@ -552,10 +584,14 @@ export function CliPage() {
               ,{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 ptransfer-linux-arm64
+              </code>
+              ,{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer-macos-arm64
               </code>{' '}
               or{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                ptransfer-macos-arm64
+                ptransfer-windows-amd64.exe
               </code>{' '}
               yourself from{' '}
               <a
@@ -570,7 +606,8 @@ export function CliPage() {
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 chmod +x
               </code>{' '}
-              it. A release tag after{' '}
+              it on Linux and macOS; Windows may warn about an unsigned
+              download, which the installer avoids. A release tag after{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 -s --
               </code>{' '}
@@ -587,17 +624,7 @@ export function CliPage() {
             >
               beam-rs
             </a>
-            . There is no Windows build: on Windows, use this site in a browser,
-            or{' '}
-            <a
-              href={BEAM_RS_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={linkClass}
-            >
-              beam-rs
-            </a>{' '}
-            for a command line. Every command, flag and option is documented in{' '}
+            . Every command, flag and option is documented in{' '}
             <a
               href={PTRANSFER_CLI_DOCS_URL}
               target="_blank"

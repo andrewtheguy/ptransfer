@@ -146,7 +146,7 @@ export function HomePage() {
           <div className="min-w-0">
             <span className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
               <Terminal className="h-3.5 w-3.5" />
-              Linux and macOS
+              Linux, macOS and Windows
             </span>
             <h2 className="mt-4 text-3xl">Also in your terminal</h2>
             <p className="mt-3 text-muted-foreground">

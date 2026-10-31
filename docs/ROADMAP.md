@@ -242,14 +242,26 @@ behind a portability layer:
      - Left, from a desktop session, since over ssh the escape goes back to
        the ssh client's terminal rather than a Windows clipboard: OSC 52
        copying in Windows Terminal.
-   - **5c**: shipping. A `windows-latest` job in the `Release CLI` workflow,
-     smoke-tested in PowerShell, publishing `ptransfer-windows-amd64.exe`;
-     an `install.ps1` that checks the download with `Get-FileHash` against
-     the checksum GitHub published; the CLI page and README, which say the
-     terminal UI wants Windows Terminal; and the Windows
-     CI VM driven by devtools' Windows driver with a Bun stack, so the unit,
-     terminal UI and live tests run there. An unsigned executable from the
-     internet meets SmartScreen; signing is a separate decision.
+   - **5c** (done, released with the next `Release CLI` run): shipping.
+     - A `windows-latest` row in the `Release CLI` workflow builds
+       `ptransfer-windows-amd64.exe` and smoke-tests it in PowerShell, away
+       from the checkout.
+     - `install.ps1` runs under Windows PowerShell 5.1, what a stock Windows
+       runs `irm | iex` in, as well as PowerShell 7. It checks the download
+       with `Get-FileHash` against the digest GitHub published, installs into
+       `%LOCALAPPDATA%\Programs\ptransfer` with no administrator, and adds
+       that folder to the user's `PATH`, once. Windows will not replace an
+       executable while it runs, so a running `ptransfer.exe` makes it stop
+       and say so. `install.sh` sends Git Bash and MSYS to it.
+     - The README and the site's CLI, home and about pages name Windows, and
+       say the terminal UI wants Windows Terminal.
+     - `pwsh ci/windows/remote.ps1` runs the type check, the CLI's unit and
+       terminal UI tests, and the executable's build and smoke test on the CI
+       VM, through devtools' Windows driver and its `bun` stack; `ci -Live`
+       adds the CLI's live tests.
+     - Not done: signing. An unsigned executable a browser downloaded meets
+       SmartScreen; the installer's download carries no mark of the web, so
+       it does not. Signing is a separate decision.
 
 Why a JavaScript CLI is viable at all, checked under Bun 1.4 so the later
 phases rest on something measured rather than assumed — the first two before

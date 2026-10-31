@@ -86,13 +86,16 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: bun-linux-x64
-            label: linux-amd64
+            binary: ptransfer-linux-amd64
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64
-            label: linux-arm64
+            binary: ptransfer-linux-arm64
           - runner: macos-latest
             target: bun-darwin-arm64
-            label: macos-arm64
+            binary: ptransfer-macos-arm64
+          - runner: windows-latest
+            target: bun-windows-x64
+            binary: ptransfer-windows-amd64.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -104,14 +107,15 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Build
-        run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/ptransfer-${{ matrix.label }}"
+        run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/${{ matrix.binary }}"
 
       - name: Smoke test the binary
+        if: runner.os != 'Windows'
         working-directory: ${{ runner.temp }}
         env:
           VERSION: ${{ needs.setup.outputs.version }}
         run: |
-          binary="$GITHUB_WORKSPACE/dist/cli/ptransfer-${{ matrix.label }}"
+          binary="$GITHUB_WORKSPACE/dist/cli/${{ matrix.binary }}"
           got="$("$binary" --version)"
           echo "binary reports: $got"
           case "$got" in
@@ -123,11 +127,29 @@ jobs:
           esac
           "$binary" send --help > /dev/null
 
+      # The same check in PowerShell, which is what runs it on Windows.
+      - name: Smoke test the executable
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          $binary = Join-Path $env:GITHUB_WORKSPACE 'dist\cli\${{ matrix.binary }}'
+          $got = & $binary --version
+          Write-Host "executable reports: $got"
+          if ($LASTEXITCODE -ne 0 -or $got -notlike "ptransfer $env:VERSION *") {
+            Write-Host "::error::expected 'ptransfer $env:VERSION (protocol N)'"
+            exit 1
+          }
+          & $binary send --help | Out-Null
+          exit $LASTEXITCODE
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ptransfer-${{ matrix.label }}
-          path: dist/cli/ptransfer-${{ matrix.label }}
+          name: ${{ matrix.binary }}
+          path: dist/cli/${{ matrix.binary }}
           if-no-files-found: error
 
   create-release:

@@ -21,10 +21,10 @@ export const PTRANSFER_CLI_DOCS_URL = `${PTRANSFER_REPO_URL}#command-line`;
 /** Where each release publishes the CLI's self-contained executables. */
 export const PTRANSFER_CLI_RELEASES_URL = `${PTRANSFER_REPO_URL}/releases`;
 
-/**
- * The one-line installer, `install.sh` at the root of this repository. Linux
- * and macOS only: there is no Windows build, and the CLI refuses that platform
- * up front rather than half-supporting it.
- */
+/** The one-line installer for Linux and macOS, `install.sh` at the root of this repository. */
 export const PTRANSFER_CLI_INSTALL_SH =
   'curl -fsSL https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.sh | bash';
+
+/** Its Windows counterpart for PowerShell, `install.ps1` beside it. */
+export const PTRANSFER_CLI_INSTALL_PS1 =
+  'irm https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.ps1 | iex';
