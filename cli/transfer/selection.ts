@@ -1,12 +1,14 @@
 import type { Dirent, Stats } from 'node:fs';
 import {
   type FileHandle,
+  lstat,
   open,
   readdir,
+  readlink,
   realpath,
   stat,
 } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   archiveTimestamp,
   createZipTransferSource,
@@ -215,10 +217,52 @@ async function expectRealPath(path: string, expected: string): Promise<void> {
 
 async function realPathOf(path: string): Promise<string> {
   try {
-    return await realpath(path);
+    return process.platform === 'win32'
+      ? await realpath(path)
+      : await followLinks(path);
   } catch {
     throw new Error(`Cannot read ${path}`);
   }
+}
+
+/** As many links as one path may pass through, as Linux's own limit. */
+const MAX_LINKS = 40;
+
+/**
+ * `realpath` on Linux and macOS, one name at a time with `lstat` and
+ * `readlink`. Bun's own reads a backslash in a name as a separator there —
+ * `photos/a\b.txt` is looked up as `photos/a/b.txt` — so a folder holding
+ * such a file, which a ZIP may carry, could not be sent at all.
+ */
+async function followLinks(path: string): Promise<string> {
+  // Not `resolve`: it takes `..` away before the links ahead of it are
+  // followed, which is not where the system's lookup goes.
+  const absolute = path.startsWith('/') ? path : `${process.cwd()}/${path}`;
+  const pending = absolute.split('/').filter((name) => name !== '');
+  let current = '/';
+  let links = 0;
+  while (pending.length > 0) {
+    const name = pending.shift() as string;
+    if (name === '.') continue;
+    if (name === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = current === '/' ? `/${name}` : `${current}/${name}`;
+    if (!(await lstat(next)).isSymbolicLink()) {
+      current = next;
+      continue;
+    }
+    if (++links > MAX_LINKS) {
+      throw Object.assign(new Error(`Too many links in ${path}`), {
+        code: 'ELOOP',
+      });
+    }
+    const target = await readlink(next);
+    pending.unshift(...target.split('/').filter((part) => part !== ''));
+    if (target.startsWith('/')) current = '/';
+  }
+  return current;
 }
 
 function changedWhileRead(path: string): Error {

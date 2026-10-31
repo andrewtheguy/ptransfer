@@ -237,6 +237,17 @@ describe('openSelection', () => {
     },
   );
 
+  // Bun's `realpath` once read the backslash as a separator, and the folder
+  // could not be sent at all.
+  it.skipIf(process.platform === 'win32')(
+    'sends a file with a backslash in its name that stays in the folder',
+    async () => {
+      const { photos } = await tree();
+      await writeFile(join(photos, 'a\\b.txt'), 'kept');
+      expect(Object.keys(await unpack([photos]))).toContain('photos/a\\b.txt');
+    },
+  );
+
   it.skipIf(ACCESS_CHECKS_BYPASSED)(
     'refuses an unreadable file before anything is sent',
     async () => {
