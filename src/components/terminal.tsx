@@ -132,3 +132,59 @@ export function CopyCommand({ command, className }: CopyCommandProps) {
     </div>
   );
 }
+
+/*
+ * The terminal UI's own palette (`cli/tui/theme.ts`), so a mock of one of its
+ * screens looks like the screen.
+ */
+export const TUI_COLORS = {
+  accent: 'text-[#7aa2f7]',
+  heading: 'text-[#c0caf5]',
+  muted: 'text-[#8b93a7]',
+  good: 'text-[#9ece6a]',
+  border: 'border-[#565f89]',
+} as const;
+
+interface TuiScreenProps {
+  /** The screen's title, after the `pTransfer · ` every screen starts with. */
+  title: string;
+  /** The key hints along the bottom, as the screen shows them. */
+  hints: string[];
+  children: React.ReactNode;
+  className?: string;
+}
+
+/**
+ * A mock of one terminal UI screen, framed as the TUI frames it: a titled
+ * border with the key hints along the bottom (`cli/tui/screen.tsx`).
+ */
+export function TuiScreen({
+  title,
+  hints,
+  children,
+  className,
+}: TuiScreenProps) {
+  return (
+    <TerminalWindow title="ptransfer" className={className}>
+      <div
+        className={cn(
+          'relative mt-1 rounded-sm border px-3 pt-3 pb-2',
+          TUI_COLORS.border,
+        )}
+      >
+        <span
+          className={cn(
+            'absolute -top-2.5 left-2 bg-zinc-950 px-1',
+            TUI_COLORS.accent,
+          )}
+        >
+          pTransfer · {title}
+        </span>
+        <div className="space-y-1">{children}</div>
+        <div className={cn('mt-3', TUI_COLORS.muted)}>
+          {hints.join('  ·  ')}
+        </div>
+      </div>
+    </TerminalWindow>
+  );
+}

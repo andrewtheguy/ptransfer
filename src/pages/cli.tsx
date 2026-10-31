@@ -17,6 +17,8 @@ import {
   TerminalComment,
   TerminalGap,
   TerminalWindow,
+  TUI_COLORS,
+  TuiScreen,
 } from '@/components/terminal';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -27,10 +29,15 @@ import {
   PTRANSFER_CLI_RELEASES_URL,
 } from '@/lib/constants';
 import { PROTOCOL_VERSION } from '@/lib/protocol-version';
+import { cn } from '@/lib/utils';
+
+type ModeValue = 'pin' | 'code' | 'tor';
 
 interface ModeExample {
-  value: string;
+  value: ModeValue;
   label: string;
+  /** What the receiver pastes into the terminal UI's Receive screen. */
+  pasted: string;
   sender: { command: string; comment: string }[];
   receiver: { command: string; comment: string }[];
   withBrowser: React.ReactNode;
@@ -40,6 +47,7 @@ const MODES: ModeExample[] = [
   {
     value: 'pin',
     label: 'PIN Exchange',
+    pasted: 'the PIN',
     sender: [
       {
         command: 'ptransfer send --pin ./report.pdf',
@@ -85,6 +93,7 @@ const MODES: ModeExample[] = [
   {
     value: 'code',
     label: 'Code Exchange',
+    pasted: 'the sender’s code',
     sender: [
       {
         command: 'ptransfer send --code ./photos ./notes.txt',
@@ -117,6 +126,7 @@ const MODES: ModeExample[] = [
   {
     value: 'tor',
     label: 'Tor Onion Service',
+    pasted: 'the .onion address',
     sender: [
       {
         command: 'ptransfer send --tor ./report.pdf',
@@ -141,6 +151,108 @@ const MODES: ModeExample[] = [
     ),
   },
 ];
+
+const TUI_SEND_OPTIONS: {
+  value: ModeValue;
+  name: string;
+  description: string;
+}[] = [
+  {
+    value: 'pin',
+    name: 'PIN Exchange',
+    description: 'Read out a short PIN, then compare a confirmation code',
+  },
+  {
+    value: 'code',
+    name: 'Code Exchange',
+    description: 'Carry a code, then a direct connection or a relay fallback',
+  },
+  {
+    value: 'tor',
+    name: 'Tor Onion Service',
+    description: 'Publish an onion service and carry its address and password',
+  },
+];
+
+const TUI_ANONYMOUS_LABEL: Record<ModeValue, string | null> = {
+  pin: 'Anonymous signaling (experimental)',
+  code: 'Anonymous signaling and relay (experimental)',
+  tor: null,
+};
+
+/** The terminal UI's Send screen with `mode` highlighted. */
+function TuiSendMock({ mode }: { mode: ModeValue }) {
+  const anonymous = TUI_ANONYMOUS_LABEL[mode];
+  return (
+    <TuiScreen
+      title="Send"
+      hints={['↑↓ choose', 'enter start', 'esc back']}
+      className="min-w-0"
+    >
+      <div className={TUI_COLORS.good}>report.pdf · 1.2 MiB</div>
+      <TerminalGap />
+      {TUI_SEND_OPTIONS.map((option) => {
+        const selected = option.value === mode;
+        return (
+          <div
+            key={option.value}
+            className={cn('px-1', selected && 'rounded-sm bg-[#7aa2f7]/20')}
+          >
+            <div className={selected ? TUI_COLORS.accent : TUI_COLORS.heading}>
+              {selected ? '› ' : '  '}
+              {option.name}
+            </div>
+            <div className={cn('pl-4', TUI_COLORS.muted)}>
+              {option.description}
+            </div>
+          </div>
+        );
+      })}
+      <TerminalGap />
+      <div className={TUI_COLORS.heading}>
+        {anonymous
+          ? `[ ] ${anonymous}   a to turn on`
+          : 'Tor bridge: Snowflake WebSocket   b to change'}
+      </div>
+    </TuiScreen>
+  );
+}
+
+/** The terminal UI's Receive screen, the same for every mode. */
+function TuiReceiveMock({ pasted }: { pasted: string }) {
+  return (
+    <TuiScreen
+      title="Receive"
+      hints={['enter continue', 'esc back']}
+      className="min-w-0"
+    >
+      <div className={TUI_COLORS.heading}>Paste what the sender gave you</div>
+      <div className={TUI_COLORS.muted}>
+        A PIN, a Code Exchange code, or a .onion address.
+      </div>
+      <div className={TUI_COLORS.muted}>
+        Where it is saved is the next screen.
+      </div>
+      <TerminalGap />
+      <div
+        className={cn(
+          'relative rounded-sm border px-2 py-1.5',
+          TUI_COLORS.border,
+        )}
+      >
+        <span
+          className={cn(
+            'absolute -top-2.5 left-2 bg-zinc-950 px-1',
+            TUI_COLORS.heading,
+          )}
+        >
+          code
+        </span>
+        <span className={cn('italic', TUI_COLORS.muted)}>‹{pasted}›</span>
+      </div>
+    </TuiScreen>
+  );
+}
 
 const REASONS = [
   {
@@ -258,8 +370,8 @@ export function CliPage() {
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">
               ptransfer --version
             </code>{' '}
-            prints the CLI&apos;s. The terminal UI offers every mode from a
-            menu; these are the same transfers as commands, for scripts.
+            prints the CLI&apos;s. The terminal UI is the easy way in, and every
+            mode is a command too, for scripts.
           </p>
         </div>
 
@@ -287,34 +399,74 @@ export function CliPage() {
               </TabsTrigger>
             ))}
           </TabsList>
-          {MODES.map(({ value, sender, receiver, withBrowser }) => (
-            <TabsContent key={value} value={value} className="mt-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <TerminalWindow title="sender" className="min-w-0">
-                  {sender.map(({ command, comment }, index) => (
-                    <div key={command}>
-                      {index > 0 && <TerminalGap />}
-                      <TerminalCommand>{command}</TerminalCommand>
-                      <TerminalComment>{comment}</TerminalComment>
-                    </div>
-                  ))}
-                </TerminalWindow>
-                <TerminalWindow title="receiver" className="min-w-0">
-                  {receiver.map(({ command, comment }, index) => (
-                    <div key={command}>
-                      {index > 0 && <TerminalGap />}
-                      <TerminalCommand>{command}</TerminalCommand>
-                      <TerminalComment>{comment}</TerminalComment>
-                    </div>
-                  ))}
-                </TerminalWindow>
-              </div>
-              <div className="mt-4 flex gap-3 rounded-2xl border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
-                <Globe className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <p>{withBrowser}</p>
-              </div>
-            </TabsContent>
-          ))}
+          {MODES.map(
+            ({ value, label, pasted, sender, receiver, withBrowser }) => (
+              <TabsContent key={value} value={value} className="mt-4">
+                <h3 className="flex items-center gap-2 text-base font-semibold">
+                  <LayoutPanelLeft className="h-4 w-4 text-primary" />
+                  In the terminal UI
+                </h3>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  <div className="min-w-0 space-y-2">
+                    <TuiSendMock mode={value} />
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        Sender:
+                      </span>{' '}
+                      run{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                        ptransfer
+                      </code>
+                      , choose Send, mark the files and folders to send, then
+                      pick {label}.
+                    </p>
+                  </div>
+                  <div className="min-w-0 space-y-2">
+                    <TuiReceiveMock pasted={pasted} />
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        Receiver:
+                      </span>{' '}
+                      run{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                        ptransfer
+                      </code>
+                      , choose Receive, and paste {pasted}. It works out the
+                      mode itself, then asks where to save.
+                    </p>
+                  </div>
+                </div>
+                <h3 className="mt-8 flex items-center gap-2 text-base font-semibold">
+                  <Workflow className="h-4 w-4 text-primary" />
+                  As commands, for scripts
+                </h3>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  <TerminalWindow title="sender" className="min-w-0">
+                    {sender.map(({ command, comment }, index) => (
+                      <div key={command}>
+                        {index > 0 && <TerminalGap />}
+                        <TerminalCommand>{command}</TerminalCommand>
+                        <TerminalComment>{comment}</TerminalComment>
+                      </div>
+                    ))}
+                  </TerminalWindow>
+                  <TerminalWindow title="receiver" className="min-w-0">
+                    {receiver.map(({ command, comment }, index) => (
+                      <div key={command}>
+                        {index > 0 && <TerminalGap />}
+                        <TerminalCommand>{command}</TerminalCommand>
+                        <TerminalComment>{comment}</TerminalComment>
+                      </div>
+                    ))}
+                  </TerminalWindow>
+                </div>
+                <div className="mt-4 flex gap-3 rounded-2xl border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+                  <Globe className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                  <p>{withBrowser}</p>
+                </div>
+              </TabsContent>
+            ),
+          )}
         </Tabs>
       </SectionContainer>
 
@@ -426,8 +578,17 @@ export function CliPage() {
             </p>
           </div>
           <div className="border-t pt-4 text-xs text-muted-foreground">
-            There is no Windows build: use WSL, or this site. For a command line
-            on Windows, or for files larger than 2 GiB, use{' '}
+            There is no Windows build: on Windows, use this site in a browser,
+            or{' '}
+            <a
+              href={BEAM_RS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={linkClass}
+            >
+              beam-rs
+            </a>{' '}
+            for a command line. For files larger than 2 GiB, use{' '}
             <a
               href={BEAM_RS_URL}
               target="_blank"
