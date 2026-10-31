@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router-dom';
 import { Footer } from '@/components/footer';
 import { Navbar } from '@/components/navbar';
 import { AboutPage } from '@/pages/about';
+import { CliPage } from '@/pages/cli';
 import { DebugPage } from '@/pages/debug';
 import { HomePage } from '@/pages/home';
 import { NotFoundPage } from '@/pages/not-found';
@@ -28,6 +29,7 @@ function App() {
           </Route>
           <Route path="/receive" element={<ReceivePage />} />
           <Route path="/r" element={<ReceiveChunkedPage />} />
+          <Route path="/cli" element={<CliPage />} />
           <Route path="/about" element={<AboutPage />} />
           {/* Relay diagnostics: unlinked on purpose, reachable by URL. */}
           <Route path="/debug" element={<DebugPage />} />

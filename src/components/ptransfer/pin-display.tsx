@@ -282,7 +282,17 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
           claim the PIN, so say so rather than let this screen imply a browser
           is required. */}
       <p className="text-xs text-muted-foreground text-center">
-        The receiver can use this site or the command line —{' '}
+        The receiver can use this site or{' '}
+        {/* A new tab: following it here would end the wait for a receiver. */}
+        <a
+          href="/cli"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium underline underline-offset-2 hover:text-foreground"
+        >
+          the command line
+        </a>{' '}
+        —{' '}
         <code className="rounded bg-muted px-1 py-0.5 font-mono">
           ptransfer receive --pin
         </code>{' '}

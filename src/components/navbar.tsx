@@ -1,4 +1,4 @@
-import { Download, Home, Info, Menu, Send, X } from 'lucide-react';
+import { Download, Home, Info, Menu, Send, Terminal, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { Logo } from '@/components/logo';
@@ -18,6 +18,7 @@ const NAV_LINKS = [
   { to: '/', label: 'Home', icon: Home, end: true },
   { to: '/send', label: 'Send', icon: Send, end: false },
   { to: '/receive', label: 'Receive', icon: Download, end: false },
+  { to: '/cli', label: 'CLI', icon: Terminal, end: false },
   { to: '/about', label: 'About', icon: Info, end: false },
 ] as const;
 

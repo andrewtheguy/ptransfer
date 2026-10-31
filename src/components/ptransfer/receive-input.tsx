@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/collapsible';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { PTRANSFER_CLI_DOCS_URL } from '@/lib/constants';
 import { ANONYMOUS_PIN_LENGTH, PIN_LENGTH } from '@/lib/crypto';
 import {
   classifyReceiveText,
@@ -399,7 +398,7 @@ export function ReceiveInput({
             The sender does not have to be a browser. A PIN, a{' '}
             <code>.onion</code> address, or a sender code minted by{' '}
             <a
-              href={PTRANSFER_CLI_DOCS_URL}
+              href="/cli"
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-foreground underline underline-offset-2"
