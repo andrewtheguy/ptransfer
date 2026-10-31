@@ -124,14 +124,22 @@ const queues = new Map<string, Promise<unknown>>();
  * The lock on `path`, created if it does not exist. Taking it waits up to
  * `waitMs` for another holder — a holder keeps it for one read-modify-write,
  * milliseconds — and rejects after that, as it does where the lock cannot be
- * loaded at all.
+ * loaded at all. The wait covers the in-process queue and the kernel lock
+ * together, from the moment the lock is asked for.
  */
 export function fileLock(path: string, waitMs = 5000): FileLock {
   const key = resolve(path);
   return (critical) => {
+    const deadline = Date.now() + waitMs;
     const previous = queues.get(key) ?? Promise.resolve();
-    const run = previous.then(() => locked(path, waitMs, critical));
-    const tail = run.catch(() => undefined);
+    const run = (async () => {
+      await turn(previous, deadline, path, waitMs);
+      return locked(path, deadline, waitMs, critical);
+    })();
+    // The next in line waits for the holder ahead too, not only for this
+    // caller: one that gave up waiting must not let it in while that holder
+    // still runs, which on Windows the re-entrant mutex would not stop.
+    const tail = Promise.all([previous, run.catch(() => undefined)]);
     queues.set(key, tail);
     void tail.then(() => {
       if (queues.get(key) === tail) queues.delete(key);
@@ -140,20 +148,43 @@ export function fileLock(path: string, waitMs = 5000): FileLock {
   };
 }
 
+function stayedLocked(path: string, waitMs: number): Error {
+  return new Error(`${path} stayed locked for ${waitMs / 1000}s`);
+}
+
+/** Wait for the holder ahead in this process, until `deadline`. */
+async function turn(
+  previous: Promise<unknown>,
+  deadline: number,
+  path: string,
+  waitMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(stayedLocked(path, waitMs)),
+      Math.max(deadline - Date.now(), 0),
+    );
+  });
+  try {
+    await Promise.race([previous, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function locked<T>(
   path: string,
+  deadline: number,
   waitMs: number,
   critical: () => Promise<T>,
 ): Promise<T> {
   const held = await (await loadPlatform())(path);
   try {
-    const deadline = Date.now() + waitMs;
     // Non-blocking and polled: a blocking wait would stop the event loop,
     // and with it every transfer this process is running.
     while (!held.tryAcquire()) {
-      if (Date.now() > deadline) {
-        throw new Error(`${path} stayed locked for ${waitMs / 1000}s`);
-      }
+      if (Date.now() > deadline) throw stayedLocked(path, waitMs);
       await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
     }
     try {
