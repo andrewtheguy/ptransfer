@@ -606,21 +606,25 @@ session's (§3), and over a framed onion stream for the Tor transport of
 
 The transport is a **reliable, ordered** message link that keeps binary and
 text messages apart. It may carry other traffic in both directions beside the
-transfer — PIN Exchange's code carriage does — but the transfer itself uses
-one direction. Whichever peer creates a data channel
+transfer — PIN Exchange's code carriage does, and so do the lane messages of
+§7.8 — but the transfer itself uses one direction. Over WebRTC the transfer
+spreads its chunks across the first connection and the extra connections
+negotiated over it (§7.8); each connection is ordered on its own, and the
+receiver puts chunks from all of them back in index order (§7.5). Whichever
+peer creates a data channel
 MUST create it **ordered and reliable** — the WebRTC default, i.e.
 `ordered: true` with neither `maxRetransmits` nor `maxPacketLifeTime` set. This
-is stated rather than assumed because §7.5's receive discipline has no way to
-recover otherwise: an unordered channel still delivers every message, but SCTP
-hands each one up as soon as it reassembles, so a single retransmit lets a
-later chunk overtake an earlier one and the peer rejects the index. Nothing on
-the wire announces the setting, and a loopback or lossless path never reveals
-it, so a host whose WebRTC binding defaults differently can pass every local
-test and fail every real transfer.
+is stated rather than assumed because nothing recovers a lost message: a
+channel that may drop one loses a chunk outright, and on an unordered one the
+text messages that share the first channel — `end`, `abort`, the lane
+messages — lose their place among what was sent before them. Nothing on the
+wire announces the setting, and a loopback or lossless path never reveals it,
+so a host whose WebRTC binding defaults differently can pass every local test
+and fail every real transfer.
 
 The transfer is **one-way**. Every message goes from the sender to the
-receiver, and the receiver sends nothing back: it verifies what arrives on its
-own — each chunk authenticates individually, and the sender's closing `end`
+receiver, and the receiver sends nothing back but its lane answers (§7.8): it
+verifies what arrives on its own — each chunk authenticates individually, and the sender's closing `end`
 says how much there was — and it closes the transport once it has the file or
 gives up. The sender is complete once its last message has left its send
 buffer. Neither side is told what the other concluded; whether the file
@@ -641,8 +645,9 @@ AES-256-GCM under the content key. **The 2-byte index prefix is also passed as
 additional authenticated data**, so a receiver rejects a chunk whose index was
 altered or whose ciphertext was swapped with another chunk's.
 
-Indices start at 0 and increase by one. The 2-byte field caps a transfer at
-65 536 chunks (`MAX_CHUNKS`).
+Indices start at 0 and increase by one in the order the sender produces the
+chunks; across connections they may arrive in another order (§7.5). The
+2-byte field caps a transfer at 65 536 chunks (`MAX_CHUNKS`).
 
 ### 7.2 Control messages
 
@@ -674,7 +679,8 @@ and every one goes from the sender to the receiver:
 The sender is paced by the transport alone: it hands the next chunk over only
 once the transport has taken the last (a data channel is drained at a 1 MiB
 `bufferedAmountLowThreshold`; a framed onion stream's writes complete as the
-stream takes them). Nothing comes back to open a window, so a receiver stores
+stream takes them). With lanes open, each chunk goes to whichever connection
+has room, so each carries what its own congestion control allows. Nothing comes back to open a window, so a receiver stores
 chunks as fast as its storage allows, and what it has taken off the link but
 not yet written waits in its memory. A receiver bounds that wait at
 `RECEIVE_BACKLOG_MAX_BYTES` (256 MiB) and gives up past it, closing the
@@ -684,16 +690,20 @@ the process dies.
 
 ### 7.4 Completion
 
-After the last chunk the sender sends `end` with the chunk count and the
-**wire** byte count (post-encoding, pre-encryption), and is complete once
-`end` has left its send buffer. It then keeps the transport up until the
+After the last chunk the sender sends `end` on the first connection with the
+chunk count and the **wire** byte count (post-encoding, pre-encryption), and
+is complete once `end` and every chunk have left its send buffers. `end` can
+reach the receiver before chunks still travelling on a lane; the receiver
+waits for them, under its watchdog (§7.7). It then keeps the transport up until the
 receiver hangs up or a linger window passes (10 s on a data channel, 30 s on
 an onion stream), so its own close never cuts off what the transport is still
 delivering.
 
 The receiver MUST verify that the chunk count matches what it received, that
-indices arrived exactly once in order, and that the decrypted wire byte count
-matches; then, and only then, it finalizes what it stored. It then closes the
+every index below it arrived exactly once, and that the decrypted wire byte
+count matches; then, and only then, it finalizes what it stored. An `end`
+whose count is already contradicted — lower than the chunks received, not
+above the highest index seen, or not one past a short chunk — fails at once. It then closes the
 transport, which is the only thing the sender ever hears from it.
 
 Once `end` has checked out, the rest is the receiver's own work: what it still
@@ -703,13 +713,18 @@ transfer.
 
 ### 7.5 Receive discipline
 
-Receivers **append in reliable arrival order**. There is no positional or
-out-of-order write path: no wire payload has a length known up front, so an
-index cannot be turned into an offset. A receiver MUST reject a chunk whose
-index is not the next expected one, a duplicate index, a short chunk before the
-final one, a malformed length, and a transfer that exceeds `MAX_MESSAGE_SIZE`.
-Once `end` has checked out it has stopped reading the transport, so anything
-sent after it is never seen.
+Receivers **append in index order**. There is no positional write path: no
+wire payload has a length known up front, so an index cannot be turned into an
+offset. A chunk that arrives ahead of a gap — on a lane that is ahead of
+another — waits in memory until every index before it has been stored, and
+counts against `RECEIVE_BACKLOG_MAX_BYTES` (§7.3) while it does.
+
+A receiver MUST reject a duplicate index, an index at or past the count of an
+`end` already received, a short chunk that is not the last by index (whichever
+of the two arrived first), a malformed length, and a transfer that exceeds
+`MAX_MESSAGE_SIZE`. Once `end` has checked out and every chunk it counts has
+arrived, the receiver stops reading the transport, so anything sent after that
+is never seen.
 
 There is **no whole-file checksum and no manifest**. Integrity rests entirely
 on per-chunk AES-GCM authentication with the authenticated index, plus the
@@ -741,10 +756,51 @@ side measuring the other:
   not drain after `end`, within the window: a receiver that stopped reading.
   While it waits on its own input it runs no clock.
 - The receiver arms it when the transport opens, resets it on every incoming
-  message, and stops it once `end` has checked out: storing what is in hand
-  is its own work, not the sender's.
+  message on any connection, and stops it once `end` has checked out and every
+  chunk it counts has arrived: storing what is in hand is its own work, not the
+  sender's.
 
 A steadily progressing transfer of any size never trips it.
+
+### 7.8 Lanes
+
+One WebRTC connection rarely fills a real network path: its congestion
+control backs off on every loss on its own. Over a direct connection, the
+sender therefore opens `EXTRA_LANES` = 3 more peer connections — lanes — once
+the first data channel is open, and spreads chunks across all of them (§7.3).
+A data channel added to the first connection would share its congestion
+window, which is why each lane is a peer connection of its own, with one
+ordered, reliable data channel. The Tor transport has no lanes.
+
+Lanes are negotiated with **text** messages on the first channel, one JSON
+object each:
+
+| `t` | Direction | Fields | Meaning |
+|---|---|---|---|
+| `lane-offer` | sender → receiver | `lane`, `sdp` | An offer for lane `lane`, every candidate in its SDP |
+| `lane-answer` | receiver → sender | `lane`, `sdp` | The answer to it, likewise complete |
+
+```json
+{ "t": "lane-offer", "lane": 1, "sdp": "v=0\r\no=- ..." }
+```
+
+- `lane` is an integer from 1 to `MAX_EXTRA_LANES` = 7; `sdp` a non-empty
+  string of at most 64 KiB. Candidates are gathered before the SDP is sent
+  (5 s at most); nothing is trickled. A malformed lane message is ignored.
+- The receiver answers each lane number once, up to `MAX_EXTRA_LANES` lanes,
+  and only while the transfer runs.
+- The first channel is authenticated end to end by the time it opens, so a
+  lane's DTLS fingerprints inherit that, and every chunk on a lane is still
+  sealed under the content key with its index as additional data (§7.1).
+- The sender starts the transfer on the first connection at once; each lane
+  joins when its channel opens. A lane that has not opened within 15 s
+  (sender) or 20 s (receiver) is closed — the sender's window is the shorter,
+  so a lane is never closed under chunks the sender has begun putting on it.
+- A lane that closes before carrying anything is dropped. One that closes
+  after carrying chunks is a connection failure (§7.6) for whichever side
+  sees it: what it still held is lost. The first connection's close ends every
+  lane, and the receiver's close of the first connection is how the sender
+  learns the transfer is over.
 
 ---
 
@@ -774,6 +830,9 @@ A steadily progressing transfer of any size never trips it.
 | `MAX_CHUNKS` | 65 536 |
 | `MAX_MESSAGE_SIZE` | 2 GiB |
 | `RECEIVE_BACKLOG_MAX_BYTES` | 256 MiB |
+| `EXTRA_LANES` | 3 |
+| `MAX_EXTRA_LANES` | 7 |
+| Lane SDP | at most 64 KiB |
 | `abort` reason | at most 200 characters |
 
 Peer-visible timeouts:
@@ -789,6 +848,8 @@ Peer-visible timeouts:
 | Direct attempt, sender | 20 s with a fallback, 120 s without |
 | Direct attempt, receiver | 30 s with a fallback, 120 s without |
 | Transfer stall (idle) | 60 s |
+| Lane open, sender | 15 s |
+| Lane open, receiver | 20 s |
 | Sender linger after `end` | 10 s (data channel), 30 s (onion stream) |
 | Sender rotation/wait backstop | 30 min |
 
@@ -861,6 +922,7 @@ Changing either digest is a breaking change, never an accident.
 | Handshake choreography | [`src/lib/pin-exchange/send.ts`](../src/lib/pin-exchange/send.ts), [`receive.ts`](../src/lib/pin-exchange/receive.ts), driven by [`src/hooks/use-pin-send.ts`](../src/hooks/use-pin-send.ts) and [`use-pin-receive.ts`](../src/hooks/use-pin-receive.ts) in the tab and by [`cli/pin/`](../cli/pin/) in the terminal |
 | Wire encoding | [`src/lib/transfer-source.ts`](../src/lib/transfer-source.ts) |
 | Transfer protocol | [`src/lib/p2p-transfer.ts`](../src/lib/p2p-transfer.ts), over the channel in [`src/lib/duplex-channel.ts`](../src/lib/duplex-channel.ts) or the Tor link in [`src/lib/tor/transfer.ts`](../src/lib/tor/transfer.ts) |
+| Lanes (§7.8) | [`src/lib/lanes.ts`](../src/lib/lanes.ts) |
 
 Design rationale for all of the above — why a PAKE, why the PIN is split, what
 the confirmation code does and does not cover, the threat model — is in

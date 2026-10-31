@@ -21,6 +21,7 @@ import { wipeBufferSource } from '@/lib/crypto/memory';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { acceptLanes, type Lanes } from '@/lib/lanes';
 import type { FileMetadata, TransferMetadata } from '@/lib/nostr';
 import {
   ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
@@ -314,6 +315,12 @@ export async function buildDirectAttempt(opts: {
   }
   sinkHolder.current = sink;
 
+  /**
+   * The extra connections the sender offers once the first is open. They
+   * close with it, which is how `finishDirectReceive` lets them go.
+   */
+  let lanes: Lanes | null = null;
+
   // Streaming receiver: decrypts each chunk into the sink as it arrives and
   // resolves once the sender's `end` checks out against what it stored. A
   // direct connection is not worth compressing for, so nothing is inflated.
@@ -336,9 +343,10 @@ export async function buildDirectAttempt(opts: {
     },
     (channel) => {
       // Data channel opened: the receiver takes it over before any message
-      // can arrive, and its idle watchdog covers the receiving stage from
-      // here on.
-      receiver.attach(channel);
+      // can arrive, together with the lanes the sender offers over it, and
+      // its idle watchdog covers the receiving stage from here on.
+      lanes = acceptLanes(channel, opts.host.peerConnection, getWebRTCConfig());
+      receiver.attach(lanes.link);
       openChannel = channel;
       dataChannelResolver?.(channel);
     },
@@ -358,6 +366,7 @@ export async function buildDirectAttempt(opts: {
   // attempt is the current one.
   const dispose = () => {
     receiver.dispose();
+    lanes?.close();
     rtc.close();
     if (rtcHolder.current === rtc) rtcHolder.current = null;
     if (sinkHolder.current === sink) sinkHolder.current = null;

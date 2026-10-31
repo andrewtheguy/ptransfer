@@ -217,8 +217,10 @@ shared transfer layer of
 [INTEROP_PROTOCOL.md §7](./INTEROP_PROTOCOL.md#7-transfer)
 unchanged — ordered and reliable, 128 KiB AES-256-GCM chunks under the content
 key as the channel takes them, then `end`; the receiver verifies on its own and
-hangs up — with the wire encoding of §6 there. Nothing about
-that layer is specific to how the two sides met.
+hangs up — with the wire encoding of §6 there. The extra connections that
+transfer spreads over (§7.8 there) are negotiated over the open channel, so
+neither code carries anything for them. Nothing about that layer is specific
+to how the two sides met.
 
 ICE is STUN-only; no TURN is configured. Candidates are
 gathered before a code is made rather than trickled, because a code is carried

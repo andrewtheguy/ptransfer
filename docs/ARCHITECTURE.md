@@ -799,6 +799,8 @@ raise.
 
 `WebRTCConnection` handles connection setup and nothing past it: the offer and answer, ICE candidate queuing, Google and Cloudflare STUN servers for direct candidate discovery (TURN relay candidates are never configured), connection state monitoring, and the single ordered, reliable data channel. The offering side creates that channel; when it opens, either side's `WebRTCConnection` hands it over as a `DuplexChannel`.
 
+Once that first channel is open, `src/lib/lanes.ts` negotiates three more peer connections — lanes — over it ([INTEROP_PROTOCOL.md §7.8](INTEROP_PROTOCOL.md#78-lanes)), and the transfer spreads its chunks across every connection that has opened, the receiver putting them back in index order. One connection's congestion control holds it to a fraction of a real internet path; measured browser to browser across one, four connections carried 2–3× what one did. On a LAN, Chrome's single WebRTC thread is the ceiling and lanes add nothing, so the transfer never waits for them.
+
 The `DuplexChannel` is symmetric. Which peer made the offer, and which one sends the file, says nothing about which way messages may flow once the channel is open: both sides send text and binary messages and both listen. Its properties:
 
 - **Ordered sends with backpressure.** Every send, text or binary, joins one queue and leaves in call order; each waits while more than 1 MiB is buffered, so a message sent while a chunk waits on the drain cannot overtake it. The 128 KiB encrypted chunk messages rely on WebRTC for fragmentation.
@@ -841,7 +843,7 @@ Both WebRTC modes run the Code Exchange session in `src/lib/code-exchange/` — 
 5. Display it as a multi-QR URL grid (chunked into ~400-byte URL QR codes) plus a base64 copy button
 6. Accept the receiver's answer from the scan/paste input and derive the ECDH shared secret
 7. Attempt the direct WebRTC connection (20 seconds when a fallback is available, otherwise 120 seconds). With a fallback available, the relay session is derived up front and the selected control relays are watched for the receiver's sealed `hello` (`watchForReceiverHello`): the receiver's ICE agent declares the direct route dead long before the sender's, so its `hello` ends the direct attempt at once instead of waiting out the window
-8. On success, send 128 KiB chunks over the data channel as it takes them, then `end`; complete once they have left the send buffer, and linger until the receiver hangs up
+8. On success, offer the extra lanes over the data channel and send 128 KiB chunks over whichever connection has room, then `end`; complete once they have left the send buffers, and linger until the receiver hangs up
 9. On connection failure (ICE failure, timeout, or the receiver's `hello`), use the eligible fallback: ordinary mode materializes the source (up to 100 MiB) and runs `sendFileLive`, while anonymous mode runs `serveOverAnonymousRelay` over the shared Tor transport. Otherwise surface the P2P failure
 
 **`use-code-receive.ts`** - Receiver logic (Code Exchange):

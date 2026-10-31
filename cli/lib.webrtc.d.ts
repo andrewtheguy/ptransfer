@@ -122,6 +122,7 @@ interface RTCPeerConnection extends EventTarget {
   readonly connectionState: RTCPeerConnectionState;
   readonly iceConnectionState: RTCIceConnectionState;
   readonly iceGatheringState: RTCIceGatheringState;
+  readonly localDescription: RTCSessionDescription | null;
   readonly remoteDescription: RTCSessionDescription | null;
   onconnectionstatechange:
     | ((this: RTCPeerConnection, ev: Event) => unknown)
