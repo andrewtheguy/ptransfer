@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeDataChannelPair } from '../test/fake-data-channel';
 import { ENCRYPTION_CHUNK_SIZE } from './crypto';
 import { createDataChannelDuplex } from './data-channel';
+import type { DuplexChannel } from './duplex-channel';
 import {
   createLaneLink,
   encodeLaneMessage,
@@ -74,6 +75,10 @@ describe('createLaneLink', () => {
       await createAdaptiveAppendSink(data.length),
     );
     receiver.attach(receiving.link);
+    // Held, the first channel stays full after its first chunks, so the rest
+    // go to the lane however long each chunk takes to encrypt.
+    first.senderEnd.hold();
+    setTimeout(() => first.senderEnd.release(), 20);
     await sendFileOverLink(sending.link, k, source(data), {
       compressed: false,
     });
@@ -128,6 +133,30 @@ describe('createLaneLink', () => {
 
     first.sender.close();
     expect(ended).toEqual(['closed']);
+  });
+
+  it('fails the flush when a chunk handed to a lane failed to send', async () => {
+    // Stand-ins whose own flush always resolves, so only the failed send can
+    // tell the flush that a chunk was lost.
+    const stub = (sendBinary: () => Promise<void>): DuplexChannel => ({
+      sendBinary,
+      sendText: async () => {},
+      sendNow: () => true,
+      subscribe: () => () => {},
+      flush: async () => {},
+      onEnd: () => () => {},
+      close: () => {},
+    });
+    // The first channel never takes its chunk, so the next goes to the lane.
+    const first = stub(() => new Promise<void>(() => {}));
+    const lane = stub(() => Promise.reject(new Error('lane send failed')));
+    const sending = createLaneLink(first);
+    sending.add(lane);
+
+    await sending.link.sendBinary(new Uint8Array(10));
+    await sending.link.sendBinary(new Uint8Array(10));
+
+    await expect(sending.link.flush()).rejects.toThrow('lane send failed');
   });
 
   it('sends text on the first channel only', async () => {

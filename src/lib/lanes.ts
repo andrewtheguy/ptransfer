@@ -195,6 +195,9 @@ export function createLaneLink(primary: DuplexChannel): {
     sendNow: (text) => primary.sendNow(text),
     flush: async () => {
       await Promise.all(channels.map((channel) => channel.flush()));
+      // A chunk whose send failed never counted on its channel, so that
+      // channel's flush can resolve without it; it is still lost.
+      if (sendError) throw sendError;
     },
     subscribe: (listener) => {
       listeners.add(listener);
