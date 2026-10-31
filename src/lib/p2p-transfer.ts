@@ -37,15 +37,19 @@
  * Neither side materializes the whole file: the sender coalesces a lazy
  * `TransferSource` into `ENCRYPTION_CHUNK_SIZE` pieces, and the receiver
  * appends each decrypted (and, for 'deflate-raw', inflated) chunk to scratch
- * storage in the link's reliable order, finalizing from the `end` byte count.
- * The sender is paced by the transport's backpressure alone, so what the
- * receiver has taken off the link but not yet written waits in memory — up to
- * `RECEIVE_BACKLOG_MAX_BYTES`, past which the receiver gives up.
+ * storage in index order, finalizing from the `end` byte count. The sender is
+ * paced by the transport's backpressure alone, so what the receiver has taken
+ * off the link but not yet written — including chunks that arrived ahead of a
+ * gap — waits in memory, up to `RECEIVE_BACKLOG_MAX_BYTES`, past which the
+ * receiver gives up.
  *
- * The link must be reliable and ordered: every payload appends in arrival
- * order and only the final chunk may be short, so a transport that reorders
- * or drops messages breaks the transfer rather than degrading it. Text the
- * transfer does not recognize is left to whatever else shares the link.
+ * The link must be reliable, but it need not keep chunks in order across the
+ * connections it spreads them over (`lanes.ts`): the receiver orders them by
+ * their authenticated index, and `end` may overtake chunks still on their
+ * way. Each connection on its own is ordered, and only the final chunk may be
+ * short, so a transport that drops messages breaks the transfer rather than
+ * degrading it. Text the transfer does not recognize is left to whatever else
+ * shares the link.
  */
 
 import { type AppendSink, createInflatingAppendSink } from '@/lib/append-sink';
@@ -67,9 +71,10 @@ import {
 } from '@/lib/transfer-source';
 
 /**
- * A reliable, ordered message link: a WebRTC `DuplexChannel`, or a framed Tor
- * stream (`createTorLink`). The transfer sends on it from one side and
- * listens on it from the other.
+ * A reliable message link: a WebRTC `DuplexChannel`, the lanes of a direct
+ * connection taken together (`lanes.ts`), or a framed Tor stream
+ * (`createTorLink`). The transfer sends on it from one side and listens on it
+ * from the other.
  */
 export interface TransferLink {
   /**
@@ -632,12 +637,14 @@ export interface TransferReceiver {
 }
 
 /**
- * Create a streaming receiver for a payload of unknown wire size. Chunks must
- * arrive in the link's reliable order and are appended to `sink` as they
- * authenticate; for a 'deflate-raw' wire encoding they are inflated in
- * between, so the sealed Blob is the original file. `end` supplies the final
- * authenticated chunk count and wire byte count, and the sink is sealed once
- * everything before it has been stored and checks out.
+ * Create a streaming receiver for a payload of unknown wire size. Chunks may
+ * arrive in any order — a transfer spread over several connections delivers
+ * each connection's share in its own time — and are appended to `sink` in
+ * index order as they authenticate; for a 'deflate-raw' wire encoding they are
+ * inflated in between, so the sealed Blob is the original file. `end`
+ * supplies the final authenticated chunk count and wire byte count, and may
+ * arrive before chunks still on their way; the sink is sealed once every chunk
+ * it counts has been stored and checks out.
  */
 export function createTransferReceiver(
   key: CryptoKey,
@@ -664,11 +671,20 @@ export function createTransferReceiver(
 
   let attached = false;
   const detach: (() => void)[] = [];
-  const pending = new Set<Promise<void>>();
+  /** Distinct chunks that have arrived, in whatever order. */
   let receivedChunks = 0;
+  /** Chunks that arrived ahead of a gap, by index, waiting their turn. */
+  const waiting = new Map<number, { data: Uint8Array; length: number }>();
+  /** The next index to hand to storage; every one before it is queued. */
+  let nextToStore = 0;
+  let highestIndex = -1;
+  /** The index of the one chunk shorter than full, which must be the last. */
+  let shortIndex: number | null = null;
+  /** What `end` claimed, while chunks it counts are still on their way. */
+  let expectedEnd: { chunks: number; bytes: number } | null = null;
   let claimedWireBytes = 0;
   let totalDecryptedBytes = 0;
-  let previousChunkLength: number | null = null;
+  /** Decrypt-and-append, one chunk after another in index order. Never rejects. */
   let appendChain = Promise.resolve();
   let settled = false;
 
@@ -697,6 +713,7 @@ export function createTransferReceiver(
     if (settled) return;
     settled = true;
     release();
+    waiting.clear();
     rejectDone(error);
   };
 
@@ -714,69 +731,21 @@ export function createTransferReceiver(
     }, stallTimeoutMs);
   };
 
-  const handleChunk = (data: ArrayBuffer) => {
-    let chunkIndex: number;
-    let encryptedData: Uint8Array;
-    let expectedPlaintextLength: number;
-
-    try {
-      ({ chunkIndex, encryptedData } = parseChunkMessage(data));
-      // The link is reliable and ordered. Requiring that order lets the
-      // receiver append without holding or seeking chunks, and rejects
-      // duplicates in the same stroke.
-      if (chunkIndex !== receivedChunks || chunkIndex >= MAX_CHUNKS) {
-        throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
-      }
-      expectedPlaintextLength =
-        encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
-      if (
-        expectedPlaintextLength <= 0 ||
-        expectedPlaintextLength > ENCRYPTION_CHUNK_SIZE
-      ) {
-        throw new Error(`Invalid streamed chunk ${chunkIndex} length`);
-      }
-      if (
-        previousChunkLength !== null &&
-        previousChunkLength !== ENCRYPTION_CHUNK_SIZE
-      ) {
-        throw new Error('Only the final streamed chunk may be short');
-      }
-      if (claimedWireBytes + expectedPlaintextLength > maxWireBytes) {
-        throw new Error('Transfer exceeds the supported size limit');
-      }
-      // What has come off the link but is not yet written is this side's
-      // memory, and nothing here can slow the sender down.
-      if (
-        claimedWireBytes - totalDecryptedBytes + expectedPlaintextLength >
-        maxBacklogBytes
-      ) {
-        throw new Error('Storage could not keep up with the connection');
-      }
-      previousChunkLength = expectedPlaintextLength;
-      claimedWireBytes += expectedPlaintextLength;
-
-      // Claim the index before decrypting so an in-order `end` cannot race
-      // the asynchronous crypto operation.
-      receivedChunks++;
-    } catch (error) {
-      fail(error instanceof Error ? error : new Error('Invalid data chunk'));
-      return;
-    }
-
+  const store = (chunkIndex: number, data: Uint8Array, length: number) => {
     const processChunk = async () => {
       // Once the transfer has failed, what is still queued behind the write in
       // progress is dropped unread rather than decrypted for nothing.
       if (settled) return;
       let decryptedChunk: Uint8Array;
       try {
-        decryptedChunk = await decryptChunk(key, encryptedData, chunkIndex);
+        decryptedChunk = await decryptChunk(key, data, chunkIndex);
       } catch {
         throw new Error(`Chunk ${chunkIndex} failed authentication`);
       }
       if (settled) return;
-      if (decryptedChunk.length !== expectedPlaintextLength) {
+      if (decryptedChunk.length !== length) {
         throw new Error(
-          `Invalid chunk ${chunkIndex} length: expected ${expectedPlaintextLength}, got ${decryptedChunk.length}`,
+          `Invalid chunk ${chunkIndex} length: expected ${length}, got ${decryptedChunk.length}`,
         );
       }
 
@@ -785,29 +754,81 @@ export function createTransferReceiver(
       totalDecryptedBytes += decryptedChunk.length;
       reportProgress(totalDecryptedBytes, progressTotal);
     };
-
-    // Appends must follow wire order even if Web Crypto resolves operations
-    // at different times.
-    appendChain = appendChain.then(processChunk);
-    const appended = appendChain;
-    const promise = (async () => {
-      try {
-        await appended;
-      } catch (error: unknown) {
-        fail(
-          error instanceof Error ? error : new Error('Failed to receive chunk'),
-        );
-      }
-    })();
-    pending.add(promise);
-    void (async () => {
-      await promise;
-      pending.delete(promise);
-    })();
+    appendChain = appendChain.then(processChunk).catch((error: unknown) => {
+      fail(
+        error instanceof Error ? error : new Error('Failed to receive chunk'),
+      );
+    });
   };
 
-  const handleEnd = async (count: number, finalBytes: number) => {
-    if (count !== receivedChunks) {
+  const handleChunk = (message: ArrayBuffer) => {
+    try {
+      const { chunkIndex, encryptedData } = parseChunkMessage(message);
+      // Each index arrives once, and none past the count `end` gave.
+      if (
+        chunkIndex < nextToStore ||
+        waiting.has(chunkIndex) ||
+        chunkIndex >= MAX_CHUNKS ||
+        (expectedEnd !== null && chunkIndex >= expectedEnd.chunks)
+      ) {
+        throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
+      }
+      const length = encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
+      if (length <= 0 || length > ENCRYPTION_CHUNK_SIZE) {
+        throw new Error(`Invalid streamed chunk ${chunkIndex} length`);
+      }
+      // Only the last chunk may be short: none may follow a short one, in
+      // index order, whichever arrived first.
+      if (
+        (shortIndex !== null && chunkIndex > shortIndex) ||
+        (length < ENCRYPTION_CHUNK_SIZE &&
+          (shortIndex !== null || chunkIndex < highestIndex))
+      ) {
+        throw new Error('Only the final streamed chunk may be short');
+      }
+      if (claimedWireBytes + length > maxWireBytes) {
+        throw new Error('Transfer exceeds the supported size limit');
+      }
+      // What has come off the link but is not yet written — waiting behind a
+      // gap or in the write queue — is this side's memory, and nothing here
+      // can slow the sender down.
+      if (claimedWireBytes - totalDecryptedBytes + length > maxBacklogBytes) {
+        throw new Error('Storage could not keep up with the connection');
+      }
+      if (length < ENCRYPTION_CHUNK_SIZE) shortIndex = chunkIndex;
+      highestIndex = Math.max(highestIndex, chunkIndex);
+      claimedWireBytes += length;
+      receivedChunks++;
+      waiting.set(chunkIndex, { data: encryptedData, length });
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error('Invalid data chunk'));
+      return;
+    }
+
+    // Everything now contiguous goes to storage, in index order.
+    for (
+      let next = waiting.get(nextToStore);
+      next !== undefined;
+      next = waiting.get(nextToStore)
+    ) {
+      waiting.delete(nextToStore);
+      store(nextToStore, next.data, next.length);
+      nextToStore++;
+    }
+    if (expectedEnd !== null && receivedChunks === expectedEnd.chunks) {
+      void complete();
+    }
+  };
+
+  const handleEnd = (count: number, finalBytes: number) => {
+    // A count that the chunks already contradict fails at once; one still
+    // short of them waits for the rest, under the watchdog.
+    if (
+      expectedEnd !== null ||
+      count < receivedChunks ||
+      count <= highestIndex ||
+      (shortIndex !== null && count !== shortIndex + 1)
+    ) {
       fail(
         new Error(
           `Invalid end message: received ${receivedChunks} chunks, got ${count}`,
@@ -815,7 +836,19 @@ export function createTransferReceiver(
       );
       return;
     }
-    if (finalBytes !== claimedWireBytes) {
+    if (finalBytes < claimedWireBytes) {
+      fail(new Error('Invalid end message: final size does not match chunks'));
+      return;
+    }
+    expectedEnd = { chunks: count, bytes: finalBytes };
+    if (receivedChunks === count) void complete();
+  };
+
+  /** Every chunk `end` counts has arrived: store the rest and seal. */
+  const complete = async () => {
+    if (expectedEnd === null) return;
+    const { bytes: finalBytes } = expectedEnd;
+    if (claimedWireBytes !== finalBytes) {
       fail(new Error('Invalid end message: final size does not match chunks'));
       return;
     }
@@ -827,12 +860,10 @@ export function createTransferReceiver(
     // violation to catch either.
     release();
 
-    if (pending.size > 0) {
-      await Promise.allSettled(Array.from(pending));
-    }
+    await appendChain;
     if (settled) return;
 
-    if (receivedChunks !== count || totalDecryptedBytes !== finalBytes) {
+    if (totalDecryptedBytes !== finalBytes) {
       fail(
         new Error(
           `Incomplete transfer: got ${totalDecryptedBytes} bytes, expected ${finalBytes}`,
@@ -887,7 +918,7 @@ export function createTransferReceiver(
           fail(new Error('Invalid end message values'));
           return;
         }
-        void handleEnd(control.chunks, control.bytes);
+        handleEnd(control.chunks, control.bytes);
         break;
       case 'abort':
         fail(new TransferAbortedError(control.reason));

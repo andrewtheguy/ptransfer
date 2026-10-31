@@ -665,19 +665,97 @@ describe('createTransferReceiver', () => {
     await expect(receiver.done).resolves.toBeInstanceOf(Blob);
   });
 
-  it('refuses chunks out of order', async () => {
-    const { key, receiver, peer } = await attachedReceiver();
+  it('stores chunks that arrive out of order in index order', async () => {
+    const totalBytes = 2 * ENCRYPTION_CHUNK_SIZE + 100;
+    const plaintext = makePlaintext(totalBytes);
+    const { key, sink, receiver, peer } = await attachedReceiver(
+      'identity',
+      {},
+      totalBytes,
+    );
+    const messages = await encryptAll(key, plaintext);
+
+    peer.deliver(messages[2]);
+    peer.deliver(messages[0]);
+    peer.deliver(messages[1]);
+    peer.deliver({ t: 'end', chunks: 3, bytes: totalBytes });
+
+    const blob = await receiver.done;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(plaintext);
+    await sink.discard();
+  });
+
+  it('waits for chunks still on their way when the end overtakes them', async () => {
+    const totalBytes = ENCRYPTION_CHUNK_SIZE + 100;
+    const plaintext = makePlaintext(totalBytes);
+    const { key, sink, receiver, peer } = await attachedReceiver(
+      'identity',
+      {},
+      totalBytes,
+    );
+    const messages = await encryptAll(key, plaintext);
+
+    peer.deliver(messages[1]);
+    peer.deliver({ t: 'end', chunks: 2, bytes: totalBytes });
+    await tick();
+    peer.deliver(messages[0]);
+
+    const blob = await receiver.done;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(plaintext);
+    expect(peer.listeners()).toBe(0);
+    await sink.discard();
+  });
+
+  it('stalls when the end counts a chunk that never comes', async () => {
+    const { key, receiver, peer } = await attachedReceiver('identity', {
+      stallTimeoutMs: 50,
+    });
     const messages = await encryptAll(
       key,
       makePlaintext(ENCRYPTION_CHUNK_SIZE + 100),
     );
 
     peer.deliver(messages[1]);
+    peer.deliver({ t: 'end', chunks: 2, bytes: ENCRYPTION_CHUNK_SIZE + 100 });
+
+    await expect(receiver.done).rejects.toThrow('Transfer stalled');
+  });
+
+  it('refuses a chunk after the short one, whichever arrives first', async () => {
+    for (const shortFirst of [true, false]) {
+      const { key, receiver, peer } = await attachedReceiver();
+      const short = await encryptChunk(key, makePlaintext(100), 1);
+      const after = await encryptChunk(
+        key,
+        makePlaintext(ENCRYPTION_CHUNK_SIZE),
+        2,
+      );
+      const order = shortFirst ? [short, after] : [after, short];
+      for (const message of order) peer.deliver(message.buffer as ArrayBuffer);
+      await expect(receiver.done).rejects.toThrow(
+        'Only the final streamed chunk may be short',
+      );
+    }
+  });
+
+  it('refuses a chunk past the count the end gave', async () => {
+    const { key, receiver, peer } = await attachedReceiver();
+    const late = await encryptChunk(
+      key,
+      makePlaintext(ENCRYPTION_CHUNK_SIZE),
+      2,
+    );
+
+    peer.deliver({
+      t: 'end',
+      chunks: 2,
+      bytes: 2 * ENCRYPTION_CHUNK_SIZE,
+    });
+    peer.deliver(late.buffer as ArrayBuffer);
 
     await expect(receiver.done).rejects.toThrow(
       'Unexpected streamed chunk index',
     );
-    expect(peer.sent).toEqual([]);
   });
 
   it('refuses a duplicate chunk index', async () => {

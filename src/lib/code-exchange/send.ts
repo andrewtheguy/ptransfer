@@ -20,6 +20,7 @@ import { wipeBufferSource } from '@/lib/crypto/memory';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { offerLanes } from '@/lib/lanes';
 import type { FileMetadata, TransferMetadata } from '@/lib/nostr';
 import {
   ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
@@ -50,7 +51,7 @@ import {
   serveOverAnonymousRelay,
 } from '@/lib/tor/code-relay';
 import { type TransferSource, wireEncodingFor } from '@/lib/transfer-source';
-import { WebRTCConnection } from '@/lib/webrtc';
+import { type PeerConnectionClass, WebRTCConnection } from '@/lib/webrtc';
 import { getWebRTCConfig } from '@/lib/webrtc-config';
 import { lingerAfterSend } from './hang-up';
 import type { ExchangeHost } from './host';
@@ -282,6 +283,8 @@ export interface SenderOffer {
   /** The offer's `createdAt`: the session's TTL runs from here. */
   createdAt: number;
   rtc: WebRTCConnection;
+  /** What `rtc` is built on, and what its lanes are built on too. */
+  peerConnection: PeerConnectionClass;
   /** Settles whenever the channel opens, even before anything waits on it. */
   channelOpened: Promise<DuplexChannel>;
   privateKey: CryptoKey;
@@ -410,6 +413,7 @@ export async function createSenderOffer(opts: {
       offerBinary,
       createdAt,
       rtc,
+      peerConnection: opts.host.peerConnection,
       channelOpened,
       privateKey: ecdhKeyPair.privateKey,
       salt,
@@ -648,28 +652,35 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
   });
   report(transferring(0, fileSize));
 
-  // Encrypted chunks as the channel takes them, then `end`; complete once
-  // all of it has left this side's buffer.
-  await sendFileOverLink(channel, key, content, {
-    // Deflating costs more time than a direct connection saves.
-    compressed: false,
-    onProgress: (current, total) => {
-      if (!isCancelled()) report(transferring(current, total));
-    },
-    isCancelled,
-  });
+  // More connections beside this one, offered over it, which the transfer
+  // spreads across as they open; it starts on this one without waiting.
+  const lanes = offerLanes(channel, offer.peerConnection, getWebRTCConfig());
+  try {
+    // Encrypted chunks as the connections take them, then `end`; complete
+    // once all of it has left this side's buffers.
+    await sendFileOverLink(lanes.link, key, content, {
+      // Deflating costs more time than a direct connection saves.
+      compressed: false,
+      onProgress: (current, total) => {
+        if (!isCancelled()) report(transferring(current, total));
+      },
+      isCancelled,
+    });
 
-  if (isCancelled()) return;
-  report({
-    status: 'complete',
-    message: 'File sent via P2P!',
-    contentType: 'file',
-    useWebRTC: true,
-  });
-  // The bytes left this side's buffer, not this machine: the connection stays
-  // up until the receiver hangs up with the file, so the caller's close
-  // cannot cut off what the transport is still delivering.
-  await lingerAfterSend(channel, isCancelled);
+    if (isCancelled()) return;
+    report({
+      status: 'complete',
+      message: 'File sent via P2P!',
+      contentType: 'file',
+      useWebRTC: true,
+    });
+    // The bytes left this side's buffers, not this machine: the connections
+    // stay up until the receiver hangs up with the file, so the caller's close
+    // cannot cut off what the transport is still delivering.
+    await lingerAfterSend(channel, isCancelled);
+  } finally {
+    lanes.close();
+  }
 
   /**
    * The anonymous relay data path: the same session keys an encrypted control
