@@ -239,9 +239,12 @@ behind a portability layer:
        file and exiting 130, 149, and with the receiver gone; and the terminal
        UI drawn, driven through to the same transfer, its password masked,
        and cancelled with Ctrl-C mid-transfer.
-     - Left, from a desktop session, since over ssh the escape goes back to
-       the ssh client's terminal rather than a Windows clipboard: OSC 52
-       copying in Windows Terminal.
+     - Done by hand from a desktop session, since over ssh the escape goes
+       back to the ssh client's terminal rather than a Windows clipboard: in
+       Windows Terminal, the built executable's copy key put a PIN on the
+       clipboard that pasted into Notepad unchanged. That run also found the
+       executable missing node-datachannel's addon, which the smoke tests
+       now catch.
    - **5c** (done, released with the next `Release CLI` run): shipping.
      - A `windows-latest` row in the `Release CLI` workflow builds
        `ptransfer-windows-amd64.exe` and smoke-tests it in PowerShell, away
