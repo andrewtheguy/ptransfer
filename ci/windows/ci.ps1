@@ -61,7 +61,24 @@ Invoke-Step 'smoke test the executable' {
             return
         }
         & $binary send --help | Out-Null
-    } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { return }
+        # The native addons load only when used, so --version passes without
+        # them. A Code Exchange code is printed once libdatachannel has made an
+        # offer; the run then fails on the answer stdin never brings.
+        $code = $null | & $binary send --code (Join-Path $PSScriptRoot '..\..\package.json') 2> send-code.err
+        $refused = Select-String -Quiet 'No code was given on standard input' send-code.err
+        if (-not $code -or -not $refused) {
+            Get-Content send-code.err
+            Write-Host '   send --code printed no code: the WebRTC addon did not load'
+            $global:LASTEXITCODE = 1
+            return
+        }
+        Write-Host '   send --code made an offer: the WebRTC addon loaded'
+        $global:LASTEXITCODE = 0
+    } finally {
+        Remove-Item -ErrorAction SilentlyContinue send-code.err
+        Pop-Location
+    }
 }
 
 if (-not $Live) {

@@ -126,8 +126,17 @@ jobs:
               ;;
           esac
           "$binary" send --help > /dev/null
+          # The native addons load only when used, so --version passes without
+          # them. A Code Exchange code is printed once libdatachannel has made
+          # an offer; the run then fails on the answer stdin never brings.
+          code="$("$binary" send --code "$GITHUB_WORKSPACE/package.json" < /dev/null 2> send-code.err || true)"
+          if [ -z "$code" ] || ! grep -q 'No code was given on standard input' send-code.err; then
+            cat send-code.err
+            echo "::error::send --code printed no code: the WebRTC addon did not load"
+            exit 1
+          fi
 
-      # The same check in PowerShell, which is what runs it on Windows.
+      # The same checks in PowerShell, which is what runs it on Windows.
       - name: Smoke test the executable
         if: runner.os == 'Windows'
         working-directory: ${{ runner.temp }}
@@ -143,7 +152,14 @@ jobs:
             exit 1
           }
           & $binary send --help | Out-Null
-          exit $LASTEXITCODE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $code = $null | & $binary send --code (Join-Path $env:GITHUB_WORKSPACE 'package.json') 2> send-code.err
+          if (-not $code -or -not (Select-String -Quiet 'No code was given on standard input' send-code.err)) {
+            Get-Content send-code.err
+            Write-Host "::error::send --code printed no code: the WebRTC addon did not load"
+            exit 1
+          }
+          exit 0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

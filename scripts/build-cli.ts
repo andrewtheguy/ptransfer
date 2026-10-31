@@ -50,8 +50,11 @@ type Target = keyof typeof TARGETS;
 
 const ROOT = resolve(import.meta.dirname, '..');
 
-// node-datachannel's ESM loader, the module the plugin stands in for.
-const ADDON_LOADER = /node-datachannel\/dist\/esm\/lib\/node-datachannel\.mjs$/;
+// node-datachannel's ESM loader, the module the plugin stands in for. The
+// path is the system's own, so `\` separates it on Windows: a pattern with
+// `/` alone matches nothing there, and the executable ships without the addon.
+const ADDON_LOADER =
+  /node-datachannel[\\/]dist[\\/]esm[\\/]lib[\\/]node-datachannel\.mjs$/;
 
 function hostTarget(): Target {
   // Bun names Windows targets `windows`, where Node's platform is `win32`.
@@ -97,6 +100,10 @@ async function main(): Promise<void> {
   resolvePackage(TARGETS[target].tui, target);
 
   await mkdir(dirname(outfile), { recursive: true });
+  // Whether the plugin met the loader it replaces. If it did not, the build
+  // still succeeds, and the executable fails only when a WebRTC connection is
+  // first made — which no smoke test of `--version` reaches.
+  let swapped = false;
   const result = await Bun.build({
     entrypoints: [resolve(ROOT, 'cli/main.ts')],
     root: ROOT,
@@ -109,10 +116,13 @@ async function main(): Promise<void> {
       {
         name: 'node-datachannel-static-addon',
         setup(build) {
-          build.onLoad({ filter: ADDON_LOADER }, () => ({
-            loader: 'js',
-            contents: `export { default } from ${JSON.stringify(addon)};\n`,
-          }));
+          build.onLoad({ filter: ADDON_LOADER }, () => {
+            swapped = true;
+            return {
+              loader: 'js',
+              contents: `export { default } from ${JSON.stringify(addon)};\n`,
+            };
+          });
         },
       },
     ],
@@ -122,6 +132,11 @@ async function main(): Promise<void> {
   }
   if (!result.success) {
     throw new Error('Build failed');
+  }
+  if (!swapped) {
+    throw new Error(
+      "node-datachannel's addon loader was never bundled, so the addon is not in the executable; check ADDON_LOADER against its path",
+    );
   }
   process.stdout.write(`${outfile}\n`);
 }
