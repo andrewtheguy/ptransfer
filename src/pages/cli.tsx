@@ -506,7 +506,7 @@ export function CliPage() {
             with no runtime or package manager to install.
           </p>
         </div>
-        <div className="mx-auto mt-8 max-w-2xl space-y-6 rounded-2xl border bg-card p-6 shadow-sm">
+        <div className="mx-auto mt-8 max-w-5xl space-y-6 rounded-2xl border bg-card p-6 shadow-sm">
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
               Latest release
