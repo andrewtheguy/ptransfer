@@ -1,4 +1,3 @@
-import { generateNonce } from './aes-gcm';
 import { AES_NONCE_LENGTH, AES_TAG_LENGTH } from './constants';
 
 /**
@@ -43,9 +42,19 @@ export async function encryptChunk(
   plaintext: Uint8Array,
   chunkIndex: number,
 ): Promise<Uint8Array> {
-  const chunkIndexBytes = encodeChunkIndex(chunkIndex);
-  const nonce = generateNonce();
+  // Laid out in place: the index and nonce are written where they travel,
+  // and only the ciphertext is copied in after.
+  const result = new Uint8Array(OVERHEAD_PER_CHUNK + plaintext.length);
+  const chunkIndexBytes = result.subarray(0, CHUNK_INDEX_SIZE);
+  chunkIndexBytes.set(encodeChunkIndex(chunkIndex));
+  const nonce = result.subarray(
+    CHUNK_INDEX_SIZE,
+    CHUNK_INDEX_SIZE + AES_NONCE_LENGTH,
+  );
+  crypto.getRandomValues(nonce);
 
+  // Web Crypto copies its inputs when called, so neither the views into
+  // `result` nor a caller's reused `plaintext` buffer can change under it.
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
@@ -56,20 +65,8 @@ export async function encryptChunk(
     plaintext as BufferSource,
   );
 
-  // Build output: [2-byte index][nonce][ciphertext+tag]
-  const result = new Uint8Array(
-    CHUNK_INDEX_SIZE + nonce.length + ciphertext.byteLength,
-  );
-
-  // Write chunk index as big-endian 16-bit
-  result.set(chunkIndexBytes, 0);
-
-  // Write nonce
-  result.set(nonce, CHUNK_INDEX_SIZE);
-
-  // Write ciphertext (includes tag from Web Crypto)
-  result.set(new Uint8Array(ciphertext), CHUNK_INDEX_SIZE + nonce.length);
-
+  // Ciphertext with the tag Web Crypto appends.
+  result.set(new Uint8Array(ciphertext), CHUNK_INDEX_SIZE + AES_NONCE_LENGTH);
   return result;
 }
 
@@ -77,7 +74,8 @@ export async function encryptChunk(
  * Parse an encrypted chunk message to extract chunk index and encrypted data.
  *
  * @param data - Raw message data (ArrayBuffer or Uint8Array)
- * @returns Parsed chunk with index and encrypted payload
+ * @returns Parsed chunk with index and encrypted payload; the payload is a
+ *   view onto `data`, not a copy, so `data` must not change while it is used
  */
 export function parseChunkMessage(data: ArrayBuffer | Uint8Array): {
   chunkIndex: number;
@@ -95,7 +93,7 @@ export function parseChunkMessage(data: ArrayBuffer | Uint8Array): {
   const chunkIndex = (bytes[0] << 8) | bytes[1];
 
   // Rest is the encrypted data (nonce + ciphertext + tag)
-  const encryptedData = bytes.slice(CHUNK_INDEX_SIZE);
+  const encryptedData = bytes.subarray(CHUNK_INDEX_SIZE);
 
   return { chunkIndex, encryptedData };
 }
@@ -117,8 +115,9 @@ export async function decryptChunk(
   }
 
   const chunkIndexBytes = encodeChunkIndex(chunkIndex);
-  const nonce = encryptedData.slice(0, AES_NONCE_LENGTH);
-  const ciphertext = encryptedData.slice(AES_NONCE_LENGTH);
+  // Views, not copies: Web Crypto copies its inputs itself.
+  const nonce = encryptedData.subarray(0, AES_NONCE_LENGTH);
+  const ciphertext = encryptedData.subarray(AES_NONCE_LENGTH);
 
   const plaintext = await crypto.subtle.decrypt(
     {
