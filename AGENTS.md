@@ -49,7 +49,9 @@
   portability layer. Build paths with `node:path`, never by hand with `/`; a
   Windows check that the CI VM cannot exercise is checked by hand there (see
   phase 5 of `docs/ROADMAP.md`). Its terminal UI is OpenTUI with the React
-  bindings, in `cli/tui`, and `ptransfer` with no command opens it; every
+  bindings, in `cli/tui`, and `ptransfer` with no command opens it; on
+  Windows it targets Windows Terminal (ConPTY), and the older console host is
+  out of scope — do not work around it. Every
   command stays line-oriented, which is what pipes, scripts and the live tests
   drive. What a transfer shows and asks for goes through the `Presenter` in
   `cli/ui/presenter.ts`, so neither host's plumbing reaches the transfer code.

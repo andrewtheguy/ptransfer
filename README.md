@@ -22,10 +22,11 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Command line
 
-The same code runs in a terminal on Linux and macOS; there is no Windows
-build (WSL counts as Linux). For a command line on Windows, or for files
-larger than 2 GiB, use [beam-rs](https://github.com/andrewtheguy/beam-rs)
-instead. `cli/` is a Bun application that imports
+The same code runs in a terminal on Linux, macOS and Windows. Windows has no
+release build yet: run it there from a checkout with Bun, or use
+[beam-rs](https://github.com/andrewtheguy/beam-rs) for a command line (WSL
+counts as Linux). For files larger than 2 GiB, use beam-rs too. `cli/` is a
+Bun application that imports
 the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
 are the ones the browser tab runs, so a change to the app is a change to the
 CLI by construction. What the CLI adds is what a process has and a page does
@@ -62,7 +63,10 @@ locally.
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
 one of the tab's three transfer modes; or paste what a sender gave you and
-let it work out which of the three it is.
+let it work out which of the three it is. On Windows it is meant for Windows
+Terminal; the older console host, the plain window a program opened from
+Explorer gets where Windows Terminal is not the default, is not supported and
+may not draw or copy correctly. The commands below work in either.
 
 Every command below is the line-oriented interface instead, which is what a
 pipe and a script want and what stays out of the terminal UI's way. PIN
