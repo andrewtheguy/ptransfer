@@ -68,7 +68,7 @@ export function TerminalCommand({ children }: { children: React.ReactNode }) {
 
 /** A shell comment explaining the command above it; wraps on a narrow screen. */
 export function TerminalComment({ children }: { children: React.ReactNode }) {
-  return <div className="whitespace-pre-wrap text-zinc-500"># {children}</div>;
+  return <div className="whitespace-pre-wrap text-zinc-400"># {children}</div>;
 }
 
 /** Vertical space between groups of commands. */
