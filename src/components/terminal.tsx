@@ -47,17 +47,17 @@ export function TerminalWindow({
           </span>
         )}
       </div>
-      <div className="space-y-1 overflow-x-auto p-4 font-mono text-xs leading-relaxed sm:text-[13px]">
+      <div className="space-y-1 p-4 font-mono text-xs leading-relaxed sm:text-[13px]">
         {children}
       </div>
     </div>
   );
 }
 
-/** One command typed at the prompt; scrolls sideways rather than wrapping. */
+/** One command typed at the prompt; wraps at spaces rather than being cut off. */
 export function TerminalCommand({ children }: { children: React.ReactNode }) {
   return (
-    <div className="whitespace-pre">
+    <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">
       <span aria-hidden="true" className="select-none text-emerald-400">
         ${' '}
       </span>
@@ -78,16 +78,14 @@ export function TerminalGap() {
 
 interface CopyCommandProps {
   command: string;
-  /**
-   * Wrap a long command instead of scrolling it sideways, for commands that
-   * differ only at the end and would otherwise all look the same.
-   */
-  wrap?: boolean;
   className?: string;
 }
 
-/** A single command on one line with a button that copies it. */
-export function CopyCommand({ command, wrap, className }: CopyCommandProps) {
+/**
+ * A command with a button that copies it. It wraps rather than scrolls, so a
+ * long one is never cut off and two that differ only at the end look different.
+ */
+export function CopyCommand({ command, className }: CopyCommandProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -112,12 +110,7 @@ export function CopyCommand({ command, wrap, className }: CopyCommandProps) {
         className,
       )}
     >
-      <code
-        className={cn(
-          'min-w-0 flex-1 px-3 py-2.5 font-mono text-xs leading-5',
-          wrap ? 'break-all' : 'overflow-x-auto whitespace-nowrap',
-        )}
-      >
+      <code className="min-w-0 flex-1 px-3 py-2.5 font-mono text-xs leading-5 [overflow-wrap:anywhere]">
         <span aria-hidden="true" className="select-none text-emerald-400">
           ${' '}
         </span>

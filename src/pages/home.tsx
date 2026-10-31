@@ -151,10 +151,10 @@ export function HomePage() {
             <h2 className="mt-4 text-3xl">Also in your terminal</h2>
             <p className="mt-3 text-muted-foreground">
               <span className="font-medium text-foreground">ptransfer</span>{' '}
-              runs the same transfers from the command line, in all three modes.
-              Either end can be a browser tab or a terminal, so you can send
-              from a server you reach over SSH, script a transfer, or stay in a
-              terminal UI.
+              brings these screens to your terminal: run it, pick files, and
+              choose a mode, or paste what a sender gave you. Either end of a
+              transfer can be a browser tab or a terminal, and every mode is a
+              command too, for scripts and servers you reach over SSH.
             </p>
             <Button asChild variant="outline" className="mt-6 gap-2">
               <Link to="/cli">
@@ -165,12 +165,9 @@ export function HomePage() {
           </div>
           <div className="min-w-0 space-y-3">
             <TerminalWindow title="~">
-              <TerminalCommand>
-                ptransfer send --pin ./report.pdf
-              </TerminalCommand>
+              <TerminalCommand>ptransfer</TerminalCommand>
               <TerminalComment>
-                the receiver can type this PIN into this site, or into another
-                terminal
+                opens the terminal UI: pick files, then PIN, Code or Tor
               </TerminalComment>
             </TerminalWindow>
             <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />

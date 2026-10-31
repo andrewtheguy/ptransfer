@@ -68,7 +68,7 @@ const MODES: ModeExample[] = [
           Send
         </Link>{' '}
         page goes to{' '}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+        <code className="whitespace-nowrap rounded bg-muted px-1 py-0.5 font-mono text-xs">
           ptransfer receive --pin
         </code>
         , and a PIN the terminal shows goes into the{' '}
@@ -133,7 +133,7 @@ const MODES: ModeExample[] = [
     withBrowser: (
       <>
         A tab connects to an onion service the terminal published, and{' '}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+        <code className="whitespace-nowrap rounded bg-muted px-1 py-0.5 font-mono text-xs">
           ptransfer receive --onion
         </code>{' '}
         connects to one a tab published.
@@ -143,6 +143,12 @@ const MODES: ModeExample[] = [
 ];
 
 const REASONS = [
+  {
+    icon: LayoutPanelLeft,
+    title: 'Terminal UI',
+    description:
+      'Run ptransfer with no command to get this app’s screens in your terminal: a file browser, the three transfer modes, and a box to paste whatever a sender gave you.',
+  },
   {
     icon: Server,
     title: 'No browser needed',
@@ -154,12 +160,6 @@ const REASONS = [
     title: 'Scriptable',
     description:
       'Every command is line-oriented. What the other side needs goes to standard output and everything else to standard error. Codes and passwords are read from standard input, so they stay out of shell history.',
-  },
-  {
-    icon: LayoutPanelLeft,
-    title: 'Terminal UI',
-    description:
-      'Run ptransfer with no command to get this app’s screens in your terminal: a file browser, the three transfer modes, and a box to paste whatever a sender gave you.',
   },
   {
     icon: Gauge,
@@ -189,7 +189,12 @@ export function CliPage() {
               <span className="font-medium text-foreground">ptransfer</span> is
               this app as one self-contained executable. It runs the same
               protocol, crypto and Tor code, so either end of a transfer can be
-              a browser tab or a terminal.
+              a browser tab or a terminal. Run{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm text-foreground">
+                ptransfer
+              </code>{' '}
+              to open the terminal UI: pick files, then a mode, or paste what a
+              sender gave you.
             </p>
             <CopyCommand
               command={PTRANSFER_CLI_INSTALL_SH}
@@ -230,18 +235,13 @@ export function CliPage() {
           <TerminalWindow title="~" className="min-w-0">
             <TerminalCommand>ptransfer</TerminalCommand>
             <TerminalComment>
-              opens the terminal UI: pick files, pick a mode
+              opens the terminal UI: pick files and folders, choose PIN, Code or
+              Tor, or paste what a sender gave you
             </TerminalComment>
             <TerminalGap />
+            <TerminalComment>or, from a script:</TerminalComment>
             <TerminalCommand>ptransfer send --pin ./report.pdf</TerminalCommand>
-            <TerminalComment>
-              shows a PIN to read out to the receiver
-            </TerminalComment>
-            <TerminalGap />
             <TerminalCommand>ptransfer receive --pin</TerminalCommand>
-            <TerminalComment>
-              takes a PIN from a terminal or from this site
-            </TerminalComment>
           </TerminalWindow>
         </div>
       </SectionContainer>
@@ -258,7 +258,8 @@ export function CliPage() {
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">
               ptransfer --version
             </code>{' '}
-            prints the CLI&apos;s.
+            prints the CLI&apos;s. The terminal UI offers every mode from a
+            menu; these are the same transfers as commands, for scripts.
           </p>
         </div>
 
@@ -358,7 +359,7 @@ export function CliPage() {
             <p className="text-sm font-medium text-foreground">
               Latest release
             </p>
-            <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} wrap />
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />
             <p className="text-xs text-muted-foreground">
               The installer picks the executable for your machine, checks it
               against its published checksum, and puts it in{' '}
@@ -382,7 +383,6 @@ export function CliPage() {
             </p>
             <CopyCommand
               command={`${PTRANSFER_CLI_INSTALL_SH} -s -- --prerelease`}
-              wrap
             />
           </div>
           <div className="space-y-2">
@@ -391,7 +391,6 @@ export function CliPage() {
             </p>
             <CopyCommand
               command={`${PTRANSFER_CLI_INSTALL_SH} -s -- --download-only`}
-              wrap
             />
             <p className="text-xs text-muted-foreground">
               Or download{' '}
