@@ -73,8 +73,11 @@ behind a portability layer:
   Windows. The relay cache's lock is `flock(2)` on Unix and a named kernel
   mutex on Windows; either is released by the kernel when its holder dies.
 - **Terminal**: results on standard output, everything else on standard
-  error, a password typed in raw mode or piped in, and ANSI escapes, which
-  Windows Terminal and the Windows 10+ console both take.
+  error, a password typed in raw mode or piped in, and ANSI escapes. On
+  Windows the terminal UI is for Windows Terminal, or anything else drawing
+  through a pseudo console (ConPTY); the older console host, which a program
+  opened from Explorer still gets where Windows Terminal is not the default,
+  is not a target, and the terminal UI is not expected to be whole there.
 - **Release targets**: `bun-linux-x64`, `bun-linux-arm64`,
   `bun-darwin-arm64` and `bun-windows-x64` — platforms Bun, OpenTUI and
   node-datachannel all ship prebuilt. Intel macOS and Windows arm64 are not
@@ -236,14 +239,14 @@ behind a portability layer:
        file and exiting 130, 149, and with the receiver gone; and the terminal
        UI drawn, driven through to the same transfer, its password masked,
        and cancelled with Ctrl-C mid-transfer.
-     - Left, from a desktop session, since ssh has no console of the older
-       kind and no clipboard: the same in the console host, which
-       `ptransfer.exe` opened from Explorer gets, and OSC 52 copying, which
-       Windows Terminal takes and the console host does not.
+     - Left, from a desktop session, since over ssh the escape goes back to
+       the ssh client's terminal rather than a Windows clipboard: OSC 52
+       copying in Windows Terminal.
    - **5c**: shipping. A `windows-latest` job in the `Release CLI` workflow,
      smoke-tested in PowerShell, publishing `ptransfer-windows-amd64.exe`;
      an `install.ps1` that checks the download with `Get-FileHash` against
-     the checksum GitHub published; the CLI page and README; and the Windows
+     the checksum GitHub published; the CLI page and README, which say the
+     terminal UI wants Windows Terminal; and the Windows
      CI VM driven by devtools' Windows driver with a Bun stack, so the unit,
      terminal UI and live tests run there. An unsigned executable from the
      internet meets SmartScreen; signing is a separate decision.
