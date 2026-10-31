@@ -578,7 +578,16 @@ export function CliPage() {
             </p>
           </div>
           <div className="border-t pt-4 text-xs text-muted-foreground">
-            There is no Windows build: on Windows, use this site in a browser,
+            For files larger than 2 GiB, use{' '}
+            <a
+              href={BEAM_RS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={linkClass}
+            >
+              beam-rs
+            </a>
+            . There is no Windows build: on Windows, use this site in a browser,
             or{' '}
             <a
               href={BEAM_RS_URL}
@@ -588,16 +597,7 @@ export function CliPage() {
             >
               beam-rs
             </a>{' '}
-            for a command line. For files larger than 2 GiB, use{' '}
-            <a
-              href={BEAM_RS_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={linkClass}
-            >
-              beam-rs
-            </a>
-            . Every command, flag and option is documented in{' '}
+            for a command line. Every command, flag and option is documented in{' '}
             <a
               href={PTRANSFER_CLI_DOCS_URL}
               target="_blank"
