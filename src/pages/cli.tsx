@@ -968,16 +968,7 @@ export function CliPage() {
             {t({
               en: (
                 <>
-                  For files larger than 2 GiB, use{' '}
-                  <a
-                    href={BEAM_RS_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={linkClass}
-                  >
-                    beam-rs
-                  </a>
-                  . Every command, flag and option is documented in{' '}
+                  Every command, flag and option is documented in{' '}
                   <a
                     href={PTRANSFER_CLI_DOCS_URL}
                     target="_blank"
@@ -986,12 +977,7 @@ export function CliPage() {
                   >
                     the README
                   </a>
-                  .
-                </>
-              ),
-              es: (
-                <>
-                  Para archivos de más de 2 GiB, usa{' '}
+                  . For files larger than 2 GiB, use{' '}
                   <a
                     href={BEAM_RS_URL}
                     target="_blank"
@@ -1000,7 +986,12 @@ export function CliPage() {
                   >
                     beam-rs
                   </a>
-                  . Todos los comandos, opciones y parámetros están documentados
+                  .
+                </>
+              ),
+              es: (
+                <>
+                  Todos los comandos, opciones y parámetros están documentados
                   en{' '}
                   <a
                     href={PTRANSFER_CLI_DOCS_URL}
@@ -1009,6 +1000,15 @@ export function CliPage() {
                     className={linkClass}
                   >
                     el README
+                  </a>
+                  . Para archivos de más de 2 GiB, usa{' '}
+                  <a
+                    href={BEAM_RS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={linkClass}
+                  >
+                    beam-rs
                   </a>
                   .
                 </>

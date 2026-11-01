@@ -77,8 +77,9 @@
 - `bun run test:live:code:cli` runs Code Exchange between two CLI processes —
   direct, a folder, and the Nostr relay fallback (`SCENARIOS=anonymous` adds the
   Tor one) — and `bun run test:live:code:cli-web` runs it between the CLI and a
-  headless Chromium tab, both ways; run them after changing `cli/code/`,
-  `src/lib/code-exchange/`, `src/lib/webrtc.ts`, or the relay fallback.
+  headless Chromium tab, both ways (`UI_LANG=es` runs both ends in Spanish);
+  run them after changing `cli/code/`, `src/lib/code-exchange/`,
+  `src/lib/webrtc.ts`, or the relay fallback.
 - `bun run test:live:pin:cli` runs PIN Exchange between two CLI processes over
   the same scenarios, carrying the PIN and the confirmation code between them;
   run it after changing `cli/pin/` or `src/lib/pin-exchange/`. A change there

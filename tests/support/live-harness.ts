@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export interface PwLocator {
   click(): Promise<void>;
+  getAttribute(name: string): Promise<string | null>;
   fill(value: string): Promise<void>;
   first(): PwLocator;
   innerText(): Promise<string>;
@@ -38,6 +39,7 @@ export interface PwPage {
   getByTestId(testId: string): PwLocator;
   goto(url: string, options?: { waitUntil?: string }): Promise<unknown>;
   locator(selector: string): PwLocator;
+  url(): string;
   on(event: 'pageerror', handler: (error: Error) => void): void;
   on(
     event: 'console',
@@ -47,9 +49,9 @@ export interface PwPage {
     event: 'download',
     options?: { timeout?: number },
   ): Promise<PwDownload>;
-  waitForFunction(
-    fn: () => boolean,
-    arg?: unknown,
+  waitForFunction<A>(
+    fn: (arg: A) => boolean,
+    arg?: A,
     options?: { timeout?: number },
   ): Promise<unknown>;
   waitForLoadState(state?: string): Promise<void>;
