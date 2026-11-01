@@ -107,8 +107,9 @@ export function ConfirmationCodeInput({
         <span className="text-xs text-destructive flex items-start gap-1.5">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-px" />
           {t({
-            en: 'A code has only letters and digits, with an optional hyphen.',
-            es: 'Un código solo tiene letras y números, con un guion opcional.',
+            // I, L and O are taken as 1 and 0, so U is the one letter refused.
+            en: 'A code has only letters (no U) and digits, with an optional hyphen.',
+            es: 'Un código solo tiene letras (sin la U) y números, con un guion opcional.',
           })}
         </span>
       ) : (
