@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { t } from '@/lib/i18n';
 import { isMobileDevice } from '@/lib/utils';
 import RxingScannerWorker from '@/workers/rxing-qr-scanner.worker?worker';
 
@@ -216,7 +217,12 @@ export function useQRScanner(options: UseQRScannerOptions) {
       if (shouldAbortStart()) return;
 
       if (!videoRef.current) {
-        throw new Error('Video element not available');
+        throw new Error(
+          t({
+            en: 'Video element not available',
+            es: 'El elemento de video no está disponible',
+          }),
+        );
       }
 
       const isMobile = isMobileDevice();
@@ -268,9 +274,19 @@ export function useQRScanner(options: UseQRScannerOptions) {
         return;
       }
       const errorMessage =
-        err instanceof Error ? err.message : 'Failed to access camera';
+        err instanceof Error
+          ? err.message
+          : t({
+              en: 'Failed to access camera',
+              es: 'No se pudo acceder a la cámara',
+            });
       if (onError) {
-        onError(`Camera access denied or unavailable. ${errorMessage}`);
+        onError(
+          t({
+            en: `Camera access denied or unavailable. ${errorMessage}`,
+            es: `Acceso a la cámara denegado o no disponible. ${errorMessage}`,
+          }),
+        );
       }
       isScanningRef.current = false;
     }

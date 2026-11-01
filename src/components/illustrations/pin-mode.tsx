@@ -6,17 +6,23 @@
  *
  * Concept: a PIN/keypad chip coordinating two endpoints through a relay arc.
  */
+import { useT } from '@/i18n/locale-context';
+
 interface IllustrationProps {
   className?: string;
 }
 
 export function PinModeIllustration({ className }: IllustrationProps) {
+  const t = useT();
   return (
     <svg
       viewBox="0 0 200 140"
       className={className}
       role="img"
-      aria-label="A shared PIN coordinating two devices through a relay"
+      aria-label={t({
+        en: 'A shared PIN coordinating two devices through a relay',
+        es: 'Un PIN compartido que coordina dos dispositivos a través de un relay',
+      })}
       xmlns="http://www.w3.org/2000/svg"
     >
       {/* Soft backdrop */}

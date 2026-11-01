@@ -15,6 +15,7 @@ import {
 import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import type { PinKind } from '@/lib/crypto';
 import type { DuplexChannel } from '@/lib/duplex-channel';
+import { type Localized, t } from '@/lib/i18n';
 import { carryOfferForAnswer, type NostrClient } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import {
@@ -54,8 +55,10 @@ import type { Presenter } from '../ui/presenter';
 /** How long a cancel's word to the receiver is given to leave. */
 const HANG_UP_WAIT_MS = 600;
 
-const CODE_MISMATCH =
-  'That is not the code the receiver is showing. Check you are reading it from the person you meant to send to, and type it again.';
+const CODE_MISMATCH: Localized = {
+  en: 'That is not the code the receiver is showing. Check you are reading it from the person you meant to send to, and type it again.',
+  es: 'Ese no es el código que muestra el receptor. Comprueba que lo lees de la persona a la que querías enviar, y vuelve a escribirlo.',
+};
 
 export interface PinSendOptions {
   content: TransferSource;
@@ -208,27 +211,49 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
         shown += 1;
         if (shown === 1) {
           say('');
-          say('Read the receiver this PIN:');
+          say(
+            t({
+              en: 'Read the receiver this PIN:',
+              es: 'Léele al receptor este PIN:',
+            }),
+          );
         } else {
-          say('The PIN has rotated. Read out this one instead:');
+          say(
+            t({
+              en: 'The PIN has rotated. Read out this one instead:',
+              es: 'El PIN ha cambiado. Lee este en su lugar:',
+            }),
+          );
         }
         presenter.hand(pin, 'PIN');
         if (shown === 1) {
           say('');
           say(
-            'A fresh one appears every couple of minutes: read out the newest.',
+            t({
+              en: 'A fresh one appears every couple of minutes: read out the newest.',
+              es: 'Aparece uno nuevo cada par de minutos: lee el más reciente.',
+            }),
           );
         }
-        presenter.status('Waiting for the receiver to enter the PIN...');
+        presenter.status(
+          t({
+            en: 'Waiting for the receiver to enter the PIN...',
+            es: 'Esperando a que el receptor introduzca el PIN...',
+          }),
+        );
       },
     });
     const session = rendezvous;
     // A fresh PIN on demand, for a PIN that was read to the wrong person or
     // seen by someone over a shoulder. The line interface has no key to bind
     // it to and rotation covers it there.
-    const withdrawRefresh = presenter.action('r', 'a fresh PIN', () => {
-      void session.refresh();
-    });
+    const withdrawRefresh = presenter.action(
+      'r',
+      t({ en: 'a fresh PIN', es: 'un PIN nuevo' }),
+      () => {
+        void session.refresh();
+      },
+    );
 
     let claim: Awaited<typeof session.claimed>;
     try {
@@ -269,14 +294,22 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
     offerBuild.catch(() => undefined);
 
     say('');
-    say('A receiver has the PIN, and is showing a confirmation code.');
-    say(
-      'Ask them for it over a channel someone who read the PIN off your screen',
-    );
-    say(
-      'does not control: the code, not the PIN, is what decides that this is the',
-    );
-    say('person you meant to send to.');
+    for (const line of t({
+      en: [
+        'A receiver has the PIN, and is showing a confirmation code.',
+        'Ask them for it over a channel someone who read the PIN off your screen',
+        'does not control: the code, not the PIN, is what decides that this is the',
+        'person you meant to send to.',
+      ],
+      es: [
+        'Un receptor tiene el PIN y está mostrando un código de confirmación.',
+        'Pídeselo por un canal que no controle quien haya leído el PIN en tu',
+        'pantalla: es el código, no el PIN, lo que confirma que es la persona a',
+        'la que querías enviar.',
+      ],
+    })) {
+      say(line);
+    }
 
     let expiry: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => {
@@ -284,7 +317,10 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
         () =>
           reject(
             new Error(
-              'Confirmation code was not entered in time. Start a new transfer.',
+              t({
+                en: 'Confirmation code was not entered in time. Start a new transfer.',
+                es: 'No se introdujo el código de confirmación a tiempo. Empieza una nueva transferencia.',
+              }),
             ),
           ),
         CONFIRM_CODE_ENTRY_TIMEOUT_MS,
@@ -292,11 +328,17 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
     });
     try {
       await Promise.race([
-        presenter.readWord("The receiver's confirmation code: ", (text) => {
-          if (!confirmationCodeMatches(text, expectedCode)) {
-            throw new Error(CODE_MISMATCH);
-          }
-        }),
+        presenter.readWord(
+          t({
+            en: "The receiver's confirmation code: ",
+            es: 'Código de confirmación del receptor: ',
+          }),
+          (text) => {
+            if (!confirmationCodeMatches(text, expectedCode)) {
+              throw new Error(t(CODE_MISMATCH));
+            }
+          },
+        ),
         expired,
       ]);
     } finally {
@@ -308,7 +350,12 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
     // locked onto, so the gate opens. From here it is a Code Exchange session
     // whose codes ride the sealed channel instead of a person's hand.
     offerOnScreen = true;
-    presenter.status('Preparing the connection...');
+    presenter.status(
+      t({
+        en: 'Preparing the connection...',
+        es: 'Preparando la conexión...',
+      }),
+    );
     const offer = await offerBuild;
     if (!offer) return interrupted ?? 1;
     void (async () => {
@@ -316,7 +363,12 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
       if (rtc === offer.rtc) channel = opened;
     })();
 
-    presenter.status('Sending the connection offer...');
+    presenter.status(
+      t({
+        en: 'Sending the connection offer...',
+        es: 'Enviando la oferta de conexión...',
+      }),
+    );
     const answerCode = await carryOfferForAnswer({
       client: nostr,
       secretKey: session.secretKey,
@@ -343,12 +395,14 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
       torProgress: transport ? torProgress : null,
       isCancelled,
       report,
-      answerMismatchMessage:
-        "The receiver's response does not match this transfer. Start a new transfer.",
+      answerMismatchMessage: t({
+        en: "The receiver's response does not match this transfer. Start a new transfer.",
+        es: 'La respuesta del receptor no corresponde a esta transferencia. Empieza una nueva transferencia.',
+      }),
     });
     presenter.done();
     if (isCancelled()) return interrupted ?? 1;
-    say(`Sent ${content.name}`);
+    say(t({ en: `Sent ${content.name}`, es: `Enviado ${content.name}` }));
     return 0;
   } catch (error) {
     presenter.done();

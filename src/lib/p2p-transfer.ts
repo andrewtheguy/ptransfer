@@ -64,6 +64,7 @@ import {
 } from '@/lib/crypto';
 import type { ChannelEndReason, ChannelMessage } from '@/lib/duplex-channel';
 import { P2PConnectionError, SourceError } from '@/lib/errors';
+import { type Localized, t } from '@/lib/i18n';
 import {
   type TransferSource,
   type WireEncoding,
@@ -125,6 +126,12 @@ export const RECEIVE_BACKLOG_MAX_BYTES = 256 * 1024 * 1024;
 /** The abort reason a sender gives when its user cancelled. */
 export const CANCELLED_REASON = 'cancelled';
 
+/** A sender's failure when the receiver hung up first; nobody is left to tell. */
+const CLOSED_BEFORE_DELIVERY: Localized = {
+  en: 'The connection closed before the file was delivered',
+  es: 'La conexión se cerró antes de entregar el archivo',
+};
+
 /** Longest abort reason taken from the sender; anything past it is cut. */
 const MAX_REASON_LENGTH = 200;
 
@@ -166,7 +173,12 @@ function readCount(value: unknown, max: number, field: string): number {
     value < 0 ||
     value > max
   ) {
-    throw new ProtocolError(`Invalid ${field} in a transfer control message`);
+    throw new ProtocolError(
+      t({
+        en: `Invalid ${field} in a transfer control message`,
+        es: `Valor de ${field} no válido en un mensaje de control de la transferencia`,
+      }),
+    );
   }
   return value;
 }
@@ -215,8 +227,14 @@ export class TransferAbortedError extends Error {
   constructor(reason: string) {
     super(
       reason === CANCELLED_REASON
-        ? 'The sender cancelled the transfer'
-        : `The sender stopped the transfer${reason ? `: ${reason}` : ''}`,
+        ? t({
+            en: 'The sender cancelled the transfer',
+            es: 'El emisor canceló la transferencia',
+          })
+        : t({
+            en: `The sender stopped the transfer${reason ? `: ${reason}` : ''}`,
+            es: `El emisor detuvo la transferencia${reason ? `: ${reason}` : ''}`,
+          }),
     );
     this.name = 'TransferAbortedError';
     this.reason = reason;
@@ -444,8 +462,11 @@ export async function sendFileOverLink(
     fail(
       new P2PConnectionError(
         reason === 'error'
-          ? 'The connection failed before the file was delivered'
-          : 'The connection closed before the file was delivered',
+          ? t({
+              en: 'The connection failed before the file was delivered',
+              es: 'La conexión falló antes de entregar el archivo',
+            })
+          : t(CLOSED_BEFORE_DELIVERY),
       ),
       true,
     );
@@ -558,12 +579,7 @@ export async function sendFileOverLink(
       );
     } catch (error) {
       if (!failure) {
-        fail(
-          new P2PConnectionError(
-            'The connection closed before the file was delivered',
-          ),
-          true,
-        );
+        fail(new P2PConnectionError(t(CLOSED_BEFORE_DELIVERY)), true);
       }
       throw failure ?? error;
     }
@@ -583,6 +599,11 @@ export async function sendFileOverLink(
     unwatchEnd();
   }
 }
+
+const END_SIZE_MISMATCH: Localized = {
+  en: 'Invalid end message: final size does not match chunks',
+  es: 'Mensaje de fin no válido: el tamaño final no coincide con los fragmentos',
+};
 
 export interface ReceiverOptions {
   /** Called after each chunk with cumulative decrypted wire bytes and the total. */
@@ -725,7 +746,10 @@ export function createTransferReceiver(
     stallTimer = setTimeout(() => {
       fail(
         new P2PConnectionError(
-          `Transfer stalled: no data received within ${Math.round(stallTimeoutMs / 1000)}s`,
+          t({
+            en: `Transfer stalled: no data received within ${Math.round(stallTimeoutMs / 1000)}s`,
+            es: `Transferencia detenida: no se recibieron datos en ${Math.round(stallTimeoutMs / 1000)} s`,
+          }),
         ),
       );
     }, stallTimeoutMs);
@@ -740,12 +764,20 @@ export function createTransferReceiver(
       try {
         decryptedChunk = await decryptChunk(key, data, chunkIndex);
       } catch {
-        throw new Error(`Chunk ${chunkIndex} failed authentication`);
+        throw new Error(
+          t({
+            en: `Chunk ${chunkIndex} failed authentication`,
+            es: `El fragmento ${chunkIndex} no superó la autenticación`,
+          }),
+        );
       }
       if (settled) return;
       if (decryptedChunk.length !== length) {
         throw new Error(
-          `Invalid chunk ${chunkIndex} length: expected ${length}, got ${decryptedChunk.length}`,
+          t({
+            en: `Invalid chunk ${chunkIndex} length: expected ${length}, got ${decryptedChunk.length}`,
+            es: `Longitud no válida del fragmento ${chunkIndex}: se esperaba ${length} y llegó ${decryptedChunk.length}`,
+          }),
         );
       }
 
@@ -756,7 +788,14 @@ export function createTransferReceiver(
     };
     appendChain = appendChain.then(processChunk).catch((error: unknown) => {
       fail(
-        error instanceof Error ? error : new Error('Failed to receive chunk'),
+        error instanceof Error
+          ? error
+          : new Error(
+              t({
+                en: 'Failed to receive chunk',
+                es: 'No se pudo recibir el fragmento',
+              }),
+            ),
       );
     });
   };
@@ -771,11 +810,21 @@ export function createTransferReceiver(
         chunkIndex >= MAX_CHUNKS ||
         (expectedEnd !== null && chunkIndex >= expectedEnd.chunks)
       ) {
-        throw new Error(`Unexpected streamed chunk index: ${chunkIndex}`);
+        throw new Error(
+          t({
+            en: `Unexpected streamed chunk index: ${chunkIndex}`,
+            es: `Índice de fragmento inesperado: ${chunkIndex}`,
+          }),
+        );
       }
       const length = encryptedData.length - AES_NONCE_LENGTH - AES_TAG_LENGTH;
       if (length <= 0 || length > ENCRYPTION_CHUNK_SIZE) {
-        throw new Error(`Invalid streamed chunk ${chunkIndex} length`);
+        throw new Error(
+          t({
+            en: `Invalid streamed chunk ${chunkIndex} length`,
+            es: `Longitud no válida del fragmento ${chunkIndex}`,
+          }),
+        );
       }
       // Only the last chunk may be short: none may follow a short one, in
       // index order, whichever arrived first.
@@ -784,16 +833,31 @@ export function createTransferReceiver(
         (length < ENCRYPTION_CHUNK_SIZE &&
           (shortIndex !== null || chunkIndex < highestIndex))
       ) {
-        throw new Error('Only the final streamed chunk may be short');
+        throw new Error(
+          t({
+            en: 'Only the final streamed chunk may be short',
+            es: 'Solo el último fragmento puede ser más corto',
+          }),
+        );
       }
       if (claimedWireBytes + length > maxWireBytes) {
-        throw new Error('Transfer exceeds the supported size limit');
+        throw new Error(
+          t({
+            en: 'Transfer exceeds the supported size limit',
+            es: 'La transferencia supera el límite de tamaño admitido',
+          }),
+        );
       }
       // What has come off the link but is not yet written — waiting behind a
       // gap or in the write queue — is this side's memory, and nothing here
       // can slow the sender down.
       if (claimedWireBytes - totalDecryptedBytes + length > maxBacklogBytes) {
-        throw new Error('Storage could not keep up with the connection');
+        throw new Error(
+          t({
+            en: 'Storage could not keep up with the connection',
+            es: 'El almacenamiento no pudo seguir el ritmo de la conexión',
+          }),
+        );
       }
       if (length < ENCRYPTION_CHUNK_SIZE) shortIndex = chunkIndex;
       highestIndex = Math.max(highestIndex, chunkIndex);
@@ -801,7 +865,16 @@ export function createTransferReceiver(
       receivedChunks++;
       waiting.set(chunkIndex, { data: encryptedData, length });
     } catch (error) {
-      fail(error instanceof Error ? error : new Error('Invalid data chunk'));
+      fail(
+        error instanceof Error
+          ? error
+          : new Error(
+              t({
+                en: 'Invalid data chunk',
+                es: 'Fragmento de datos no válido',
+              }),
+            ),
+      );
       return;
     }
 
@@ -831,13 +904,16 @@ export function createTransferReceiver(
     ) {
       fail(
         new Error(
-          `Invalid end message: received ${receivedChunks} chunks, got ${count}`,
+          t({
+            en: `Invalid end message: received ${receivedChunks} chunks, got ${count}`,
+            es: `Mensaje de fin no válido: se recibieron ${receivedChunks} fragmentos y el mensaje indica ${count}`,
+          }),
         ),
       );
       return;
     }
     if (finalBytes < claimedWireBytes) {
-      fail(new Error('Invalid end message: final size does not match chunks'));
+      fail(new Error(t(END_SIZE_MISMATCH)));
       return;
     }
     expectedEnd = { chunks: count, bytes: finalBytes };
@@ -849,7 +925,7 @@ export function createTransferReceiver(
     if (expectedEnd === null) return;
     const { bytes: finalBytes } = expectedEnd;
     if (claimedWireBytes !== finalBytes) {
-      fail(new Error('Invalid end message: final size does not match chunks'));
+      fail(new Error(t(END_SIZE_MISMATCH)));
       return;
     }
     // Everything is in hand; the rest is storing it, which the link has no
@@ -866,7 +942,10 @@ export function createTransferReceiver(
     if (totalDecryptedBytes !== finalBytes) {
       fail(
         new Error(
-          `Incomplete transfer: got ${totalDecryptedBytes} bytes, expected ${finalBytes}`,
+          t({
+            en: `Incomplete transfer: got ${totalDecryptedBytes} bytes, expected ${finalBytes}`,
+            es: `Transferencia incompleta: se recibieron ${totalDecryptedBytes} bytes y se esperaban ${finalBytes}`,
+          }),
         ),
       );
       return;
@@ -879,7 +958,12 @@ export function createTransferReceiver(
       fail(
         error instanceof Error
           ? error
-          : new Error('Failed to finalize received file'),
+          : new Error(
+              t({
+                en: 'Failed to finalize received file',
+                es: 'No se pudo finalizar el archivo recibido',
+              }),
+            ),
       );
       return;
     }
@@ -907,7 +991,14 @@ export function createTransferReceiver(
       control = parseControl(data);
     } catch (error) {
       fail(
-        error instanceof Error ? error : new Error('Invalid control message'),
+        error instanceof Error
+          ? error
+          : new Error(
+              t({
+                en: 'Invalid control message',
+                es: 'Mensaje de control no válido',
+              }),
+            ),
       );
       return;
     }
@@ -915,7 +1006,14 @@ export function createTransferReceiver(
     switch (control.t) {
       case 'end':
         if (control.bytes > maxWireBytes) {
-          fail(new Error('Invalid end message values'));
+          fail(
+            new Error(
+              t({
+                en: 'Invalid end message values',
+                es: 'Valores no válidos en el mensaje de fin',
+              }),
+            ),
+          );
           return;
         }
         handleEnd(control.chunks, control.bytes);
@@ -935,8 +1033,14 @@ export function createTransferReceiver(
         fail(
           new P2PConnectionError(
             reason === 'error'
-              ? 'The connection failed before the transfer completed'
-              : 'The connection closed before the transfer completed',
+              ? t({
+                  en: 'The connection failed before the transfer completed',
+                  es: 'La conexión falló antes de completar la transferencia',
+                })
+              : t({
+                  en: 'The connection closed before the transfer completed',
+                  es: 'La conexión se cerró antes de completar la transferencia',
+                }),
           ),
         ),
       ),

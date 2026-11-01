@@ -18,6 +18,7 @@ import {
 } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import { awaitCarriedOffer, type NostrClient } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
@@ -56,8 +57,10 @@ import type { Presenter } from '../ui/presenter';
 
 type TransferPool = ReturnType<typeof createTransferPool>;
 
-const NOT_A_PIN =
-  'That is not a PIN. A PIN is 12 characters, or 16 for an anonymous transfer, and the last one checks the rest — check it was read out whole.';
+const NOT_A_PIN: Localized = {
+  en: 'That is not a PIN. A PIN is 12 characters, or 16 for an anonymous transfer, and the last one checks the rest — check it was read out whole.',
+  es: 'Eso no es un PIN. Un PIN tiene 12 caracteres, o 16 en una transferencia anónima, y el último verifica el resto; comprueba que se leyó entero.',
+};
 
 export interface PinReceiveOptions {
   /** The folder the file is saved in, already checked. */
@@ -83,12 +86,12 @@ export async function receiveByPin(
   const say = (line: string) => presenter.say(line);
 
   const pin = await presenter.readWord(
-    "The sender's PIN: ",
+    t({ en: "The sender's PIN: ", es: 'PIN del emisor: ' }),
     // The tab's own rules, so a PIN link a sender pasted into a chat window
     // reads here exactly as it does there.
     (text) => {
       const found = classifyReceiveText(text);
-      if (found?.kind !== 'pin') throw new Error(NOT_A_PIN);
+      if (found?.kind !== 'pin') throw new Error(t(NOT_A_PIN));
       return found;
     },
   );
@@ -147,7 +150,10 @@ export async function receiveByPin(
     let bootstrapOnScreen = true;
     if (anonymous) {
       say(
-        'That is an anonymous PIN: the handshake goes through Tor, which takes a few minutes to start.',
+        t({
+          en: 'That is an anonymous PIN: the handshake goes through Tor, which takes a few minutes to start.',
+          es: 'Es un PIN anónimo: la negociación pasa por Tor, que tarda unos minutos en iniciarse.',
+        }),
       );
       transport = new AnonymousSignalingTransport({
         bootstrap: () =>
@@ -199,12 +205,26 @@ export async function receiveByPin(
     if (isCancelled()) return interrupted ?? 1;
 
     say(
-      `The sender is offering ${fileName} (${formatFileSize(metadata.fileSize)})`,
+      t({
+        en: `The sender is offering ${fileName} (${formatFileSize(metadata.fileSize)})`,
+        es: `El emisor ofrece ${fileName} (${formatFileSize(metadata.fileSize)})`,
+      }),
     );
     say('');
-    say('Read the sender this confirmation code. They send nothing until they');
-    say('have typed it, and whoever read the PIN off their screen without');
-    say('being meant to holds a different one:');
+    for (const line of t({
+      en: [
+        'Read the sender this confirmation code. They send nothing until they',
+        'have typed it, and whoever read the PIN off their screen without',
+        'being meant to holds a different one:',
+      ],
+      es: [
+        'Léele al emisor este código de confirmación. No enviará nada hasta',
+        'haberlo escrito, y quien haya leído el PIN en su pantalla sin deber',
+        'hacerlo tiene uno distinto:',
+      ],
+    })) {
+      say(line);
+    }
     say('');
     presenter.hand(confirmationCode, 'confirmation code');
     say('');
@@ -219,22 +239,40 @@ export async function receiveByPin(
       signalsKey,
       isCancelled,
       timeoutMs: OFFER_WAIT_TIMEOUT_MS,
-      timeoutMessage:
-        'The sender did not enter the confirmation code in time. Start a new transfer.',
+      timeoutMessage: t({
+        en: 'The sender did not enter the confirmation code in time. Start a new transfer.',
+        es: 'El emisor no introdujo el código de confirmación a tiempo. Empieza una nueva transferencia.',
+      }),
     });
     closeCarriage = carriage.close;
-    show('Waiting for the sender to type the confirmation code...');
+    show(
+      t({
+        en: 'Waiting for the sender to type the confirmation code...',
+        es: 'Esperando a que el emisor escriba el código de confirmación...',
+      }),
+    );
     const offerCode = await carriage.offer;
     if (isCancelled()) return interrupted ?? 1;
 
-    show('The sender confirmed — connecting...');
+    show(
+      t({
+        en: 'The sender confirmed — connecting...',
+        es: 'El emisor confirmó; conectando...',
+      }),
+    );
     const offer = await acceptPinOffer(offerCode, { metadata, anonymous });
     const relayFallback = eligibleFallbackRelays(offer);
     if (options.simulateNoDirect && !relayFallback) {
       throw new Error(
         offer.fallbackRelays
-          ? 'The file is too large for the fallback, so there is no route but the direct one to simulate the loss of'
-          : 'The offer names no fallback, so there is no route but the direct one to simulate the loss of',
+          ? t({
+              en: 'The file is too large for the fallback, so there is no route but the direct one to simulate the loss of',
+              es: 'El archivo es demasiado grande para el respaldo, así que no hay más ruta que la directa cuya pérdida simular',
+            })
+          : t({
+              en: 'The offer names no fallback, so there is no route but the direct one to simulate the loss of',
+              es: 'La oferta no indica ningún respaldo, así que no hay más ruta que la directa cuya pérdida simular',
+            }),
       );
     }
 
@@ -276,7 +314,12 @@ export async function receiveByPin(
 
     let direct = !options.simulateNoDirect;
     if (direct) {
-      show('Waiting for the sender to connect...');
+      show(
+        t({
+          en: 'Waiting for the sender to connect...',
+          es: 'Esperando a que el emisor se conecte...',
+        }),
+      );
       try {
         await attempt.opened;
       } catch (error) {
@@ -295,13 +338,18 @@ export async function receiveByPin(
 
     let saved: number;
     if (direct) {
-      show('Connected directly; receiving...');
+      show(
+        t({
+          en: 'Connected directly; receiving...',
+          es: 'Conexión directa establecida; recibiendo...',
+        }),
+      );
       const payload = await finishDirectReceive({
         attempt,
         rtcHolder,
         isCancelled,
       });
-      if (!payload) throw new Error('Cancelled');
+      if (!payload) throw new Error(t({ en: 'Cancelled', es: 'Cancelado' }));
       saved = payload.size;
     } else {
       // The offer and the answer have done their job; the fallback meets the
@@ -326,7 +374,12 @@ export async function receiveByPin(
     }
     presenter.done();
     if (isCancelled()) return interrupted ?? 1;
-    say(`Saved ${formatFileSize(saved)} to ${destination}`);
+    say(
+      t({
+        en: `Saved ${formatFileSize(saved)} to ${destination}`,
+        es: `Se guardaron ${formatFileSize(saved)} en ${destination}`,
+      }),
+    );
     presenter.hand(destination);
     return 0;
   } catch (error) {

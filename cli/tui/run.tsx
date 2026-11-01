@@ -1,4 +1,5 @@
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import {
   type BoxRenderable,
   CliRenderEvents,
@@ -11,7 +12,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Presenter } from '../ui/presenter';
 import { MaskedField } from './masked-field';
-import { createTuiPresenter } from './presenter';
+import { createTuiPresenter, shownLabel } from './presenter';
 import { FIELD_MAX, Note, Problem, Screen } from './screen';
 import { createTransferStore, type Handed } from './store';
 import { theme } from './theme';
@@ -43,8 +44,18 @@ const BAR = 40;
  * app's, so selecting with the terminal instead takes the modifier every
  * terminal keeps for that.
  */
-const NOT_TAKEN =
-  'This terminal would not take a clipboard copy; hold shift (option on a Mac) and drag to select with the terminal instead.';
+const NOT_TAKEN: Localized = {
+  en: 'This terminal would not take a clipboard copy; hold shift (option on a Mac) and drag to select with the terminal instead.',
+  es: 'Esta terminal no aceptó la copia al portapapeles; mantén shift (option en un Mac) y arrastra para seleccionar con la terminal.',
+};
+
+/** The note under the values once `what` is on the clipboard. */
+function copiedText(what: string): string {
+  return t({
+    en: `Copied ${what} to the clipboard.`,
+    es: `Se copió ${what} al portapapeles.`,
+  });
+}
 
 export interface RunProps {
   title: string;
@@ -119,9 +130,7 @@ export function Run({
     const ok = renderer.copyToClipboardOSC52(item.value);
     setCopied({
       value: item.value,
-      note: ok
-        ? `Copied ${item.label ?? 'the code'} to the clipboard.`
-        : NOT_TAKEN,
+      note: ok ? copiedText(shownLabel(item.label).the) : t(NOT_TAKEN),
     });
   };
 
@@ -164,19 +173,22 @@ export function Run({
       title={title}
       hints={
         outcome
-          ? ['enter quit']
+          ? [t({ en: 'enter quit', es: 'enter salir' })]
           : prompt
             ? handed.length > 0
-              ? ['enter submit', 'tab copy']
-              : ['enter submit']
+              ? [
+                  t({ en: 'enter submit', es: 'enter aceptar' }),
+                  t({ en: 'tab copy', es: 'tab copiar' }),
+                ]
+              : [t({ en: 'enter submit', es: 'enter aceptar' })]
             : [
                 ...(handed.length > 1
-                  ? ['1-9 copy']
+                  ? [t({ en: '1-9 copy', es: '1-9 copiar' })]
                   : handed.length === 1
-                    ? ['c copy']
+                    ? [t({ en: 'c copy', es: 'c copiar' })]
                     : []),
                 ...actions.map((action) => `${action.key} ${action.label}`),
-                'ctrl-c stop',
+                t({ en: 'ctrl-c stop', es: 'ctrl-c detener' }),
               ]
       }
     >
@@ -216,7 +228,11 @@ export function Run({
             ) : (
               <TypedField
                 attempt={prompt.attempt}
-                placeholder={prompt.kind === 'code' ? 'paste here' : 'type here'}
+                placeholder={
+                  prompt.kind === 'code'
+                    ? t({ en: 'paste here', es: 'pega aquí' })
+                    : t({ en: 'type here', es: 'escribe aquí' })
+                }
                 onSubmit={prompt.submit}
               />
             )}
@@ -229,7 +245,9 @@ export function Run({
             <Problem>{outcome.error}</Problem>
           ) : (
             <text fg={outcome.status === 0 ? theme.good : theme.warn}>
-              {outcome.status === 0 ? 'Done.' : 'Stopped.'}
+              {outcome.status === 0
+                ? t({ en: 'Done.', es: 'Listo.' })
+                : t({ en: 'Stopped.', es: 'Detenido.' })}
             </text>
           )}
         </box>
@@ -263,7 +281,8 @@ function HandedValue({
   const { width } = useTerminalDimensions();
   const box = useRef<BoxRenderable | null>(null);
   const text = useRef<TextRenderable | null>(null);
-  const label = `${numbered ? `${index + 1}. ` : ''}${item.label ?? 'code'}`;
+  const shown = shownLabel(item.label);
+  const label = `${numbered ? `${index + 1}. ` : ''}${shown.name}`;
   const oneLine = item.value.length <= width - label.length - 6;
 
   // A drag over the value copies what it took. The mouse is the app's, so the
@@ -309,14 +328,16 @@ function HandedValue({
       });
       const ok = renderer.copyToClipboardOSC52(taken);
       const what =
-        taken === item.value ? (item.label ?? 'the code') : 'the selection';
-      onCopied(ok ? `Copied ${what} to the clipboard.` : NOT_TAKEN);
+        taken === item.value
+          ? shown.the
+          : t({ en: 'the selection', es: 'la selección' });
+      onCopied(ok ? copiedText(what) : t(NOT_TAKEN));
     };
     renderer.on(CliRenderEvents.SELECTION, onSelection);
     return () => {
       renderer.off(CliRenderEvents.SELECTION, onSelection);
     };
-  }, [renderer, item.value, item.label, oneLine, onCopied]);
+  }, [renderer, item.value, shown.the, oneLine, onCopied]);
 
   if (oneLine) {
     // The label is its own text so that a drag over the value takes the
@@ -338,7 +359,10 @@ function HandedValue({
     <box
       ref={box}
       style={{ border: true, borderColor: theme.border, height: LONG_VALUE + 2 }}
-      title={` ${label} · ${item.value.length} characters `}
+      title={t({
+        en: ` ${label} · ${item.value.length} characters `,
+        es: ` ${label} · ${item.value.length} caracteres `,
+      })}
       titleColor={theme.muted}
       onMouseDown={startOnValue}
     >
@@ -381,12 +405,24 @@ function widen(
 function copyHint(asking: boolean, count: number): string {
   if (asking) {
     return count > 1
-      ? 'Press tab to copy each of them in turn.'
-      : 'Press tab to copy it to the clipboard.';
+      ? t({
+          en: 'Press tab to copy each of them in turn.',
+          es: 'Pulsa tab para copiar cada uno, por turnos.',
+        })
+      : t({
+          en: 'Press tab to copy it to the clipboard.',
+          es: 'Pulsa tab para copiar al portapapeles.',
+        });
   }
   return count > 1
-    ? 'Press 1 or 2 to copy one to the clipboard.'
-    : 'Press c to copy it to the clipboard.';
+    ? t({
+        en: 'Press 1 or 2 to copy one to the clipboard.',
+        es: 'Pulsa 1 o 2 para copiar uno al portapapeles.',
+      })
+    : t({
+        en: 'Press c to copy it to the clipboard.',
+        es: 'Pulsa c para copiar al portapapeles.',
+      });
 }
 
 function Bar({ current, total }: { current: number; total: number }) {
@@ -397,7 +433,10 @@ function Bar({ current, total }: { current: number; total: number }) {
       <span fg={theme.good}>{'█'.repeat(filled)}</span>
       <span fg={theme.border}>{'░'.repeat(BAR - filled)}</span>
       <span fg={theme.muted}>
-        {` ${Math.floor(fraction * 100)}% (${formatFileSize(current)} of ${formatFileSize(total)})`}
+        {t({
+          en: ` ${Math.floor(fraction * 100)}% (${formatFileSize(current)} of ${formatFileSize(total)})`,
+          es: ` ${Math.floor(fraction * 100)}% (${formatFileSize(current)} de ${formatFileSize(total)})`,
+        })}
       </span>
     </text>
   );

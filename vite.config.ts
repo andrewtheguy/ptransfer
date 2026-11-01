@@ -1,8 +1,25 @@
 import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import type { Plugin } from 'vite';
+import type { ManifestOptions } from 'vite-plugin-pwa';
 import { VitePWA } from 'vite-plugin-pwa';
 import { configDefaults, defineConfig } from 'vitest/config';
+import {
+  type HeadContent,
+  HTML_LANG,
+  headFor,
+  INDEXED_PAGES,
+  manifestHref,
+  pageFileName,
+  SITE_ORIGIN,
+} from './src/i18n/pages';
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  type Locale,
+  localizePath,
+} from './src/lib/i18n';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
@@ -16,6 +33,163 @@ function getGitCommitHash(): string {
   // fall back to a placeholder to avoid confusion about which commit is running.
   const cfSha = process.env.CF_PAGES_COMMIT_SHA;
   return cfSha ? cfSha.slice(0, 7) : 'local';
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function replaceOnce(html: string, search: RegExp, replacement: string) {
+  if (!search.test(html)) {
+    throw new Error(`index.html no longer has ${search}`);
+  }
+  return html.replace(search, replacement);
+}
+
+/**
+ * The PWA manifest of one language. vite-plugin-pwa writes the default
+ * locale's; `localizedPages` writes the others beside it, and links each
+ * page to its own language's. The `id` is the same in every language, so they
+ * are one app; without it, each `start_url` would make its own.
+ */
+function webManifest(locale: Locale): Partial<ManifestOptions> {
+  return {
+    id: '/',
+    name: 'pTransfer',
+    short_name: 'pTransfer',
+    description: headFor('/', locale).description,
+    lang: HTML_LANG[locale],
+    theme_color: '#000000',
+    background_color: '#000000',
+    display: 'standalone',
+    orientation: 'portrait',
+    scope: '/',
+    start_url: localizePath('/', locale),
+    icons: [
+      {
+        src: 'pwa-192x192.png',
+        sizes: '192x192',
+        type: 'image/png',
+      },
+      {
+        src: 'pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+      },
+      {
+        src: 'pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
+  };
+}
+
+function withHead(template: string, head: HeadContent, locale: Locale): string {
+  const links = [
+    ...(head.canonical
+      ? [`<link rel="canonical" href="${escapeHtml(head.canonical)}" />`]
+      : []),
+    ...head.alternates.map(
+      ({ hreflang, href }) =>
+        `<link rel="alternate" hreflang="${hreflang}" href="${escapeHtml(href)}" />`,
+    ),
+  ];
+  let html = replaceOnce(
+    template,
+    /<html lang="[^"]*">/,
+    `<html lang="${head.lang}">`,
+  );
+  html = replaceOnce(
+    html,
+    /<meta name="description" content="[^"]*" \/>/,
+    `<meta name="description" content="${escapeHtml(head.description)}" />`,
+  );
+  if (locale !== DEFAULT_LOCALE) {
+    html = replaceOnce(
+      html,
+      /<link rel="manifest" href="[^"]*">/,
+      `<link rel="manifest" href="${manifestHref(locale)}">`,
+    );
+  }
+  return replaceOnce(
+    html,
+    /<title>[^<]*<\/title>/,
+    [`<title>${escapeHtml(head.title)}</title>`, ...links].join('\n  '),
+  );
+}
+
+/**
+ * One HTML file per indexed page and locale, each with its own language,
+ * title, description, canonical link and alternates in its head, and a
+ * sitemap listing them — what a search engine reads before running the app.
+ * `es/about.html` is served at `/es/about`; any other path gets the host's
+ * fallback, `index.html`, and the app sets its head once it runs.
+ */
+function localizedPages(): Plugin {
+  return {
+    name: 'ptransfer:localized-pages',
+    apply: 'build',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      const index = bundle['index.html'];
+      if (index?.type !== 'asset') {
+        throw new Error('the build emitted no index.html');
+      }
+      const template = String(index.source);
+      for (const path of Object.keys(INDEXED_PAGES)) {
+        for (const locale of LOCALES) {
+          const html = withHead(template, headFor(path, locale), locale);
+          const fileName = pageFileName(path, locale);
+          if (fileName === 'index.html') {
+            index.source = html;
+          } else {
+            this.emitFile({ type: 'asset', fileName, source: html });
+          }
+        }
+      }
+
+      const urls = Object.keys(INDEXED_PAGES).flatMap((path) =>
+        LOCALES.map((locale) => {
+          const alternates = headFor(path, locale).alternates.map(
+            ({ hreflang, href }) =>
+              `    <xhtml:link rel="alternate" hreflang="${hreflang}" href="${escapeHtml(href)}" />`,
+          );
+          return [
+            '  <url>',
+            `    <loc>${escapeHtml(`${SITE_ORIGIN}${localizePath(path, locale)}`)}</loc>`,
+            ...alternates,
+            '  </url>',
+          ].join('\n');
+        }),
+      );
+      for (const locale of LOCALES) {
+        if (locale === DEFAULT_LOCALE) continue;
+        this.emitFile({
+          type: 'asset',
+          fileName: manifestHref(locale).slice(1),
+          source: `${JSON.stringify(webManifest(locale))}\n`,
+        });
+      }
+
+      this.emitFile({
+        type: 'asset',
+        fileName: 'sitemap.xml',
+        source: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">',
+          ...urls,
+          '</urlset>',
+          '',
+        ].join('\n'),
+      });
+    },
+  };
 }
 
 // https://vite.dev/config/
@@ -57,6 +231,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     react(),
+    localizedPages(),
     VitePWA({
       registerType: 'prompt',
       devOptions: {
@@ -72,36 +247,7 @@ export default defineConfig({
         // Increase max file size for WASM files (zxing-wasm can be large)
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
       },
-      manifest: {
-        name: 'pTransfer',
-        short_name: 'pTransfer',
-        description:
-          'Share files and folders securely with end-to-end encryption',
-        theme_color: '#000000',
-        background_color: '#000000',
-        display: 'standalone',
-        orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
-        icons: [
-          {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
+      manifest: webManifest(DEFAULT_LOCALE),
     }),
   ],
   optimizeDeps: {

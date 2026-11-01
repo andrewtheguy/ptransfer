@@ -1,5 +1,6 @@
 import http from 'node:http';
 import zlib from 'node:zlib';
+import { t } from '@/lib/i18n';
 
 /**
  * Downloading the Tor directory the fast way: plain HTTP to the directory
@@ -109,12 +110,28 @@ function httpGet(url: string): Promise<Buffer> {
         response.on('error', reject);
         // A connection dropped mid-body closes without `end`.
         response.on('close', () => {
-          if (!response.complete) reject(new Error('Response ended early'));
+          if (!response.complete) {
+            reject(
+              new Error(
+                t({
+                  en: 'Response ended early',
+                  es: 'La respuesta terminó antes de tiempo',
+                }),
+              ),
+            );
+          }
         });
       },
     );
     request.on('timeout', () =>
-      request.destroy(new Error('Request timed out')),
+      request.destroy(
+        new Error(
+          t({
+            en: 'Request timed out',
+            es: 'Se agotó el tiempo de la solicitud',
+          }),
+        ),
+      ),
     );
     request.on('error', reject);
   });
@@ -134,7 +151,10 @@ async function fetchFromAuthority(documentPath: string): Promise<Buffer> {
     }
   }
   throw new Error(
-    `No directory authority served ${documentPath}\n  ${failures.join('\n  ')}`,
+    t({
+      en: `No directory authority served ${documentPath}\n  ${failures.join('\n  ')}`,
+      es: `Ninguna autoridad de directorio sirvió ${documentPath}\n  ${failures.join('\n  ')}`,
+    }),
   );
 }
 
@@ -220,10 +240,18 @@ async function fetchAuthorityCertificates(
   say: (message: string) => void,
 ): Promise<string> {
   const ids = signingCertIds(consensus);
-  say(`Consensus is signed by ${ids.length} known authorities`);
+  say(
+    t({
+      en: `Consensus is signed by ${ids.length} known authorities`,
+      es: `El consenso está firmado por ${ids.length} autoridades conocidas`,
+    }),
+  );
   if (ids.length < CONSENSUS_THRESHOLD) {
     throw new Error(
-      `Consensus needs ${CONSENSUS_THRESHOLD} authority signatures, found ${ids.length}`,
+      t({
+        en: `Consensus needs ${CONSENSUS_THRESHOLD} authority signatures, found ${ids.length}`,
+        es: `El consenso necesita ${CONSENSUS_THRESHOLD} firmas de autoridades, hay ${ids.length}`,
+      }),
     );
   }
   const segments = ids
@@ -234,10 +262,18 @@ async function fetchAuthorityCertificates(
   ).toString('utf8');
   const found =
     certificates.match(/^dir-key-certificate-version /gm)?.length ?? 0;
-  say(`Received ${found} of ${ids.length} authority certificates`);
+  say(
+    t({
+      en: `Received ${found} of ${ids.length} authority certificates`,
+      es: `Recibidos ${found} de ${ids.length} certificados de autoridades`,
+    }),
+  );
   if (found < CONSENSUS_THRESHOLD) {
     throw new Error(
-      `Received ${found} authority certificates, need ${CONSENSUS_THRESHOLD}`,
+      t({
+        en: `Received ${found} authority certificates, need ${CONSENSUS_THRESHOLD}`,
+        es: `Recibidos ${found} certificados de autoridades, se necesitan ${CONSENSUS_THRESHOLD}`,
+      }),
     );
   }
   return certificates;
@@ -262,10 +298,18 @@ export function collectDigests(
   const middle = usable.filter((entry) => entry.flags.has('V2Dir')).length;
   const hsdir = entries.filter((entry) => entry.flags.has('HSDir')).length;
   say(
-    `Consensus has ${entries.length} relays; ${middle} usable middle, ${hsdir} HSDir`,
+    t({
+      en: `Consensus has ${entries.length} relays; ${middle} usable middle, ${hsdir} HSDir`,
+      es: `El consenso tiene ${entries.length} relays; ${middle} intermedios utilizables, ${hsdir} HSDir`,
+    }),
   );
   if (middle < MIN_RELAYS_PER_ROLE || hsdir < MIN_HSDIR_RELAYS) {
-    throw new Error('Consensus has too few usable relays for a seed');
+    throw new Error(
+      t({
+        en: 'Consensus has too few usable relays for a seed',
+        es: 'El consenso tiene muy pocos relays utilizables para una semilla',
+      }),
+    );
   }
   return [...new Set(entries.map((entry) => entry.microdescDigest))];
 }
@@ -292,7 +336,12 @@ async function fetchMicrodescriptors(
       documents[index] = body.toString('utf8');
       done++;
       if (done % 10 === 0 || done === chunks.length) {
-        say(`Fetched microdescriptor batch ${done}/${chunks.length}`);
+        say(
+          t({
+            en: `Fetched microdescriptor batch ${done}/${chunks.length}`,
+            es: `Descargado el lote de microdescriptores ${done}/${chunks.length}`,
+          }),
+        );
       }
     }
   };
@@ -314,11 +363,20 @@ export async function fetchDirectorySeed(
 ): Promise<string> {
   const say = options.onProgress ?? (() => undefined);
 
-  say('Fetching the current microdesc consensus...');
+  say(
+    t({
+      en: 'Fetching the current microdesc consensus...',
+      es: 'Descargando el consenso microdesc actual...',
+    }),
+  );
   const consensus = (await fetchFromAuthority(CONSENSUS_PATH)).toString('utf8');
   const lifetime = consensusLifetime(consensus);
+  const mib = (consensus.length / 1024 / 1024).toFixed(2);
   say(
-    `Consensus ${(consensus.length / 1024 / 1024).toFixed(2)} MiB, valid ${lifetime.after} .. ${lifetime.until} UTC`,
+    t({
+      en: `Consensus ${mib} MiB, valid ${lifetime.after} .. ${lifetime.until} UTC`,
+      es: `Consenso de ${mib} MiB, válido ${lifetime.after} .. ${lifetime.until} UTC`,
+    }),
   );
 
   const certificates = await fetchAuthorityCertificates(consensus, say);
@@ -326,11 +384,21 @@ export async function fetchDirectorySeed(
   const digests = collectDigests(parseRouterEntries(consensus), say);
   const microdescriptors = await fetchMicrodescriptors(digests, say);
   const found = microdescriptors.match(/^onion-key$/gm)?.length ?? 0;
-  say(`Received ${found} of ${digests.length} microdescriptors`);
+  say(
+    t({
+      en: `Received ${found} of ${digests.length} microdescriptors`,
+      es: `Recibidos ${found} de ${digests.length} microdescriptores`,
+    }),
+  );
   // Relays leave the network between the consensus and this fetch, so a few
   // missing microdescriptors are normal; a large shortfall is not.
   if (found < digests.length * 0.9) {
-    throw new Error('Too few microdescriptors came back to build a seed');
+    throw new Error(
+      t({
+        en: 'Too few microdescriptors came back to build a seed',
+        es: 'Llegaron muy pocos microdescriptores para crear una semilla',
+      }),
+    );
   }
 
   return JSON.stringify({

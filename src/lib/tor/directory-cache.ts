@@ -156,7 +156,7 @@ export async function loadDirectorySeed(): Promise<DirectorySeed> {
   if (cached) {
     const verdict = await judgeDirectorySeed(cached);
     if (verdict.usable) return { value: cached, source: 'browser cache' };
-    console.info(`[tor] Ignoring the cached directory: ${verdict.reason}`);
+    console.info(`[tor] Ignoring the cached directory: ${verdict.reason?.en}`);
   }
 
   const snapshot = await loadSnapshot();
@@ -164,7 +164,7 @@ export async function loadDirectorySeed(): Promise<DirectorySeed> {
     const verdict = await judgeDirectorySeed(snapshot);
     if (verdict.usable) return { value: snapshot, source: 'served snapshot' };
     console.info(
-      `[tor] Ignoring the served directory snapshot: ${verdict.reason}`,
+      `[tor] Ignoring the served directory snapshot: ${verdict.reason?.en}`,
     );
   }
 

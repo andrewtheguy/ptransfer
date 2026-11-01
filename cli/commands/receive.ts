@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { type Localized, t } from '@/lib/i18n';
 import { parseOnionAddress } from '@/lib/tor/onion-address';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
@@ -32,7 +33,8 @@ import { UsageError } from '../usage';
  * sender gave it, and nothing is ever overwritten.
  */
 
-const USAGE = `usage: ptransfer receive --pin [options]
+const USAGE: Localized = {
+  en: `usage: ptransfer receive --pin [options]
        ptransfer receive --code [options]
        ptransfer receive --onion <address> [options]
 
@@ -63,13 +65,55 @@ options:
   --simulate-no-direct     with --pin or --code, for testing: answer with no
                            network routes, so the file goes through the
                            fallback the sender's offer names
-${TOR_OPTIONS_USAGE}
+${TOR_OPTIONS_USAGE.en}
                            (with --code, used when the code asks for the
                            anonymous fallback; with --pin, when the PIN is an
                            anonymous one)
   -v, --verbose            show diagnostics and the Tor client's own log lines
   -h, --help
-`;
+`,
+  es: `uso: ptransfer receive --pin [opciones]
+     ptransfer receive --code [opciones]
+     ptransfer receive --onion <address> [opciones]
+
+Recibe un archivo en el directorio actual, o en la carpeta que indique --out,
+con el nombre que le dio el emisor; varios archivos o una carpeta llegan en un
+solo ZIP.
+
+--pin lee de la entrada estándar el PIN que te leyó el emisor —o un enlace de
+PIN— y muestra un código de confirmación para que se lo leas. El emisor no
+envía nada hasta que haya escrito ese código. Un PIN de 16 caracteres es
+anónimo y pasa por Tor; las opciones de Tor de abajo dicen cómo llegar a él.
+
+--code lee de la entrada estándar el código que te dio el emisor —desde la
+aplicación web o con ptransfer send --code— y muestra una respuesta para que el
+emisor la pegue de vuelta. El archivo llega entonces por una conexión directa
+o, si no se abre ninguna, por el respaldo que indica el código.
+
+--onion se conecta al servicio onion que publicó un emisor. La contraseña de un
+solo uso se lee de la entrada estándar: escrita cuando se pide, o por una
+tubería.
+
+opciones:
+  --pin                    toma el PIN del emisor y devuelve un código de
+                           confirmación
+  --code                   toma un código del emisor y devuelve una respuesta
+  --onion <host.onion>     la dirección que mostró el emisor; se acepta un
+                           :<port>, que tiene prioridad sobre el de por defecto
+  -o, --out <folder>       guarda en esta carpeta, que debe existir, en lugar
+                           del directorio actual
+  --simulate-no-direct     con --pin o --code, para pruebas: responde sin rutas
+                           de red, de modo que el archivo pase por el respaldo
+                           que indica la oferta del emisor
+${TOR_OPTIONS_USAGE.es}
+                           (con --code, se usan cuando el código pide el
+                           respaldo anónimo; con --pin, cuando el PIN es
+                           anónimo)
+  -v, --verbose            muestra diagnósticos y las líneas de registro del
+                           propio cliente de Tor
+  -h, --help
+`,
+};
 
 export async function receive(argv: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -86,7 +130,7 @@ export async function receive(argv: string[]): Promise<number> {
     },
   });
   if (values.help) {
-    process.stdout.write(USAGE);
+    process.stdout.write(t(USAGE));
     return 0;
   }
   const modes = [values.pin, values.code, Boolean(values.onion)].filter(
@@ -94,18 +138,29 @@ export async function receive(argv: string[]): Promise<number> {
   ).length;
   if (modes !== 1) {
     throw new UsageError(
-      'Choose one mode: --pin, --code, or --onion <address>',
+      t({
+        en: 'Choose one mode: --pin, --code, or --onion <address>',
+        es: 'Elige un modo: --pin, --code o --onion <address>',
+      }),
     );
   }
   if (values['simulate-no-direct'] && !values.code && !values.pin) {
-    throw new UsageError('--simulate-no-direct goes with --pin or --code');
+    throw new UsageError(
+      t({
+        en: '--simulate-no-direct goes with --pin or --code',
+        es: '--simulate-no-direct va con --pin o --code',
+      }),
+    );
   }
   // Every input is checked before the bootstrap, which otherwise spends
   // seconds building circuits only to reject them afterwards.
   const parsed = values.onion ? parseOnionAddress(values.onion) : null;
   if (values.onion && !parsed) {
     throw new UsageError(
-      `${values.onion} is not a valid onion address; check for typos`,
+      t({
+        en: `${values.onion} is not a valid onion address; check for typos`,
+        es: `${values.onion} no es una dirección onion válida; revisa si hay errores de escritura`,
+      }),
     );
   }
   let folder: string;
@@ -118,7 +173,9 @@ export async function receive(argv: string[]): Promise<number> {
   }
   const torOptions = torOptionsFrom(values);
   routeDiagnostics(values.verbose);
-  const presenter = createLinePresenter('Receiving');
+  const presenter = createLinePresenter(
+    t({ en: 'Receiving', es: 'Recibiendo' }),
+  );
   if (values.pin) {
     return await receiveByPin({
       folder,

@@ -6,6 +6,7 @@ import {
   generateMutualOfferBinary,
 } from '@/lib/code-signaling';
 import { generatePin } from '@/lib/crypto';
+import { setLocale } from '@/lib/i18n';
 import type { TestRendererSetup } from '@opentui/core/testing';
 import { testRender } from '@opentui/react/test-utils';
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -1113,5 +1114,110 @@ describe('the run screen', () => {
     await screen.settle();
     // The hint is replaced by what the copy did, whichever way it went.
     expect(screen.frame()).not.toContain('Press tab to copy');
+  });
+});
+
+describe('in Spanish', () => {
+  afterEach(() => {
+    setLocale('en');
+  });
+
+  /**
+   * The line the key hints are drawn on, which is the last one inside the
+   * frame: whole when the hints fit on it, and only their tail when they wrap.
+   */
+  function hintLine(frame: string): string {
+    const lines = frame.split('\n').filter((line) => line.trim() !== '');
+    const bottom = lines.findLastIndex((line) => line.startsWith('└'));
+    return (lines[bottom - 1] ?? '').replace(/│/g, '').trim();
+  }
+
+  it('opens on the choice between sending and receiving', async () => {
+    setLocale('es');
+    const screen = await draw(<App onExit={() => {}} />);
+    const frame = screen.frame();
+    expect(frame).toContain('pTransfer · Inicio');
+    expect(frame).toContain('Enviar');
+    expect(frame).toContain('Recibir');
+    expect(frame).toContain('Pega un PIN, un código o una dirección onion');
+    expect(frame).not.toContain('Paste a PIN');
+    expect(hintLine(frame)).toBe('↑↓ elegir  ·  enter abrir  ·  ctrl-c salir');
+  });
+
+  it('names the three modes and the anonymous option on one line each', async () => {
+    setLocale('es');
+    const root = await tree();
+    const screen = await draw(
+      <SendMode
+        paths={[join(root, 'notes.txt')]}
+        onStart={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    screen.mockInput.pressArrow('down');
+    await screen.settle();
+    const frame = screen.frame();
+    expect(frame).toContain('Intercambio por PIN');
+    expect(frame).toContain(
+      'Pasa un código; luego conexión directa o respaldo por relays',
+    );
+    expect(frame).toContain('Servicio onion de Tor');
+    expect(frame).toContain(
+      '[ ] Señalización y relay anónimos (experimental)   a para activar',
+    );
+    expect(hintLine(frame)).toBe('↑↓ elegir  ·  enter iniciar  ·  esc atrás');
+  });
+
+  it('reads an anonymous PIN off the field and names the bridge', async () => {
+    setLocale('es');
+    const screen = await draw(
+      <ReceiveInputScreen
+        bridge="websocket"
+        onBridge={() => {}}
+        onAccept={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await screen.mockInput.pasteBracketedText(generatePin('anonymous'));
+    await screen.settle();
+    const frame = screen.frame();
+    expect(frame).toContain('Pega lo que te dio el emisor');
+    expect(frame).toContain(
+      'Un PIN de Intercambio por PIN · anónimo: su negociación va por Tor',
+    );
+    expect(frame).toContain(
+      'Puente de Tor: Snowflake WebSocket   tab para cambiar',
+    );
+    expect(hintLine(frame)).toBe('enter continuar  ·  esc atrás');
+  });
+
+  it('shows what was handed under a translated label, keyed on the English one', async () => {
+    setLocale('es');
+    let rotate: (() => void) | null = null;
+    const screen = await draw(
+      <Run
+        title="Enviar · Intercambio por PIN"
+        start={(presenter) => {
+          presenter.hand('AbCDefG23hjk', 'PIN');
+          presenter.hand('ABCD', 'confirmation code');
+          presenter.action('r', 'a fresh PIN', () => {});
+          presenter.progress(5, 100);
+          rotate = () => presenter.hand('mnPQrst45uvw', 'PIN');
+          return new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    act(() => rotate?.());
+    await screen.settle();
+    const frame = screen.frame();
+    expect(frame).toContain('1. PIN: mnPQrst45uvw');
+    expect(frame).not.toContain('AbCDefG23hjk');
+    expect(frame).toContain('2. código de confirmación: ABCD');
+    expect(frame).toContain('Pulsa 1 o 2 para copiar uno al portapapeles.');
+    expect(frame).toContain('(5 B de 100 B)');
+    expect(hintLine(frame)).toBe(
+      '1-9 copiar  ·  r un PIN nuevo  ·  ctrl-c detener',
+    );
   });
 });

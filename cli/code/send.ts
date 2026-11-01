@@ -19,6 +19,7 @@ import {
 } from '@/lib/code-signaling';
 import { TRANSFER_EXPIRATION_MS } from '@/lib/crypto';
 import type { DuplexChannel } from '@/lib/duplex-channel';
+import { type Localized, t } from '@/lib/i18n';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { TransferSource } from '@/lib/transfer-source';
 import type { WebRTCConnection } from '@/lib/webrtc';
@@ -41,8 +42,10 @@ import { createCliHost } from './host';
 /** How long a cancel's word to the receiver is given to leave. */
 const HANG_UP_WAIT_MS = 600;
 
-const ANSWER_MISMATCH =
-  'That response does not answer this code. Paste the response the receiver made from the code above.';
+const ANSWER_MISMATCH: Localized = {
+  en: 'That response does not answer this code. Paste the response the receiver made from the code above.',
+  es: 'Esa respuesta no corresponde a este código. Pega la respuesta que el receptor generó con el código de arriba.',
+};
 
 export interface CodeSendOptions {
   content: TransferSource;
@@ -165,12 +168,20 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     })();
     if (offer.fallback.kind === 'none') {
       say(
-        'No relays could be proven for a fallback, so this transfer needs a direct connection.',
+        t({
+          en: 'No relays could be proven for a fallback, so this transfer needs a direct connection.',
+          es: 'No se pudo comprobar ningún relay para el respaldo, así que esta transferencia necesita una conexión directa.',
+        }),
       );
     }
 
     say('');
-    say('Give the receiver this code:');
+    say(
+      t({
+        en: 'Give the receiver this code:',
+        es: 'Dale al receptor este código:',
+      }),
+    );
     say('');
     presenter.hand(generateMutualClipboardData(offer.offerBinary));
     say('');
@@ -181,7 +192,15 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     let expiry: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => {
       expiry = setTimeout(
-        () => reject(new Error('Session expired. Send again for a new code.')),
+        () =>
+          reject(
+            new Error(
+              t({
+                en: 'Session expired. Send again for a new code.',
+                es: 'La sesión caducó. Vuelve a enviar para obtener un código nuevo.',
+              }),
+            ),
+          ),
         expiresIn,
       );
     });
@@ -189,11 +208,14 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
     try {
       answer = await Promise.race([
         presenter.readCode(
-          "Paste the receiver's response: ",
+          t({
+            en: "Paste the receiver's response: ",
+            es: 'Pega la respuesta del receptor: ',
+          }),
           async (container) => {
             const parsed = readAnswer(container);
             if (!(await answersOffer(offer, parsed))) {
-              throw new Error(ANSWER_MISMATCH);
+              throw new Error(t(ANSWER_MISMATCH));
             }
             return parsed;
           },
@@ -213,11 +235,11 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
       torProgress: transport ? torProgress : null,
       isCancelled,
       report,
-      answerMismatchMessage: ANSWER_MISMATCH,
+      answerMismatchMessage: t(ANSWER_MISMATCH),
     });
     presenter.done();
     if (isCancelled()) return interrupted ?? 1;
-    say(`Sent ${content.name}`);
+    say(t({ en: `Sent ${content.name}`, es: `Enviado ${content.name}` }));
     return 0;
   } catch (error) {
     presenter.done();

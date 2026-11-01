@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import { parseOnionAddress } from '@/lib/tor/onion-address';
 import { DEFAULT_TOR_BRIDGE, type TorBridge } from '@/lib/tor/bridge';
 import type { SelectOption } from '@opentui/core';
@@ -53,18 +54,26 @@ type Stage =
   | { name: 'receive-folder'; accepted: Accepted }
   | { name: 'run'; running: Running };
 
-const HOME: SelectOption[] = [
-  {
-    name: 'Send',
-    description: 'Pick files and folders, then how to carry them across',
-    value: 'send',
-  },
-  {
-    name: 'Receive',
-    description: 'Paste a PIN, a code, or an onion address',
-    value: 'receive',
-  },
-];
+function homeOptions(): SelectOption[] {
+  return [
+    {
+      name: t({ en: 'Send', es: 'Enviar' }),
+      description: t({
+        en: 'Pick files and folders, then how to carry them across',
+        es: 'Elige archivos y carpetas, y luego cómo hacerlos llegar',
+      }),
+      value: 'send',
+    },
+    {
+      name: t({ en: 'Receive', es: 'Recibir' }),
+      description: t({
+        en: 'Paste a PIN, a code, or an onion address',
+        es: 'Pega un PIN, un código o una dirección onion',
+      }),
+      value: 'receive',
+    },
+  ];
+}
 
 /** Tor's defaults, with the bridge the screen before this one chose. */
 function torOptionsFor(bridge: TorBridge): TorOptions {
@@ -101,16 +110,25 @@ export function App({ onExit }: { onExit(status: number): void }) {
     const running: Running =
       choice.mode === 'pin'
         ? {
-            title: 'Send · PIN Exchange',
+            title: t({
+              en: 'Send · PIN Exchange',
+              es: 'Enviar · Intercambio por PIN',
+            }),
             start: (presenter) => sendByPin({ ...common, presenter }),
           }
         : choice.mode === 'code'
           ? {
-              title: 'Send · Code Exchange',
+              title: t({
+                en: 'Send · Code Exchange',
+                es: 'Enviar · Intercambio por código',
+              }),
               start: (presenter) => sendByCode({ ...common, presenter }),
             }
           : {
-              title: 'Send · Tor Onion Service',
+              title: t({
+                en: 'Send · Tor Onion Service',
+                es: 'Enviar · Servicio onion de Tor',
+              }),
               start: (presenter) =>
                 sendOverTor({
                   content: choice.content,
@@ -132,7 +150,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
       setStage({
         name: 'run',
         running: {
-          title: 'Receive · PIN Exchange',
+          title: t({
+            en: 'Receive · PIN Exchange',
+            es: 'Recibir · Intercambio por PIN',
+          }),
           // The PIN is what the screen before this one read the mode off, so
           // it answers the engine's own request for one rather than asking
           // the same question twice.
@@ -154,7 +175,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
       setStage({
         name: 'run',
         running: {
-          title: 'Receive · Code Exchange',
+          title: t({
+            en: 'Receive · Code Exchange',
+            es: 'Recibir · Intercambio por código',
+          }),
           firstCode: accepted.code,
           start: (presenter) =>
             receiveByCode({
@@ -180,7 +204,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
     setStage({
       name: 'run',
       running: {
-        title: 'Receive · Tor Onion Service',
+        title: t({
+          en: 'Receive · Tor Onion Service',
+          es: 'Recibir · Servicio onion de Tor',
+        }),
         start: (presenter) =>
           receiveOverTor({
             parsed,
@@ -196,15 +223,25 @@ export function App({ onExit }: { onExit(status: number): void }) {
   switch (stage.name) {
     case 'home':
       return (
-        <Screen title="Home" hints={['↑↓ choose', 'enter open', 'ctrl-c quit']}>
+        <Screen
+          title={t({ en: 'Home', es: 'Inicio' })}
+          hints={[
+            t({ en: '↑↓ choose', es: '↑↓ elegir' }),
+            t({ en: 'enter open', es: 'enter abrir' }),
+            t({ en: 'ctrl-c quit', es: 'ctrl-c salir' }),
+          ]}
+        >
           <Note>
-            Send files and folders, or receive what someone is sending.
+            {t({
+              en: 'Send files and folders, or receive what someone is sending.',
+              es: 'Envía archivos y carpetas, o recibe lo que alguien te envía.',
+            })}
           </Note>
           <Gap />
           <box style={{ height: 6 }}>
             <select
               focused
-              options={HOME}
+              options={homeOptions()}
               showDescription
               onSelect={(_, option) =>
                 setStage(
@@ -224,7 +261,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
         <Picker
           mode="paths"
           start={process.cwd()}
-          title="Send · what to send"
+          title={t({
+            en: 'Send · what to send',
+            es: 'Enviar · qué enviar',
+          })}
           onDone={(paths) => setStage({ name: 'send-mode', paths })}
           onCancel={() => setStage({ name: 'home' })}
         />
@@ -256,7 +296,10 @@ export function App({ onExit }: { onExit(status: number): void }) {
         <Picker
           mode="folder"
           start={folder}
-          title="Receive · where to save"
+          title={t({
+            en: 'Receive · where to save',
+            es: 'Recibir · dónde guardar',
+          })}
           accept={destinationFolder}
           onDone={([chosen]) => {
             if (chosen) startReceive(stage.accepted, chosen);

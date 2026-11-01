@@ -21,6 +21,7 @@ import { wipeBufferSource } from '@/lib/crypto/memory';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import { acceptLanes, type Lanes } from '@/lib/lanes';
 import type { FileMetadata, TransferMetadata } from '@/lib/nostr';
 import {
@@ -91,8 +92,19 @@ export interface ReadOffer {
 /** Parse an offer container. Throws on anything that is not an offer. */
 export async function readOffer(offerBinary: Uint8Array): Promise<ReadOffer> {
   const parsed = parseMutualPayload(offerBinary);
-  if (!parsed) throw new Error('Invalid offer format');
-  if (parsed.type !== 'offer') throw new Error('Expected offer, got answer');
+  if (!parsed) {
+    throw new Error(
+      t({ en: 'Invalid offer format', es: 'Formato de oferta no válido' }),
+    );
+  }
+  if (parsed.type !== 'offer') {
+    throw new Error(
+      t({
+        en: 'Expected offer, got answer',
+        es: 'Se esperaba una oferta y llegó una respuesta',
+      }),
+    );
+  }
   // Hash the container as it arrived, before anything downstream can reshape
   // it; the answer's confirmation tag is bound to this exact value.
   return {
@@ -131,12 +143,22 @@ export function acceptOffer({
   transcriptHash,
 }: ReadOffer): AcceptedOffer {
   if (Date.now() - payload.createdAt > TRANSFER_EXPIRATION_MS) {
-    throw new Error('Offer expired. Ask sender to create a new one.');
+    throw new Error(
+      t({
+        en: 'Offer expired. Ask sender to create a new one.',
+        es: 'La oferta caducó. Pide al emisor que cree una nueva.',
+      }),
+    );
   }
 
   const { fileName, fileSize, mimeType, salt } = payload;
   if (!salt) {
-    throw new Error('Invalid offer: missing encryption salt');
+    throw new Error(
+      t({
+        en: 'Invalid offer: missing encryption salt',
+        es: 'Oferta no válida: falta la sal de cifrado',
+      }),
+    );
   }
   if (
     !fileName ||
@@ -145,11 +167,21 @@ export function acceptOffer({
     !Number.isFinite(fileSize) ||
     fileSize < 0
   ) {
-    throw new Error('Invalid offer: missing or invalid file metadata');
+    throw new Error(
+      t({
+        en: 'Invalid offer: missing or invalid file metadata',
+        es: 'Oferta no válida: faltan los metadatos del archivo o no son válidos',
+      }),
+    );
   }
   if (fileSize > MAX_MESSAGE_SIZE) {
+    const size = formatFileSize(fileSize);
+    const limit = formatFileSize(MAX_MESSAGE_SIZE);
     throw new Error(
-      `Transfer rejected: Size (${formatFileSize(fileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
+      t({
+        en: `Transfer rejected: Size (${size}) exceeds limit (${limit})`,
+        es: `Transferencia rechazada: el tamaño (${size}) supera el límite (${limit})`,
+      }),
     );
   }
 
@@ -207,8 +239,13 @@ export function unrelayableError(
   error: P2PConnectionError,
 ): P2PConnectionError {
   if (offer.metadata.fileSize <= SLOW_TRANSPORT_MAX_BYTES) return error;
+  const limit = formatFileSize(SLOW_TRANSPORT_MAX_BYTES);
+  const via = offer.fallback === 'anonymous' ? 'Tor' : 'Nostr';
   return new P2PConnectionError(
-    `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through ${offer.fallback === 'anonymous' ? 'Tor' : 'Nostr'} either.`,
+    t({
+      en: `${error.message}. The file is over ${limit}, so it cannot be relayed through ${via} either.`,
+      es: `${error.message}. El archivo supera ${limit}, así que tampoco se puede retransmitir por ${via}.`,
+    }),
   );
 }
 
@@ -289,7 +326,13 @@ export async function buildDirectAttempt(opts: {
   onProgress: (current: number, total: number) => void;
 }): Promise<DirectAttempt | null> {
   const { offer, keys, sinkHolder, rtcHolder, isCancelled, report } = opts;
-  report({ status: 'generating_answer', message: 'Creating P2P answer...' });
+  report({
+    status: 'generating_answer',
+    message: t({
+      en: 'Creating P2P answer...',
+      es: 'Creando la respuesta P2P...',
+    }),
+  });
 
   const iceCandidates: string[] = [];
   let answerSDP: RTCSessionDescriptionInit | null = null;
@@ -354,7 +397,9 @@ export async function buildDirectAttempt(opts: {
       // A dead route is known long before the connection timeout; the
       // fallback starts from it right away.
       if (connectionState === 'failed' || connectionState === 'disconnected') {
-        const error = new P2PConnectionError('Connection failed');
+        const error = new P2PConnectionError(
+          t({ en: 'Connection failed', es: 'La conexión falló' }),
+        );
         if (connectionFailedRejecter) connectionFailedRejecter(error);
         else earlyConnectionFailure ??= error;
       }
@@ -392,7 +437,13 @@ export async function buildDirectAttempt(opts: {
       return null;
     }
 
-    report({ status: 'generating_answer', message: 'Generating answer...' });
+    report({
+      status: 'generating_answer',
+      message: t({
+        en: 'Generating answer...',
+        es: 'Generando la respuesta...',
+      }),
+    });
     await new Promise<void>((resolve) => {
       if (answerSDP) {
         resolve();
@@ -408,7 +459,10 @@ export async function buildDirectAttempt(opts: {
 
     report({
       status: 'generating_answer',
-      message: 'Gathering network info...',
+      message: t({
+        en: 'Gathering network info...',
+        es: 'Recopilando información de red...',
+      }),
     });
     const iceGatheringComplete = await rtc.waitForIceGatheringComplete(
       ICE_GATHER_TIMEOUT_MS,
@@ -421,8 +475,14 @@ export async function buildDirectAttempt(opts: {
     report({
       status: 'generating_answer',
       message: iceGatheringComplete
-        ? 'Preparing response code...'
-        : 'Network probe timed out. Preparing response code with available routes...',
+        ? t({
+            en: 'Preparing response code...',
+            es: 'Preparando el código de respuesta...',
+          })
+        : t({
+            en: 'Network probe timed out. Preparing response code with available routes...',
+            es: 'Se agotó el tiempo del sondeo de red. Preparando el código de respuesta con las rutas disponibles...',
+          }),
     });
     if (isCancelled()) {
       dispose();
@@ -431,7 +491,10 @@ export async function buildDirectAttempt(opts: {
 
     if (!answerSDP) {
       throw new Error(
-        'Failed to generate answer SDP: Answer was not created by WebRTC connection',
+        t({
+          en: 'Failed to generate answer SDP: Answer was not created by WebRTC connection',
+          es: 'No se pudo generar el SDP de la respuesta: la conexión WebRTC no creó la respuesta',
+        }),
       );
     }
     const settledAnswerSDP: RTCSessionDescriptionInit = answerSDP;
@@ -454,7 +517,11 @@ export async function buildDirectAttempt(opts: {
         return;
       }
       const timeout = setTimeout(() => {
-        reject(new P2PConnectionError('Connection timeout'));
+        reject(
+          new P2PConnectionError(
+            t({ en: 'Connection timeout', es: 'Tiempo de conexión agotado' }),
+          ),
+        );
       }, opts.connectionTimeoutMs);
       dataChannelResolver = (channel) => {
         clearTimeout(timeout);
@@ -535,16 +602,22 @@ export async function finishDirectReceive(opts: {
   return payload;
 }
 
-const RELAY_FALLBACK_MESSAGE =
-  'No direct connection — receiving the file through Nostr instead';
-const TOR_FALLBACK_MESSAGE =
-  'No direct connection — receiving the file through Tor instead';
+const RELAY_FALLBACK_MESSAGE: Localized = {
+  en: 'No direct connection — receiving the file through Nostr instead',
+  es: 'No hay conexión directa — el archivo se recibe por Nostr',
+};
+const TOR_FALLBACK_MESSAGE: Localized = {
+  en: 'No direct connection — receiving the file through Tor instead',
+  es: 'No hay conexión directa — el archivo se recibe por Tor',
+};
 
 /** What the fallback's control relays are called on screen. */
 export function fallbackMessage(offer: AcceptedOffer): string {
-  return offer.fallback === 'anonymous'
-    ? TOR_FALLBACK_MESSAGE
-    : RELAY_FALLBACK_MESSAGE;
+  return t(
+    offer.fallback === 'anonymous'
+      ? TOR_FALLBACK_MESSAGE
+      : RELAY_FALLBACK_MESSAGE,
+  );
 }
 
 /** A file the fallback delivered, and what to say about it. */
@@ -589,7 +662,12 @@ export function receiveOverFallback(
   if (opts.offer.fallback === 'anonymous') {
     if (!opts.transport) {
       return Promise.reject(
-        new Error('The Tor fallback needs a Tor client, and none is running'),
+        new Error(
+          t({
+            en: 'The Tor fallback needs a Tor client, and none is running',
+            es: 'La alternativa por Tor necesita un cliente de Tor y no hay ninguno en marcha',
+          }),
+        ),
       );
     }
     return receiveOverTorFallback(opts, opts.transport);
@@ -602,7 +680,14 @@ async function receiveOverRelayFallback(
 ): Promise<FallbackReceipt | 'switched' | null> {
   const { offer, keys, hold, switchedBack, isCancelled, report } = opts;
   const relays = offer.fallbackRelays;
-  if (!relays) throw new Error('This offer names no fallback relays');
+  if (!relays) {
+    throw new Error(
+      t({
+        en: 'This offer names no fallback relays',
+        es: 'Esta oferta no indica relays de respaldo',
+      }),
+    );
+  }
   const { fileName, fileSize, mimeType } = offer.metadata;
   const stopped = () => isCancelled() || switchedBack();
 
@@ -619,7 +704,10 @@ async function receiveOverRelayFallback(
   } else {
     report({
       status: 'fetching',
-      message: `${RELAY_FALLBACK_MESSAGE}. Connecting to relays...`,
+      message: `${t(RELAY_FALLBACK_MESSAGE)}. ${t({
+        en: 'Connecting to relays...',
+        es: 'Conectando con los relays...',
+      })}`,
       progress: { current: 0, total: fileSize },
       ...relayState,
     });
@@ -650,10 +738,19 @@ async function receiveOverRelayFallback(
         report({
           status: 'fetching',
           message: !p.manifest
-            ? `${RELAY_FALLBACK_MESSAGE}. Waiting for the sender...`
+            ? `${t(RELAY_FALLBACK_MESSAGE)}. ${t({
+                en: 'Waiting for the sender...',
+                es: 'Esperando al emisor...',
+              })}`
             : p.chunksDone === p.chunksTotal
-              ? 'All pieces received — verifying...'
-              : `Receiving pieces through relays... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
+              ? t({
+                  en: 'All pieces received — verifying...',
+                  es: 'Se recibieron todas las partes — verificando...',
+                })
+              : t({
+                  en: `Receiving pieces through relays... ${p.chunksDone}/${p.chunksTotal} (sender has uploaded ${p.available})`,
+                  es: `Recibiendo partes a través de los relays... ${p.chunksDone}/${p.chunksTotal} (el emisor ha subido ${p.available})`,
+                }),
           progress: {
             current: Math.min(p.chunksDone * chunkBytes, total),
             total,
@@ -683,7 +780,10 @@ async function receiveOverRelayFallback(
       fileSize: data.length,
       mimeType,
     },
-    message: 'File received through Nostr relays!',
+    message: t({
+      en: 'File received through Nostr relays!',
+      es: '¡Archivo recibido a través de los relays de Nostr!',
+    }),
     stats: lastStats,
   };
 }
@@ -724,7 +824,13 @@ async function receiveOverTorFallback(
   };
 
   status(
-    `${TOR_FALLBACK_MESSAGE}. ${torStatus() || 'Starting the Tor client...'}`,
+    `${t(TOR_FALLBACK_MESSAGE)}. ${
+      torStatus() ||
+      t({
+        en: 'Starting the Tor client...',
+        es: 'Iniciando el cliente de Tor...',
+      })
+    }`,
   );
   const session = await deriveRelaySession(keys.sharedSecretKey, offer.salt);
   // Created only once the session is in hand, so a failed derivation leaves
@@ -741,7 +847,7 @@ async function receiveOverTorFallback(
     // From here until the client is up, its progress is the transfer's only
     // progress, and a cold start is minutes.
     const unfollow = opts.torProgress?.follow((message) =>
-      status(`${TOR_FALLBACK_MESSAGE}. ${message}`),
+      status(`${t(TOR_FALLBACK_MESSAGE)}. ${message}`),
     );
     let client: Awaited<ReturnType<typeof transport.torClient>>;
     try {
@@ -765,12 +871,15 @@ async function receiveOverTorFallback(
       onAnnounced: () => {
         senderPresent = true;
       },
-      onStatus: (message) => status(`${TOR_FALLBACK_MESSAGE}. ${message}`),
+      onStatus: (message) => status(`${t(TOR_FALLBACK_MESSAGE)}. ${message}`),
       onProgress: (current, total) => {
         if (stopped()) return;
         report({
           status: 'fetching',
-          message: 'Receiving the file over Tor...',
+          message: t({
+            en: 'Receiving the file over Tor...',
+            es: 'Recibiendo el archivo por Tor...',
+          }),
           progress: { current, total },
           ...relayState,
         });
@@ -809,7 +918,10 @@ async function receiveOverTorFallback(
       fileSize: received.fileSize,
       mimeType: received.mimeType,
     },
-    message: 'File received through Tor!',
+    message: t({
+      en: 'File received through Tor!',
+      es: '¡Archivo recibido a través de Tor!',
+    }),
     sink,
   };
 }

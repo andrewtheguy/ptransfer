@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import type { TransferState } from '@/lib/nostr';
 import { createAdaptiveAppendSink } from '@/lib/scratch-sink';
 import type { TorBridge } from '@/lib/tor/bridge';
@@ -114,11 +115,19 @@ export function useTorReceive(): UseTorReceiveReturn {
         const parsed = parseOnionAddress(request.address);
         if (!parsed) {
           throw new Error(
-            'That is not a valid onion address — check for typos.',
+            t({
+              en: 'That is not a valid onion address — check for typos.',
+              es: 'No es una dirección onion válida: revisa que no haya errores de escritura.',
+            }),
           );
         }
         if (!isValidPin(request.password)) {
-          throw new Error('Invalid password — check for typos.');
+          throw new Error(
+            t({
+              en: 'Invalid password — check for typos.',
+              es: 'Contraseña no válida: revisa que no haya errores de escritura.',
+            }),
+          );
         }
 
         const onStatus = (message: string) => {
@@ -126,7 +135,12 @@ export function useTorReceive(): UseTorReceiveReturn {
           setState({ status: 'connecting', message });
         };
 
-        onStatus('Loading the Tor client...');
+        onStatus(
+          t({
+            en: 'Loading the Tor client...',
+            es: 'Cargando el cliente de Tor...',
+          }),
+        );
         const client = await bootstrapTorClient({
           bridge: request.bridge,
           onStatus,
@@ -134,13 +148,21 @@ export function useTorReceive(): UseTorReceiveReturn {
         clientRef.current = client;
         if (cancelledRef.current) throw new Error('Cancelled');
 
-        onStatus(`Building a circuit to ${parsed.host}...`);
+        onStatus(
+          t({
+            en: `Building a circuit to ${parsed.host}...`,
+            es: `Construyendo un circuito hacia ${parsed.host}...`,
+          }),
+        );
         const stream = await client.connectStream(parsed.host, parsed.port);
         const framed = new TorFramedStream(stream);
         framedRef.current = framed;
         if (cancelledRef.current) throw new Error('Cancelled');
 
-        setState({ status: 'connecting', message: 'Authenticating...' });
+        setState({
+          status: 'connecting',
+          message: t({ en: 'Authenticating...', es: 'Autenticando...' }),
+        });
         const { keys, metadata } = await runTorClientHandshake(
           framed,
           request.password,
@@ -152,7 +174,10 @@ export function useTorReceive(): UseTorReceiveReturn {
         // not worth connecting a transfer for.
         if (metadata.fileSize > TOR_MAX_TRANSFER_BYTES) {
           throw new Error(
-            `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport.`,
+            t({
+              en: `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport.`,
+              es: `El emisor ofrece ${formatFileSize(metadata.fileSize)}, más que el límite de ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} del transporte por Tor.`,
+            }),
           );
         }
 
@@ -163,7 +188,10 @@ export function useTorReceive(): UseTorReceiveReturn {
         };
         setState({
           status: 'receiving',
-          message: 'Receiving over Tor...',
+          message: t({
+            en: 'Receiving over Tor...',
+            es: 'Recibiendo por Tor...',
+          }),
           contentType: 'file',
           fileMetadata,
           progress: { current: 0, total: metadata.fileSize },
@@ -182,7 +210,10 @@ export function useTorReceive(): UseTorReceiveReturn {
             onProgress: (current, total) =>
               setState({
                 status: 'receiving',
-                message: 'Receiving over Tor...',
+                message: t({
+                  en: 'Receiving over Tor...',
+                  es: 'Recibiendo por Tor...',
+                }),
                 contentType: 'file',
                 fileMetadata,
                 progress: { current, total },
@@ -209,7 +240,7 @@ export function useTorReceive(): UseTorReceiveReturn {
         });
         setState({
           status: 'complete',
-          message: 'File received',
+          message: t({ en: 'File received', es: 'Archivo recibido' }),
           contentType: 'file',
           fileMetadata,
           progress: { current: payload.size, total: payload.size },
@@ -221,7 +252,10 @@ export function useTorReceive(): UseTorReceiveReturn {
             message:
               error instanceof Error
                 ? error.message
-                : 'The Tor transfer failed',
+                : t({
+                    en: 'The Tor transfer failed',
+                    es: 'La transferencia por Tor falló',
+                  }),
           });
         }
       } finally {

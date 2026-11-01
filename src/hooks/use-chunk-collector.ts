@@ -5,6 +5,7 @@ import {
   parseChunk,
   reassembleChunks,
 } from '@/lib/chunk-utils';
+import { t } from '@/lib/i18n';
 
 interface ChunkCollectorState {
   totalChunks: number | null;
@@ -89,15 +90,30 @@ export function useChunkCollector() {
         const assembled = reassembleChunks(chunksRef.current, parsed.total);
         const expectedChecksum = checksumRef.current;
         if (!assembled) {
-          resetCollector('Invalid QR payload');
+          resetCollector(
+            t({
+              en: 'Invalid QR payload',
+              es: 'Datos del código QR no válidos',
+            }),
+          );
           return false;
         }
         if (expectedChecksum === null || !Number.isFinite(expectedChecksum)) {
-          resetCollector('Invalid QR payload');
+          resetCollector(
+            t({
+              en: 'Invalid QR payload',
+              es: 'Datos del código QR no válidos',
+            }),
+          );
           return false;
         }
         if (!isValidPayloadChecksum(assembled, expectedChecksum)) {
-          resetCollector('Invalid QR payload');
+          resetCollector(
+            t({
+              en: 'Invalid QR payload',
+              es: 'Datos del código QR no válidos',
+            }),
+          );
           return false;
         }
 

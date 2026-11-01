@@ -1,3 +1,4 @@
+import { type Localized, t } from '@/lib/i18n';
 import { decodeCode } from '../code/code-input';
 import { InterruptedError } from '../interrupt';
 import type { Presenter } from '../ui/presenter';
@@ -14,8 +15,63 @@ import type { Action, Prompt, TransferStore } from './store';
  * `done()` is therefore a no-op — there is no line being rewritten to end.
  */
 
-const INCOMPLETE =
-  'That is not a complete pTransfer code, or it is more than an hour old. Check it was copied whole.';
+const INCOMPLETE: Localized = {
+  en: 'That is not a complete pTransfer code, or it is more than an hour old. Check it was copied whole.',
+  es: 'Eso no es un código de pTransfer completo, o tiene más de una hora. Comprueba que se copió entero.',
+};
+
+/**
+ * What a handed value is called on screen, by the label it was handed under:
+ * `name` beside the value, and `the` in a sentence about it.
+ */
+const LABELS = new Map<string, { name: Localized; the: Localized }>([
+  ['PIN', { name: { en: 'PIN', es: 'PIN' }, the: { en: 'PIN', es: 'el PIN' } }],
+  [
+    'confirmation code',
+    {
+      name: { en: 'confirmation code', es: 'código de confirmación' },
+      the: { en: 'confirmation code', es: 'el código de confirmación' },
+    },
+  ],
+  [
+    'password',
+    {
+      name: { en: 'password', es: 'contraseña' },
+      the: { en: 'password', es: 'la contraseña' },
+    },
+  ],
+  [
+    'address',
+    {
+      name: { en: 'address', es: 'dirección' },
+      the: { en: 'address', es: 'la dirección' },
+    },
+  ],
+]);
+
+/** A value handed with no label: a code, as far as the screen is concerned. */
+const UNLABELLED = {
+  name: { en: 'code', es: 'código' },
+  the: { en: 'the code', es: 'el código' },
+};
+
+/** What a handed value's `label` is shown as; see `LABELS`. */
+export function shownLabel(label: string | null): {
+  name: string;
+  the: string;
+} {
+  if (label === null) {
+    return { name: t(UNLABELLED.name), the: t(UNLABELLED.the) };
+  }
+  const known = LABELS.get(label);
+  if (!known) return { name: label, the: label };
+  return { name: t(known.name), the: t(known.the) };
+}
+
+/** What an offered action is called in the key hints, by its label. */
+const ACTIONS = new Map<string, Localized>([
+  ['a fresh PIN', { en: 'a fresh PIN', es: 'un PIN nuevo' }],
+]);
 
 export interface TuiPresenterOptions {
   /**
@@ -91,7 +147,7 @@ export function createTuiPresenter(
         const take = async (text: string) => {
           const container = decodeCode(text);
           if (!container) {
-            ask(INCOMPLETE);
+            ask(t(INCOMPLETE));
             return;
           }
           // Off the screen while the answer is judged: accepting a code can
@@ -154,7 +210,8 @@ export function createTuiPresenter(
       });
     },
     action(key, label, run) {
-      const action: Action = { key, label, run };
+      const shown = ACTIONS.get(label);
+      const action: Action = { key, label: shown ? t(shown) : label, run };
       store.update((view) => ({ ...view, actions: [...view.actions, action] }));
       return () => {
         store.update((view) => ({

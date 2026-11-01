@@ -1,4 +1,6 @@
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { useT } from '@/i18n/locale-context';
+import type { Localized } from '@/lib/i18n';
 import {
   TOR_BRIDGE_LABELS,
   TOR_BRIDGES,
@@ -15,11 +17,15 @@ import {
  * than in six places that would drift apart.
  */
 
-const BRIDGE_DESCRIPTIONS: Record<TorBridge, string> = {
-  websocket:
-    'one fixed bridge endpoint, no broker and no STUN. The faster of the two, and the one to try first.',
-  webrtc:
-    'a volunteer proxy brokered over HTTPS, using STUN. Harder to block, and worth switching to if the WebSocket bridge cannot be reached.',
+const BRIDGE_DESCRIPTIONS: Record<TorBridge, Localized> = {
+  websocket: {
+    en: 'one fixed bridge endpoint, no broker and no STUN. The faster of the two, and the one to try first.',
+    es: 'un único punto de acceso fijo, sin intermediario y sin STUN. El más rápido de los dos, y el primero que conviene probar.',
+  },
+  webrtc: {
+    en: 'a volunteer proxy brokered over HTTPS, using STUN. Harder to block, and worth switching to if the WebSocket bridge cannot be reached.',
+    es: 'un proxy voluntario asignado por un intermediario a través de HTTPS, usando STUN. Más difícil de bloquear; vale la pena cambiar a este si no se puede alcanzar el puente WebSocket.',
+  },
 };
 
 interface TorBridgeChoiceProps {
@@ -37,6 +43,7 @@ export function TorBridgeChoice({
   onChange,
   idPrefix,
 }: TorBridgeChoiceProps) {
+  const t = useT();
   return (
     <RadioGroup
       value={value}
@@ -57,7 +64,7 @@ export function TorBridgeChoice({
           <span>
             <span className="font-medium">{TOR_BRIDGE_LABELS[bridge]}</span>{' '}
             <span className="text-muted-foreground">
-              &mdash; {BRIDGE_DESCRIPTIONS[bridge]}
+              &mdash; {t(BRIDGE_DESCRIPTIONS[bridge])}
             </span>
           </span>
         </label>

@@ -1,4 +1,5 @@
 import { wipeBufferSource } from '../crypto/memory';
+import { t } from '../i18n';
 import { chunkAad, decodeChunkContent } from './codec';
 import { CLOCK_SKEW_TOLERANCE_SEC, RELAY_QUERY_MAX_WAIT_MS } from './constants';
 import { buildChunkFilters, parseChunkEvent } from './events';
@@ -18,12 +19,18 @@ export function assertManifestWindow(
 ): void {
   if (nowSec > manifest.expiresAt + CLOCK_SKEW_TOLERANCE_SEC) {
     throw new Error(
-      'This transfer has expired — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
+      t({
+        en: 'This transfer has expired — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
+        es: 'Esta transferencia ha caducado: los relays solo guardan las copias durante 1 hora. Pide al emisor que inicie una nueva transferencia.',
+      }),
     );
   }
   if (manifest.createdAt > nowSec + CLOCK_SKEW_TOLERANCE_SEC) {
     throw new Error(
-      'This transfer appears to be from the future — check that your device clock is set correctly.',
+      t({
+        en: 'This transfer appears to be from the future — check that your device clock is set correctly.',
+        es: 'Esta transferencia parece venir del futuro: comprueba que el reloj de tu dispositivo esté bien configurado.',
+      }),
     );
   }
 }

@@ -1,4 +1,5 @@
 import { wipeBufferSource } from '../crypto/memory';
+import { t } from '../i18n';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { assembleChunks, decompressPayload, sha256 } from './codec';
 import {
@@ -268,7 +269,10 @@ export async function receiveFileLive(
             const hash = uint8ArrayToBase64(await sha256(data));
             if (hash !== manifest.fileHash) {
               throw new Error(
-                'File integrity check failed — the download was corrupted',
+                t({
+                  en: 'File integrity check failed — the download was corrupted',
+                  es: 'Falló la comprobación de integridad del archivo: la descarga llegó dañada',
+                }),
               );
             }
             // The file is complete and verified — hand it over first, then
@@ -366,7 +370,14 @@ export async function receiveFileLive(
         lastSenderN = msg.n;
         lastPeerAt = Date.now();
         if (msg.t === 'cancel') {
-          fail(new Error('The sender cancelled the transfer'));
+          fail(
+            new Error(
+              t({
+                en: 'The sender cancelled the transfer',
+                es: 'El emisor canceló la transferencia',
+              }),
+            ),
+          );
           return;
         }
         upto = msg.upto;
@@ -390,7 +401,10 @@ export async function receiveFileLive(
       if (now / 1000 > (manifest ? manifest.expiresAt : opts.expiresAt)) {
         fail(
           new Error(
-            'The transfer expired before all pieces arrived — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
+            t({
+              en: 'The transfer expired before all pieces arrived — relay copies are only kept for 1 hour. Ask the sender to start a new transfer.',
+              es: 'La transferencia caducó antes de que llegaran todas las piezas: los relays solo guardan las copias durante 1 hora. Pide al emisor que inicie una nueva transferencia.',
+            }),
           ),
         );
         return;
@@ -401,8 +415,14 @@ export async function receiveFileLive(
         fail(
           new Error(
             lastPeerAt > 0
-              ? 'The sender stopped responding. Both pages must stay open until the transfer completes.'
-              : "No response from the sender over the relays. Make sure the sender's page is still open.",
+              ? t({
+                  en: 'The sender stopped responding. Both pages must stay open until the transfer completes.',
+                  es: 'El emisor dejó de responder. Ambas páginas deben seguir abiertas hasta que termine la transferencia.',
+                })
+              : t({
+                  en: "No response from the sender over the relays. Make sure the sender's page is still open.",
+                  es: 'El emisor no responde a través de los relays. Asegúrate de que su página siga abierta.',
+                }),
           ),
         );
         return;

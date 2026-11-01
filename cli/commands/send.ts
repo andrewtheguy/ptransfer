@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import { TOR_WAIT_TIMEOUT_MS } from '@/lib/tor/serve';
 import { defaultCacheDir } from '../cache-dir';
 import { sendByCode } from '../code/send';
@@ -35,7 +36,8 @@ import { UsageError } from '../usage';
  * it; everything else goes to standard error.
  */
 
-const USAGE = `usage: ptransfer send --pin <path>... [options]
+const USAGE: Localized = {
+  en: `usage: ptransfer send --pin <path>... [options]
        ptransfer send --code <path>... [options]
        ptransfer send --tor <path>... [options]
 
@@ -67,7 +69,7 @@ options:
                            finds no direct route, through Tor rather than
                            public Nostr relays; with --code: the fallback
                            alone. The Tor options below say how to reach it
-${TOR_OPTIONS_USAGE}
+${TOR_OPTIONS_USAGE.en}
   -v, --verbose            show diagnostics and the Tor client's own log lines
   -h, --help
 
@@ -77,14 +79,57 @@ environment:
                            or off to keep it in memory for this run alone
                            (default: relay-cache.json in the cache directory
                            above)
-`;
+`,
+  es: `uso: ptransfer send --pin <path>... [opciones]
+     ptransfer send --code <path>... [opciones]
+     ptransfer send --tor <path>... [opciones]
+
+Envía archivos y carpetas. Un archivo se envía tal cual; varios, o una carpeta,
+van en un solo ZIP que conserva la estructura de cada carpeta bajo su nombre.
+
+--pin muestra un PIN corto para leérselo al receptor, y muestra uno nuevo cada
+par de minutos hasta que alguien lo use. Cuando lo haga, verá el nombre y el
+tamaño de lo que se ofrece y un código de confirmación: escribe ese código
+aquí; ninguna oferta de conexión ni ningún byte del archivo sale de este
+proceso hasta que lo hagas. Con --anonymous, toda la negociación pasa por Tor.
+
+--code muestra un código para que el receptor lo pegue en la aplicación web o
+en ptransfer receive --code, y luego lee de la entrada estándar la respuesta
+que te devuelva. El archivo va entonces por una conexión directa; si no se abre
+ninguna, a través de relays públicos de Nostr, o con --anonymous a través de
+Tor, para archivos de hasta 100 MiB. El código vale una hora.
+
+--tor publica un servicio onion y muestra la dirección y la contraseña de un
+solo uso que necesita el receptor. El servicio responde hasta que un receptor
+recibe la transferencia, o durante ${TOR_WAIT_TIMEOUT_MS / 60000} minutos.
+
+opciones:
+  --pin                    lee al receptor un PIN y recibe a cambio su código
+                           de confirmación
+  --code                   entrega al receptor un código y recibe el suyo
+  --tor                    envía a través de un servicio onion de Tor
+  --anonymous              con --pin: lleva la negociación, y un archivo que
+                           no encuentre ruta directa, por Tor en lugar de por
+                           relays públicos de Nostr; con --code: solo el
+                           respaldo. Las opciones de Tor de abajo dicen cómo
+                           llegar a él
+${TOR_OPTIONS_USAGE.es}
+  -v, --verbose            muestra diagnósticos y las líneas de registro del
+                           propio cliente de Tor
+  -h, --help
+
+entorno:
+  PTRANSFER_RELAY_CACHE    dónde guardar lo que las transferencias anteriores
+                           aprendieron de los relays públicos de Nostr: un
+                           directorio propio, u off para guardarlo en memoria
+                           solo durante esta ejecución (por defecto:
+                           relay-cache.json en el directorio de caché de
+                           arriba)
+`,
+};
 
 /** How many left-out paths are named before the rest are only counted. */
 const SKIPPED_SHOWN = 5;
-
-function count(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
 
 export async function send(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -101,22 +146,37 @@ export async function send(argv: string[]): Promise<number> {
     },
   });
   if (values.help) {
-    process.stdout.write(USAGE);
+    process.stdout.write(t(USAGE));
     return 0;
   }
   const modes = [values.pin, values.code, values.tor].filter(Boolean).length;
   if (modes !== 1) {
-    throw new UsageError('Choose one mode: --pin, --code or --tor');
+    throw new UsageError(
+      t({
+        en: 'Choose one mode: --pin, --code or --tor',
+        es: 'Elige un modo: --pin, --code o --tor',
+      }),
+    );
   }
   if (values.anonymous && values.tor) {
-    throw new UsageError('--anonymous goes with --pin or --code');
+    throw new UsageError(
+      t({
+        en: '--anonymous goes with --pin or --code',
+        es: '--anonymous va con --pin o --code',
+      }),
+    );
   }
   if (positionals.length === 0) {
-    throw new UsageError('Give at least one file or folder to send');
+    throw new UsageError(
+      t({
+        en: 'Give at least one file or folder to send',
+        es: 'Indica al menos un archivo o carpeta para enviar',
+      }),
+    );
   }
   const torOptions = torOptionsFrom(values);
   routeDiagnostics(values.verbose);
-  const presenter = createLinePresenter('Sending');
+  const presenter = createLinePresenter(t({ en: 'Sending', es: 'Enviando' }));
   const say = (line: string) => presenter.say(line);
 
   const {
@@ -127,16 +187,26 @@ export async function send(argv: string[]): Promise<number> {
   if (skipped.length > 0) {
     const shown = skipped.slice(0, SKIPPED_SHOWN);
     const more = skipped.length - shown.length;
+    const n = skipped.length;
     say(
-      `Leaving out ${count(skipped.length, 'symbolic link or special file', 'symbolic links or special files')}, which the ZIP does not carry:`,
+      t({
+        en: `Leaving out ${n} ${n === 1 ? 'symbolic link or special file' : 'symbolic links or special files'}, which the ZIP does not carry:`,
+        es: `Se omite${n === 1 ? '' : 'n'} ${n} ${n === 1 ? 'enlace simbólico o archivo especial' : 'enlaces simbólicos o archivos especiales'}, que el ZIP no lleva:`,
+      }),
     );
     for (const path of shown) say(`  ${path}`);
-    if (more > 0) say(`  and ${more} more`);
+    if (more > 0) {
+      say(t({ en: `  and ${more} more`, es: `  y ${more} más` }));
+    }
   }
   // Only the multiple file/folder flow is an archive: a ZIP.
   if (content.archive) {
+    const size = formatFileSize(content.estimatedSize);
     say(
-      `Sending ${count(fileCount, 'file', 'files')} (${formatFileSize(content.estimatedSize)}) as ${content.name}`,
+      t({
+        en: `Sending ${fileCount} ${fileCount === 1 ? 'file' : 'files'} (${size}) as ${content.name}`,
+        es: `Enviando ${fileCount} ${fileCount === 1 ? 'archivo' : 'archivos'} (${size}) como ${content.name}`,
+      }),
     );
   }
   if (values.pin) {

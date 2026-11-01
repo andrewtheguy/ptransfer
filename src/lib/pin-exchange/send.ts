@@ -21,6 +21,7 @@ import {
   startPake,
   wipeBufferSource,
 } from '@/lib/crypto';
+import { t } from '@/lib/i18n';
 import {
   type ClaimPayload,
   type ConfirmPayload,
@@ -357,7 +358,14 @@ export function startPinRendezvous(
     };
 
     timeout = setTimeout(() => {
-      giveUp(new Error('No receiver connected. Please start a new transfer.'));
+      giveUp(
+        new Error(
+          t({
+            en: 'No receiver connected. Please start a new transfer.',
+            es: 'No se conectó ningún receptor. Inicia una nueva transferencia.',
+          }),
+        ),
+      );
     }, PIN_WAIT_TIMEOUT_MS);
 
     cancelPoll = setInterval(() => {
@@ -535,7 +543,11 @@ export function startPinRendezvous(
     try {
       await publishRendezvous();
     } catch (err) {
-      giveUp(err instanceof Error ? err : new Error('Publish failed'));
+      giveUp(
+        err instanceof Error
+          ? err
+          : new Error(t({ en: 'Publish failed', es: 'La publicación falló' })),
+      );
     }
   })();
   scheduleRotation();
@@ -569,7 +581,10 @@ export function startPinRendezvous(
         // read out.
         giveUp(
           new Error(
-            'Could not publish a fresh PIN, and the PINs shown before it no longer work. Please start a new transfer.',
+            t({
+              en: 'Could not publish a fresh PIN, and the PINs shown before it no longer work. Please start a new transfer.',
+              es: 'No se pudo publicar un PIN nuevo, y los PIN mostrados antes ya no funcionan. Inicia una nueva transferencia.',
+            }),
           ),
         );
       } finally {
@@ -686,11 +701,17 @@ export function mismatchedProtocol(
   peer: 'sender' | 'receiver',
   payload: { protocolVersion?: unknown },
 ): string {
-  const theirs =
-    typeof payload.protocolVersion === 'number'
-      ? `protocol ${payload.protocolVersion}`
-      : 'an older protocol';
-  return `The ${peer} is running a pTransfer release on ${theirs}, and this one is on protocol ${PROTOCOL_VERSION}. Update both sides to releases on the same protocol, then start a new transfer.`;
+  const theirs = payload.protocolVersion;
+  if (typeof theirs === 'number') {
+    return t({
+      en: `The ${peer} is running a pTransfer release on protocol ${theirs}, and this one is on protocol ${PROTOCOL_VERSION}. Update both sides to releases on the same protocol, then start a new transfer.`,
+      es: `${peer === 'sender' ? 'El emisor' : 'El receptor'} usa una versión de pTransfer con el protocolo ${theirs}, y esta usa el protocolo ${PROTOCOL_VERSION}. Actualiza ambos lados a versiones con el mismo protocolo y luego inicia una nueva transferencia.`,
+    });
+  }
+  return t({
+    en: `The ${peer} is running a pTransfer release on an older protocol, and this one is on protocol ${PROTOCOL_VERSION}. Update both sides to releases on the same protocol, then start a new transfer.`,
+    es: `${peer === 'sender' ? 'El emisor' : 'El receptor'} usa una versión de pTransfer con un protocolo anterior, y esta usa el protocolo ${PROTOCOL_VERSION}. Actualiza ambos lados a versiones con el mismo protocolo y luego inicia una nueva transferencia.`,
+  });
 }
 
 /**

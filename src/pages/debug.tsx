@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { useT } from '@/i18n/locale-context';
+import type { Localized } from '@/lib/i18n';
 import {
   ANONYMOUS_SIGNALING_RELAYS,
   DEFAULT_RELAYS,
@@ -37,6 +39,7 @@ type RelaySource = 'pool' | 'custom';
  * in — which is how a candidate gets vetted before it becomes a default.
  */
 export function DebugPage() {
+  const t = useT();
   const [source, setSource] = useState<RelaySource>('pool');
   const [input, setInput] = useState('');
   const [results, setResults] = useState<RelayProbeResult[]>([]);
@@ -85,31 +88,43 @@ export function DebugPage() {
   return (
     <SectionContainer className="space-y-6 py-4">
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold">Relay diagnostics</h1>
+        <h1 className="text-2xl font-semibold">
+          {t({ en: 'Relay diagnostics', es: 'Diagnóstico de relays' })}
+        </h1>
         <p className="text-sm text-muted-foreground max-w-2xl">
-          Checks a relay by doing what a transfer does, under a throwaway key.
-          The two methods ask different things of a relay, so each gets its own
-          verdict: PIN Exchange puts the peers in touch over the signaling
-          kinds, while Code Exchange hand-carries its code and needs a relay
-          only for the encrypted control channel its fallback runs over the
-          chunk kind. A relay that merely opens its socket proves neither —
-          plenty accept the connection and then refuse a kind, or acknowledge a
-          write and never serve it back.
+          {t({
+            en: 'Checks a relay by doing what a transfer does, under a throwaway key. The two methods ask different things of a relay, so each gets its own verdict: PIN Exchange puts the peers in touch over the signaling kinds, while Code Exchange hand-carries its code and needs a relay only for the encrypted control channel its fallback runs over the chunk kind. A relay that merely opens its socket proves neither — plenty accept the connection and then refuse a kind, or acknowledge a write and never serve it back.',
+            es: 'Comprueba un relay haciendo lo mismo que una transferencia, con una clave desechable. Los dos métodos piden cosas distintas a un relay, así que cada uno recibe su propio veredicto: el Intercambio por PIN pone en contacto a los dos extremos mediante los kinds de señalización, mientras que el Intercambio por código lleva su código a mano y solo necesita un relay para el canal de control cifrado sobre el que su respaldo funciona con el kind de fragmentos. Un relay que solo abre su socket no demuestra ninguna de las dos cosas: muchos aceptan la conexión y luego rechazan un kind, o confirman una escritura y nunca la devuelven.',
+          })}
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Signaling relays</CardTitle>
+          <CardTitle>
+            {t({ en: 'Signaling relays', es: 'Relays de señalización' })}
+          </CardTitle>
           <CardDescription>
             {source === 'pool'
-              ? `${DEFAULT_RELAYS.length} relays in the clearnet pool`
-              : 'Relays you enter, checked exactly the same way'}
+              ? t({
+                  en: `${DEFAULT_RELAYS.length} relays in the clearnet pool`,
+                  es: `${DEFAULT_RELAYS.length} relays en el grupo de la red abierta`,
+                })
+              : t({
+                  en: 'Relays you enter, checked exactly the same way',
+                  es: 'Los relays que introduzcas, comprobados exactamente igual',
+                })}
             {reported
-              ? ` · ${pinPassed} carry PIN Exchange · ${codePassed} carry Code Exchange`
+              ? t({
+                  en: ` · ${pinPassed} carry PIN Exchange · ${codePassed} carry Code Exchange`,
+                  es: ` · ${pinPassed} admiten el Intercambio por PIN · ${codePassed} admiten el Intercambio por código`,
+                })
               : ''}
             {ranAt && !running
-              ? ` · checked ${ranAt.toLocaleTimeString()}`
+              ? t({
+                  en: ` · checked ${ranAt.toLocaleTimeString()}`,
+                  es: ` · comprobado a las ${ranAt.toLocaleTimeString()}`,
+                })
               : ''}
           </CardDescription>
         </CardHeader>
@@ -120,10 +135,10 @@ export function DebugPage() {
           >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="pool" disabled={running}>
-                Default pool
+                {t({ en: 'Default pool', es: 'Grupo predeterminado' })}
               </TabsTrigger>
               <TabsTrigger value="custom" disabled={running}>
-                Custom relays
+                {t({ en: 'Custom relays', es: 'Relays personalizados' })}
               </TabsTrigger>
             </TabsList>
 
@@ -144,13 +159,31 @@ export function DebugPage() {
                 spellCheck={false}
                 autoComplete="off"
                 className="font-mono text-xs"
-                aria-label="Relay URLs to check"
+                aria-label={t({
+                  en: 'Relay URLs to check',
+                  es: 'URL de los relays que comprobar',
+                })}
               />
               <p className="text-xs text-muted-foreground">
-                One per line, or separated by spaces or commas; the{' '}
-                <code>wss://</code> is optional. Every entry is normalized the
-                way the app normalizes any relay list, so what gets checked is
-                what a transfer would actually connect to.
+                {t({
+                  en: (
+                    <>
+                      One per line, or separated by spaces or commas; the{' '}
+                      <code>wss://</code> is optional. Every entry is normalized
+                      the way the app normalizes any relay list, so what gets
+                      checked is what a transfer would actually connect to.
+                    </>
+                  ),
+                  es: (
+                    <>
+                      Uno por línea, o separados por espacios o comas; el{' '}
+                      <code>wss://</code> es opcional. Cada entrada se normaliza
+                      igual que la aplicación normaliza cualquier lista de
+                      relays, así que lo que se comprueba es exactamente a lo
+                      que se conectaría una transferencia.
+                    </>
+                  ),
+                })}
               </p>
               {parsed.rejected.length > 0 && (
                 <RejectedList rejected={parsed.rejected} />
@@ -165,10 +198,10 @@ export function DebugPage() {
             {running ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Checking relays…
+                {t({ en: 'Checking relays…', es: 'Comprobando relays…' })}
               </>
             ) : (
-              checkLabel(source, relays.length)
+              t(checkLabel(source, relays.length))
             )}
           </Button>
 
@@ -184,10 +217,17 @@ export function DebugPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Anonymous signaling relays</CardTitle>
+          <CardTitle>
+            {t({
+              en: 'Anonymous signaling relays',
+              es: 'Relays de señalización anónimos',
+            })}
+          </CardTitle>
           <CardDescription>
-            {ANONYMOUS_SIGNALING_RELAYS.length} onion services · not checked
-            here
+            {t({
+              en: `${ANONYMOUS_SIGNALING_RELAYS.length} onion services · not checked here`,
+              es: `${ANONYMOUS_SIGNALING_RELAYS.length} servicios onion · no se comprueban aquí`,
+            })}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -204,10 +244,13 @@ export function DebugPage() {
   );
 }
 
-function checkLabel(source: RelaySource, count: number): string {
-  if (source === 'pool') return 'Check relays';
-  if (count === 0) return 'Check relays';
-  return count === 1 ? 'Check 1 relay' : `Check ${count} relays`;
+function checkLabel(source: RelaySource, count: number): Localized<string> {
+  if (source === 'pool' || count === 0) {
+    return { en: 'Check relays', es: 'Comprobar relays' };
+  }
+  return count === 1
+    ? { en: 'Check 1 relay', es: 'Comprobar 1 relay' }
+    : { en: `Check ${count} relays`, es: `Comprobar ${count} relays` };
 }
 
 /**
@@ -232,6 +275,7 @@ function RejectedList({ rejected }: { rejected: RejectedRelayInput[] }) {
 }
 
 function RelayResult({ result }: { result: RelayProbeResult }) {
+  const t = useT();
   const usable = result.pinExchange.passed || result.codeExchange.passed;
   return (
     <li className="space-y-1.5">
@@ -245,7 +289,9 @@ function RelayResult({ result }: { result: RelayProbeResult }) {
           <span className="break-all">{result.url.replace('wss://', '')}</span>
         </span>
         {!usable && (
-          <span className="shrink-0 text-sm text-destructive">unusable</span>
+          <span className="shrink-0 text-sm text-destructive">
+            {t({ en: 'unusable', es: 'inutilizable' })}
+          </span>
         )}
       </div>
       <ul className="pl-6 space-y-0.5 text-xs text-muted-foreground">
@@ -258,6 +304,7 @@ function RelayResult({ result }: { result: RelayProbeResult }) {
 }
 
 function CheckBlock({ check }: { check: RelayCheck }) {
+  const t = useT();
   return (
     <div className="pl-6 space-y-0.5">
       <div className="flex items-baseline justify-between gap-4 text-xs font-medium">
@@ -269,7 +316,12 @@ function CheckBlock({ check }: { check: RelayCheck }) {
               : 'text-destructive'
           }`}
         >
-          {check.passed ? `passes · ${check.rttMs}ms` : 'fails'}
+          {check.passed
+            ? t({
+                en: `passes · ${check.rttMs}ms`,
+                es: `funciona · ${check.rttMs}ms`,
+              })
+            : t({ en: 'fails', es: 'falla' })}
         </span>
       </div>
       <ul className="pl-4 space-y-0.5 text-xs text-muted-foreground">

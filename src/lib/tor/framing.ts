@@ -1,4 +1,5 @@
 import { ENCRYPTED_CHUNK_OVERHEAD, ENCRYPTION_CHUNK_SIZE } from '@/lib/crypto';
+import { t } from '@/lib/i18n';
 import type { OnionStream } from './webtor-api';
 
 /**
@@ -92,16 +93,29 @@ export class TorFramedStream {
     // above; either way it is over the limit and refused before allocating.
     if (length < 0 || length > MAX_FRAME_BYTES) {
       throw new Error(
-        `The peer announced a ${length >>> 0}-byte frame, over the ${MAX_FRAME_BYTES}-byte limit`,
+        t({
+          en: `The peer announced a ${length >>> 0}-byte frame, over the ${MAX_FRAME_BYTES}-byte limit`,
+          es: `El otro extremo anunció una trama de ${length >>> 0} bytes, por encima del límite de ${MAX_FRAME_BYTES} bytes`,
+        }),
       );
     }
     if (kind !== KIND_BINARY && kind !== KIND_TEXT) {
-      throw new Error(`Unknown frame kind ${kind}`);
+      throw new Error(
+        t({
+          en: `Unknown frame kind ${kind}`,
+          es: `Tipo de trama desconocido: ${kind}`,
+        }),
+      );
     }
 
     const payload = await this.readExactly(length);
     if (payload === null) {
-      throw new Error('The peer closed the connection mid-frame');
+      throw new Error(
+        t({
+          en: 'The peer closed the connection mid-frame',
+          es: 'El otro extremo cerró la conexión a mitad de una trama',
+        }),
+      );
     }
     return { isString: kind === KIND_TEXT, data: payload };
   }
@@ -115,10 +129,20 @@ export class TorFramedStream {
   async receiveText(): Promise<string> {
     const message = await this.receive();
     if (message === null) {
-      throw new Error('The peer closed the connection during the handshake');
+      throw new Error(
+        t({
+          en: 'The peer closed the connection during the handshake',
+          es: 'El otro extremo cerró la conexión durante la negociación',
+        }),
+      );
     }
     if (!message.isString) {
-      throw new Error('Expected a handshake message, got a binary frame');
+      throw new Error(
+        t({
+          en: 'Expected a handshake message, got a binary frame',
+          es: 'Se esperaba un mensaje de negociación y llegó una trama binaria',
+        }),
+      );
     }
     return new TextDecoder(undefined, { fatal: true }).decode(message.data);
   }
@@ -164,7 +188,12 @@ export class TorFramedStream {
     if (this.bufferedLength === 0 && !(await this.fill())) return null;
     const header = await this.readExactly(HEADER_LENGTH);
     if (header === null) {
-      throw new Error('The peer closed the connection mid-frame');
+      throw new Error(
+        t({
+          en: 'The peer closed the connection mid-frame',
+          es: 'El otro extremo cerró la conexión a mitad de una trama',
+        }),
+      );
     }
     return header;
   }

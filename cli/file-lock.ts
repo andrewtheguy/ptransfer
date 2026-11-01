@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { type FileHandle, open } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { t } from '@/lib/i18n';
 
 /**
  * An exclusive lock named by a file, for a read-modify-write that other
@@ -96,7 +97,14 @@ function windowsMutex({ dlopen, FFIType, ptr }: Ffi): Platform {
       .digest('hex');
     const name = Buffer.from(`Global\\ptransfer-${digest}\0`, 'utf16le');
     const mutex = CreateMutexW(null, 0, ptr(name));
-    if (!mutex) throw new Error(`Cannot create the lock for ${path}`);
+    if (!mutex) {
+      throw new Error(
+        t({
+          en: `Cannot create the lock for ${path}`,
+          es: `No se puede crear el bloqueo de ${path}`,
+        }),
+      );
+    }
     return {
       tryAcquire: () => {
         const status = WaitForSingleObject(mutex, 0);
@@ -149,7 +157,12 @@ export function fileLock(path: string, waitMs = 5000): FileLock {
 }
 
 function stayedLocked(path: string, waitMs: number): Error {
-  return new Error(`${path} stayed locked for ${waitMs / 1000}s`);
+  return new Error(
+    t({
+      en: `${path} stayed locked for ${waitMs / 1000}s`,
+      es: `${path} siguió bloqueado durante ${waitMs / 1000} s`,
+    }),
+  );
 }
 
 /** Wait for the holder ahead in this process, until `deadline`. */

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { AES_NONCE_LENGTH, AES_TAG_LENGTH } from './constants';
 
 // Minimum encrypted data length: nonce + tag (ciphertext can be empty for empty plaintext)
@@ -57,7 +58,10 @@ export async function decrypt(
 ): Promise<Uint8Array> {
   if (encrypted.length < MIN_ENCRYPTED_LENGTH) {
     throw new Error(
-      `Encrypted data too short: expected at least ${MIN_ENCRYPTED_LENGTH} bytes (nonce + tag)`,
+      t({
+        en: `Encrypted data too short: expected at least ${MIN_ENCRYPTED_LENGTH} bytes (nonce + tag)`,
+        es: `Datos cifrados demasiado cortos: se esperaban al menos ${MIN_ENCRYPTED_LENGTH} bytes (nonce + tag)`,
+      }),
     );
   }
 

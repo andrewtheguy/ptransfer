@@ -1,5 +1,6 @@
 import { SLOW_TRANSPORT_MAX_BYTES } from '../crypto/constants';
 import { wipeBufferSource } from '../crypto/memory';
+import { t } from '../i18n';
 import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import {
   chunkAad,
@@ -116,12 +117,20 @@ export async function sendFileLive(
 
   if (data.length === 0) {
     wipeBufferSource(keyBytes);
-    throw new Error('Cannot send an empty file');
+    throw new Error(
+      t({
+        en: 'Cannot send an empty file',
+        es: 'No se puede enviar un archivo vacío',
+      }),
+    );
   }
   if (data.length > SLOW_TRANSPORT_MAX_BYTES) {
     wipeBufferSource(keyBytes);
     throw new Error(
-      `File too large for Nostr relay transfer (max ${SLOW_TRANSPORT_MAX_BYTES / (1024 * 1024)} MiB)`,
+      t({
+        en: `File too large for Nostr relay transfer (max ${SLOW_TRANSPORT_MAX_BYTES / (1024 * 1024)} MiB)`,
+        es: `Archivo demasiado grande para transferirlo por relays de Nostr (máximo ${SLOW_TRANSPORT_MAX_BYTES / (1024 * 1024)} MiB)`,
+      }),
     );
   }
 
@@ -298,7 +307,10 @@ export async function sendFileLive(
         if (gen[index] >= maxRetransmits) {
           fail(
             new Error(
-              `Piece ${index + 1} of ${total} could not be delivered after ${gen[index]} re-sends — transfer aborted`,
+              t({
+                en: `Piece ${index + 1} of ${total} could not be delivered after ${gen[index]} re-sends — transfer aborted`,
+                es: `No se pudo entregar la pieza ${index + 1} de ${total} tras ${gen[index]} reenvíos: transferencia interrumpida`,
+              }),
             ),
           );
           return;
@@ -372,7 +384,14 @@ export async function sendFileLive(
             succeed();
             return;
           case 'cancel':
-            fail(new Error('The receiver cancelled the transfer'));
+            fail(
+              new Error(
+                t({
+                  en: 'The receiver cancelled the transfer',
+                  es: 'El receptor canceló la transferencia',
+                }),
+              ),
+            );
             return;
         }
         report();
@@ -454,7 +473,10 @@ export async function sendFileLive(
           throwIfCancelled();
           if (placed < 0) {
             throw new Error(
-              `Chunk ${index + 1}/${total} could not be saved to any relay — transfer aborted`,
+              t({
+                en: `Chunk ${index + 1}/${total} could not be saved to any relay — transfer aborted`,
+                es: `No se pudo guardar el fragmento ${index + 1}/${total} en ningún relay: transferencia interrumpida`,
+              }),
             );
           }
           placedPos[index] = placed;
@@ -504,7 +526,10 @@ export async function sendFileLive(
         if (now / 1000 > expiresAt) {
           fail(
             new Error(
-              'The relay copies expired before the receiver finished. Start a new transfer.',
+              t({
+                en: 'The relay copies expired before the receiver finished. Start a new transfer.',
+                es: 'Las copias en los relays caducaron antes de que el receptor terminara. Inicia una nueva transferencia.',
+              }),
             ),
           );
           return;
@@ -516,7 +541,10 @@ export async function sendFileLive(
         ) {
           fail(
             new Error(
-              'The receiver stopped responding. Ask them to keep the page open and try again.',
+              t({
+                en: 'The receiver stopped responding. Ask them to keep the page open and try again.',
+                es: 'El receptor dejó de responder. Pídele que mantenga la página abierta e inténtalo de nuevo.',
+              }),
             ),
           );
         }

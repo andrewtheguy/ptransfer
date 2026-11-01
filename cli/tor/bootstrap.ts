@@ -1,4 +1,5 @@
 import type { ParseArgsOptionsConfig } from 'node:util';
+import { type Localized, t } from '@/lib/i18n';
 import {
   type BridgeSetup,
   bridgeOptions,
@@ -41,7 +42,8 @@ export const TOR_OPTIONS = {
 } as const satisfies ParseArgsOptionsConfig;
 
 /** Their help text, for a command's usage. */
-export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached directory and download a fresh one
+export const TOR_OPTIONS_USAGE: Localized = {
+  en: `  --refresh-directory      ignore the cached directory and download a fresh one
   --cache-dir <path>       where to keep the Tor directory and the relay cache
                            (default: ~/Library/Caches/ptransfer on macOS,
                            %LOCALAPPDATA%\\ptransfer\\cache on Windows,
@@ -55,7 +57,23 @@ export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached d
                            is harder to block
   --bridge-url <ws://...>  a Snowflake bridge to use instead of the public one,
                            with --bridge websocket; requires --bridge-fingerprint
-  --bridge-fingerprint <hex>`;
+  --bridge-fingerprint <hex>`,
+  es: `  --refresh-directory      ignora el directorio en caché y descarga uno nuevo
+  --cache-dir <path>       dónde guardar el directorio de Tor y la caché de
+                           relays (por defecto: ~/Library/Caches/ptransfer en
+                           macOS, %LOCALAPPDATA%\\ptransfer\\cache en Windows,
+                           y si no, $XDG_CACHE_HOME/ptransfer o
+                           ~/.cache/ptransfer)
+  --bridge <websocket|webrtc>
+                           cómo llegar a la red Tor (por defecto ${DEFAULT_TOR_BRIDGE}):
+                           websocket se conecta directamente a un puente
+                           Snowflake fijo y es el más rápido; webrtc pasa por
+                           un proxy voluntario que asigna el broker de
+                           Snowflake, más difícil de bloquear
+  --bridge-url <ws://...>  un puente Snowflake en lugar del público, con
+                           --bridge websocket; requiere --bridge-fingerprint
+  --bridge-fingerprint <hex>`,
+};
 
 export interface TorOptions {
   refreshDirectory: boolean;
@@ -80,20 +98,32 @@ export function torOptionsFrom(values: {
   const bridge = values.bridge ?? DEFAULT_TOR_BRIDGE;
   if (!isTorBridge(bridge)) {
     throw new UsageError(
-      `--bridge must be ${TOR_BRIDGES.join(' or ')}, not ${JSON.stringify(bridge)}`,
+      t({
+        en: `--bridge must be ${TOR_BRIDGES.join(' or ')}, not ${JSON.stringify(bridge)}`,
+        es: `--bridge debe ser ${TOR_BRIDGES.join(' o ')}, no ${JSON.stringify(bridge)}`,
+      }),
     );
   }
   const url = values['bridge-url'];
   const fingerprint = values['bridge-fingerprint'];
   if (Boolean(url) !== Boolean(fingerprint)) {
     throw new UsageError(
-      'Give --bridge-url and --bridge-fingerprint together, or neither',
+      t({
+        en: 'Give --bridge-url and --bridge-fingerprint together, or neither',
+        es: 'Indica --bridge-url y --bridge-fingerprint juntos, o ninguno',
+      }),
     );
   }
   if (bridge === 'webrtc' && url) {
     throw new UsageError(
-      '--bridge-url and --bridge-fingerprint apply to --bridge websocket only: ' +
-        'the webrtc bridge reaches the public bridge through a volunteer proxy',
+      t({
+        en:
+          '--bridge-url and --bridge-fingerprint apply to --bridge websocket only: ' +
+          'the webrtc bridge reaches the public bridge through a volunteer proxy',
+        es:
+          '--bridge-url y --bridge-fingerprint solo valen con --bridge websocket: ' +
+          'el puente webrtc llega al puente público a través de un proxy voluntario',
+      }),
     );
   }
   return {
@@ -126,7 +156,9 @@ export async function bootstrapTor(
 ): Promise<WebtorClient> {
   const { say, onLap = () => {} } = options;
 
-  say('Loading the Tor client...');
+  say(
+    t({ en: 'Loading the Tor client...', es: 'Cargando el cliente de Tor...' }),
+  );
   const { WebtorClient, describeDirectory } = await loadWebtor();
   // Before the directory, so a WebRTC stack that will not load fails the
   // command without first spending a download on it.
@@ -134,19 +166,34 @@ export async function bootstrapTor(
     options.bridge === 'webrtc'
       ? { bridge: 'webrtc', rtcPeerConnection: await loadRtcPeerConnection() }
       : { bridge: 'websocket', custom: options.customBridge };
-  onLap('load the Tor client');
+  onLap(t({ en: 'load the Tor client', es: 'cargar el cliente de Tor' }));
 
   const store = openDirectoryStore(options.cacheDir);
   let seed = options.refreshDirectory
     ? undefined
     : await store.load(describeDirectory, (reason) =>
-        say(`Ignoring the cached directory: ${reason}`),
+        say(
+          t({
+            en: `Ignoring the cached directory: ${reason}`,
+            es: `Se ignora el directorio en caché: ${reason}`,
+          }),
+        ),
       );
   let directory: DirectoryDescription | undefined;
   if (seed) {
     directory = describeDirectory(seed);
-    say(`Using the cached directory in ${store.path}`);
-    onLap('read the cached directory');
+    say(
+      t({
+        en: `Using the cached directory in ${store.path}`,
+        es: `Usando el directorio en caché de ${store.path}`,
+      }),
+    );
+    onLap(
+      t({
+        en: 'read the cached directory',
+        es: 'leer el directorio en caché',
+      }),
+    );
   } else {
     try {
       const fresh = await fetchDirectorySeed({ onProgress: say });
@@ -158,34 +205,66 @@ export async function bootstrapTor(
       // The fast path is a convenience: without a seed the client downloads
       // the directory through the bridge itself, which is what a tab does.
       seed = undefined;
+      const reason = error instanceof Error ? error.message : String(error);
       say(
-        `Could not download the directory from the authorities: ${error instanceof Error ? error.message : String(error)}`,
+        t({
+          en: `Could not download the directory from the authorities: ${reason}`,
+          es: `No se pudo descargar el directorio de las autoridades: ${reason}`,
+        }),
       );
       say(
-        'The client will download it through the bridge instead; expect minutes',
+        t({
+          en: 'The client will download it through the bridge instead; expect minutes',
+          es: 'El cliente lo descargará a través del puente; tardará unos minutos',
+        }),
       );
     }
-    onLap('download the directory');
+    onLap(t({ en: 'download the directory', es: 'descargar el directorio' }));
     if (seed) {
       const kept = await store.save(seed, (reason) =>
-        say(`Could not keep the directory: ${reason}`),
+        say(
+          t({
+            en: `Could not keep the directory: ${reason}`,
+            es: `No se pudo guardar el directorio: ${reason}`,
+          }),
+        ),
       );
-      if (kept) say(`Kept the directory in ${store.path}`);
+      if (kept) {
+        say(
+          t({
+            en: `Kept the directory in ${store.path}`,
+            es: `Directorio guardado en ${store.path}`,
+          }),
+        );
+      }
     }
   }
 
   // The time period places the HSDir ring: peers more than one period apart
   // cannot reach each other, and nothing else in either log says so.
   if (directory) {
+    const after = directory.validAfter.toISOString();
+    const until = directory.validUntil.toISOString();
     say(
-      `Directory: consensus valid ${directory.validAfter.toISOString()} to ` +
-        `${directory.validUntil.toISOString()}, onion time period ` +
-        `${directory.timePeriod}`,
+      t({
+        en:
+          `Directory: consensus valid ${after} to ` +
+          `${until}, onion time period ` +
+          `${directory.timePeriod}`,
+        es:
+          `Directorio: consenso válido de ${after} a ` +
+          `${until}, periodo de tiempo onion ` +
+          `${directory.timePeriod}`,
+      }),
     );
   }
 
+  const bridgeLabel = TOR_BRIDGE_LABELS[bridge.bridge];
   say(
-    `Bootstrapping Tor over the ${TOR_BRIDGE_LABELS[bridge.bridge]} bridge...`,
+    t({
+      en: `Bootstrapping Tor over the ${bridgeLabel} bridge...`,
+      es: `Iniciando Tor a través del puente ${bridgeLabel}...`,
+    }),
   );
   const client = await WebtorClient.create({
     ...bridgeOptions(bridge),
@@ -200,7 +279,7 @@ export async function bootstrapTor(
     // back, so nothing here rewrites what it just read.
     onDirectoryChange: (fresh) => void store.save(fresh),
   });
-  onLap('bootstrap');
+  onLap(t({ en: 'bootstrap', es: 'iniciar Tor' }));
   return client;
 }
 
@@ -211,7 +290,10 @@ export async function closeTor(client: WebtorClient | null): Promise<void> {
     await client.close();
   } catch (error) {
     process.stderr.write(
-      `Failed to close the Tor client: ${error instanceof Error ? error.message : String(error)}\n`,
+      t({
+        en: `Failed to close the Tor client: ${error instanceof Error ? error.message : String(error)}\n`,
+        es: `No se pudo cerrar el cliente de Tor: ${error instanceof Error ? error.message : String(error)}\n`,
+      }),
     );
   }
 }

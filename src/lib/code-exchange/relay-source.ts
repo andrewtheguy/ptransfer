@@ -1,5 +1,6 @@
 import { SLOW_TRANSPORT_MAX_BYTES } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import { NostrFileCancelledError } from '@/lib/nostr-file';
 import type { TransferSource } from '@/lib/transfer-source';
 
@@ -21,8 +22,12 @@ export async function readSourceFully(
       if (value) {
         total += value.length;
         if (total > SLOW_TRANSPORT_MAX_BYTES) {
+          const limit = formatFileSize(SLOW_TRANSPORT_MAX_BYTES);
           throw new Error(
-            `File exceeds ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)} Nostr relay limit`,
+            t({
+              en: `File exceeds ${limit} Nostr relay limit`,
+              es: `El archivo supera el límite de ${limit} de los relays de Nostr`,
+            }),
           );
         }
         parts.push(value);

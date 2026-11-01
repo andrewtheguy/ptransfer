@@ -1,5 +1,6 @@
 import { createDataChannelDuplex } from '@/lib/data-channel';
 import type { DuplexChannel } from '@/lib/duplex-channel';
+import { t } from '@/lib/i18n';
 
 export type WebRTCSignal =
   | { type: 'offer'; sdp: string }
@@ -119,7 +120,12 @@ export class WebRTCConnection {
     await this.pc.setLocalDescription(offer);
     console.log('Local description set. Sending offer signal.');
     if (!offer.sdp) {
-      throw new Error('Failed to create offer: SDP is missing');
+      throw new Error(
+        t({
+          en: 'Failed to create offer: SDP is missing',
+          es: 'No se pudo crear la oferta: falta el SDP',
+        }),
+      );
     }
     this.onSignal({ type: 'offer', sdp: offer.sdp });
   }
@@ -129,7 +135,12 @@ export class WebRTCConnection {
     try {
       if (signal.type === 'offer') {
         if (!signal.sdp) {
-          throw new Error('Invalid offer signal: SDP is missing');
+          throw new Error(
+            t({
+              en: 'Invalid offer signal: SDP is missing',
+              es: 'Señal de oferta no válida: falta el SDP',
+            }),
+          );
         }
         console.log('Setting remote offer...');
         await this.pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
@@ -140,12 +151,22 @@ export class WebRTCConnection {
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
         if (!answer.sdp) {
-          throw new Error('Failed to create answer: SDP is missing');
+          throw new Error(
+            t({
+              en: 'Failed to create answer: SDP is missing',
+              es: 'No se pudo crear la respuesta: falta el SDP',
+            }),
+          );
         }
         this.onSignal({ type: 'answer', sdp: answer.sdp });
       } else if (signal.type === 'answer') {
         if (!signal.sdp) {
-          throw new Error('Invalid answer signal: SDP is missing');
+          throw new Error(
+            t({
+              en: 'Invalid answer signal: SDP is missing',
+              es: 'Señal de respuesta no válida: falta el SDP',
+            }),
+          );
         }
         console.log('Setting remote answer...');
         await this.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
@@ -228,7 +249,12 @@ export class WebRTCConnection {
           this.pc.connectionState === 'closed'
         ) {
           settleReject(
-            new Error('Connection failed while gathering network info'),
+            new Error(
+              t({
+                en: 'Connection failed while gathering network info',
+                es: 'La conexión falló al recopilar la información de red',
+              }),
+            ),
           );
           return;
         }

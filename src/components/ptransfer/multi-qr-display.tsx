@@ -8,6 +8,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
+import { useLocale, useT } from '@/i18n/locale-context';
 import { buildChunkUrl, chunkPayload } from '@/lib/chunk-utils';
 import { generateMutualClipboardData } from '@/lib/code-signaling';
 import { generateTextQRCode } from '@/lib/qr-utils';
@@ -37,11 +38,13 @@ export function MultiQRDisplay({
   clipboardData,
   showCopyButton = true,
 }: MultiQRDisplayProps) {
+  const t = useT();
+  const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const [qrImageUrls, setQrImageUrls] = useState<Map<number, string>>(
     new Map(),
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
   // Reveal the read-only text box when the browser can't copy, or on request.
   const [showText, setShowText] = useState(!clipboardWriteSupported);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -57,16 +60,16 @@ export function MultiQRDisplay({
     const baseUrl = window.location.origin;
     const chunks = chunkPayload(data);
     return chunks.map((chunk, i) => ({
-      url: buildChunkUrl(baseUrl, chunk),
+      url: buildChunkUrl(baseUrl, chunk, locale),
       index: i,
       total: chunks.length,
     }));
-  }, [data]);
+  }, [data, locale]);
 
   useEffect(() => {
     if (chunkInfos.length === 0) {
       setQrImageUrls(new Map());
-      setError(null);
+      setError(false);
       return;
     }
 
@@ -75,7 +78,7 @@ export function MultiQRDisplay({
     const measuredWidth = containerRef.current?.clientWidth ?? 0;
     const qrWidth = Math.max(measuredWidth, MIN_QR_SIZE);
 
-    setError(null);
+    setError(false);
     setQrImageUrls(new Map());
 
     void (async () => {
@@ -103,7 +106,7 @@ export function MultiQRDisplay({
 
       if (firstError !== null) {
         console.error('Failed to generate QR codes:', firstError);
-        setError('Failed to generate QR codes');
+        setError(true);
         setQrImageUrls(new Map());
         return;
       }
@@ -145,7 +148,10 @@ export function MultiQRDisplay({
     return (
       <div className="flex items-center justify-center text-destructive text-sm py-8">
         <AlertCircle className="h-4 w-4 mr-2" />
-        {error}
+        {t({
+          en: 'Failed to generate QR codes',
+          es: 'No se pudieron generar los códigos QR',
+        })}
       </div>
     );
   }
@@ -155,8 +161,10 @@ export function MultiQRDisplay({
   return (
     <div className="flex flex-col items-center space-y-4">
       <div className="text-xs text-muted-foreground">
-        {data.length.toLocaleString()} bytes &bull; {chunkInfos.length} QR code
-        {chunkInfos.length !== 1 ? 's' : ''}
+        {t({
+          en: `${data.length.toLocaleString()} bytes • ${chunkInfos.length} QR code${chunkInfos.length !== 1 ? 's' : ''}`,
+          es: `${data.length.toLocaleString()} bytes • ${chunkInfos.length} ${chunkInfos.length !== 1 ? 'códigos' : 'código'} QR`,
+        })}
       </div>
 
       <div
@@ -172,7 +180,10 @@ export function MultiQRDisplay({
                 {qrImageUrls.has(info.index) ? (
                   <img
                     src={qrImageUrls.get(info.index)}
-                    alt={`QR Code ${info.index + 1} of ${info.total}`}
+                    alt={t({
+                      en: `QR Code ${info.index + 1} of ${info.total}`,
+                      es: `Código QR ${info.index + 1} de ${info.total}`,
+                    })}
                     className="block w-full h-auto"
                   />
                 ) : (
@@ -184,7 +195,10 @@ export function MultiQRDisplay({
             </div>
             {info.total > 1 && (
               <p className="text-xs text-muted-foreground font-medium">
-                {info.index + 1} of {info.total}
+                {t({
+                  en: `${info.index + 1} of ${info.total}`,
+                  es: `${info.index + 1} de ${info.total}`,
+                })}
               </p>
             )}
           </div>
@@ -203,12 +217,12 @@ export function MultiQRDisplay({
               {copied ? (
                 <>
                   <Check className="h-3 w-3 mr-1 text-green-500" />
-                  Copied!
+                  {t({ en: 'Copied!', es: '¡Copiado!' })}
                 </>
               ) : (
                 <>
                   <Copy className="h-3 w-3 mr-1" />
-                  Copy Data
+                  {t({ en: 'Copy Data', es: 'Copiar datos' })}
                 </>
               )}
             </Button>
@@ -221,8 +235,14 @@ export function MultiQRDisplay({
           >
             <CollapsibleTrigger className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
               {clipboardWriteSupported
-                ? "Can't copy? Show text to copy manually"
-                : 'Show text to copy manually'}
+                ? t({
+                    en: "Can't copy? Show text to copy manually",
+                    es: '¿No puedes copiar? Mostrar el texto para copiarlo a mano',
+                  })
+                : t({
+                    en: 'Show text to copy manually',
+                    es: 'Mostrar el texto para copiarlo a mano',
+                  })}
             </CollapsibleTrigger>
             <CollapsibleContent className="w-full space-y-1">
               <Textarea
@@ -232,12 +252,17 @@ export function MultiQRDisplay({
                 onClick={handleTextSelect}
                 rows={4}
                 spellCheck={false}
-                aria-label="Connection data to copy"
+                aria-label={t({
+                  en: 'Connection data to copy',
+                  es: 'Datos de conexión para copiar',
+                })}
                 className="w-full font-mono text-xs break-all resize-none"
               />
               <p className="text-xs text-muted-foreground text-center">
-                Select all the text above, copy it, and send it back to the
-                receiver.
+                {t({
+                  en: 'Select all the text above, copy it, and send it back to the receiver.',
+                  es: 'Selecciona todo el texto de arriba, cópialo y envíaselo al receptor.',
+                })}
               </p>
             </CollapsibleContent>
           </Collapsible>

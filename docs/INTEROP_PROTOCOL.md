@@ -147,6 +147,26 @@ filter, never as an identifier.
 - `salt`: 16 random bytes (`SALT_LENGTH`), public, carried in the rendezvous
   event's `s` tag as base64. It is the HKDF salt for every session derivation.
 
+### 1.4 Receive links
+
+A sender may hand its value over as a link to the receiving page instead of
+as bare text — a QR code a phone camera opens, or a URL the receiver pastes.
+The value travels in the fragment, which a browser never sends to a server:
+
+| Link | Form |
+| --- | --- |
+| PIN | `{origin}/receive#p={PIN}` |
+| Onion address ([TOR_TRANSPORT.md](TOR_TRANSPORT.md)) | `{origin}/receive#o={address}` |
+| Code Exchange offer chunk ([ARCHITECTURE.md](ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts)) | `{origin}/r#{base64url chunk}` |
+
+- **Language**: a sender whose page is not in English appends `&l={locale}`
+  to the fragment — `l=es` for Spanish — and the receiving page opens in that
+  language. An English sender appends nothing.
+- **Parsing**: the value is the fragment up to its first `&`; `&` is outside
+  every value's alphabet. A receiver MUST accept a link with or without
+  `&l=…`, and MUST ignore a language it does not know. Anything that reads a
+  pasted link — the receive page, the CLI — parses it this way.
+
 ---
 
 ## 2. SPAKE2

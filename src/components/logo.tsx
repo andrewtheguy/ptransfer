@@ -1,14 +1,17 @@
+import { useT } from '@/i18n/locale-context';
+
 interface LogoProps {
   className?: string;
 }
 
 export function Logo({ className = 'h-10 w-10' }: LogoProps) {
+  const t = useT();
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       className={className}
-      aria-label="pTransfer logo"
+      aria-label={t({ en: 'pTransfer logo', es: 'Logotipo de pTransfer' })}
     >
       {/* Folder */}
       <path

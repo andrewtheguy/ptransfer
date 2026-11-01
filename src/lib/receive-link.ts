@@ -1,4 +1,6 @@
 import { isValidPin } from './crypto';
+import { DEFAULT_LOCALE, type Locale } from './i18n';
+import { fragmentValue, withLinkLocale } from './link-locale';
 import { parseOnionAddress } from './tor/onion-address';
 
 /**
@@ -8,7 +10,9 @@ import { parseOnionAddress } from './tor/onion-address';
  * Every mode's QR points at the same screen: the receiver scans with whatever
  * camera app they have, land on /receive with the value already in the box, and
  * only have to press Receive. The value it carries — a PIN or an onion address
- * — travels in the fragment, which browsers never send to a server.
+ * — travels in the fragment, which browsers never send to a server. A sender
+ * reading another language than English adds it after the value
+ * (`link-locale.ts`), so the receiver's page opens in it.
  */
 const RECEIVE_LINK_PATH = '/receive';
 
@@ -26,10 +30,15 @@ const PIN_FRAGMENT_PREFIX = 'p=';
 const ONION_FRAGMENT_PREFIX = 'o=';
 
 /**
- * Build the link a PIN QR encodes: {origin}/receive#p={pin}
+ * Build the link a PIN QR encodes: {origin}/receive#p={pin}, with `&l=es`
+ * after it for a Spanish sender.
  */
-export function buildPinUrl(baseUrl: string, pin: string): string {
-  return buildReceiveUrl(baseUrl, PIN_FRAGMENT_PREFIX, pin);
+export function buildPinUrl(
+  baseUrl: string,
+  pin: string,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  return buildReceiveUrl(baseUrl, PIN_FRAGMENT_PREFIX, pin, locale);
 }
 
 /**
@@ -38,17 +47,25 @@ export function buildPinUrl(baseUrl: string, pin: string): string {
  * The one-time password is not in the link. The receiver enters it separately
  * after the address has been filled in.
  */
-export function buildOnionUrl(baseUrl: string, address: string): string {
-  return buildReceiveUrl(baseUrl, ONION_FRAGMENT_PREFIX, address);
+export function buildOnionUrl(
+  baseUrl: string,
+  address: string,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  return buildReceiveUrl(baseUrl, ONION_FRAGMENT_PREFIX, address, locale);
 }
 
 function buildReceiveUrl(
   baseUrl: string,
   prefix: string,
   value: string,
+  locale: Locale,
 ): string {
   const base = baseUrl.replace(/\/$/, '');
-  return `${base}${RECEIVE_LINK_PATH}#${prefix}${value}`;
+  return withLinkLocale(
+    `${base}${RECEIVE_LINK_PATH}#${prefix}${value}`,
+    locale,
+  );
 }
 
 /**
@@ -84,6 +101,7 @@ function extractFragmentValue(text: string, prefix: string): string | null {
     return null;
   }
 
-  if (!hash.startsWith(`#${prefix}`)) return null;
-  return hash.slice(1 + prefix.length);
+  const value = fragmentValue(hash);
+  if (!value.startsWith(prefix)) return null;
+  return value.slice(prefix.length);
 }

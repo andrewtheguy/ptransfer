@@ -8,6 +8,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
+import { useT } from '@/i18n/locale-context';
 import { generateMutualClipboardData } from '@/lib/code-signaling';
 import { generateBinaryQRCode } from '@/lib/qr-utils';
 
@@ -32,10 +33,11 @@ export function QRDisplay({
   showCopyButton = true,
   showSize = true,
 }: QRDisplayProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
   // Reveal the read-only text box when the browser can't copy, or on request.
   const [showText, setShowText] = useState(!clipboardWriteSupported);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,7 +58,7 @@ export function QRDisplay({
     const qrWidth = Math.max(measuredWidth, MIN_QR_SIZE);
 
     setIsGenerating(true);
-    setError(null);
+    setError(false);
 
     void (async () => {
       try {
@@ -68,7 +70,7 @@ export function QRDisplay({
         );
       } catch (err) {
         console.error('Failed to generate QR code:', err);
-        setError('Failed to generate QR code');
+        setError(true);
         setQrImageUrl(null);
       } finally {
         setIsGenerating(false);
@@ -118,12 +120,15 @@ export function QRDisplay({
           ) : error ? (
             <div className="text-destructive text-sm flex items-center">
               <AlertCircle className="h-4 w-4 mr-2" />
-              {error}
+              {t({
+                en: 'Failed to generate QR code',
+                es: 'No se pudo generar el código QR',
+              })}
             </div>
           ) : qrImageUrl ? (
             <img
               src={qrImageUrl}
-              alt="QR Code"
+              alt={t({ en: 'QR Code', es: 'Código QR' })}
               className="block w-full h-auto"
             />
           ) : null}
@@ -132,7 +137,10 @@ export function QRDisplay({
 
       {showSize && (
         <div className="text-xs text-muted-foreground">
-          {data.length.toLocaleString()} bytes (compressed)
+          {t({
+            en: `${data.length.toLocaleString()} bytes (compressed)`,
+            es: `${data.length.toLocaleString()} bytes (comprimido)`,
+          })}
         </div>
       )}
 
@@ -148,12 +156,12 @@ export function QRDisplay({
               {copied ? (
                 <>
                   <Check className="h-3 w-3 mr-1 text-green-500" />
-                  Copied!
+                  {t({ en: 'Copied!', es: '¡Copiado!' })}
                 </>
               ) : (
                 <>
                   <Copy className="h-3 w-3 mr-1" />
-                  Copy Data
+                  {t({ en: 'Copy Data', es: 'Copiar datos' })}
                 </>
               )}
             </Button>
@@ -166,8 +174,14 @@ export function QRDisplay({
           >
             <CollapsibleTrigger className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
               {clipboardWriteSupported
-                ? "Can't copy? Show text to copy manually"
-                : 'Show text to copy manually'}
+                ? t({
+                    en: "Can't copy? Show text to copy manually",
+                    es: '¿No puedes copiar? Mostrar el texto para copiarlo a mano',
+                  })
+                : t({
+                    en: 'Show text to copy manually',
+                    es: 'Mostrar el texto para copiarlo a mano',
+                  })}
             </CollapsibleTrigger>
             <CollapsibleContent className="w-full space-y-1">
               <Textarea
@@ -177,12 +191,17 @@ export function QRDisplay({
                 onClick={handleTextSelect}
                 rows={4}
                 spellCheck={false}
-                aria-label="Response data to copy"
+                aria-label={t({
+                  en: 'Response data to copy',
+                  es: 'Datos de respuesta para copiar',
+                })}
                 className="w-full font-mono text-xs break-all resize-none"
               />
               <p className="text-xs text-muted-foreground text-center">
-                Select all the text above, copy it, and send it back to the
-                sender.
+                {t({
+                  en: 'Select all the text above, copy it, and send it back to the sender.',
+                  es: 'Selecciona todo el texto de arriba, cópialo y envíaselo de vuelta al emisor.',
+                })}
               </p>
             </CollapsibleContent>
           </Collapsible>

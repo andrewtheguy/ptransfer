@@ -13,6 +13,7 @@ import {
   getArchiveBaseName,
   type ZipEntry,
 } from '@/lib/folder-utils';
+import { t } from '@/lib/i18n';
 import type { TransferSource } from '@/lib/transfer-source';
 import {
   chosenFileStream,
@@ -80,11 +81,21 @@ async function collectEntries(
   for (const path of paths) {
     const info = await statPath(path);
     const name = basename(resolve(path));
-    if (name === '') throw new Error('The root folder cannot be sent');
+    if (name === '') {
+      throw new Error(
+        t({
+          en: 'The root folder cannot be sent',
+          es: 'No se puede enviar la carpeta raíz',
+        }),
+      );
+    }
     const clash = named.get(name);
     if (clash !== undefined) {
       throw new Error(
-        `${clash} and ${path} would both be ${name} in the archive; rename one, or send them separately`,
+        t({
+          en: `${clash} and ${path} would both be ${name} in the archive; rename one, or send them separately`,
+          es: `${clash} y ${path} serían ambos ${name} en el archivo comprimido; cambia el nombre de uno, o envíalos por separado`,
+        }),
       );
     }
     named.set(name, path);
@@ -93,11 +104,22 @@ async function collectEntries(
     } else if (info.isDirectory()) {
       await walk(path, await realPathOf(path), name, entries, skipped);
     } else {
-      throw new Error(`Not a regular file or folder: ${path}`);
+      throw new Error(
+        t({
+          en: `Not a regular file or folder: ${path}`,
+          es: `No es un archivo normal ni una carpeta: ${path}`,
+        }),
+      );
     }
   }
   if (entries.length === 0) {
-    throw new Error(`Nothing to send: ${paths.join(', ')} holds no files`);
+    const list = paths.join(', ');
+    throw new Error(
+      t({
+        en: `Nothing to send: ${list} holds no files`,
+        es: `No hay nada que enviar: ${list} no contiene archivos`,
+      }),
+    );
   }
   return { entries, skipped };
 }
@@ -120,7 +142,12 @@ async function walk(
   try {
     children = await readdir(folder, { withFileTypes: true });
   } catch {
-    throw new Error(`Cannot read the folder ${folder}`);
+    throw new Error(
+      t({
+        en: `Cannot read the folder ${folder}`,
+        es: `No se puede leer la carpeta ${folder}`,
+      }),
+    );
   }
   // By code point, not locale: the same tree packs the same way everywhere.
   children.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -155,7 +182,7 @@ async function namedEntry(
   try {
     await (await open(path, 'r')).close();
   } catch {
-    throw new Error(`Cannot read ${path}`);
+    throw cannotRead(path);
   }
   return diskEntry(path, inArchive, info, true);
 }
@@ -176,13 +203,13 @@ async function walkedEntry(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ELOOP' || code === 'ENOENT') throw changedWhileRead(path);
-    throw new Error(`Cannot read ${path}`);
+    throw cannotRead(path);
   }
   let info: Stats;
   try {
     info = await handle.stat();
   } catch {
-    throw new Error(`Cannot read ${path}`);
+    throw cannotRead(path);
   } finally {
     await handle.close();
   }
@@ -217,12 +244,23 @@ async function realPathOf(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch {
-    throw new Error(`Cannot read ${path}`);
+    throw cannotRead(path);
   }
 }
 
 function changedWhileRead(path: string): Error {
-  return new Error(`${path} changed while its folder was read; send it again`);
+  return new Error(
+    t({
+      en: `${path} changed while its folder was read; send it again`,
+      es: `${path} cambió mientras se leía su carpeta; vuelve a enviarlo`,
+    }),
+  );
+}
+
+function cannotRead(path: string): Error {
+  return new Error(
+    t({ en: `Cannot read ${path}`, es: `No se puede leer ${path}` }),
+  );
 }
 
 async function statPath(path: string): Promise<Stats> {
@@ -230,8 +268,13 @@ async function statPath(path: string): Promise<Stats> {
     return await stat(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`No such file or folder: ${path}`);
+      throw new Error(
+        t({
+          en: `No such file or folder: ${path}`,
+          es: `No existe el archivo o la carpeta: ${path}`,
+        }),
+      );
     }
-    throw new Error(`Cannot read ${path}`);
+    throw cannotRead(path);
   }
 }

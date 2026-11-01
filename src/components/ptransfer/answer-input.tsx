@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { useT } from '@/i18n/locale-context';
 import {
   isValidBinaryPayload,
   parseClipboardPayload,
@@ -20,13 +21,22 @@ interface AnswerInputProps {
  * scanned or pasted.
  */
 export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
+  const t = useT();
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<'scan' | 'paste'>('scan');
   // Behind a click gate so the camera isn't running before the receiver has
   // anything to show.
   const [scanStarted, setScanStarted] = useState(false);
-  const scanActionVerb = isMobileDevice() ? 'Tap' : 'Click';
+  const scanHint = isMobileDevice()
+    ? t({
+        en: 'Tap anywhere in this area to start the camera scanner.',
+        es: 'Toca cualquier parte de esta área para iniciar el escáner de la cámara.',
+      })
+    : t({
+        en: 'Click anywhere in this area to start the camera scanner.',
+        es: 'Haz clic en cualquier parte de esta área para iniciar el escáner de la cámara.',
+      });
 
   const handlePaste = useCallback(async () => {
     try {
@@ -35,31 +45,46 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
       setError(null);
     } catch (err) {
       console.error('Failed to paste:', err);
-      setError('Failed to read clipboard');
+      setError(
+        t({
+          en: 'Failed to read clipboard',
+          es: 'No se pudo leer el portapapeles',
+        }),
+      );
     }
-  }, []);
+  }, [t]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed) {
-      setError('Please paste the data');
+      setError(t({ en: 'Please paste the data', es: 'Pega los datos' }));
       return;
     }
 
     const binary = parseClipboardPayload(trimmed);
     if (!binary) {
-      setError('Invalid format. Make sure you copied the complete text.');
+      setError(
+        t({
+          en: 'Invalid format. Make sure you copied the complete text.',
+          es: 'Formato no válido. Asegúrate de haber copiado el texto completo.',
+        }),
+      );
       return;
     }
 
     if (!isValidBinaryPayload(binary)) {
-      setError('Invalid or unsupported payload format');
+      setError(
+        t({
+          en: 'Invalid or unsupported payload format',
+          es: 'Formato de datos no válido o no compatible',
+        }),
+      );
       return;
     }
 
     setError(null);
     onSubmit(binary);
-  }, [value, onSubmit]);
+  }, [value, onSubmit, t]);
 
   const handleScanSuccess = useCallback(
     (result: ScanResult) => {
@@ -71,11 +96,9 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
     [onSubmit],
   );
 
+  // The scanner reports only the camera failing, not transient scan failures.
   const handleScanError = useCallback((err: string) => {
-    // Only show persistent errors, not transient scan failures
-    if (err.includes('denied') || err.includes('unavailable')) {
-      setError(err);
-    }
+    setError(err);
   }, []);
 
   const handleStartScan = useCallback(() => {
@@ -100,11 +123,11 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="scan" disabled={disabled}>
             <Camera className="h-4 w-4 mr-2" />
-            Scan
+            {t({ en: 'Scan', es: 'Escanear' })}
           </TabsTrigger>
           <TabsTrigger value="paste" disabled={disabled}>
             <ClipboardPaste className="h-4 w-4 mr-2" />
-            Paste
+            {t({ en: 'Paste', es: 'Pegar' })}
           </TabsTrigger>
         </TabsList>
 
@@ -124,10 +147,10 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
               className="w-full rounded-lg border border-dashed p-6 text-center cursor-pointer transition-colors hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Camera className="h-6 w-6 mx-auto mb-2" />
-              <p className="text-base font-medium">Start scanning</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {`${scanActionVerb} anywhere in this area to start the camera scanner.`}
+              <p className="text-base font-medium">
+                {t({ en: 'Start scanning', es: 'Empezar a escanear' })}
               </p>
+              <p className="text-sm text-muted-foreground mt-1">{scanHint}</p>
             </button>
           )}
         </TabsContent>
@@ -140,9 +163,15 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
                 setValue(e.target.value);
                 setError(null);
               }}
-              placeholder="Paste the receiver's response here..."
+              placeholder={t({
+                en: "Paste the receiver's response here...",
+                es: 'Pega aquí la respuesta del receptor...',
+              })}
               className="min-h-[100px] font-mono text-xs"
-              aria-label="Receiver's response code"
+              aria-label={t({
+                en: "Receiver's response code",
+                es: 'Código de respuesta del receptor',
+              })}
               disabled={disabled}
             />
 
@@ -163,7 +192,7 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
               className="flex-1"
             >
               <ClipboardPaste className="h-4 w-4 mr-2" />
-              Paste from Clipboard
+              {t({ en: 'Paste from Clipboard', es: 'Pegar del portapapeles' })}
             </Button>
 
             <Button
@@ -172,7 +201,7 @@ export function AnswerInput({ onSubmit, disabled }: AnswerInputProps) {
               disabled={disabled || !value.trim()}
               className="flex-1"
             >
-              Submit
+              {t({ en: 'Submit', es: 'Confirmar' })}
             </Button>
           </div>
         </TabsContent>

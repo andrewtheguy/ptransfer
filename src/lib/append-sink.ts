@@ -11,6 +11,8 @@
  * API, so the transfer protocol in `p2p-transfer.ts` runs on either.
  */
 
+import { t } from '@/lib/i18n';
+
 /** Sequential sink for received payloads of unknown final size. */
 export interface AppendSink {
   /** Append bytes at the end of the payload. Rejects on storage failure. */
@@ -52,7 +54,12 @@ export function createInflatingAppendSink(
       if (done) return;
       outputBytes += value.length;
       if (outputBytes > maxOutputBytes) {
-        throw new Error('Decompressed transfer exceeds the size limit');
+        throw new Error(
+          t({
+            en: 'Decompressed transfer exceeds the size limit',
+            es: 'La transferencia descomprimida supera el límite de tamaño',
+          }),
+        );
       }
       await inner.append(value);
     }

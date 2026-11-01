@@ -13,4 +13,4 @@
  * there already fails closed, as its protocol document explains. The Tor
  * handshake's own `TOR_HANDSHAKE_VERSION` is sent and checked beside it.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;

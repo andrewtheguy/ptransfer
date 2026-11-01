@@ -1,5 +1,6 @@
 import { p256 } from '@noble/curves/nist.js';
 import { bytesToNumberBE, numberToBytesBE } from '@noble/curves/utils.js';
+import { t } from '../i18n';
 import { wipeBufferSource } from './memory';
 
 /**
@@ -112,7 +113,12 @@ export async function derivePakeSecret(pin: string): Promise<Uint8Array> {
 function readPakeScalar(pakeSecret: Uint8Array, name: string): bigint {
   const value = bytesToNumberBE(pakeSecret);
   if (value <= 0n || value >= Point.Fn.ORDER) {
-    throw new Error(`Invalid ${name}: not a reduced nonzero group scalar`);
+    throw new Error(
+      t({
+        en: `Invalid ${name}: not a reduced nonzero group scalar`,
+        es: `${name} no válido: no es un escalar de grupo reducido distinto de cero`,
+      }),
+    );
   }
   return value;
 }
@@ -218,7 +224,12 @@ export async function finishPake(
   const w = readPakeScalar(pakeSecret, 'PAKE secret');
 
   if (peerMessage.length !== PAKE_MESSAGE_LENGTH) {
-    throw new Error('Invalid PAKE message length');
+    throw new Error(
+      t({
+        en: 'Invalid PAKE message length',
+        es: 'Longitud de mensaje PAKE no válida',
+      }),
+    );
   }
   // fromBytes validates the point is on the curve; P-256 has cofactor 1, so
   // on-curve and non-identity is the full subgroup check.
@@ -227,7 +238,12 @@ export async function finishPake(
   const peerBlind = (role === 'sender' ? N : M).multiply(w);
   const unblinded = peer.subtract(peerBlind);
   if (unblinded.is0()) {
-    throw new Error('Invalid PAKE message: unblinds to the identity');
+    throw new Error(
+      t({
+        en: 'Invalid PAKE message: unblinds to the identity',
+        es: 'Mensaje PAKE no válido: al quitar el cegado da la identidad',
+      }),
+    );
   }
   const K = unblinded.multiply(secret).toBytes(true);
 

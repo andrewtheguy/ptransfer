@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { generatePin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import type { TransferMetadata, TransferState } from '@/lib/nostr';
 import type { TorBridge } from '@/lib/tor/bridge';
 import { bootstrapTorClient, closeTorClient } from '@/lib/tor/client';
@@ -92,7 +93,10 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
       try {
         if (fileSize > TOR_MAX_TRANSFER_BYTES) {
           throw new Error(
-            `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; this selection is ${formatFileSize(fileSize)}.`,
+            t({
+              en: `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; this selection is ${formatFileSize(fileSize)}.`,
+              es: `El transporte por Tor admite como máximo ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; esta selección ocupa ${formatFileSize(fileSize)}.`,
+            }),
           );
         }
         // A ZIP's headers and entry paths are wire bytes that no file size
@@ -102,13 +106,19 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
         // resume — the whole transfer.
         if (content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
           throw new Error(
-            `This selection needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows. Archive overhead grows with the number of files; send fewer of them.`,
+            t({
+              en: `This selection needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows. Archive overhead grows with the number of files; send fewer of them.`,
+              es: `Esta selección necesita hasta ${formatFileSize(content.projectedWireBytes)} en la red, más de los ${formatFileSize(TOR_MAX_WIRE_BYTES)} que admite el transporte por Tor. La sobrecarga del archivo comprimido crece con el número de archivos; envía menos.`,
+            }),
           );
         }
 
         setState({
           status: 'connecting',
-          message: 'Loading the Tor client...',
+          message: t({
+            en: 'Loading the Tor client...',
+            es: 'Cargando el cliente de Tor...',
+          }),
           contentType: 'file',
           fileMetadata,
         });
@@ -130,8 +140,10 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
 
         setState({
           status: 'connecting',
-          message:
-            'Establishing introduction points and publishing the descriptor...',
+          message: t({
+            en: 'Establishing introduction points and publishing the descriptor...',
+            es: 'Estableciendo los puntos de introducción y publicando el descriptor...',
+          }),
           contentType: 'file',
           fileMetadata,
         });
@@ -169,7 +181,7 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
 
         setState({
           status: 'complete',
-          message: 'File sent',
+          message: t({ en: 'File sent', es: 'Archivo enviado' }),
           contentType: 'file',
           fileMetadata,
           progress: { current: fileSize, total: fileSize },
@@ -181,7 +193,10 @@ export function useTorSend(bridge: TorBridge): UseTorSendReturn {
             message:
               error instanceof Error
                 ? error.message
-                : 'The Tor transfer failed',
+                : t({
+                    en: 'The Tor transfer failed',
+                    es: 'La transferencia por Tor falló',
+                  }),
             contentType: 'file',
             fileMetadata,
           });

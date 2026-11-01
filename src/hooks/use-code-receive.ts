@@ -19,6 +19,7 @@ import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import { generateMutualAnswerBinary } from '@/lib/code-signaling';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
+import { type Localized, t } from '@/lib/i18n';
 import type { TransferState } from '@/lib/nostr';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
@@ -116,12 +117,17 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 // What the response page says while the simulation is on: the relay fetch is
 // already running behind it, but nothing has begun until the sender takes the
 // response in, and a progress bar would claim otherwise.
-const SIMULATED_HOLDING_MESSAGE =
-  'Simulating no direct connection — waiting for the sender to take in your response';
+const SIMULATED_HOLDING_MESSAGE: Localized = {
+  en: 'Simulating no direct connection — waiting for the sender to take in your response',
+  es: 'Simulando que no hay conexión directa: esperando a que el emisor lea tu respuesta',
+};
 // The same, for a direct route that died on its own before the sender ever
 // took the response in. The response is still the only way this transfer
 // starts, so it stays on screen and the fallback waits behind it.
-const HOLDING_SUFFIX = 'Hand your response to the sender to start it';
+const HOLDING_SUFFIX: Localized = {
+  en: 'Hand your response to the sender to start it',
+  es: 'Pasa tu respuesta al emisor para empezar',
+};
 
 /**
  * The response left on screen while a fallback runs behind it, because the
@@ -238,7 +244,11 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       read = await readOffer(offerData);
     } catch (error) {
       if (offerStepRef.current === step) offerStepRef.current = null;
-      step.reject(error instanceof Error ? error : new Error('Invalid offer'));
+      step.reject(
+        error instanceof Error
+          ? error
+          : new Error(t({ en: 'Invalid offer', es: 'Oferta no válida' })),
+      );
       return;
     }
     // The step may have been cancelled while parsing; settle-once makes the
@@ -256,7 +266,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
       try {
         setState({
           status: 'waiting_for_offer',
-          message: "Scan or paste the sender's code",
+          message: t({
+            en: "Scan or paste the sender's code",
+            es: 'Escanea o pega el código del emisor',
+          }),
         });
 
         const offerStep = createPendingStep<ReadOffer>();
@@ -296,7 +309,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
         setState({
           status: 'generating_answer',
-          message: 'Generating keys...',
+          message: t({ en: 'Generating keys...', es: 'Generando claves...' }),
         });
         let keys = await deriveAnswerKeys(offer);
         if (abandoned()) return;
@@ -343,8 +356,8 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           report({
             status: 'showing_answer',
             message: held.simulated
-              ? SIMULATED_HOLDING_MESSAGE
-              : `${fallbackMessage(offer)}. ${HOLDING_SUFFIX}`,
+              ? t(SIMULATED_HOLDING_MESSAGE)
+              : `${fallbackMessage(offer)}. ${t(HOLDING_SUFFIX)}`,
             answerData: held.answerData,
             contentType: 'file',
             fileMetadata,
@@ -455,7 +468,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             let channel: DuplexChannel;
             setState({
               status: 'showing_answer',
-              message: 'Show this to sender and wait for connection',
+              message: t({
+                en: 'Show this to sender and wait for connection',
+                es: 'Muestra esto al emisor y espera la conexión',
+              }),
               answerData: attempt.answerBinary,
               contentType: 'file',
               fileMetadata,
@@ -500,7 +516,12 @@ export function useCodeReceive(): UseCodeReceiveReturn {
           // Simulated: no peer connection at all. The response reuses the SDP
           // of the attempt just torn down, with its candidates left out.
           if (!latestAnswerSDP || !simulationRelays) {
-            throw new Error('Cannot simulate a dead route before an answer');
+            throw new Error(
+              t({
+                en: 'Cannot simulate a dead route before an answer',
+                es: 'No se puede simular una ruta caída antes de una respuesta',
+              }),
+            );
           }
           const answerBinary = await generateMutualAnswerBinary(
             latestAnswerSDP,
@@ -536,7 +557,7 @@ export function useCodeReceive(): UseCodeReceiveReturn {
 
         setState({
           status: 'receiving',
-          message: 'Receiving file...',
+          message: t({ en: 'Receiving file...', es: 'Recibiendo archivo...' }),
           contentType: 'file',
           fileMetadata,
           useWebRTC: true,
@@ -559,7 +580,10 @@ export function useCodeReceive(): UseCodeReceiveReturn {
         });
         setState({
           status: 'complete',
-          message: 'File received (P2P)!',
+          message: t({
+            en: 'File received (P2P)!',
+            es: '¡Archivo recibido (P2P)!',
+          }),
           contentType: 'file',
           fileMetadata: { fileName, fileSize: payload.size, mimeType },
         });
@@ -572,7 +596,9 @@ export function useCodeReceive(): UseCodeReceiveReturn {
             ...prevState,
             status: 'error',
             message:
-              error instanceof Error ? error.message : 'Failed to receive',
+              error instanceof Error
+                ? error.message
+                : t({ en: 'Failed to receive', es: 'No se pudo recibir' }),
             connectionFailed: error instanceof P2PConnectionError,
           }));
         }

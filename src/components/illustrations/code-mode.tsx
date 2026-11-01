@@ -6,17 +6,23 @@
  *
  * Concept: two devices beginning Code Exchange by sharing QR codes.
  */
+import { useT } from '@/i18n/locale-context';
+
 interface IllustrationProps {
   className?: string;
 }
 
 export function CodeModeIllustration({ className }: IllustrationProps) {
+  const t = useT();
   return (
     <svg
       viewBox="0 0 200 140"
       className={className}
       role="img"
-      aria-label="Two devices beginning Code Exchange with QR codes"
+      aria-label={t({
+        en: 'Two devices beginning Code Exchange with QR codes',
+        es: 'Dos dispositivos que inician un Intercambio por código con códigos QR',
+      })}
       xmlns="http://www.w3.org/2000/svg"
     >
       {/* Soft backdrop */}

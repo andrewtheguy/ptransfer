@@ -1,4 +1,5 @@
 import type { Event, Filter } from 'nostr-tools';
+import { t } from '@/lib/i18n';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../base64';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
 import { createSignalingEvent, parseSignalingEvent } from './events';
@@ -196,7 +197,10 @@ export function carryOfferForAnswer(
       finish(() =>
         reject(
           new Error(
-            'The receiver did not answer the connection offer. Start a new transfer.',
+            t({
+              en: 'The receiver did not answer the connection offer. Start a new transfer.',
+              es: 'El receptor no respondió a la oferta de conexión. Inicia una nueva transferencia.',
+            }),
           ),
         ),
       );
@@ -212,7 +216,16 @@ export function carryOfferForAnswer(
         await publishOffer();
       } catch (error: unknown) {
         finish(() =>
-          reject(error instanceof Error ? error : new Error('Publish failed')),
+          reject(
+            error instanceof Error
+              ? error
+              : new Error(
+                  t({
+                    en: 'Publish failed',
+                    es: 'No se pudo publicar',
+                  }),
+                ),
+          ),
         );
         return;
       }

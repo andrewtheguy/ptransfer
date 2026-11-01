@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { encodeCrockfordBase32 } from './base32';
 import {
   AES_KEY_LENGTH,
@@ -50,7 +51,10 @@ async function deriveSessionKey(
 ): Promise<CryptoKey> {
   if (salt.length < SALT_LENGTH) {
     throw new Error(
-      `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+      t({
+        en: `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+        es: `Sal demasiado corta: se esperaban al menos ${SALT_LENGTH} bytes y llegaron ${salt.length}`,
+      }),
     );
   }
 
@@ -204,7 +208,10 @@ export async function deriveConfirmationCode(
 ): Promise<string> {
   if (salt.length < SALT_LENGTH) {
     throw new Error(
-      `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+      t({
+        en: `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+        es: `Sal demasiado corta: se esperaban al menos ${SALT_LENGTH} bytes y llegaron ${salt.length}`,
+      }),
     );
   }
 
@@ -283,7 +290,10 @@ export async function deriveAnswerConfirmation(
 ): Promise<Uint8Array> {
   if (salt.length < SALT_LENGTH) {
     throw new Error(
-      `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+      t({
+        en: `Salt too short: expected at least ${SALT_LENGTH} bytes, got ${salt.length}`,
+        es: `Sal demasiado corta: se esperaban al menos ${SALT_LENGTH} bytes y llegaron ${salt.length}`,
+      }),
     );
   }
 

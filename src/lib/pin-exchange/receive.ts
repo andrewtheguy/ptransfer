@@ -22,6 +22,7 @@ import {
   wipeBufferSource,
 } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import {
   base64ToUint8Array,
   type ClaimPayload,
@@ -43,6 +44,11 @@ import {
 } from '@/lib/nostr';
 import { PROTOCOL_VERSION } from '@/lib/protocol-version';
 import { mismatchedProtocol } from './send';
+
+const NO_CLAIMABLE_TRANSFER: Localized = {
+  en: 'No claimable transfer found for this PIN. Check the code currently shown on the sender.',
+  es: 'No se encontró ninguna transferencia disponible para este PIN. Comprueba el código que muestra ahora el emisor.',
+};
 
 /**
  * The receiving half of a PIN Exchange handshake: finding the sender by the
@@ -165,7 +171,13 @@ export async function claimPin(
 ): Promise<PinReceiverSession | null> {
   const { client, pakeSecret, locator, isCancelled, report } = options;
 
-  report({ status: 'connecting', message: 'Deriving lookup keys...' });
+  report({
+    status: 'connecting',
+    message: t({
+      en: 'Deriving lookup keys...',
+      es: 'Derivando las claves de búsqueda...',
+    }),
+  });
 
   // Mirror the sender's acceptance rule by deriving the receiver's current and
   // immediately previous rotation buckets. Nothing here waits on a key stretch
@@ -179,7 +191,13 @@ export async function claimPin(
 
   if (isCancelled()) return null;
 
-  report({ status: 'receiving', message: 'Searching for sender...' });
+  report({
+    status: 'receiving',
+    message: t({
+      en: 'Searching for sender...',
+      es: 'Buscando al emisor...',
+    }),
+  });
 
   // The hint is derived from the PIN's public locator segment, so it carries
   // only ~17.3 bits and unrelated transfers sharing a bucket do collide. The
@@ -202,7 +220,10 @@ export async function claimPin(
 
   if (events.length === 0) {
     throw new Error(
-      'No transfer found for this PIN. It may have rotated — check the code currently shown on the sender.',
+      t({
+        en: 'No transfer found for this PIN. It may have rotated — check the code currently shown on the sender.',
+        es: 'No se encontró ninguna transferencia para este PIN. Puede que haya cambiado — comprueba el código que muestra ahora el emisor.',
+      }),
     );
   }
 
@@ -311,8 +332,11 @@ export async function claimPin(
     }
     throw new Error(
       sawExpiredCandidate
-        ? 'This PIN has expired. Enter the code currently shown on the sender.'
-        : 'No claimable transfer found for this PIN. Check the code currently shown on the sender.',
+        ? t({
+            en: 'This PIN has expired. Enter the code currently shown on the sender.',
+            es: 'Este PIN caducó. Introduce el código que muestra ahora el emisor.',
+          })
+        : t(NO_CLAIMABLE_TRANSFER),
     );
   }
 
@@ -331,7 +355,10 @@ export async function claimPin(
 
   report({
     status: 'receiving',
-    message: 'Waiting for the sender to verify...',
+    message: t({
+      en: 'Waiting for the sender to verify...',
+      es: 'Esperando a que el emisor verifique...',
+    }),
   });
 
   // Run our side of the PAKE against one candidate's element — fresh ephemeral
@@ -416,9 +443,7 @@ export async function claimPin(
   // wait settles.
 
   if (candidates.length === 0) {
-    throw new Error(
-      'No claimable transfer found for this PIN. Check the code currently shown on the sender.',
-    );
+    throw new Error(t(NO_CLAIMABLE_TRANSFER));
   }
 
   if (isCancelled()) return null;
@@ -460,7 +485,10 @@ export async function claimPin(
       cleanup();
       reject(
         new Error(
-          'Sender did not confirm. The transfer may have been claimed by another device, the sender may have gone offline, or the PIN was mistyped.',
+          t({
+            en: 'Sender did not confirm. The transfer may have been claimed by another device, the sender may have gone offline, or the PIN was mistyped.',
+            es: 'El emisor no confirmó. Puede que otro dispositivo haya reclamado la transferencia, que el emisor se haya desconectado o que el PIN se escribiera mal.',
+          }),
         ),
       );
     }, CONFIRM_TIMEOUT_MS);
@@ -645,7 +673,13 @@ export async function claimPin(
         if (settled) return;
         settled = true;
         cleanup();
-        reject(err instanceof Error ? err : new Error('Publish failed'));
+        reject(
+          err instanceof Error
+            ? err
+            : new Error(
+                t({ en: 'Publish failed', es: 'La publicación falló' }),
+              ),
+        );
       }
     })();
   });
@@ -666,8 +700,13 @@ export async function claimPin(
 
   const { candidate, metadata } = winner;
   if (metadata.fileSize > MAX_MESSAGE_SIZE) {
+    const size = formatFileSize(metadata.fileSize);
+    const limit = formatFileSize(MAX_MESSAGE_SIZE);
     throw new Error(
-      `Transfer rejected: Size (${formatFileSize(metadata.fileSize)}) exceeds limit (${formatFileSize(MAX_MESSAGE_SIZE)})`,
+      t({
+        en: `Transfer rejected: Size (${size}) exceeds limit (${limit})`,
+        es: `Transferencia rechazada: el tamaño (${size}) supera el límite (${limit})`,
+      }),
     );
   }
 
@@ -740,7 +779,10 @@ export async function acceptPinOffer(
   const offer = acceptOffer(await readOffer(offerCode));
   if (!sameTransferMetadata(offer.metadata, expected.metadata)) {
     throw new Error(
-      "The sender's connection offer describes a different file than it confirmed. Start a new transfer.",
+      t({
+        en: "The sender's connection offer describes a different file than it confirmed. Start a new transfer.",
+        es: 'La oferta de conexión del emisor describe un archivo distinto del que confirmó. Inicia una nueva transferencia.',
+      }),
     );
   }
   if (
@@ -749,8 +791,14 @@ export async function acceptPinOffer(
   ) {
     throw new Error(
       expected.anonymous
-        ? "The sender's connection offer asks for a clearnet fallback, which anonymous signaling never uses. Start a new transfer."
-        : "The sender's connection offer asks for the Tor fallback, which only an anonymous PIN uses. Start a new transfer.",
+        ? t({
+            en: "The sender's connection offer asks for a clearnet fallback, which anonymous signaling never uses. Start a new transfer.",
+            es: 'La oferta de conexión del emisor pide una alternativa por la red abierta, que la señalización anónima nunca usa. Inicia una nueva transferencia.',
+          })
+        : t({
+            en: "The sender's connection offer asks for the Tor fallback, which only an anonymous PIN uses. Start a new transfer.",
+            es: 'La oferta de conexión del emisor pide la alternativa por Tor, que solo usa un PIN anónimo. Inicia una nueva transferencia.',
+          }),
     );
   }
   return offer;

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { usePinReceive } from '@/hooks/use-pin-receive';
 import { useTorReceive } from '@/hooks/use-tor-receive';
+import { useT } from '@/i18n/locale-context';
 import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import {
   derivePakeSecret,
@@ -33,6 +34,7 @@ import { TransferStatus } from './transfer-status';
 type ReceiveRoute = 'none' | 'pin' | 'code' | 'tor';
 
 export function ReceiveTab() {
+  const t = useT();
   // Both hooks must be called unconditionally (React rules); the route picks
   // which one's state the UI reads.
   const {
@@ -137,10 +139,15 @@ export function ReceiveTab() {
         // means the transfer never started, so hand the box back.
         console.error('Failed to start PIN receive flow:', err);
         setRoute('none');
-        setStartError('Could not start the transfer. Please try again.');
+        setStartError(
+          t({
+            en: 'Could not start the transfer. Please try again.',
+            es: 'No se pudo iniciar la transferencia. Inténtalo de nuevo.',
+          }),
+        );
       }
     },
-    [receive],
+    [receive, t],
   );
 
   const handleSubmit = useCallback(
@@ -163,7 +170,12 @@ export function ReceiveTab() {
           // into a hook that has no failure of its own to report.
           console.error('Failed to derive the PIN key material:', err);
           setRoute('none');
-          setStartError('Could not start the transfer. Please try again.');
+          setStartError(
+            t({
+              en: 'Could not start the transfer. Please try again.',
+              es: 'No se pudo iniciar la transferencia. Inténtalo de nuevo.',
+            }),
+          );
           return;
         }
         if (input.pinKind === 'anonymous') {
@@ -203,7 +215,7 @@ export function ReceiveTab() {
       // 'offer-chunk' never reaches here: the scanner reassembles chunks, and
       // the paste box redirects a single chunk link to the Scan tab.
     },
-    [startPinReceive, startReceive],
+    [startPinReceive, startReceive, t],
   );
 
   // submitOffer is a no-op until doReceive has armed its offer step, so hand
@@ -325,8 +337,10 @@ export function ReceiveTab() {
           />
 
           <div className="text-xs text-muted-foreground text-center pb-2">
-            File data is encrypted before transfer. Relays or STUN may still see
-            routing metadata.
+            {t({
+              en: 'File data is encrypted before transfer. Relays or STUN may still see routing metadata.',
+              es: 'Los datos del archivo se cifran antes de la transferencia. Los relays o STUN aún pueden ver metadatos de enrutamiento.',
+            })}
           </div>
         </>
       ) : (
@@ -354,7 +368,9 @@ export function ReceiveTab() {
               onSimulateNoDirectChange={setSimulateNoDirect}
               directRouteDead={codeState.directRouteDead}
               fallbackName={
-                codeState.anonymousFallback ? 'Tor' : 'the Nostr relays'
+                codeState.anonymousFallback
+                  ? 'Tor'
+                  : t({ en: 'the Nostr relays', es: 'los relays de Nostr' })
               }
               torStatus={codeState.torStatus}
             />
@@ -378,7 +394,7 @@ export function ReceiveTab() {
                   className="w-full max-w-[200px] bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-600 dark:hover:bg-cyan-700"
                 >
                   <Download className="mr-2 h-4 w-4" />
-                  Download File
+                  {t({ en: 'Download File', es: 'Descargar archivo' })}
                 </Button>
               </div>
             </div>
@@ -392,7 +408,7 @@ export function ReceiveTab() {
                 className="flex-1"
               >
                 <X className="mr-2 h-4 w-4" />
-                Cancel
+                {t({ en: 'Cancel', es: 'Cancelar' })}
               </Button>
             )}
 
@@ -403,7 +419,7 @@ export function ReceiveTab() {
                 className="flex-1"
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
-                Receive Another
+                {t({ en: 'Receive Another', es: 'Recibir otro' })}
               </Button>
             )}
           </div>

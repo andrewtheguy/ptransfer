@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { AES_KEY_LENGTH } from './constants';
 
 /**
@@ -52,11 +53,19 @@ export async function publicKeyToFingerprint(
 export function formatFingerprint(fingerprint: string): string {
   if (typeof fingerprint !== 'string' || fingerprint.length !== 16) {
     throw new TypeError(
-      `Invalid fingerprint: expected 16-character hex string, got ${typeof fingerprint === 'string' ? `${fingerprint.length} characters` : typeof fingerprint}`,
+      t({
+        en: `Invalid fingerprint: expected 16-character hex string, got ${typeof fingerprint === 'string' ? `${fingerprint.length} characters` : typeof fingerprint}`,
+        es: `Huella no válida: se esperaba una cadena hexadecimal de 16 caracteres y se recibió ${typeof fingerprint === 'string' ? `una de ${fingerprint.length} caracteres` : typeof fingerprint}`,
+      }),
     );
   }
   if (!/^[0-9A-Fa-f]+$/.test(fingerprint)) {
-    throw new TypeError(`Invalid fingerprint: contains non-hex characters`);
+    throw new TypeError(
+      t({
+        en: `Invalid fingerprint: contains non-hex characters`,
+        es: 'Huella no válida: contiene caracteres no hexadecimales',
+      }),
+    );
   }
   const fp = fingerprint.toUpperCase();
   return `${fp.slice(0, 4)}-${fp.slice(4, 8)}-${fp.slice(8, 12)}-${fp.slice(12, 16)}`;
@@ -110,12 +119,18 @@ export async function importECDHPublicKey(
   // Validate uncompressed P-256 public key format
   if (!(publicKeyBytes instanceof Uint8Array) || publicKeyBytes.length !== 65) {
     throw new TypeError(
-      'Invalid ECDH public key: expected 65-byte uncompressed P-256 key (0x04 || X || Y)',
+      t({
+        en: 'Invalid ECDH public key: expected 65-byte uncompressed P-256 key (0x04 || X || Y)',
+        es: 'Clave pública ECDH no válida: se esperaba una clave P-256 sin comprimir de 65 bytes (0x04 || X || Y)',
+      }),
     );
   }
   if (publicKeyBytes[0] !== 0x04) {
     throw new TypeError(
-      'Invalid ECDH public key: missing uncompressed point prefix (0x04)',
+      t({
+        en: 'Invalid ECDH public key: missing uncompressed point prefix (0x04)',
+        es: 'Clave pública ECDH no válida: falta el prefijo de punto sin comprimir (0x04)',
+      }),
     );
   }
 
@@ -177,7 +192,10 @@ export async function deriveAESKeyFromSecretKey(
 ): Promise<CryptoKey> {
   if (salt.length < 16) {
     throw new Error(
-      `Salt too short: expected at least 16 bytes, got ${salt.length}`,
+      t({
+        en: `Salt too short: expected at least 16 bytes, got ${salt.length}`,
+        es: `Sal demasiado corta: se esperaban al menos 16 bytes y llegaron ${salt.length}`,
+      }),
     );
   }
 
@@ -205,7 +223,10 @@ export async function computePublicKeyCommitment(
 ): Promise<string> {
   if (!(publicKeyBytes instanceof Uint8Array) || publicKeyBytes.length < 16) {
     throw new TypeError(
-      `Invalid public key bytes: expected at least 16 bytes, got ${publicKeyBytes instanceof Uint8Array ? publicKeyBytes.length : typeof publicKeyBytes}`,
+      t({
+        en: `Invalid public key bytes: expected at least 16 bytes, got ${publicKeyBytes instanceof Uint8Array ? publicKeyBytes.length : typeof publicKeyBytes}`,
+        es: `Bytes de clave pública no válidos: se esperaban al menos 16 bytes y llegaron ${publicKeyBytes instanceof Uint8Array ? publicKeyBytes.length : typeof publicKeyBytes}`,
+      }),
     );
   }
 

@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import { InterruptedError } from '../interrupt';
 import {
   escapeSequenceFilter,
@@ -48,7 +49,14 @@ async function readFromPipe<T>(
     }
   }
   const line = text.trim();
-  if (line === '') throw new Error('Nothing was given on standard input');
+  if (line === '') {
+    throw new Error(
+      t({
+        en: 'Nothing was given on standard input',
+        es: 'No se recibió nada por la entrada estándar',
+      }),
+    );
+  }
   return await accept(line);
 }
 
@@ -122,7 +130,7 @@ function readAtTerminal<T>(
             fail(new InterruptedError());
             return;
           case '\u0004': // Ctrl-D
-            fail(new Error('Cancelled'));
+            fail(new Error(t({ en: 'Cancelled', es: 'Cancelado' })));
             return;
           case '\u007f': // Backspace
           case '\b':

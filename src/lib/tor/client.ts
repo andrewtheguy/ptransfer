@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import { bridgeOptions, type CustomBridge, type TorBridge } from './bridge';
 import {
   describeSeed,
@@ -68,14 +69,30 @@ export async function bootstrapTorClient(
 ): Promise<WebtorClient> {
   const { onStatus } = options;
 
-  onStatus?.('Loading the Tor client...');
+  onStatus?.(
+    t({
+      en: 'Loading the Tor client...',
+      es: 'Cargando el cliente de Tor...',
+    }),
+  );
   const { WebtorClient } = await loadWebtor();
 
   const seed = await loadDirectorySeed();
+  const source = {
+    'served snapshot': { en: 'served snapshot', es: 'instantánea servida' },
+    'browser cache': { en: 'browser cache', es: 'caché del navegador' },
+    'Tor download': { en: 'Tor download', es: 'descarga de Tor' },
+  }[seed.source];
   onStatus?.(
     seed.value
-      ? `Bootstrapping Tor (directory from the ${seed.source})...`
-      : 'Bootstrapping Tor and downloading the directory; this takes a few minutes on a first run...',
+      ? t({
+          en: `Bootstrapping Tor (directory from the ${source.en})...`,
+          es: `Iniciando Tor (directorio de la ${source.es})...`,
+        })
+      : t({
+          en: 'Bootstrapping Tor and downloading the directory; this takes a few minutes on a first run...',
+          es: 'Iniciando Tor y descargando el directorio; la primera vez tarda unos minutos...',
+        }),
   );
 
   const client = await WebtorClient.create({
@@ -139,7 +156,7 @@ async function logDirectory(cache: string): Promise<void> {
   const verdict = judgeDescription(directory);
   if (!verdict.usable) {
     console.warn(
-      `[tor] This directory is not current: ${verdict.reason}. That spends ` +
+      `[tor] This directory is not current: ${verdict.reason?.en}. That spends ` +
         'the one period of slack either side, so a peer whose own directory ' +
         'has moved on further will not be reachable.',
     );

@@ -253,7 +253,7 @@ service carries the file.
   - CRC32 is carried only in chunk `0`; receivers MUST buffer chunk `1..N-1` data until chunk `0` is received (this spec does not define a streaming-without-chunk-0 mode).
   - CRC32 validation is deferred until full reassembly is complete and chunk `0` (with `payload_crc32_be_u32`) is available.
   - On CRC32 failure after full reassembly, receivers MUST drop the reassembled payload, log a checksum/protocol error, and fail the current transfer attempt (retry/rescan is an implementation-level recovery action).
-- Each chunk is base64url-encoded and embedded in a URL: `{origin}/r#{base64url}`
+- Each chunk is base64url-encoded and embedded in a URL: `{origin}/r#{base64url}`, followed by `&l=es` when the sender's page is in Spanish (`src/lib/link-locale.ts`), so the receiver's page opens in Spanish; an English sender's URL carries nothing more
 - Deployment requirement: app must be hosted at domain root (no subpath), because chunk URLs are built from `window.location.origin` and append `/r` directly
 - Displayed as a grid of URL QR codes, each scannable by a phone's native camera
 - For a typical `1200`-byte offer: `3` QR codes. Single-chunk payloads (`≤400` payload bytes) produce `1` QR code.

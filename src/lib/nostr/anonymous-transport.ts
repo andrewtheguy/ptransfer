@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import type { OnionWebSocket, WebtorClient } from '@/lib/tor/webtor-api';
 
 /**
@@ -57,7 +58,12 @@ function errorEvent(message: string): Event & { message: string } {
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return typeof error === 'string' ? error : 'Anonymous signaling failed';
+  return typeof error === 'string'
+    ? error
+    : t({
+        en: 'Anonymous signaling failed',
+        es: 'Falló la señalización anónima',
+      });
 }
 
 export interface AnonymousTransportOptions {
@@ -91,7 +97,10 @@ async function withBootstrapDeadline(
     timeout = globalThis.setTimeout(() => {
       reject(
         new Error(
-          'Anonymous signaling could not reach the Tor network within 5 minutes',
+          t({
+            en: 'Anonymous signaling could not reach the Tor network within 5 minutes',
+            es: 'La señalización anónima no pudo conectar con la red Tor en 5 minutos',
+          }),
         ),
       );
     }, BOOTSTRAP_TIMEOUT_MS);
@@ -143,7 +152,12 @@ export class AnonymousSignalingTransport {
         // Cancelled while this was still in flight: it holds circuits for a
         // session that has already reported itself finished.
         await closeTorClient(client);
-        throw new Error('Anonymous signaling was cancelled');
+        throw new Error(
+          t({
+            en: 'Anonymous signaling was cancelled',
+            es: 'Se canceló la señalización anónima',
+          }),
+        );
       }
       this.client = client;
       return client;
@@ -403,7 +417,14 @@ export class AnonymousSignalingTransport {
     // Wake every waiter now rather than whenever the bootstrap gets around to
     // finishing. A bootstrap still in flight closes the client it eventually
     // produces on its own, having seen `closed`.
-    this.cancelBootstrap(new Error('Anonymous signaling was cancelled'));
+    this.cancelBootstrap(
+      new Error(
+        t({
+          en: 'Anonymous signaling was cancelled',
+          es: 'Se canceló la señalización anónima',
+        }),
+      ),
+    );
     const client = this.client;
     this.client = null;
     if (client) void closeTorClient(client);

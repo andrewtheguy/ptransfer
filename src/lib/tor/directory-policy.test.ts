@@ -45,7 +45,7 @@ describe('judgeDescription', () => {
       noon + hour,
     );
     expect(verdict.usable).toBe(false);
-    expect(verdict.reason).toContain('time period');
+    expect(verdict.reason?.en).toContain('time period');
   });
 
   it('rejects a consensus with too little life left to bootstrap with', () => {
@@ -54,19 +54,28 @@ describe('judgeDescription', () => {
       noon + 3 * hour - 60_000,
     );
     expect(verdict.usable).toBe(false);
-    expect(verdict.reason).toContain('expires at');
+    expect(verdict.reason?.en).toContain('expires at');
   });
 
   it('rejects a consensus that is not valid yet', () => {
     expect(
       judgeDescription(described('2026-08-27T12:00:00Z'), noon - hour),
-    ).toEqual({ usable: false, reason: 'its consensus is not valid yet' });
+    ).toEqual({
+      usable: false,
+      reason: {
+        en: 'its consensus is not valid yet',
+        es: 'su consenso aún no es válido',
+      },
+    });
   });
 
   it('rejects a directory that could not be read at all', () => {
     expect(judgeDescription(undefined, noon)).toEqual({
       usable: false,
-      reason: 'it carries no readable consensus',
+      reason: {
+        en: 'it carries no readable consensus',
+        es: 'no contiene ningún consenso legible',
+      },
     });
   });
 });

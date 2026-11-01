@@ -1,6 +1,8 @@
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useLocale, useT } from '@/i18n/locale-context';
+import { LocaleLink } from '@/i18n/locale-link';
 import { generateTextQRCode } from '@/lib/qr-utils';
 import { buildOnionUrl } from '@/lib/receive-link';
 
@@ -26,6 +28,8 @@ export function TorAddressDisplay({
   address,
   password,
 }: TorAddressDisplayProps) {
+  const t = useT();
+  const locale = useLocale();
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
 
@@ -37,7 +41,7 @@ export function TorAddressDisplay({
     void (async () => {
       try {
         const url = await generateTextQRCode(
-          buildOnionUrl(window.location.origin, address),
+          buildOnionUrl(window.location.origin, address, locale),
           { width: QR_WIDTH, errorCorrectionLevel: 'M' },
         );
         if (active) setQrUrl(url);
@@ -53,15 +57,22 @@ export function TorAddressDisplay({
     return () => {
       active = false;
     };
-  }, [address]);
+  }, [address, locale]);
 
   return (
     <div className="space-y-3 rounded-lg border bg-muted/40 p-4">
       <div className="space-y-1">
-        <p className="text-sm font-medium">The receiver needs both of these</p>
+        <p className="text-sm font-medium">
+          {t({
+            en: 'The receiver needs both of these',
+            es: 'El receptor necesita ambos datos',
+          })}
+        </p>
         <p className="text-xs text-muted-foreground">
-          Send them over any channel you trust. The service answers only while
-          this tab is open, and the address dies with it.
+          {t({
+            en: 'Send them over any channel you trust. The service answers only while this tab is open, and the address dies with it.',
+            es: 'Envíaselos por cualquier canal de confianza. El servicio solo responde mientras esta pestaña está abierta, y la dirección deja de existir con ella.',
+          })}
         </p>
       </div>
 
@@ -77,7 +88,10 @@ export function TorAddressDisplay({
               {qrUrl ? (
                 <img
                   src={qrUrl}
-                  alt="QR code linking to the receive page with this address"
+                  alt={t({
+                    en: 'QR code linking to the receive page with this address',
+                    es: 'Código QR que enlaza a la página de recepción con esta dirección',
+                  })}
                   className="block w-full h-auto"
                 />
               ) : (
@@ -86,37 +100,72 @@ export function TorAddressDisplay({
             </div>
           </div>
           <p className="text-xs text-muted-foreground text-center">
-            Scanning this opens the receive page with the address filled in —
-            read them the password separately.
+            {t({
+              en: 'Scanning this opens the receive page with the address filled in — read them the password separately.',
+              es: 'Al escanearlo se abre la página de recepción con la dirección ya rellenada; díctale la contraseña por separado.',
+            })}
           </p>
         </div>
       )}
 
-      <CopyableValue label="Address" value={address} testId="tor-address" />
       <CopyableValue
-        label="Password"
+        label={t({ en: 'Address', es: 'Dirección' })}
+        copyLabel={t({ en: 'Copy address', es: 'Copiar dirección' })}
+        value={address}
+        testId="tor-address"
+      />
+      <CopyableValue
+        label={t({ en: 'Password', es: 'Contraseña' })}
+        copyLabel={t({ en: 'Copy password', es: 'Copiar contraseña' })}
         value={password}
         secret
         testId="tor-password"
       />
 
       <p className="text-xs text-muted-foreground">
-        On the receiving side, scan or paste the address into pTransfer&apos;s
-        receive page and the password into the field that appears — or, on{' '}
         {/* A new tab: following it here would take the onion service down. */}
-        <a
-          href="/cli"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium underline underline-offset-2 hover:text-foreground"
-        >
-          the command line
-        </a>
-        , run{' '}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">
-          ptransfer receive --onion {address}
-        </code>{' '}
-        and enter the password when prompted.
+        {t({
+          en: (
+            <>
+              On the receiving side, scan or paste the address into
+              pTransfer&apos;s receive page and the password into the field that
+              appears — or, on{' '}
+              <LocaleLink
+                to="/cli"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                the command line
+              </LocaleLink>
+              , run{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer receive --onion {address}
+              </code>{' '}
+              and enter the password when prompted.
+            </>
+          ),
+          es: (
+            <>
+              En el lado receptor, escanea o pega la dirección en la página de
+              recepción de pTransfer y la contraseña en el campo que aparece; o,
+              en{' '}
+              <LocaleLink
+                to="/cli"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                la línea de comandos
+              </LocaleLink>
+              , ejecuta{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer receive --onion {address}
+              </code>{' '}
+              e introduce la contraseña cuando se te pida.
+            </>
+          ),
+        })}
       </p>
     </div>
   );
@@ -124,13 +173,20 @@ export function TorAddressDisplay({
 
 interface CopyableValueProps {
   label: string;
+  copyLabel: string;
   value: string;
   secret?: boolean;
   /** Handle for the live test, which reads the pair off the page. */
   testId: string;
 }
 
-function CopyableValue({ label, value, secret, testId }: CopyableValueProps) {
+function CopyableValue({
+  label,
+  copyLabel,
+  value,
+  secret,
+  testId,
+}: CopyableValueProps) {
   const [copied, setCopied] = useState(false);
 
   const copy = useCallback(async () => {
@@ -159,7 +215,7 @@ function CopyableValue({ label, value, secret, testId }: CopyableValueProps) {
           variant="outline"
           size="sm"
           onClick={() => void copy()}
-          aria-label={`Copy ${label.toLowerCase()}`}
+          aria-label={copyLabel}
         >
           {copied ? (
             <Check className="h-4 w-4 text-green-600" />

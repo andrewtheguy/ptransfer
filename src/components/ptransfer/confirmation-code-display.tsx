@@ -1,6 +1,7 @@
 import { Check, Copy, KeyRound } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useT } from '@/i18n/locale-context';
 
 interface ConfirmationCodeDisplayProps {
   code: string;
@@ -18,6 +19,7 @@ interface ConfirmationCodeDisplayProps {
 export function ConfirmationCodeDisplay({
   code,
 }: ConfirmationCodeDisplayProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -37,7 +39,7 @@ export function ConfirmationCodeDisplay({
     <div className="rounded-lg border bg-muted/40 p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2 text-sm font-medium">
         <KeyRound className="h-4 w-4" />
-        Confirmation code
+        {t({ en: 'Confirmation code', es: 'Código de confirmación' })}
       </div>
 
       <div className="font-mono text-3xl text-center tracking-[0.15em] select-all break-all">
@@ -45,8 +47,10 @@ export function ConfirmationCodeDisplay({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Read this code to the sender. The transfer only starts once they enter
-        it, so nothing is sent to anyone who guessed or copied the PIN.
+        {t({
+          en: 'Read this code to the sender. The transfer only starts once they enter it, so nothing is sent to anyone who guessed or copied the PIN.',
+          es: 'Dile este código al emisor. La transferencia solo empieza cuando lo introduzca, así que no se envía nada a quien haya adivinado o copiado el PIN.',
+        })}
       </p>
 
       <Button
@@ -58,11 +62,13 @@ export function ConfirmationCodeDisplay({
       >
         {copied ? (
           <>
-            <Check className="h-3.5 w-3.5" /> Copied
+            <Check className="h-3.5 w-3.5" />{' '}
+            {t({ en: 'Copied', es: 'Copiado' })}
           </>
         ) : (
           <>
-            <Copy className="h-3.5 w-3.5" /> Copy code
+            <Copy className="h-3.5 w-3.5" />{' '}
+            {t({ en: 'Copy code', es: 'Copiar código' })}
           </>
         )}
       </Button>

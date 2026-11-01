@@ -1,5 +1,6 @@
 import { deflateSync, inflateSync } from 'fflate';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
+import { t } from '../i18n';
 import { NOSTR_FILE_AAD_PREFIX, NOSTR_FILE_CHUNK_SIZE } from './constants';
 import { decodeZ85, encodeZ85 } from './z85';
 
@@ -43,7 +44,10 @@ export function decompressPayload(
   if (compression === 'none') {
     if (payload.length !== fileSize) {
       throw new Error(
-        `Payload size mismatch: expected ${fileSize}, got ${payload.length}`,
+        t({
+          en: `Payload size mismatch: expected ${fileSize}, got ${payload.length}`,
+          es: `El tamaño de la carga no coincide: se esperaban ${fileSize} y llegaron ${payload.length}`,
+        }),
       );
     }
     return payload;
@@ -56,7 +60,10 @@ export function decompressPayload(
   });
   if (plaintext.length !== fileSize) {
     throw new Error(
-      `Decompressed size mismatch: expected ${fileSize}, got ${plaintext.length}`,
+      t({
+        en: `Decompressed size mismatch: expected ${fileSize}, got ${plaintext.length}`,
+        es: `El tamaño descomprimido no coincide: se esperaban ${fileSize} y llegaron ${plaintext.length}`,
+      }),
     );
   }
   return plaintext;
@@ -69,8 +76,22 @@ export function splitIntoChunks(
   data: Uint8Array,
   chunkSize: number,
 ): Uint8Array[] {
-  if (chunkSize <= 0) throw new Error('chunkSize must be positive');
-  if (data.length === 0) throw new Error('cannot chunk empty data');
+  if (chunkSize <= 0) {
+    throw new Error(
+      t({
+        en: 'chunkSize must be positive',
+        es: 'chunkSize debe ser positivo',
+      }),
+    );
+  }
+  if (data.length === 0) {
+    throw new Error(
+      t({
+        en: 'cannot chunk empty data',
+        es: 'no se pueden fragmentar datos vacíos',
+      }),
+    );
+  }
   const chunks: Uint8Array[] = [];
   for (let offset = 0; offset < data.length; offset += chunkSize) {
     chunks.push(
@@ -124,7 +145,12 @@ export async function decodeChunkContent(
   const encrypted = decodeZ85(content);
   const chunk = await decrypt(key, encrypted, aad);
   if (chunk.length > maxSize) {
-    throw new Error('Chunk exceeds the chunk size');
+    throw new Error(
+      t({
+        en: 'Chunk exceeds the chunk size',
+        es: 'El fragmento supera el tamaño de fragmento',
+      }),
+    );
   }
   return chunk;
 }
@@ -146,16 +172,31 @@ export function assembleChunks(
   let offset = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    if (!chunk) throw new Error(`Missing chunk ${i} of ${chunks.length}`);
+    if (!chunk) {
+      throw new Error(
+        t({
+          en: `Missing chunk ${i} of ${chunks.length}`,
+          es: `Falta el fragmento ${i} de ${chunks.length}`,
+        }),
+      );
+    }
     if (offset + chunk.length > payloadSize) {
-      throw new Error('Assembled data exceeds expected payload size');
+      throw new Error(
+        t({
+          en: 'Assembled data exceeds expected payload size',
+          es: 'Los datos ensamblados superan el tamaño de carga esperado',
+        }),
+      );
     }
     result.set(chunk, offset);
     offset += chunk.length;
   }
   if (offset !== payloadSize) {
     throw new Error(
-      `Assembled size mismatch: expected ${payloadSize}, got ${offset}`,
+      t({
+        en: `Assembled size mismatch: expected ${payloadSize}, got ${offset}`,
+        es: `El tamaño ensamblado no coincide: se esperaban ${payloadSize} y llegaron ${offset}`,
+      }),
     );
   }
   return result;

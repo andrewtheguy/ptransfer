@@ -17,6 +17,7 @@
  * behind.
  */
 
+import { t } from '@/lib/i18n';
 import type { AppendSink } from './append-sink';
 import { MEMORY_SINK_MAX_BYTES } from './crypto/constants';
 
@@ -42,7 +43,10 @@ function opfsSupported(): boolean {
 function requireOpfs(): void {
   if (!opfsSupported()) {
     throw new Error(
-      'This browser cannot store transfers over 100 MiB on disk (no OPFS support). Update to a current version of Chrome, Edge, Firefox, or Safari.',
+      t({
+        en: 'This browser cannot store transfers over 100 MiB on disk (no OPFS support). Update to a current version of Chrome, Edge, Firefox, or Safari.',
+        es: 'Este navegador no puede guardar en disco transferencias de más de 100 MiB (no admite OPFS). Actualiza a una versión reciente de Chrome, Edge, Firefox o Safari.',
+      }),
     );
   }
 }
