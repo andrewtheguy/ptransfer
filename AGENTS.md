@@ -98,7 +98,9 @@
     scenario alone — and do not check it against `main`.
   - Failed twice with an error from this code — a wrong file, a byte
     mismatch, an exception or a non-zero exit with a message of ours — is
-    worth comparing with `main`, once, running only the failing scenario.
+    worth comparing with `main`, once: for Code and PIN Exchange only the
+    failing scenario, with `SCENARIOS=`; the Tor CLI test has no way to pick
+    one, so it runs whole.
 
 ## Dependencies
 
