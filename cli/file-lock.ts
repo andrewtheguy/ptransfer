@@ -182,9 +182,11 @@ async function locked<T>(
   const held = await (await loadPlatform())(path);
   try {
     // Non-blocking and polled: a blocking wait would stop the event loop,
-    // and with it every transfer this process is running.
-    while (!held.tryAcquire()) {
+    // and with it every transfer this process is running. The deadline comes
+    // first, so the lock is never taken once the caller has stopped waiting.
+    for (;;) {
       if (Date.now() > deadline) throw stayedLocked(path, waitMs);
+      if (held.tryAcquire()) break;
       await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
     }
     try {
