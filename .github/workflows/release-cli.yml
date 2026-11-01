@@ -106,6 +106,12 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Under Bun, by `--bun`, on each system it ships for: vitest's launcher
+      # asks for Node, and Bun's own file system calls, which the executable
+      # makes, are what a regression there would break.
+      - name: CLI unit tests under Bun
+        run: bun x --bun vitest run --project unit cli/
+
       - name: Build
         run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/${{ matrix.binary }}"
 
