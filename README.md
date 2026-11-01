@@ -21,7 +21,8 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 - **PWA Support**: Install as a Progressive Web App for offline access
 - **English and Spanish**: The site is in English at `/` and in Spanish under
   `/es/` (`/es/send`, `/es/about`, …), each page with its own URL for search
-  engines; the CLI speaks Spanish when the environment's locale does — see
+  engines; the CLI speaks Spanish with `--lang es`, or when the
+  environment's locale does — see
   [Language](#language)
 
 ## Command line
@@ -334,9 +335,11 @@ through `useT()` from `src/i18n/locale-context.ts`. Adding a locale to
   in progress. In-app links go through `LocaleLink` and `useLocaleNavigate`
   to stay in the language; links handed to the other side (a PIN link, an
   onion link, multi-QR links) carry no prefix.
-- **CLI**: the language comes from `LC_ALL`, `LC_MESSAGES` or `LANG`, the
-  first one set (`LANG=es_ES.UTF-8 ptransfer`), and on Windows, which sets
-  none, from the user's locale. The `label: value` lines a script reads from
+- **CLI**: `--lang en` or `--lang es`, with any command or none
+  (`ptransfer --lang es`, `ptransfer send --pin --lang es report.pdf`), picks
+  the language. Without it, the language comes from `LC_ALL`, `LC_MESSAGES` or
+  `LANG`, the first one set (`LANG=es_ES.UTF-8 ptransfer`), and on Windows,
+  which sets none, from the user's locale. The `label: value` lines a script reads from
   standard output keep their English labels in every language.
 - What travels to the peer, such as the reason a sender stopped, stays in
   English: the other side's language is not known.

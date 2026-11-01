@@ -5,7 +5,7 @@ import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
 import { routeDiagnostics } from './diagnostics';
 import { INTERRUPTED_STATUS, InterruptedError } from './interrupt';
-import { detectLocale, systemLocale } from './locale';
+import { detectLocale, systemLocale, takeLangFlag } from './locale';
 import { UsageError } from './usage';
 import { CLI_VERSION } from './version';
 
@@ -41,6 +41,11 @@ A command is the line interface: results on standard output, everything else
 on standard error, which is what a script and a pipe want. Run one with --help
 for its options, or ptransfer --version for the release and the protocol
 version; a peer needs the same protocol version.
+
+options, with any command or none:
+  --lang <en|es>  the language to speak: English or Spanish. Without it,
+                  the one LC_ALL, LC_MESSAGES or LANG names, or on Windows
+                  the user's language; English when it is neither
 `,
   es: `uso: ptransfer [comando] [opciones]
 
@@ -58,6 +63,11 @@ todo lo demás a la salida de error estándar, que es lo que necesitan un script
 y una tubería. Ejecuta uno con --help para ver sus opciones, o
 ptransfer --version para ver la versión publicada y la del protocolo; el otro
 extremo necesita la misma versión del protocolo.
+
+opciones, con cualquier comando o sin ninguno:
+  --lang <en|es>  el idioma en que hablar: inglés o español. Sin ella, el
+                  que indique LC_ALL, LC_MESSAGES o LANG, o en Windows el
+                  idioma del usuario; inglés si no es ninguno de los dos
 `,
 };
 
@@ -67,9 +77,11 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   'tor-test': torTest,
 };
 
-async function main(argv: string[]): Promise<number> {
+async function main(args: string[]): Promise<number> {
   // Quiet until a command has read its own --verbose.
   routeDiagnostics(false);
+  const { locale, argv } = takeLangFlag(args);
+  if (locale) setLocale(locale);
   const [command, ...rest] = argv;
   if (!command) {
     // Loaded only now: the terminal UI pulls in React and OpenTUI's native
@@ -100,7 +112,8 @@ async function main(argv: string[]): Promise<number> {
   return await run(rest);
 }
 
-// Before anything prints: every message is said in this language.
+// Before anything prints: every message is said in this language, unless
+// `--lang` names another — which `main` reads first of all.
 setLocale(detectLocale(process.env, systemLocale()));
 
 try {
