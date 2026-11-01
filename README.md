@@ -84,11 +84,12 @@ locally.
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
 one of the tab's three transfer modes; or paste what a sender gave you and
-let it work out which of the three it is. On Windows it is meant for Windows
-Terminal, the default terminal on Windows 11; the older console host, which
-Windows 10 and Windows Server open PowerShell and `cmd` in unless Windows
-Terminal is set as the default, is not supported and may not draw or copy
-correctly. The commands below work in either.
+let it work out which of the three it is. On Windows, Windows Terminal — the
+default terminal on Windows 11 — is the one it is tested in and the one to
+use. It works in the older console host too, which Windows 10 and Windows
+Server open PowerShell and `cmd` in unless Windows Terminal is set as the
+default, copying included, though that is checked by hand rather than on
+every change.
 
 Every command below is the line-oriented interface instead, which is what a
 pipe and a script want and what stays out of the terminal UI's way. PIN
