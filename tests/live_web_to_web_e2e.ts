@@ -4,6 +4,12 @@
 // transfers a file to a browser-tab receiver through the real Nostr relays
 // and a real WebRTC data channel, driven headlessly via Playwright.
 //
+// Scenarios, in order:
+//   typed-pin    English tabs; the PIN is typed into the receiver's box
+//   pin-link-es  a Spanish sender; the receiver opens the link its PIN QR
+//                holds, which names no /es/ path but carries `&l=es`, and
+//                must land on the Spanish receive page with the PIN filled in
+//
 // It deliberately uses the public relays and therefore lives outside the unit
 // test suite; it needs internet access, Bun, and a Chrome-family browser.
 //
@@ -34,6 +40,14 @@ import {
   terminate,
   WEB_ROOT,
 } from './support/live-harness.ts';
+import {
+  getLocale,
+  type Locale,
+  localizePath,
+  setLocale,
+  t,
+} from '../src/lib/i18n.ts';
+import { linkLocale } from '../src/lib/link-locale.ts';
 
 const REQUESTED_WEB_URL = new URL(
   process.env.PTRANSFER_WEB_URL ?? 'http://127.0.0.1:4173',
@@ -45,14 +59,29 @@ let browser: PwBrowser | undefined;
 let ownedWebServer: ChildProcess | undefined;
 let cleanupStarted = false;
 
-async function receivePasteInput(page: PwPage): Promise<PwLocator> {
-  await page.getByRole('tab', { name: 'Paste', exact: true }).click();
-  const input = page.getByRole('textbox', {
-    name: 'PIN, onion address, or sender code',
+/** The receive page's input box, in the current locale. */
+function receiveInput(page: PwPage): PwLocator {
+  return page.getByRole('textbox', {
+    name: t({
+      en: 'PIN, onion address, or sender code',
+      es: 'PIN, dirección onion o código del emisor',
+    }),
     exact: true,
   });
+}
+
+async function receivePasteInput(page: PwPage): Promise<PwLocator> {
+  await page
+    .getByRole('tab', { name: t({ en: 'Paste', es: 'Pegar' }), exact: true })
+    .click();
+  const input = receiveInput(page);
   await input.waitFor({ state: 'visible', timeout: 30_000 });
   return input;
+}
+
+/** `path`, an app path such as `/send`, in the current locale. */
+function pageUrl(path: string): string {
+  return new URL(localizePath(path, getLocale()), webUrl).href;
 }
 
 async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
@@ -93,21 +122,38 @@ async function warmWebApp(activeBrowser: PwBrowser): Promise<void> {
 }
 
 async function readWebConfirmationCode(page: PwPage): Promise<string> {
+  const label = t({ en: 'Confirmation code', es: 'Código de confirmación' });
   await page.waitForFunction(
-    () => /Confirmation code\s+[0-9A-Z]{4}-[0-9A-Z]{4}/.test(document.body.innerText),
-    null,
+    (shown) =>
+      new RegExp(`${shown}\\s+[0-9A-Z]{4}-[0-9A-Z]{4}`).test(
+        document.body.innerText,
+      ),
+    label,
     { timeout: 120_000 },
   );
   const text = await page.locator('body').innerText();
-  const match = text.match(/Confirmation code\s+([0-9A-Z]{4})-([0-9A-Z]{4})/);
+  const match = text.match(
+    new RegExp(`${label}\\s+([0-9A-Z]{4})-([0-9A-Z]{4})`),
+  );
   if (!match) {
     throw new Error('Web receiver confirmation code was not found');
   }
   return `${match[1]}${match[2]}`;
 }
 
-async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
-  console.log('\n=== Web sender -> web receiver ===');
+/**
+ * A tab sends by PIN Exchange to another tab, both in `locale`; the receiver
+ * either types the PIN or opens the link the sender's QR code holds.
+ */
+async function webToWeb(
+  activeBrowser: PwBrowser,
+  scenario: string,
+  locale: Locale,
+  viaLink: boolean,
+): Promise<void> {
+  console.log(`\n=== Web sender -> web receiver: ${scenario} ===`);
+  // The labels the tabs are driven by are the pages' own, in their language.
+  setLocale(locale);
   // Isolated contexts: two independent tabs with no shared storage, exactly
   // like a sender and a receiver on different machines.
   const senderContext = await activeBrowser.newContext();
@@ -119,12 +165,15 @@ async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
   try {
     const source = join(WEB_ROOT, 'README.md');
 
-    await senderPage.goto(new URL('/send', webUrl).href, {
-      waitUntil: 'domcontentloaded',
-    });
+    await senderPage.goto(pageUrl('/send'), { waitUntil: 'domcontentloaded' });
     await senderPage.locator('input[type="file"]').first().setInputFiles(source);
     await senderPage
-      .getByRole('button', { name: 'Start PIN Exchange' })
+      .getByRole('button', {
+        name: t({
+          en: 'Start PIN Exchange',
+          es: 'Iniciar Intercambio por PIN',
+        }),
+      })
       .click();
 
     const pinInput = senderPage.getByRole('textbox', {
@@ -138,40 +187,79 @@ async function webToWeb(activeBrowser: PwBrowser): Promise<void> {
     }
     console.log(`[e2e] web sender PIN: ${pin}`);
 
-    await receiverPage.goto(new URL('/receive', webUrl).href, {
-      waitUntil: 'domcontentloaded',
-    });
-    const receiverInput = await receivePasteInput(receiverPage);
-    await receiverInput.fill(pin);
-    await receiverPage.getByRole('button', { name: 'Receive', exact: true }).click();
+    if (viaLink) {
+      const qr = senderPage.getByTestId('pin-link');
+      await qr.waitFor({ state: 'visible', timeout: 60_000 });
+      const link = new URL((await qr.getAttribute('data-link')) ?? '');
+      console.log(`[e2e] web sender PIN link: ${link.href}`);
+      // The link names the page, not its language's path: the language is
+      // in the fragment, for the page to move to before it renders.
+      if (link.pathname !== '/receive' || linkLocale(link.hash) !== locale) {
+        throw new Error(`Unexpected ${locale} PIN link: ${link.href}`);
+      }
+      await receiverPage.goto(link.href, { waitUntil: 'domcontentloaded' });
+      const receiverInput = receiveInput(receiverPage);
+      await receiverInput.waitFor({ state: 'visible', timeout: 30_000 });
+      const expectedPath = localizePath('/receive', locale);
+      const landedOn = new URL(receiverPage.url()).pathname;
+      const lang = await receiverPage.locator('html').getAttribute('lang');
+      if (landedOn !== expectedPath || lang !== locale) {
+        throw new Error(
+          `The link opened ${landedOn} in ${lang}, not ${expectedPath} in ${locale}`,
+        );
+      }
+      const filledIn = await receiverInput.inputValue();
+      if (filledIn !== pin) {
+        throw new Error(`The link filled in ${JSON.stringify(filledIn)}, not the PIN`);
+      }
+      console.log(`[e2e] the link opened ${landedOn} with the PIN filled in`);
+    } else {
+      await receiverPage.goto(pageUrl('/receive'), {
+        waitUntil: 'domcontentloaded',
+      });
+      const receiverInput = await receivePasteInput(receiverPage);
+      await receiverInput.fill(pin);
+    }
+    await receiverPage
+      .getByRole('button', {
+        name: t({ en: 'Receive', es: 'Recibir' }),
+        exact: true,
+      })
+      .click();
 
     const confirmationCode = await readWebConfirmationCode(receiverPage);
     console.log(`[e2e] web receiver confirmation code: ${confirmationCode}`);
 
     const confirmationInput = senderPage.getByRole('textbox', {
-      name: 'Confirmation code',
+      name: t({ en: 'Confirmation code', es: 'Código de confirmación' }),
     });
     await confirmationInput.waitFor({ state: 'visible', timeout: 60_000 });
     await confirmationInput.fill(confirmationCode);
-    await senderPage.getByRole('button', { name: 'Start transfer' }).click();
+    await senderPage
+      .getByRole('button', {
+        name: t({ en: 'Start transfer', es: 'Iniciar transferencia' }),
+      })
+      .click();
 
     const downloadButton = receiverPage.getByRole('button', {
-      name: 'Download File',
+      name: t({ en: 'Download File', es: 'Descargar archivo' }),
     });
     await downloadButton.waitFor({ state: 'visible', timeout: 150_000 });
-    await senderPage.getByText('Transfer Complete!', { exact: true }).waitFor({
-      state: 'visible',
-      timeout: 60_000,
-    });
+    await senderPage
+      .getByText(
+        t({ en: 'Transfer Complete!', es: '¡Transferencia completada!' }),
+        { exact: true },
+      )
+      .waitFor({ state: 'visible', timeout: 60_000 });
 
     const downloadPromise = receiverPage.waitForEvent('download', {
       timeout: 30_000,
     });
     await downloadButton.click();
     const download = await downloadPromise;
-    const downloaded = join(ARTIFACTS, 'web-to-web-README.md');
+    const downloaded = join(ARTIFACTS, `${scenario}-README.md`);
     await download.saveAs(downloaded);
-    await assertSameBytes(source, downloaded, 'web -> web downloaded file');
+    await assertSameBytes(source, downloaded, `${scenario} downloaded file`);
     assertNoSenderErrors();
     assertNoReceiverErrors();
   } finally {
@@ -218,7 +306,8 @@ try {
   });
 
   await warmWebApp(browser);
-  await webToWeb(browser);
+  await webToWeb(browser, 'typed-pin', 'en', false);
+  await webToWeb(browser, 'pin-link-es', 'es', true);
   console.log(`\nWEB -> WEB LIVE TEST PASSED\nArtifacts: ${ARTIFACTS}`);
 } catch (error) {
   console.error(`\nWEB -> WEB LIVE TEST FAILED\n${(error as Error).stack ?? error}`);

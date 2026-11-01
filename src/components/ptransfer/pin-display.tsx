@@ -1,5 +1,5 @@
 import { AlertCircle, Check, Copy, Loader2, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useLocale, useT } from '@/i18n/locale-context';
@@ -96,6 +96,12 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     };
   }, []);
 
+  // The link the QR code holds: the receive page with this PIN filled in.
+  const link = useMemo(
+    () => buildPinUrl(window.location.origin, pin, locale),
+    [pin, locale],
+  );
+
   // A new PIN restarts the rotation countdown and gets a QR code of its own,
   // so rotation and "Generate a new PIN" both leave a scannable code for the
   // PIN currently on screen.
@@ -107,10 +113,10 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
 
     void (async () => {
       try {
-        const url = await generateTextQRCode(
-          buildPinUrl(window.location.origin, pin, locale),
-          { width: QR_WIDTH, errorCorrectionLevel: 'M' },
-        );
+        const url = await generateTextQRCode(link, {
+          width: QR_WIDTH,
+          errorCorrectionLevel: 'M',
+        });
         if (active) setQrUrl(url);
       } catch (err) {
         // The QR only saves the receiver some typing; the PIN below it is the
@@ -124,7 +130,7 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     return () => {
       active = false;
     };
-  }, [pin, locale]);
+  }, [link]);
 
   const handleCopy = useCallback(async () => {
     // Clear any existing timeout
@@ -213,6 +219,9 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
                     es: 'Código QR que enlaza a la página de recepción con este PIN',
                   })}
                   className="block w-full h-auto"
+                  // For the live tests, which follow the link the QR holds.
+                  data-testid="pin-link"
+                  data-link={link}
                 />
               ) : (
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
