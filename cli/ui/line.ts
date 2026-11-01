@@ -51,8 +51,10 @@ export function createLinePresenter(label: string): Presenter {
     readSecret(prompt) {
       return settle(() => readSecret(prompt));
     },
-    readWord(prompt, accept) {
-      return settle(() => readWord(prompt, accept));
+    readWord(prompt, accept, options) {
+      return settle(() =>
+        readWord(prompt, accept, process.stdin, process.stderr, options),
+      );
     },
     // Nothing to bind a key to: standard input is where a piped answer comes
     // from, so reading a keystroke here would eat one.

@@ -3,6 +3,7 @@ import { type Localized, t } from '@/lib/i18n';
 import {
   type BoxRenderable,
   CliRenderEvents,
+  type InputRenderable,
   type MouseEvent,
   type Selection,
   type SubmitEvent,
@@ -228,6 +229,7 @@ export function Run({
             ) : (
               <TypedField
                 attempt={prompt.attempt}
+                uppercase={prompt.uppercase ?? false}
                 placeholder={
                   prompt.kind === 'code'
                     ? t({ en: 'paste here', es: 'pega aquí' })
@@ -450,16 +452,26 @@ function Bar({ current, total }: { current: number; total: number }) {
  */
 function TypedField({
   attempt,
+  uppercase,
   placeholder,
   onSubmit,
 }: {
   attempt: number;
+  uppercase: boolean;
   placeholder: string;
   onSubmit(value: string): void;
 }) {
   return (
     <input
       key={attempt}
+      // Every key typed and every paste goes in through `insertText`, so
+      // capitalizing there keeps the cursor where the text went, where
+      // rewriting the whole value would move it to the end.
+      ref={(field: InputRenderable | null) => {
+        if (!field || !uppercase) return;
+        const insert = field.insertText.bind(field);
+        field.insertText = (text: string) => insert(text.toUpperCase());
+      }}
       focused
       maxLength={FIELD_MAX}
       placeholder={placeholder}

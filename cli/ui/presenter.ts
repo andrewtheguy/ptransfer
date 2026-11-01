@@ -9,6 +9,15 @@
  * those are standard error and standard input (`line.ts`), or the terminal UI
  * (`../tui/presenter.ts`); the transfer code itself knows neither.
  */
+/** How a `readWord` answer is typed. */
+export interface WordOptions {
+  /**
+   * Show and take what is typed in capitals, for an answer whose case does
+   * not matter — a confirmation code, never a PIN, which is case-sensitive.
+   */
+  uppercase?: boolean;
+}
+
 export interface Presenter {
   /** A line that is always shown whole: an instruction, a result. */
   say(line: string): void;
@@ -49,6 +58,7 @@ export interface Presenter {
   readWord<T>(
     prompt: string,
     accept: (text: string) => T | Promise<T>,
+    options?: WordOptions,
   ): Promise<T>;
   /**
    * Offer something the person may do while the transfer runs — minting a

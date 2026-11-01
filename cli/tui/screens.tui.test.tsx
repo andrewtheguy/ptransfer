@@ -946,6 +946,53 @@ describe('the run screen', () => {
     expect(taken).toEqual(['RIGHT']);
   });
 
+  it('shows and takes a confirmation code in capitals', async () => {
+    const taken: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Send · PIN Exchange"
+        start={async (presenter) => {
+          taken.push(
+            await presenter.readWord(
+              "The receiver's confirmation code: ",
+              (text) => text,
+              { uppercase: true },
+            ),
+          );
+          return await new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    await screen.mockInput.typeText('ab');
+    await screen.mockInput.pasteBracketedText('cd-efgh');
+    await screen.settle();
+    expect(screen.frame()).toContain('ABCD-EFGH');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(taken).toEqual(['ABCD-EFGH']);
+  });
+
+  it('keeps the case of a PIN as typed', async () => {
+    const taken: string[] = [];
+    const screen = await draw(
+      <Run
+        title="Receive · PIN Exchange"
+        start={async (presenter) => {
+          taken.push(
+            await presenter.readWord("The sender's PIN: ", (text) => text),
+          );
+          return await new Promise<number>(() => {});
+        }}
+        onFinished={() => {}}
+      />,
+    );
+    await screen.mockInput.typeText('AbCDefG23hjk');
+    screen.mockInput.pressEnter();
+    await screen.settle();
+    expect(taken).toEqual(['AbCDefG23hjk']);
+  });
+
   it('answers the first question with the PIN the screen before it took', async () => {
     const taken: string[] = [];
     const screen = await draw(

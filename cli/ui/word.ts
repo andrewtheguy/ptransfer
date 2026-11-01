@@ -5,6 +5,7 @@ import {
   type SecretInput,
   type SecretOutput,
 } from '../secret';
+import type { WordOptions } from './presenter';
 
 /**
  * Reading one short answer from standard input: a PIN Exchange PIN, or the
@@ -21,17 +22,25 @@ import {
  * error: there is no one there to type a second one.
  */
 
-/** Read one answer and hand it to `accept`, which says what it is or throws. */
+/**
+ * Read one answer and hand it to `accept`, which says what it is or throws.
+ * With `uppercase`, what is typed is echoed and taken in capitals.
+ */
 export async function readWord<T>(
   prompt: string,
   accept: (text: string) => T | Promise<T>,
   input: SecretInput = process.stdin,
   output: SecretOutput = process.stderr,
+  { uppercase = false }: WordOptions = {},
 ): Promise<T> {
+  const cased = uppercase ? (text: string) => text.toUpperCase() : undefined;
   if (input.isTTY && input.setRawMode) {
-    return await readAtTerminal(prompt, accept, input, output);
+    return await readAtTerminal(prompt, accept, input, output, cased);
   }
-  return await readFromPipe(accept, input);
+  return await readFromPipe(
+    (text) => accept(cased ? cased(text) : text),
+    input,
+  );
 }
 
 /** The first line, without its line ending. Empty input is an error. */
@@ -66,6 +75,7 @@ function readAtTerminal<T>(
   accept: (text: string) => T | Promise<T>,
   input: SecretInput,
   output: SecretOutput,
+  cased: ((text: string) => string) | undefined,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     // Called on the stream: a real TTY's setRawMode needs its `this`.
@@ -143,8 +153,9 @@ function readAtTerminal<T>(
             // Printable input only; what an escape sequence is made of has
             // already been swallowed above.
             if (char >= ' ') {
-              typed += char;
-              output.write(char);
+              const shown = cased ? cased(char) : char;
+              typed += shown;
+              output.write(shown);
             }
         }
       }
