@@ -414,9 +414,9 @@ export function AboutContent() {
             <h2 className="text-xl font-semibold">Also on the command line</h2>
             <p className="mt-1.5 text-sm text-muted-foreground">
               <span className="font-medium text-foreground">ptransfer</span> is
-              this app in a terminal on Linux and macOS. It runs the same
-              protocol, crypto and Tor code, so either end of a transfer, in any
-              of the three modes, can be a tab or a terminal.
+              this app in a terminal on Linux, macOS and Windows. It runs the
+              same protocol, crypto and Tor code, so either end of a transfer,
+              in any of the three modes, can be a tab or a terminal.
             </p>
           </div>
           <Button asChild variant="outline" className="shrink-0 gap-2">

@@ -1,5 +1,4 @@
 import {
-  chmod,
   mkdir,
   mkdtemp,
   rename,
@@ -12,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unzipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACCESS_CHECKS_BYPASSED, denyAccess } from '../testing/deny-access';
 import { openSelection } from './selection';
 
 /** Runs after each folder the walk lists, to change the tree under it. */
@@ -224,22 +224,58 @@ describe('openSelection', () => {
     await expect(readAll(source.stream(true))).rejects.toThrow(changed);
   });
 
-  it('refuses a file name Windows would unpack outside the folder', async () => {
-    const { photos } = await tree();
-    await writeFile(join(photos, '..\\escape.txt'), 'out');
-    await expect(openSelection([photos])).rejects.toThrow(
-      'Cannot put photos/..\\escape.txt in a ZIP',
-    );
-  });
+  // A backslash is a separator on Windows, so no file there has one in its
+  // name for the walk to find.
+  it.skipIf(process.platform === 'win32')(
+    'refuses a file name Windows would unpack outside the folder',
+    async () => {
+      const { photos } = await tree();
+      await writeFile(join(photos, '..\\escape.txt'), 'out');
+      await expect(openSelection([photos])).rejects.toThrow(
+        'Cannot put photos/..\\escape.txt in a ZIP',
+      );
+    },
+  );
 
-  it.skipIf(process.getuid?.() === 0)(
+  // Bun before 1.4.4 read the backslash as a separator in `realpath`, and the
+  // folder could not be sent at all.
+  it.skipIf(process.platform === 'win32')(
+    'sends a file with a backslash in its name that stays in the folder',
+    async () => {
+      const { photos } = await tree();
+      await writeFile(join(photos, 'a\\b.txt'), 'kept');
+      expect(Object.keys(await unpack([photos]))).toContain('photos/a\\b.txt');
+    },
+  );
+
+  it.skipIf(ACCESS_CHECKS_BYPASSED)(
     'refuses an unreadable file before anything is sent',
     async () => {
       const { photos } = await tree();
-      await chmod(join(photos, 'b.jpg'), 0o000);
-      await expect(openSelection([photos])).rejects.toThrow(
-        `Cannot read ${join(photos, 'b.jpg')}`,
-      );
+      const restore = await denyAccess(join(photos, 'b.jpg'), 'read');
+      try {
+        await expect(openSelection([photos])).rejects.toThrow(
+          `Cannot read ${join(photos, 'b.jpg')}`,
+        );
+      } finally {
+        await restore();
+      }
+    },
+  );
+
+  it.skipIf(ACCESS_CHECKS_BYPASSED)(
+    'refuses an unreadable file named on its own among others',
+    async () => {
+      const { photos, notes } = await tree();
+      const named = join(photos, 'b.jpg');
+      const restore = await denyAccess(named, 'read');
+      try {
+        await expect(openSelection([named, notes])).rejects.toThrow(
+          `Cannot read ${named}`,
+        );
+      } finally {
+        await restore();
+      }
     },
   );
 });

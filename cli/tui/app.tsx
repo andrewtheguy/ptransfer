@@ -5,6 +5,7 @@ import { useKeyboard } from '@opentui/react';
 import { useState } from 'react';
 import { defaultCacheDir } from '../cache-dir';
 import { receiveByCode } from '../code/receive';
+import { INTERRUPTED_STATUS, interrupt } from '../interrupt';
 import { sendByCode } from '../code/send';
 import { receiveByPin } from '../pin/receive';
 import { sendByPin } from '../pin/send';
@@ -80,11 +81,11 @@ export function App({ onExit }: { onExit(status: number): void }) {
   useKeyboard((key) => {
     if (key.ctrl && key.name === 'c') {
       // A running transfer owns circuits, a part file and a peer that is
-      // waiting: its own signal handler takes those down and leaves with the
-      // status a shell gives an interrupted process. Everywhere else there is
-      // nothing to take down.
-      if (stage.name === 'run') process.kill(process.pid, 'SIGINT');
-      else onExit(130);
+      // waiting: its own teardown takes those down and leaves with the status
+      // a shell gives an interrupted process. It is called, not signalled: a
+      // process that sends itself SIGINT on Windows ends on the spot. With no
+      // transfer to take down there is nothing to do but leave.
+      if (stage.name !== 'run' || !interrupt()) onExit(INTERRUPTED_STATUS);
     }
   });
 

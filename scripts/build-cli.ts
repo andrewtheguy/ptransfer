@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
  *   bun scripts/build-cli.ts [--target <target>] [--outfile <path>]
  *
  * The target defaults to the machine the script runs on, and the executable
- * to `dist/cli/ptransfer`. Three native pieces have to end up inside it, and
+ * to `dist/cli/ptransfer`, `dist/cli/ptransfer.exe` for Windows. Three native pieces have to end up inside it, and
  * each needs the build machine to hold the target's copy:
  *
  * - The Tor client's wasm, which `cli/tor/webtor.ts` imports `with { type:
@@ -40,17 +40,26 @@ const TARGETS = {
     addon: '@node-datachannel/darwin-arm64',
     tui: '@opentui/core-darwin-arm64',
   },
+  'bun-windows-x64': {
+    addon: '@node-datachannel/win32-x64-msvc',
+    tui: '@opentui/core-win32-x64',
+  },
 } as const;
 
 type Target = keyof typeof TARGETS;
 
 const ROOT = resolve(import.meta.dirname, '..');
 
-// node-datachannel's ESM loader, the module the plugin stands in for.
-const ADDON_LOADER = /node-datachannel\/dist\/esm\/lib\/node-datachannel\.mjs$/;
+// node-datachannel's ESM loader, the module the plugin stands in for. The
+// path is the system's own, so `\` separates it on Windows: a pattern with
+// `/` alone matches nothing there, and the executable ships without the addon.
+const ADDON_LOADER =
+  /node-datachannel[\\/]dist[\\/]esm[\\/]lib[\\/]node-datachannel\.mjs$/;
 
 function hostTarget(): Target {
-  const target = `bun-${process.platform}-${process.arch}`;
+  // Bun names Windows targets `windows`, where Node's platform is `win32`.
+  const os = process.platform === 'win32' ? 'windows' : process.platform;
+  const target = `bun-${os}-${process.arch}`;
   if (!(target in TARGETS)) {
     throw new Error(`No release target for this machine: ${target}`);
   }
@@ -80,11 +89,21 @@ async function main(): Promise<void> {
       `Unknown target ${target}; one of ${Object.keys(TARGETS).join(', ')}`,
     );
   }
-  const outfile = resolve(ROOT, values.outfile);
+  // Bun adds `.exe` for a Windows target on its own; named here, the path
+  // printed is the one written.
+  const named = resolve(ROOT, values.outfile);
+  const outfile =
+    target.startsWith('bun-windows-') && !named.endsWith('.exe')
+      ? `${named}.exe`
+      : named;
   const addon = resolvePackage(TARGETS[target].addon, target);
   resolvePackage(TARGETS[target].tui, target);
 
   await mkdir(dirname(outfile), { recursive: true });
+  // Whether the plugin met the loader it replaces. If it did not, the build
+  // still succeeds, and the executable fails only when a WebRTC connection is
+  // first made — which no smoke test of `--version` reaches.
+  let swapped = false;
   const result = await Bun.build({
     entrypoints: [resolve(ROOT, 'cli/main.ts')],
     root: ROOT,
@@ -97,10 +116,13 @@ async function main(): Promise<void> {
       {
         name: 'node-datachannel-static-addon',
         setup(build) {
-          build.onLoad({ filter: ADDON_LOADER }, () => ({
-            loader: 'js',
-            contents: `export { default } from ${JSON.stringify(addon)};\n`,
-          }));
+          build.onLoad({ filter: ADDON_LOADER }, () => {
+            swapped = true;
+            return {
+              loader: 'js',
+              contents: `export { default } from ${JSON.stringify(addon)};\n`,
+            };
+          });
         },
       },
     ],
@@ -110,6 +132,11 @@ async function main(): Promise<void> {
   }
   if (!result.success) {
     throw new Error('Build failed');
+  }
+  if (!swapped) {
+    throw new Error(
+      "node-datachannel's addon loader was never bundled, so the addon is not in the executable; check ADDON_LOADER against its path",
+    );
   }
   process.stdout.write(`${outfile}\n`);
 }

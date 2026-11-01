@@ -86,13 +86,16 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: bun-linux-x64
-            label: linux-amd64
+            binary: ptransfer-linux-amd64
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64
-            label: linux-arm64
+            binary: ptransfer-linux-arm64
           - runner: macos-latest
             target: bun-darwin-arm64
-            label: macos-arm64
+            binary: ptransfer-macos-arm64
+          - runner: windows-latest
+            target: bun-windows-x64
+            binary: ptransfer-windows-amd64.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -103,15 +106,22 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Under Bun, by `--bun`, on each system it ships for: vitest's launcher
+      # asks for Node, and Bun's own file system calls, which the executable
+      # makes, are what a regression there would break.
+      - name: CLI unit tests under Bun
+        run: bun x --bun vitest run --project unit cli/
+
       - name: Build
-        run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/ptransfer-${{ matrix.label }}"
+        run: bun run build:cli -- --target ${{ matrix.target }} --outfile "dist/cli/${{ matrix.binary }}"
 
       - name: Smoke test the binary
+        if: runner.os != 'Windows'
         working-directory: ${{ runner.temp }}
         env:
           VERSION: ${{ needs.setup.outputs.version }}
         run: |
-          binary="$GITHUB_WORKSPACE/dist/cli/ptransfer-${{ matrix.label }}"
+          binary="$GITHUB_WORKSPACE/dist/cli/${{ matrix.binary }}"
           got="$("$binary" --version)"
           echo "binary reports: $got"
           case "$got" in
@@ -122,12 +132,46 @@ jobs:
               ;;
           esac
           "$binary" send --help > /dev/null
+          # The native addons load only when used, so --version passes without
+          # them. A Code Exchange code is printed once libdatachannel has made
+          # an offer; the run then fails on the answer stdin never brings.
+          code="$("$binary" send --code "$GITHUB_WORKSPACE/package.json" < /dev/null 2> send-code.err || true)"
+          if [ -z "$code" ] || ! grep -q 'No code was given on standard input' send-code.err; then
+            cat send-code.err
+            echo "::error::send --code printed no code: the WebRTC addon did not load"
+            exit 1
+          fi
+
+      # The same checks in PowerShell, which is what runs it on Windows.
+      - name: Smoke test the executable
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.setup.outputs.version }}
+        run: |
+          $binary = Join-Path $env:GITHUB_WORKSPACE 'dist\cli\${{ matrix.binary }}'
+          $got = & $binary --version
+          Write-Host "executable reports: $got"
+          if ($LASTEXITCODE -ne 0 -or $got -notlike "ptransfer $env:VERSION *") {
+            Write-Host "::error::expected 'ptransfer $env:VERSION (protocol N)'"
+            exit 1
+          }
+          & $binary send --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $code = $null | & $binary send --code (Join-Path $env:GITHUB_WORKSPACE 'package.json') 2> send-code.err
+          if (-not $code -or -not (Select-String -Quiet 'No code was given on standard input' send-code.err)) {
+            Get-Content send-code.err
+            Write-Host "::error::send --code printed no code: the WebRTC addon did not load"
+            exit 1
+          }
+          exit 0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ptransfer-${{ matrix.label }}
-          path: dist/cli/ptransfer-${{ matrix.label }}
+          name: ${{ matrix.binary }}
+          path: dist/cli/${{ matrix.binary }}
           if-no-files-found: error
 
   create-release:

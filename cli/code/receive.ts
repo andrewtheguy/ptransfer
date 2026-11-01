@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import type { AppendSink } from '@/lib/append-sink';
 import {
   type AcceptedOffer,
@@ -26,7 +25,7 @@ import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import type { WebRTCConnection } from '@/lib/webrtc';
 import { onInterrupt } from '../interrupt';
 import { bootstrapTor, type TorOptions } from '../tor/bootstrap';
-import { safeFileName } from '../transfer/files';
+import { savePath } from '../transfer/files';
 import type { Presenter } from '../ui/presenter';
 import { createCliHost, savedFrom } from './host';
 
@@ -80,7 +79,7 @@ export async function receiveByCode(
     async (container) => acceptOffer(await readOffer(container)),
   );
   const { fileName, fileSize } = offer.metadata;
-  const destination = join(options.folder, safeFileName(fileName));
+  const destination = savePath(options.folder, fileName);
   const relays = eligibleFallbackRelays(offer);
   if (options.simulateNoDirect && !relays) {
     throw new Error(

@@ -187,9 +187,14 @@ detect_os() {
         Darwin*)
             OS="macos"
             ;;
+        MINGW*|MSYS*|CYGWIN*)
+            print_error "This installer is for Linux and macOS. On Windows, run in PowerShell:"
+            print_error "  irm https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/install.ps1 | iex"
+            exit 1
+            ;;
         *)
             print_error "Unsupported operating system: $(uname -s)"
-            print_error "ptransfer runs on Linux and macOS; on Windows, use WSL or the web app."
+            print_error "ptransfer runs on Linux, macOS and Windows."
             exit 1
             ;;
     esac
@@ -334,7 +339,7 @@ show_usage() {
     echo "  $0 --prerelease                 # Install latest prerelease"
     echo "  $0 --download-only              # Download latest to current directory"
     echo ""
-    echo "Supported platforms: Linux (amd64, arm64), macOS (arm64)"
+    echo "Supported platforms: Linux (amd64, arm64), macOS (arm64); Windows uses install.ps1"
     echo ""
     echo "Install location: ~/.local/bin (no sudo required)"
 }

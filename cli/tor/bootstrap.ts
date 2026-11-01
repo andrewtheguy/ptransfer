@@ -44,6 +44,7 @@ export const TOR_OPTIONS = {
 export const TOR_OPTIONS_USAGE = `  --refresh-directory      ignore the cached directory and download a fresh one
   --cache-dir <path>       where to keep the Tor directory and the relay cache
                            (default: ~/Library/Caches/ptransfer on macOS,
+                           %LOCALAPPDATA%\\ptransfer\\cache on Windows,
                            otherwise $XDG_CACHE_HOME/ptransfer or
                            ~/.cache/ptransfer)
   --bridge <websocket|webrtc>

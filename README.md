@@ -22,8 +22,7 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 
 ## Command line
 
-The same code runs in a terminal on Linux and macOS; there is no Windows
-build (WSL counts as Linux). For a command line on Windows, or for files
+The same code runs in a terminal on Linux, macOS and Windows. For files
 larger than 2 GiB, use [beam-rs](https://github.com/andrewtheguy/beam-rs)
 instead. `cli/` is a Bun application that imports
 the web app's `src/lib` directly: the protocol, the crypto, and the Tor client
@@ -37,7 +36,7 @@ transfer modes — PIN Exchange, Code Exchange, and a Tor onion service — run
 from the same code.
 
 Each release ships it as one self-contained executable for Linux x64, Linux
-arm64 and Apple silicon macOS, under
+arm64, Apple silicon macOS and Windows x64, under
 [Releases](https://github.com/andrewtheguy/ptransfer/releases). The installer
 picks the one for the machine it runs on, checks it against the checksum GitHub
 published for it, and puts it on your `PATH` as `ptransfer`:
@@ -55,6 +54,29 @@ rather than installing it. By hand, download
 `ptransfer-linux-amd64`, `ptransfer-linux-arm64` or `ptransfer-macos-arm64`
 and `chmod +x` it.
 
+On Windows, in PowerShell — Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+irm https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.ps1 | iex
+```
+
+It checks the download against GitHub's checksum the same way, installs it as
+`%LOCALAPPDATA%\Programs\ptransfer\ptransfer.exe` without administrator
+rights, and adds that folder to your user `PATH`. `iex` passes no arguments,
+so for options run it as a script block: `-Tag v<version>` installs that
+release, `-Prerelease` the newest prerelease, and `-DownloadOnly` leaves the
+executable in the current directory:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/andrewtheguy/ptransfer/main/install.ps1))) -Prerelease
+```
+
+By hand, download `ptransfer-windows-amd64.exe`. It is not signed, so a copy a
+browser downloaded gets a SmartScreen warning the first time it runs; the
+installer's download does not. There is no Arm build; Windows on Arm's x64
+emulation may run this one, untested. WSL counts as Linux and takes
+`install.sh`.
+
 The commands below run it from a checkout as `bun run cli`; the executable
 takes the same commands as `ptransfer`. `bun run build:cli` builds it
 locally.
@@ -62,7 +84,11 @@ locally.
 `bun run cli` with no command opens a terminal UI, which is the tab's own
 screens drawn in a terminal: pick files and folders in a file browser, then
 one of the tab's three transfer modes; or paste what a sender gave you and
-let it work out which of the three it is.
+let it work out which of the three it is. On Windows it is meant for Windows
+Terminal, the default terminal on Windows 11; the older console host, which
+Windows 10 and Windows Server open PowerShell and `cmd` in unless Windows
+Terminal is set as the default, is not supported and may not draw or copy
+correctly. The commands below work in either.
 
 Every command below is the line-oriented interface instead, which is what a
 pipe and a script want and what stays out of the terminal UI's way. PIN
@@ -232,7 +258,7 @@ There is one input for all three modes — no mode to choose. The page works out
 
 ## Development
 
-Requires [Bun](https://bun.com/) 1.4.0.
+Requires [Bun](https://bun.com/) 1.4.4.
 
 ```bash
 # Install dependencies

@@ -22,7 +22,7 @@
 //                                   (default 480000)
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { unzipSync } from 'fflate';
@@ -49,7 +49,11 @@ const BRIDGE_ARGS = [
     : []),
 ];
 
-const ARTIFACTS = await mkdtemp(join(tmpdir(), 'ptransfer-tor-cli-e2e-'));
+// Real, so it matches what the receiver reports: its working directory, which
+// on macOS is /private/var where tmpdir() says /var.
+const ARTIFACTS = await realpath(
+  await mkdtemp(join(tmpdir(), 'ptransfer-tor-cli-e2e-')),
+);
 const children: ChildProcess[] = [];
 
 const started = Date.now();

@@ -15,9 +15,10 @@ import { CLI_VERSION } from './version';
  * adds is the platform seam a process has and a page does not: files, a
  * cache directory, plain HTTP to the Tor directory authorities.
  *
- * It is a Unix program — Linux and macOS — and leans on that: signals,
- * atomic rename, the XDG cache directory, `/` as the only path separator.
- * Windows is refused up front rather than half-supported.
+ * It runs on Linux, macOS and Windows. Where they differ — the stop
+ * signals, the rules for a file name, the cache directory, the kernel lock —
+ * the difference is spelled out in the module it belongs to, not behind a
+ * portability layer.
  *
  *   bun run cli <command> [options]
  */
@@ -46,12 +47,6 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
 };
 
 async function main(argv: string[]): Promise<number> {
-  if (process.platform === 'win32') {
-    process.stderr.write(
-      'The pTransfer CLI runs on Linux and macOS; on Windows, use WSL or the web app.\n',
-    );
-    return 1;
-  }
   // Quiet until a command has read its own --verbose.
   routeDiagnostics(false);
   const [command, ...rest] = argv;

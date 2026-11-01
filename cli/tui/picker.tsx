@@ -1,8 +1,16 @@
 import { formatFileSize } from '@/lib/file-utils';
 import { useKeyboard } from '@opentui/react';
 import { homedir } from 'node:os';
+import { sep } from 'node:path';
 import { useEffect, useRef, useState } from 'react';
-import { type Entry, listDirectory, parentOf, shortenPath } from './browse';
+import {
+  DRIVES,
+  type Entry,
+  listPlace,
+  type Place,
+  parentOf,
+  shortenPath,
+} from './browse';
 import { Gap, Note, Problem, Screen } from './screen';
 import { theme } from './theme';
 
@@ -18,7 +26,9 @@ import { theme } from './theme';
  *
  * The keys are the same in both modes: the arrows and Enter move around the
  * tree, and tab is what finishes — with the marked paths, or with the folder
- * the browser is standing in.
+ * the browser is standing in. On Windows the tree has one more level above
+ * the drive roots, the drives themselves: nothing there can be marked or
+ * saved into, only opened.
  */
 
 /** How many rows of the listing are shown at once. */
@@ -49,7 +59,7 @@ export function Picker({
   onDone,
   onCancel,
 }: PickerProps) {
-  const [directory, setDirectory] = useState(start);
+  const [directory, setDirectory] = useState<Place>(start);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
@@ -70,7 +80,7 @@ export function Picker({
     setEntries(null);
     void (async () => {
       try {
-        const found = await listDirectory(directory, hidden);
+        const found = await listPlace(directory, hidden, start);
         if (!current) return;
         setEntries(found);
         setFailure(null);
@@ -88,7 +98,7 @@ export function Picker({
     return () => {
       current = false;
     };
-  }, [directory, hidden]);
+  }, [directory, hidden, start]);
 
   // One row above the listing climbs out of the directory, so the cursor
   // moves over `rows` and index 0 is always that row.
@@ -161,6 +171,8 @@ export function Picker({
         break;
     }
     if (key.name === 'space' && mode === 'paths') {
+      // A whole drive is not something to send in one go.
+      if (directory === DRIVES) return;
       const entry = entryAt(at.current);
       if (entry) {
         toggle(entry);
@@ -192,18 +204,19 @@ export function Picker({
       }
       // A file has nothing to open: marking it is the only thing Enter could
       // have meant, and in folder mode there is nothing to mark.
-      if (mode === 'paths') toggle(entry);
+      if (mode === 'paths' && directory !== DRIVES) toggle(entry);
       return;
     }
     // Tab is what finishes, in both modes: the marked paths, or the folder
     // being browsed.
     if (key.name === 'tab') {
-      if (mode === 'folder') void decide(directory);
+      if (mode === 'folder' && directory !== DRIVES) void decide(directory);
       else if (marked.size > 0) onDone([...marked]);
     }
   });
 
   const home = homedir();
+  const heading = directory === DRIVES ? 'Drives' : shortenPath(directory, home);
   const window = Array.from({ length: WINDOW }, (_, row) => offset + row).filter(
     (index) => index < total,
   );
@@ -232,7 +245,7 @@ export function Picker({
             ]
       }
     >
-      <text fg={theme.heading}>{shortenPath(directory, home)}</text>
+      <text fg={theme.heading}>{heading}</text>
       <Gap />
       {entries === null ? (
         <Note>Reading...</Note>
@@ -242,10 +255,10 @@ export function Picker({
             const entry = entryAt(index);
             const here = index === cursor;
             const name = entry
-              ? `${entry.name}${entry.directory ? '/' : ''}`
-              : '../';
+              ? `${entry.name}${entry.directory ? sep : ''}`
+              : `..${sep}`;
             const box =
-              mode === 'folder' || !entry
+              mode === 'folder' || !entry || directory === DRIVES
                 ? '  '
                 : marked.has(entry.path)
                   ? '[x]'
@@ -266,9 +279,15 @@ export function Picker({
       )}
       <Gap />
       {failure && <Problem>{failure}</Problem>}
-      {mode === 'folder' ? (
+      {directory === DRIVES ? (
+        <text fg={theme.muted}>
+          {mode === 'folder'
+            ? 'Open a drive, then tab saves into the folder you are in.'
+            : 'Open a drive to mark what is in it.'}
+        </text>
+      ) : mode === 'folder' ? (
         <text fg={theme.good}>
-          {`Saving into ${shortenPath(directory, home)} · tab to save here`}
+          {`Saving into ${heading} · tab to save here`}
         </text>
       ) : (
         <text fg={marked.size > 0 ? theme.good : theme.muted}>

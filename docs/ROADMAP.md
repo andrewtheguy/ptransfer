@@ -41,25 +41,47 @@ A command-line host for the same `src/lib` code the browser tab runs, so a
 change to the web app is a change to the CLI by construction. It replaces the
 retired Rust `ptransfer-cli`, which reimplemented every wire format separately.
 
-**Unix only.** The CLI runs on Linux (glibc) and macOS, on x64 and arm64. Windows is out of scope: `cli/main.ts` refuses it, and WSL is Linux. A Windows command line, and files larger than 2 GiB, are what [beam-rs](https://github.com/andrewtheguy/beam-rs) is for.
-Every piece is written for a Unix process directly, with no Windows branch and
-no portability layer in between:
+**Linux, macOS and Windows.** The CLI runs on Linux (glibc) and macOS, on x64
+and arm64, and on Windows x64 (phase 5). Files larger than 2 GiB are what
+[beam-rs](https://github.com/andrewtheguy/beam-rs) is for. Where the systems
+differ the difference is spelled out in the one place it matters, not hidden
+behind a portability layer:
 
 - **Signals**: SIGINT, SIGTERM and SIGHUP each close the circuits and the
   service and remove a part file, then exit with 128 plus the signal's number,
-  as a shell reports it.
+  as a shell reports it. On Windows, Ctrl-C arrives as SIGINT, Ctrl-Break as
+  SIGBREAK, and closing the console window as SIGHUP, with a few seconds
+  before Windows ends the process; SIGTERM never arrives, since `taskkill`
+  ends a process without telling it. The terminal UI's own Ctrl-C calls the
+  same teardown directly rather than signalling itself, which on Windows
+  would end the process on the spot.
 - **Files**: a received file is written to a part file beside its
   destination and takes its name with one `rename` — atomic, because both are
   in one directory and so on one file system — after a check that the name is
-  still free. `/` is the only path separator, and a
-  sender's name is cut to the 255-byte limit of Linux and macOS file names.
+  still free. A sender's name is cut to what the file system takes: 255 bytes
+  on Linux and macOS, where `/` is the only separator and a backslash is an
+  ordinary character; 255 UTF-16 units on Windows, where `\` separates too and
+  a name is also cleared of `<>:"|?*` (a `:` would otherwise name an NTFS
+  alternate data stream), of trailing dots and spaces, and of the reserved
+  device names (`CON`, `NUL`, `COM1`, … with any extension), and cut further
+  where that keeps the whole path within `MAX_PATH`, 259 units, which
+  Explorer and most programs still stop at. Bun opens files with Windows'
+  delete sharing, so the part file is renamed and removed there as it is on
+  Unix.
 - **Cache**: `$XDG_CACHE_HOME/ptransfer`, else `~/.cache/ptransfer`;
-  `~/Library/Caches/ptransfer` on macOS.
+  `~/Library/Caches/ptransfer` on macOS; `%LOCALAPPDATA%\ptransfer\cache` on
+  Windows. The relay cache's lock is `flock(2)` on Unix and a named kernel
+  mutex on Windows; either is released by the kernel when its holder dies.
 - **Terminal**: results on standard output, everything else on standard
-  error, a password typed in raw mode or piped in, and ANSI escapes.
-- **Release targets**: `bun-linux-x64`, `bun-linux-arm64` and
-  `bun-darwin-arm64` — platforms Bun, OpenTUI and node-datachannel all ship
-  prebuilt. Intel macOS is not built.
+  error, a password typed in raw mode or piped in, and ANSI escapes. On
+  Windows the terminal UI is for Windows Terminal, or anything else drawing
+  through a pseudo console (ConPTY); the older console host, which a program
+  opened from Explorer still gets where Windows Terminal is not the default,
+  is not a target, and the terminal UI is not expected to be whole there.
+- **Release targets**: `bun-linux-x64`, `bun-linux-arm64`,
+  `bun-darwin-arm64` and `bun-windows-x64` — platforms Bun, OpenTUI and
+  node-datachannel all ship prebuilt. Intel macOS and Windows arm64 are not
+  built.
 
 1. **Project restructure and `tor-test`** (done): the `cli/` directory, a
    Bun-hosted loader for the same webtor-wasm Tor client, a directory
@@ -159,6 +181,90 @@ no portability layer in between:
      The script refuses a target whose OpenTUI core and node-datachannel
      addon are not installed, since `bun install` only installs the host's,
      which is why the release builds each target on its own machine.
+5. **Windows.** Windows support was held back while the base setup settled.
+   Checked against the CLI of phase 4 on a Windows x64 VM with Bun 1.4: Bun,
+   OpenTUI's `@opentui/core-win32-x64` and node-datachannel's
+   `win32-x64-msvc` addon all install and run; a `bun-windows-x64` binary
+   compiles and runs away from the checkout; `tor-test` and the direct,
+   folder and relay Code Exchange live scenarios pass. What did not work was
+   in the CLI's own Unix assumptions, several of them failing silently:
+   - **5a** (done): correctness.
+     - The relay cache's lock loaded `libc.so.6` and failed, which the relay
+       store swallows by design, so the cache was never written. Windows takes
+       a named kernel mutex from `kernel32.dll` over `bun:ffi` instead: one
+       per lock path, released by the kernel if its holder dies. A mutex is
+       re-entered by the thread that holds it, so locks are also queued in
+       process, which `flock` on separate opens did for free.
+     - A sender's file name was split on `/` alone and checked against Unix
+       rules only. On Windows `a:b.txt` wrote into an alternate data stream of
+       a file `a`; `<>?*|"` and `\` failed only after the whole file had
+       arrived; and `CON`, `NUL.tar.gz` or `trailing.` were created, since Bun
+       writes through `\\?\` paths that skip Win32's own checks, as files
+       Explorer cannot open or delete. Names now follow the rules above, and
+       `savePath` keeps the whole path within `MAX_PATH` where the folder
+       leaves room, never cutting a name below 32 units.
+     - The terminal UI cancelled a running transfer by sending itself SIGINT,
+       which on Windows ends the process without running a handler, so the
+       part file and the circuits were left behind. It now calls the
+       installed teardown directly, on every system.
+     - `O_NOFOLLOW` does not exist on Windows, so the guard that a file found
+       in a sent folder is not a link came out as no flag at all. There, a
+       file is opened and then held to the `lstat` of its path — not a link,
+       and the same file — which also covers a junction.
+     - `access` reads only the read-only attribute on Windows, not the ACL,
+       so a folder that cannot be written to passed, and so would a file
+       named to be sent that cannot be read. Both are now found out by
+       doing it — creating and removing a file in the folder, opening the
+       file — on every system.
+     - The tests that take access away do it with `icacls` deny entries on
+       Windows (`cli/testing/deny-access.ts`), and skip where the process
+       gets through regardless. The CI VM's ssh login is such a process: an
+       elevated token has the backup and restore privileges enabled, and
+       Bun, through libuv, opens every file with backup semantics, so a
+       deny entry does not bind it — Windows' root.
+     - The cache moved to `%LOCALAPPDATA%\ptransfer\cache`, and
+       `cli/main.ts` no longer refuses Windows.
+   - **5b**: the terminal on Windows.
+     - Done: the path picker climbs past a drive's root to the drives —
+       every letter `GetLogicalDrives` reports, and the network share it was
+       opened on, which nothing else leads back to. Nothing is marked or saved
+       into there, only opened. A directory is shown with `\`, and what has the
+       hidden attribute is hidden alongside dot files, which takes a Windows
+       home directory's `NTUSER.DAT` files and `AppData` out of the listing.
+     - Done, in a pseudo console (ConPTY, what Windows Terminal draws
+       through) that `ssh -tt` gives the CI VM's sshd, receiving a Tor
+       transfer from another machine: the password typed in raw mode, neither
+       echoed nor taking arrow keys as text, and Ctrl-C at it; Ctrl-C,
+       Ctrl-Break and the console closing mid-transfer, each leaving no part
+       file and exiting 130, 149, and with the receiver gone; and the terminal
+       UI drawn, driven through to the same transfer, its password masked,
+       and cancelled with Ctrl-C mid-transfer.
+     - Done by hand from a desktop session, since over ssh the escape goes
+       back to the ssh client's terminal rather than a Windows clipboard: in
+       Windows Terminal, the built executable's copy key put a PIN on the
+       clipboard that pasted into Notepad unchanged. That run also found the
+       executable missing node-datachannel's addon, which the smoke tests
+       now catch.
+   - **5c** (done, released with the next `Release CLI` run): shipping.
+     - A `windows-latest` row in the `Release CLI` workflow builds
+       `ptransfer-windows-amd64.exe` and smoke-tests it in PowerShell, away
+       from the checkout.
+     - `install.ps1` runs under Windows PowerShell 5.1, what a stock Windows
+       runs `irm | iex` in, as well as PowerShell 7. It checks the download
+       with `Get-FileHash` against the digest GitHub published, installs into
+       `%LOCALAPPDATA%\Programs\ptransfer` with no administrator, and adds
+       that folder to the user's `PATH`, once. Windows will not replace an
+       executable while it runs, so a running `ptransfer.exe` makes it stop
+       and say so. `install.sh` sends Git Bash and MSYS to it.
+     - The README and the site's CLI, home and about pages name Windows, and
+       say the terminal UI wants Windows Terminal.
+     - `pwsh ci/windows/remote.ps1` runs the type check, the CLI's unit and
+       terminal UI tests, and the executable's build and smoke test on the CI
+       VM, through devtools' Windows driver and its `bun` stack; `ci -Live`
+       adds the CLI's live tests.
+     - Not done: signing. An unsigned executable a browser downloaded meets
+       SmartScreen; the installer's download carries no mark of the web, so
+       it does not. Signing is a separate decision.
 
 Why a JavaScript CLI is viable at all, checked under Bun 1.4 so the later
 phases rest on something measured rather than assumed — the first two before
