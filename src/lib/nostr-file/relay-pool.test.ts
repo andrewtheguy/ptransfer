@@ -1116,6 +1116,45 @@ describe('prepareStorageRelays', () => {
     }
   });
 
+  it('never sweeps the replacements a deferred backfill proved for the control set', async () => {
+    const control = [SEED_RELAYS[0], SEED_RELAYS[1]];
+    const replacement = 'wss://replacement.example';
+    const other = 'wss://late-ok.example';
+    const unprobed = Array.from(
+      { length: 20 },
+      (_, i) => `wss://cached-${i}.example`,
+    );
+    const pool = createMockPool();
+    // The sweep's discovery turns the replacement up again, beside a relay
+    // it is free to probe.
+    for (const seed of SEED_RELAYS) {
+      pool.store.set(seed, [replacement, other].map(discoveryEvent));
+    }
+    const storage = memoryStorage();
+    const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
+      controlRelays: control,
+      storage,
+      discovered: Promise.resolve({ proven: [], unprobed }),
+      controlReplacements: Promise.resolve([replacement]),
+    });
+    const ring = await prepared.ring;
+    expect(ring).not.toContain(replacement);
+
+    const checked = () =>
+      storage.relayHealth
+        .filter((r) => r.lastCheckedAt !== null)
+        .map((r) => r.url);
+    const deadline = Date.now() + 5000;
+    while (!checked().includes(other)) {
+      if (Date.now() > deadline) throw new Error('sweep never finished');
+      await settle();
+    }
+    await settle();
+    expect(checked()).not.toContain(replacement);
+    expect(pool.closedRelays).not.toContain(replacement);
+  });
+
   it('stops on the signal, rejects the ring as cancelled, and records no verdict from the teardown', async () => {
     const candidates = Array.from(
       { length: 30 },

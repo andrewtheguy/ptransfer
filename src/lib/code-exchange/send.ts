@@ -299,6 +299,7 @@ export function startSenderFallback(opts: {
           storage,
           stats: selection.stats,
           discovered: selection.discovered,
+          controlReplacements: selection.replacements,
           signal: sweepAbort.signal,
           isCancelled: opts.isCancelled,
           onProgress: (p) => storageListener?.(p),

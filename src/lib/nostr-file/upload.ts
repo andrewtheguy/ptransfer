@@ -599,6 +599,13 @@ export function prepareStorageRelays(
      */
     discovered?: TransferRelaySelection['discovered'];
     /**
+     * The control relays a deferred backfill proved
+     * (`TransferRelaySelection.replacements`), which the relay fallback adds
+     * to the control channel: the sweep must never probe them, since a probe
+     * closes the relay it checked.
+     */
+    controlReplacements?: Promise<string[]> | null;
+    /**
      * Signaling seed pool: probed for the control channel, queried for
      * discovery, and barred from the storage ring. Defaults to
      * DEFAULT_RELAYS.
@@ -619,13 +626,21 @@ export function prepareStorageRelays(
   // The whole relay population, uncapped, probed as far as the caller lasts,
   // so the next transfer is not limited to what this one happened to need.
   // Best-effort: its outcome is the cache, never the ring. Skipped for a
-  // caller-picked ring — there is no discovery to continue.
-  const sweep = (ring: string[], unprobed: string[]) => {
+  // caller-picked ring — there is no discovery to continue. Every relay that
+  // carries or may come to carry this transfer is left out, since a probe
+  // closes what it checked: the control set, the deferred replacements and
+  // the reserve the control channel promotes from, and the ring.
+  const sweep = (upload: UploadRelaySelection, replacements: string[]) => {
     if (opts.relayOverride?.length) return;
     void sweepRelayHealth(pool, storage, {
-      unprobed,
+      unprobed: upload.unprobedCandidates,
       seeds: opts.seeds,
-      excludeRelays: [...opts.controlRelays, ...ring],
+      excludeRelays: [
+        ...opts.controlRelays,
+        ...replacements,
+        ...upload.reserveRelays,
+        ...upload.storageRelays,
+      ],
       signal: opts.signal,
       isCancelled,
     }).catch(() => {});
@@ -641,7 +656,8 @@ export function prepareStorageRelays(
       onProgress: opts.onProgress ?? (() => {}),
       stats,
     });
-    sweep(upload.storageRelays, upload.unprobedCandidates);
+    // Settles with `discovered` when there is one, so this costs no wait.
+    sweep(upload, (await opts.controlReplacements) ?? []);
     return upload;
   })();
   const ring = (async () => (await selection).storageRelays)();
