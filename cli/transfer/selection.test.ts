@@ -237,8 +237,8 @@ describe('openSelection', () => {
     },
   );
 
-  // Bun's `realpath` once read the backslash as a separator, and the folder
-  // could not be sent at all.
+  // Bun before 1.4.4 read the backslash as a separator in `realpath`, and the
+  // folder could not be sent at all.
   it.skipIf(process.platform === 'win32')(
     'sends a file with a backslash in its name that stays in the folder',
     async () => {

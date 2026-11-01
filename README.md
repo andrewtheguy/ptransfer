@@ -258,7 +258,7 @@ There is one input for all three modes — no mode to choose. The page works out
 
 ## Development
 
-Requires [Bun](https://bun.com/) 1.4.0.
+Requires [Bun](https://bun.com/) 1.4.4.
 
 ```bash
 # Install dependencies
