@@ -1,7 +1,7 @@
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { useT } from '@/i18n/locale-context';
+import { useLocale, useT } from '@/i18n/locale-context';
 import { LocaleLink } from '@/i18n/locale-link';
 import { generateTextQRCode } from '@/lib/qr-utils';
 import { buildOnionUrl } from '@/lib/receive-link';
@@ -29,6 +29,7 @@ export function TorAddressDisplay({
   password,
 }: TorAddressDisplayProps) {
   const t = useT();
+  const locale = useLocale();
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
 
@@ -40,7 +41,7 @@ export function TorAddressDisplay({
     void (async () => {
       try {
         const url = await generateTextQRCode(
-          buildOnionUrl(window.location.origin, address),
+          buildOnionUrl(window.location.origin, address, locale),
           { width: QR_WIDTH, errorCorrectionLevel: 'M' },
         );
         if (active) setQrUrl(url);
@@ -56,7 +57,7 @@ export function TorAddressDisplay({
     return () => {
       active = false;
     };
-  }, [address]);
+  }, [address, locale]);
 
   return (
     <div className="space-y-3 rounded-lg border bg-muted/40 p-4">

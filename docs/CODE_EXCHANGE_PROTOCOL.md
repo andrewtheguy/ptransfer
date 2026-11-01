@@ -350,7 +350,9 @@ How a code reaches the other device is not part of this contract. What is:
   and line wrapping around it are ignored.
 - **QR** is browser-only today: the offer is chunked across URL QR codes and
   the answer is a single binary QR. The chunking, its CRC-32, and the URL form
-  are specified in [ARCHITECTURE.md](./ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts).
+  are specified in [ARCHITECTURE.md](./ARCHITECTURE.md#code-exchange-signaling-srclibcode-signalingts);
+  a chunk URL may name the sender's language after the chunk, as every
+  receive link may ([INTEROP_PROTOCOL.md §1.4](./INTEROP_PROTOCOL.md#14-receive-links)).
   The CLI carries the same container as text through the copy/paste half; a
   terminal has no camera to read either QR back with, so an answer reaches it
   as text however its offer travelled.

@@ -8,7 +8,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
-import { useT } from '@/i18n/locale-context';
+import { useLocale, useT } from '@/i18n/locale-context';
 import { buildChunkUrl, chunkPayload } from '@/lib/chunk-utils';
 import { generateMutualClipboardData } from '@/lib/code-signaling';
 import { generateTextQRCode } from '@/lib/qr-utils';
@@ -39,6 +39,7 @@ export function MultiQRDisplay({
   showCopyButton = true,
 }: MultiQRDisplayProps) {
   const t = useT();
+  const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const [qrImageUrls, setQrImageUrls] = useState<Map<number, string>>(
     new Map(),
@@ -59,11 +60,11 @@ export function MultiQRDisplay({
     const baseUrl = window.location.origin;
     const chunks = chunkPayload(data);
     return chunks.map((chunk, i) => ({
-      url: buildChunkUrl(baseUrl, chunk),
+      url: buildChunkUrl(baseUrl, chunk, locale),
       index: i,
       total: chunks.length,
     }));
-  }, [data]);
+  }, [data, locale]);
 
   useEffect(() => {
     if (chunkInfos.length === 0) {

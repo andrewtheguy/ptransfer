@@ -7,7 +7,8 @@
  *   chunk 1..N-1: [1 byte: chunk_index][1 byte: total_chunks][N bytes: data]
  */
 
-import { t } from '@/lib/i18n';
+import { DEFAULT_LOCALE, type Locale, t } from '@/lib/i18n';
+import { fragmentValue, withLinkLocale } from '@/lib/link-locale';
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -125,12 +126,16 @@ export function chunkPayload(
 
 /**
  * Build a URL for a single chunk.
- * Format: {baseUrl}/r#{base64url}
+ * Format: {baseUrl}/r#{base64url}, with `&l=es` after it for a Spanish sender.
  */
-export function buildChunkUrl(baseUrl: string, chunk: Uint8Array): string {
+export function buildChunkUrl(
+  baseUrl: string,
+  chunk: Uint8Array,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
   const encoded = base64urlEncode(chunk);
   const base = baseUrl.replace(/\/$/, '');
-  return `${base}/r#${encoded}`;
+  return withLinkLocale(`${base}/r#${encoded}`, locale);
 }
 
 /**
@@ -211,7 +216,7 @@ export function extractChunkParam(url: string): string | null {
     const hash = parsed.hash;
     if (!hash || hash.length < 2) return null;
 
-    const payload = hash.slice(1);
+    const payload = fragmentValue(hash);
     if (!/^[A-Za-z0-9_-]+$/.test(payload)) return null;
 
     return payload;

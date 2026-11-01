@@ -333,8 +333,11 @@ through `useT()` from `src/i18n/locale-context.ts`. Adding a locale to
   other English; the pages are declared once and matched on the path without
   its prefix, so switching language from the navigation bar keeps a transfer
   in progress. In-app links go through `LocaleLink` and `useLocaleNavigate`
-  to stay in the language; links handed to the other side (a PIN link, an
-  onion link, multi-QR links) carry no prefix.
+  to stay in the language. Links handed to the other side (a PIN link, an
+  onion link, multi-QR links) carry no prefix; a Spanish sender's add `&l=es`
+  to their fragment (`/receive#p=<PIN>&l=es`), and the page they open
+  switches to Spanish before it renders. An English sender's links are
+  unchanged.
 - **CLI**: `--lang en` or `--lang es`, with any command or none
   (`ptransfer --lang es`, `ptransfer send --pin --lang es report.pdf`), picks
   the language. Without it, the language comes from `LC_ALL`, `LC_MESSAGES` or

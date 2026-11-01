@@ -90,6 +90,23 @@ describe('classifyReceiveText', () => {
     });
   });
 
+  test("recognizes links that carry the sender's language", () => {
+    const pin = generatePin();
+    expect(classifyReceiveText(buildPinUrl(ORIGIN, pin, 'es'))).toEqual({
+      kind: 'pin',
+      pin,
+      pinKind: 'standard',
+    });
+    expect(classifyReceiveText(buildOnionUrl(ORIGIN, ONION, 'es'))).toEqual({
+      kind: 'onion',
+      address: ONION,
+    });
+    const chunk = chunkPayload(buildOfferBinary())[0];
+    expect(classifyReceiveText(buildChunkUrl(ORIGIN, chunk, 'es'))).toEqual(
+      classifyReceiveText(buildChunkUrl(ORIGIN, chunk)),
+    );
+  });
+
   test('recognizes an onion address carried in a link', () => {
     expect(classifyReceiveText(buildOnionUrl(ORIGIN, ONION))).toEqual({
       kind: 'onion',

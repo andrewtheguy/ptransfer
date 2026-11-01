@@ -130,8 +130,10 @@ Use async await instead of promises unless promises is meant for a specific reas
   logs and `--verbose` diagnostics, and the labels of the CLI's standard-output
   `label: value` lines stay English.
 - Spanish pages live under `/es/`. In-app links use `LocaleLink`,
-  `LocaleNavLink` and `useLocaleNavigate` from `src/i18n/`; a link built for
-  the other side carries no prefix. A new indexed page goes in
+  `LocaleNavLink` and `useLocaleNavigate` from `src/i18n/`. A link built for
+  the other side carries no prefix: it names the sender's language in its
+  fragment instead (`&l=es`, `src/lib/link-locale.ts`), and the page it opens
+  moves to that language's path before rendering. A new indexed page goes in
   `INDEXED_PAGES` in `src/i18n/pages.ts`, which the build turns into its HTML
   files and the sitemap.
 

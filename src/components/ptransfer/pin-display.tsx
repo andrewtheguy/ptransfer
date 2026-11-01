@@ -2,7 +2,7 @@ import { AlertCircle, Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useT } from '@/i18n/locale-context';
+import { useLocale, useT } from '@/i18n/locale-context';
 import { LocaleLink } from '@/i18n/locale-link';
 import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
 import { generateTextQRCode } from '@/lib/qr-utils';
@@ -24,6 +24,7 @@ interface PinDisplayProps {
 
 export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
   const t = useT();
+  const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
@@ -107,7 +108,7 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     void (async () => {
       try {
         const url = await generateTextQRCode(
-          buildPinUrl(window.location.origin, pin),
+          buildPinUrl(window.location.origin, pin, locale),
           { width: QR_WIDTH, errorCorrectionLevel: 'M' },
         );
         if (active) setQrUrl(url);
@@ -123,7 +124,7 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     return () => {
       active = false;
     };
-  }, [pin]);
+  }, [pin, locale]);
 
   const handleCopy = useCallback(async () => {
     // Clear any existing timeout
