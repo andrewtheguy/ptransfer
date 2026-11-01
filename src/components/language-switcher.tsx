@@ -1,4 +1,4 @@
-import { Check, Languages } from 'lucide-react';
+import { Check, Globe } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
@@ -30,7 +30,7 @@ export function LanguageSwitcher() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" className="gap-1.5 px-2.5">
-          <Languages className="h-[1.2rem] w-[1.2rem]" />
+          <Globe className="h-[1.2rem] w-[1.2rem]" />
           <span aria-hidden="true" className="text-xs font-semibold uppercase">
             {locale}
           </span>
