@@ -180,7 +180,7 @@ export function HomePage() {
             <p className="text-xs font-medium text-muted-foreground">
               Windows, in PowerShell
             </p>
-            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} />
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} prompt="PS>" />
           </div>
         </div>
       </SectionContainer>

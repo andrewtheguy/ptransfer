@@ -309,18 +309,20 @@ export function CliPage() {
               to open the terminal UI: pick files, then a mode, or paste what a
               sender gave you.
             </p>
-            <CopyCommand
-              command={PTRANSFER_CLI_INSTALL_SH}
-              className="mt-6 w-full max-w-md text-left"
-            />
+            <div className="mt-6 w-full max-w-md space-y-2 text-left">
+              <p className="text-xs font-medium text-muted-foreground">
+                Linux and macOS
+              </p>
+              <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />
+              <p className="pt-1 text-xs font-medium text-muted-foreground">
+                Windows, in PowerShell
+              </p>
+              <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} prompt="PS>" />
+            </div>
             <p className="mt-2 max-w-md text-xs text-muted-foreground">
-              Installs to{' '}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                ~/.local/bin
-              </code>{' '}
-              without sudo, after checking the download against its published
-              checksum. On Windows, the PowerShell installer is under Install
-              below.
+              Both check the download against its published checksum and install
+              without sudo or administrator rights. More options are under
+              Install below.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3 md:justify-start">
               <Button asChild variant="outline" className="gap-2">
@@ -511,7 +513,7 @@ export function CliPage() {
         <div className="mx-auto mt-8 max-w-5xl space-y-6 rounded-2xl border bg-card p-6 shadow-sm">
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
-              Latest release
+              Linux and macOS
             </p>
             <CopyCommand command={PTRANSFER_CLI_INSTALL_SH} />
             <p className="text-xs text-muted-foreground">
@@ -535,7 +537,7 @@ export function CliPage() {
             <p className="text-sm font-medium text-foreground">
               Windows, in PowerShell
             </p>
-            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} />
+            <CopyCommand command={PTRANSFER_CLI_INSTALL_PS1} prompt="PS>" />
             <p className="text-xs text-muted-foreground">
               Checks the download the same way, installs to{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
@@ -563,7 +565,7 @@ export function CliPage() {
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
-              Newest prerelease
+              Newest prerelease, on Linux and macOS
             </p>
             <CopyCommand
               command={`${PTRANSFER_CLI_INSTALL_SH} -s -- --prerelease`}
@@ -571,7 +573,7 @@ export function CliPage() {
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
-              Download only, into the current directory
+              Download only, into the current directory, on Linux and macOS
             </p>
             <CopyCommand
               command={`${PTRANSFER_CLI_INSTALL_SH} -s -- --download-only`}

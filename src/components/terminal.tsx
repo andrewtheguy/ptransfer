@@ -78,6 +78,8 @@ export function TerminalGap() {
 
 interface CopyCommandProps {
   command: string;
+  /** The shell prompt shown before it, not copied: `PS>` for PowerShell. */
+  prompt?: string;
   className?: string;
 }
 
@@ -85,7 +87,11 @@ interface CopyCommandProps {
  * A command with a button that copies it. It wraps rather than scrolls, so a
  * long one is never cut off and two that differ only at the end look different.
  */
-export function CopyCommand({ command, className }: CopyCommandProps) {
+export function CopyCommand({
+  command,
+  prompt = '$',
+  className,
+}: CopyCommandProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -112,7 +118,7 @@ export function CopyCommand({ command, className }: CopyCommandProps) {
     >
       <code className="min-w-0 flex-1 px-3 py-2.5 font-mono text-xs leading-5 [overflow-wrap:anywhere]">
         <span aria-hidden="true" className="select-none text-emerald-400">
-          ${' '}
+          {prompt}{' '}
         </span>
         {command}
       </code>
