@@ -122,10 +122,12 @@ export function headFor(path: string, locale: Locale): HeadContent {
 }
 
 /**
- * The PWA manifest a page in `locale` links to. Each language is an app of its
- * own — its description, `lang`, and `start_url` on its own home — so one
- * installed from a Spanish page opens in Spanish. They sit side by side at the
- * root, where the icons they name relatively are.
+ * The PWA manifest a page in `locale` links to. Every language's names the
+ * same app, by one `id`, with its own description, `lang`, and `start_url` on
+ * its own home — so the app installed from a Spanish page opens in Spanish,
+ * and is still the one pTransfer app, not a second beside the English one.
+ * They sit side by side at the root, where the icons they name relatively
+ * are.
  */
 export function manifestHref(locale: Locale): string {
   return locale === DEFAULT_LOCALE

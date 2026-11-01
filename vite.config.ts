@@ -53,10 +53,12 @@ function replaceOnce(html: string, search: RegExp, replacement: string) {
 /**
  * The PWA manifest of one language. vite-plugin-pwa writes the default
  * locale's; `localizedPages` writes the others beside it, and links each
- * page to its own language's.
+ * page to its own language's. The `id` is the same in every language, so they
+ * are one app; without it, each `start_url` would make its own.
  */
 function webManifest(locale: Locale): Partial<ManifestOptions> {
   return {
+    id: '/',
     name: 'pTransfer',
     short_name: 'pTransfer',
     description: headFor('/', locale).description,
