@@ -84,6 +84,21 @@
   run it after changing `cli/pin/` or `src/lib/pin-exchange/`. A change there
   is a change to the browser tab too — both hosts run that handshake — so the
   web PIN flow is worth a look as well.
+- The live tests go through public Nostr relays, STUN and the Tor network,
+  which fail on their own now and then, and they are slow, so a failure is
+  read before anything is rerun. Run them only where a bullet above asks,
+  never as a routine check. The CLI scripts retry each failed scenario once,
+  and the Windows CI retries `tor-test` once.
+  - `[PASS ON RETRY]` is a network flake: say so, and do not check it
+    against `main`.
+  - Failed twice with a network error — HSDirs answering 404 (around 00:00
+    UTC, when Tor's hash ring changes, they do for a while), a Tor bootstrap
+    or circuit timing out, no relay or STUN answering — is still the network:
+    rerun it later — Code and PIN Exchange take `SCENARIOS=` to run one
+    scenario alone — and do not check it against `main`.
+  - Failed twice with an error from this code — a wrong file, a byte
+    mismatch, an exception or a non-zero exit with a message of ours — is
+    worth comparing with `main`, once, running only the failing scenario.
 
 ## Dependencies
 
