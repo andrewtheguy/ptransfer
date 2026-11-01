@@ -29,10 +29,16 @@ export function LanguageSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
+        <Button variant="outline" className="gap-1.5 px-2.5">
           <Languages className="h-[1.2rem] w-[1.2rem]" />
+          <span aria-hidden="true" className="text-xs font-semibold uppercase">
+            {locale}
+          </span>
           <span className="sr-only">
-            {t({ en: 'Change language', es: 'Cambiar idioma' })}
+            {t({
+              en: `Change language (now ${LOCALE_NAMES[locale]})`,
+              es: `Cambiar idioma (ahora ${LOCALE_NAMES[locale]})`,
+            })}
           </span>
         </Button>
       </DropdownMenuTrigger>

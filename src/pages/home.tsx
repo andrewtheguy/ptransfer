@@ -218,7 +218,11 @@ export function HomePage() {
                 ),
               })}
             </p>
-            <Button asChild variant="outline" className="mt-6 gap-2">
+            <Button
+              asChild
+              variant="outline"
+              className="mt-6 h-auto min-h-9 gap-2 whitespace-normal py-2"
+            >
               <LocaleLink to="/cli">
                 {t({
                   en: 'Get the command line app',
