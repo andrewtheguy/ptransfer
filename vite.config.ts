@@ -2,16 +2,24 @@ import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import type { Plugin } from 'vite';
+import type { ManifestOptions } from 'vite-plugin-pwa';
 import { VitePWA } from 'vite-plugin-pwa';
 import { configDefaults, defineConfig } from 'vitest/config';
 import {
   type HeadContent,
+  HTML_LANG,
   headFor,
   INDEXED_PAGES,
+  manifestHref,
   pageFileName,
   SITE_ORIGIN,
 } from './src/i18n/pages';
-import { LOCALES, localizePath } from './src/lib/i18n';
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  type Locale,
+  localizePath,
+} from './src/lib/i18n';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
@@ -42,7 +50,45 @@ function replaceOnce(html: string, search: RegExp, replacement: string) {
   return html.replace(search, replacement);
 }
 
-function withHead(template: string, head: HeadContent): string {
+/**
+ * The PWA manifest of one language. vite-plugin-pwa writes the default
+ * locale's; `localizedPages` writes the others beside it, and links each
+ * page to its own language's.
+ */
+function webManifest(locale: Locale): Partial<ManifestOptions> {
+  return {
+    name: 'pTransfer',
+    short_name: 'pTransfer',
+    description: headFor('/', locale).description,
+    lang: HTML_LANG[locale],
+    theme_color: '#000000',
+    background_color: '#000000',
+    display: 'standalone',
+    orientation: 'portrait',
+    scope: '/',
+    start_url: localizePath('/', locale),
+    icons: [
+      {
+        src: 'pwa-192x192.png',
+        sizes: '192x192',
+        type: 'image/png',
+      },
+      {
+        src: 'pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+      },
+      {
+        src: 'pwa-512x512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
+  };
+}
+
+function withHead(template: string, head: HeadContent, locale: Locale): string {
   const links = [
     ...(head.canonical
       ? [`<link rel="canonical" href="${escapeHtml(head.canonical)}" />`]
@@ -62,6 +108,13 @@ function withHead(template: string, head: HeadContent): string {
     /<meta name="description" content="[^"]*" \/>/,
     `<meta name="description" content="${escapeHtml(head.description)}" />`,
   );
+  if (locale !== DEFAULT_LOCALE) {
+    html = replaceOnce(
+      html,
+      /<link rel="manifest" href="[^"]*">/,
+      `<link rel="manifest" href="${manifestHref(locale)}">`,
+    );
+  }
   return replaceOnce(
     html,
     /<title>[^<]*<\/title>/,
@@ -89,7 +142,7 @@ function localizedPages(): Plugin {
       const template = String(index.source);
       for (const path of Object.keys(INDEXED_PAGES)) {
         for (const locale of LOCALES) {
-          const html = withHead(template, headFor(path, locale));
+          const html = withHead(template, headFor(path, locale), locale);
           const fileName = pageFileName(path, locale);
           if (fileName === 'index.html') {
             index.source = html;
@@ -113,6 +166,15 @@ function localizedPages(): Plugin {
           ].join('\n');
         }),
       );
+      for (const locale of LOCALES) {
+        if (locale === DEFAULT_LOCALE) continue;
+        this.emitFile({
+          type: 'asset',
+          fileName: manifestHref(locale).slice(1),
+          source: `${JSON.stringify(webManifest(locale))}\n`,
+        });
+      }
+
       this.emitFile({
         type: 'asset',
         fileName: 'sitemap.xml',
@@ -183,36 +245,7 @@ export default defineConfig({
         // Increase max file size for WASM files (zxing-wasm can be large)
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
       },
-      manifest: {
-        name: 'pTransfer',
-        short_name: 'pTransfer',
-        description:
-          'Share files and folders securely with end-to-end encryption',
-        theme_color: '#000000',
-        background_color: '#000000',
-        display: 'standalone',
-        orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
-        icons: [
-          {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
+      manifest: webManifest(DEFAULT_LOCALE),
     }),
   ],
   optimizeDeps: {

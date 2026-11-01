@@ -122,6 +122,18 @@ export function headFor(path: string, locale: Locale): HeadContent {
 }
 
 /**
+ * The PWA manifest a page in `locale` links to. Each language is an app of its
+ * own — its description, `lang`, and `start_url` on its own home — so one
+ * installed from a Spanish page opens in Spanish. They sit side by side at the
+ * root, where the icons they name relatively are.
+ */
+export function manifestHref(locale: Locale): string {
+  return locale === DEFAULT_LOCALE
+    ? '/manifest.webmanifest'
+    : `/manifest.${locale}.webmanifest`;
+}
+
+/**
  * The file a page is written to, relative to the build output: `index.html`
  * for the English home, `es/index.html` for the Spanish one (served at
  * `/es/`), and `about.html`, `es/about.html` for the rest (served at `/about`

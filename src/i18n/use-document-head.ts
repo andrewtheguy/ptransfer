@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { headFor } from '@/i18n/pages';
+import { headFor, manifestHref } from '@/i18n/pages';
 import type { Locale } from '@/lib/i18n';
 
 function setMeta(name: string, content: string): void {
@@ -26,6 +26,11 @@ export function useDocumentHead(path: string, locale: Locale): void {
     document.documentElement.lang = head.lang;
     document.title = head.title;
     setMeta('description', head.description);
+    // The production build links a manifest; development has none to switch.
+    const manifest = document.head.querySelector<HTMLLinkElement>(
+      'link[rel="manifest"]',
+    );
+    if (manifest) manifest.href = manifestHref(locale);
 
     for (const link of document.head.querySelectorAll(
       'link[rel="canonical"], link[rel="alternate"][hreflang]',
