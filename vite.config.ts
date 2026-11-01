@@ -244,6 +244,10 @@ export default defineConfig({
         // loads it — and that mode needs the network anyway, so precaching it
         // for offline use would cost every visitor the download for nothing.
         globIgnores: ['**/webtor_wasm_bg*.wasm'],
+        // A navigation to a file — sitemap.xml, robots.txt, a manifest — goes
+        // to the server; otherwise the app shell answers it and the app shows
+        // its not-found page. No app route has a dot in it.
+        navigateFallbackDenylist: [/\.[^/]+$/],
         // Increase max file size for WASM files (zxing-wasm can be large)
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
       },
