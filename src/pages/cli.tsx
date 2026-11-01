@@ -545,8 +545,8 @@ export function CliPage() {
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 PATH
               </code>
-              . Its terminal UI is for Windows Terminal; the older console host
-              is not supported, though the commands work there. Its options,{' '}
+              . Its terminal UI is tested in Windows Terminal, and works in the
+              older console host too. Its options,{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono">
                 -Prerelease
               </code>

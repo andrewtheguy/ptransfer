@@ -74,10 +74,11 @@ behind a portability layer:
   mutex on Windows; either is released by the kernel when its holder dies.
 - **Terminal**: results on standard output, everything else on standard
   error, a password typed in raw mode or piped in, and ANSI escapes. On
-  Windows the terminal UI is for Windows Terminal, or anything else drawing
-  through a pseudo console (ConPTY); the older console host, which a program
-  opened from Explorer still gets where Windows Terminal is not the default,
-  is not a target, and the terminal UI is not expected to be whole there.
+  Windows the terminal UI is tested in Windows Terminal, or anything else
+  drawing through a pseudo console (ConPTY), and recommended there. The
+  older console host, which a program opened from Explorer still gets where
+  Windows Terminal is not the default, is checked by hand only, and was found
+  to work, copying included.
 - **Release targets**: `bun-linux-x64`, `bun-linux-arm64`,
   `bun-darwin-arm64` and `bun-windows-x64` — platforms Bun, OpenTUI and
   node-datachannel all ship prebuilt. Intel macOS and Windows arm64 are not
@@ -244,8 +245,10 @@ behind a portability layer:
        Windows Terminal, the built executable's copy key put a PIN on the
        clipboard that pasted into Notepad unchanged. That run also found the
        executable missing node-datachannel's addon, which the smoke tests
-       now catch.
-   - **5c** (done, released with the next `Release CLI` run): shipping.
+       now catch. The released v0.0.12 was then run by hand in the older
+       console host (`conhost.exe powershell`): it draws, takes keys and
+       Ctrl-C, and its copy key reaches the clipboard there too.
+   - **5c** (done, released in v0.0.12): shipping.
      - A `windows-latest` row in the `Release CLI` workflow builds
        `ptransfer-windows-amd64.exe` and smoke-tests it in PowerShell, away
        from the checkout.

@@ -128,7 +128,7 @@ try {
     }
 
     Info 'Installation completed successfully!'
-    Info 'Run ptransfer in Windows Terminal; its terminal UI does not support the older console host.'
+    Info 'Open a new terminal and run ptransfer.'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
