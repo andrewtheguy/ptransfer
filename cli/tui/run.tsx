@@ -142,8 +142,9 @@ export function Run({
     }
     // Ctrl-C is the app's, not the `c` that copies.
     if (key.ctrl) return;
-    // What the transfer itself offers — a fresh PIN is the one there is —
-    // only while no field is up to take the key instead.
+    // What the transfer itself offers — a fresh PIN, or a code without
+    // waiting on relay replacements — only while no field is up to take the
+    // key instead.
     if (!prompt && !outcome) {
       const offered = actions.find((action) => action.key === key.name);
       if (offered) {

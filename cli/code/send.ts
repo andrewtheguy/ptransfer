@@ -144,23 +144,49 @@ export async function sendByCode(options: CodeSendOptions): Promise<number> {
           }),
       });
     }
-    fallback = startSenderFallback({
+    const prepared = startSenderFallback({
       kind: anonymous ? 'anonymous' : 'relay',
       host,
       transport,
       isCancelled,
     });
+    fallback = prepared;
 
-    const offer = await createSenderOffer({
-      metadata,
-      host,
-      fallback,
-      isCancelled,
-      report,
-      onConnection: (connection) => {
-        rtc = connection;
-      },
-    });
+    // While the code waits on replacements for defunct default relays, the
+    // person may have it now instead: a direct connection never needs them,
+    // and a relay fallback fills them in. The line interface has no key for
+    // it and waits.
+    let withdrawDefer: (() => void) | null = null;
+    const stopOfferingDefer = () => {
+      withdrawDefer?.();
+      withdrawDefer = null;
+    };
+    const offerReport = (update: SendReport) => {
+      if (!update.canDeferBackfill) stopOfferingDefer();
+      else if (!withdrawDefer) {
+        withdrawDefer = presenter.action(
+          's',
+          t({ en: 'show the code now', es: 'mostrar el código ya' }),
+          () => prepared.deferBackfill(),
+        );
+      }
+      report(update);
+    };
+    let offer: Awaited<ReturnType<typeof createSenderOffer>>;
+    try {
+      offer = await createSenderOffer({
+        metadata,
+        host,
+        fallback: prepared,
+        isCancelled,
+        report: offerReport,
+        onConnection: (connection) => {
+          rtc = connection;
+        },
+      });
+    } finally {
+      stopOfferingDefer();
+    }
     if (!offer) return interrupted ?? 1;
     void (async () => {
       const opened = await offer.channelOpened;

@@ -98,6 +98,8 @@ export function SendTransferPage() {
   // Code Exchange-specific properties (type-safe access via discriminated union)
   const codeState = activeHook.type === 'code' ? activeHook.hook.state : null;
   const offerData = codeState?.offerData;
+  const deferBackfill =
+    activeHook.type === 'code' ? activeHook.hook.deferBackfill : undefined;
   const submitAnswer =
     activeHook.type === 'code' ? activeHook.hook.submitAnswer : undefined;
 
@@ -449,7 +451,33 @@ export function SendTransferPage() {
 
           {/* Code Exchange: other states (connecting, transferring, etc.) */}
           {activeHook.type === 'code' && state.status !== 'showing_offer' && (
-            <TransferStatus state={state} />
+            <TransferStatus
+              state={state}
+              betweenProgressAndChunks={
+                codeState?.status === 'generating_offer' &&
+                codeState.canDeferBackfill &&
+                deferBackfill ? (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <p className="text-sm text-muted-foreground">
+                      {t({
+                        en: 'Some of the default relays for the fallback are not working, and replacements are being looked for. The code can be shown now without them: a direct connection does not need them, and if the file has to be relayed, the replacements are added then.',
+                        es: 'Algunos de los relays predeterminados para el respaldo no funcionan y se están buscando sustitutos. El código se puede mostrar ya sin ellos: una conexión directa no los necesita y, si el archivo tiene que retransmitirse, los sustitutos se añaden entonces.',
+                      })}
+                    </p>
+                    <Button
+                      onClick={deferBackfill}
+                      variant="secondary"
+                      className="w-full"
+                    >
+                      {t({
+                        en: 'Show the code now',
+                        es: 'Mostrar el código ya',
+                      })}
+                    </Button>
+                  </div>
+                ) : undefined
+              }
+            />
           )}
 
           {/* Tor: transfer progress, with the address pair while waiting */}

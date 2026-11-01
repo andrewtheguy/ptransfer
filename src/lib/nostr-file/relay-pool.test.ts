@@ -678,7 +678,7 @@ describe('resolveTransferRelays', () => {
     // Probing stopped as soon as the gap was filled: no ring was built here.
     // Every other candidate is handed on for the background ring — proven if
     // its probe was already in flight, unprobed otherwise — and none is lost.
-    const { proven, unprobed } = selection.discovered ?? {
+    const { proven, unprobed } = (await selection.discovered) ?? {
       proven: [],
       unprobed: [],
     };
@@ -735,9 +735,10 @@ describe('resolveTransferRelays', () => {
     // No default survived, so the whole control set is full-size-proven
     // discovered relays; the rest of the candidates go on to the ring.
     expect(selection.controlRelays).toHaveLength(CONTROL_RELAY_COUNT);
+    const discovered = await selection.discovered;
     const leftover = [
-      ...(selection.discovered?.proven ?? []).map((r) => r.url),
-      ...(selection.discovered?.unprobed ?? []),
+      ...(discovered?.proven ?? []).map((r) => r.url),
+      ...(discovered?.unprobed ?? []),
     ];
     for (const relay of selection.controlRelays) {
       expect(candidates).toContain(relay);
@@ -782,6 +783,88 @@ describe('resolveTransferRelays', () => {
     expect(selection.discovered).toBeNull();
     // Discovery never ran, so the cache is untouched.
     expect(storage.relayHealth).toEqual([]);
+  });
+
+  it('names the defaults alone when the person defers the backfill, and hands on what it finds', async () => {
+    const candidates = Array.from(
+      { length: 20 },
+      (_, i) => `wss://storage-${i}.example`,
+    );
+    // One default fails, so a backfill starts; every storage candidate holds
+    // its probe until released, so the backfill is still running when the
+    // person asks for the code.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pool = createMockPool({
+      blackholeRelays: new Set([SEED_RELAYS[0]]),
+      beforePublish: async (relay) => {
+        if (relay.startsWith('wss://storage-')) await gate;
+      },
+    });
+    pool.store.set(
+      SEED_RELAYS[1],
+      candidates.map((url) => makeEvent(30166, [['d', url]])),
+    );
+    let defer!: () => void;
+    const backfillDeferred = new Promise<void>((resolve) => {
+      defer = resolve;
+    });
+    const offered: boolean[] = [];
+    const selection = await resolveTransferRelays(pool, memoryStorage(), {
+      ...opts(),
+      backfillDeferred,
+      onBackfill: (deferrable) => {
+        offered.push(deferrable);
+        if (deferrable) defer();
+      },
+    });
+    expect(offered).toEqual([true]);
+    expect([...selection.controlRelays].sort()).toEqual(
+      SEED_RELAYS.slice(1).sort(),
+    );
+    // The backfill runs on behind the code. Once it finishes, the one
+    // replacement it was looking for is handed back for the control set and
+    // kept out of what goes on to the storage ring.
+    release();
+    const replacements = await selection.replacements;
+    expect(replacements).toHaveLength(1);
+    expect(candidates).toContain(replacements?.[0]);
+    const discovered = await selection.discovered;
+    const leftover = [
+      ...(discovered?.proven ?? []).map((r) => r.url),
+      ...(discovered?.unprobed ?? []),
+    ];
+    expect(leftover).not.toContain(replacements?.[0]);
+    expect(leftover).toHaveLength(candidates.length - 1);
+  });
+
+  it('does not let the backfill be deferred below the floor', async () => {
+    const candidates = Array.from(
+      { length: 20 },
+      (_, i) => `wss://cached-${i}.example`,
+    );
+    const storage = memoryStorage({
+      candidates,
+      discoveredAt: Date.now(),
+      cursor: 0,
+    });
+    // One default passes: without the backfill there would be no fallback.
+    const pool = createMockPool({
+      blackholeRelays: new Set(SEED_RELAYS.slice(1)),
+    });
+    const offered: boolean[] = [];
+    const selection = await resolveTransferRelays(pool, storage, {
+      ...opts(),
+      backfillDeferred: Promise.resolve(),
+      onBackfill: (deferrable) => {
+        offered.push(deferrable);
+      },
+    });
+    expect(offered).toEqual([false]);
+    expect(selection.replacements).toBeNull();
+    expect(selection.controlRelays).toHaveLength(CONTROL_RELAY_COUNT);
   });
 
   it('throws when neither the defaults nor discovery reach the floor', async () => {
@@ -1031,6 +1114,45 @@ describe('prepareStorageRelays', () => {
     for (const url of [...control, ...ring]) {
       expect(pool.closedRelays).not.toContain(url);
     }
+  });
+
+  it('never sweeps the replacements a deferred backfill proved for the control set', async () => {
+    const control = [SEED_RELAYS[0], SEED_RELAYS[1]];
+    const replacement = 'wss://replacement.example';
+    const other = 'wss://late-ok.example';
+    const unprobed = Array.from(
+      { length: 20 },
+      (_, i) => `wss://cached-${i}.example`,
+    );
+    const pool = createMockPool();
+    // The sweep's discovery turns the replacement up again, beside a relay
+    // it is free to probe.
+    for (const seed of SEED_RELAYS) {
+      pool.store.set(seed, [replacement, other].map(discoveryEvent));
+    }
+    const storage = memoryStorage();
+    const prepared = prepareStorageRelays(pool, {
+      seeds: SEED_RELAYS,
+      controlRelays: control,
+      storage,
+      discovered: Promise.resolve({ proven: [], unprobed }),
+      controlReplacements: Promise.resolve([replacement]),
+    });
+    const ring = await prepared.ring;
+    expect(ring).not.toContain(replacement);
+
+    const checked = () =>
+      storage.relayHealth
+        .filter((r) => r.lastCheckedAt !== null)
+        .map((r) => r.url);
+    const deadline = Date.now() + 5000;
+    while (!checked().includes(other)) {
+      if (Date.now() > deadline) throw new Error('sweep never finished');
+      await settle();
+    }
+    await settle();
+    expect(checked()).not.toContain(replacement);
+    expect(pool.closedRelays).not.toContain(replacement);
   });
 
   it('stops on the signal, rejects the ring as cancelled, and records no verdict from the teardown', async () => {

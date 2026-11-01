@@ -11,6 +11,7 @@ import {
 } from './codec';
 import {
   CLOCK_SKEW_TOLERANCE_SEC,
+  CONTROL_RELAY_COUNT,
   LIVE_BATCH_CHUNKS,
   LIVE_HEARTBEAT_MS,
   LIVE_IDLE_TIMEOUT_MS,
@@ -100,6 +101,13 @@ export async function sendFileLive(
     session: RelaySession;
     /** Proven signaling relays carrying the control channel (from the offer). */
     controlRelays: string[];
+    /**
+     * The replacements for defunct defaults the offer went out without
+     * (`TransferRelaySelection.replacements`): added to the control set as
+     * they arrive, and whatever they fall short of CONTROL_RELAY_COUNT is
+     * filled from the reserve. Never rejects.
+     */
+    controlReplacements?: Promise<string[]>;
     /**
      * The storage ring being prepared behind the exchange, on the same pool.
      * Its discovery tallies are continued here, and its reserve supplies the
@@ -225,9 +233,10 @@ export async function sendFileLive(
     let lastPeerAt = 0;
 
     // Control replacements: spare relays the storage ring passed over, and
-    // how many demotions are still waiting for one. The reserve arrives with
-    // the ring, which may be later than the first demotion, so the debt is
-    // counted rather than dropped and paid off whenever spares turn up.
+    // how many places in the control set are still waiting for one. The
+    // reserve arrives with the ring, which may be later than the first
+    // demotion, so the debt is counted rather than dropped and paid off
+    // whenever spares turn up.
     const reserve: string[] = [];
     let owedPromotions = 0;
 
@@ -322,7 +331,8 @@ export async function sendFileLive(
     };
 
     /**
-     * Put spares in the place of demoted signaling relays, fastest first.
+     * Put spares in the place of demoted signaling relays, and in the places
+     * a deferred offer's replacements left empty, fastest first.
      *
      * Nothing is published to tell the receiver on its own: the control set
      * rides every announcement, so marking the announcement dirty is what
@@ -556,6 +566,25 @@ export async function sendFileLive(
       availDirty = true;
       const loop = failOnError(controlLoop);
 
+      // An offer shown before its defunct defaults were replaced gets them
+      // now: the ones the backfill proved behind the code, then spares for
+      // whatever places they leave empty. Announced like any promotion.
+      const replacementsReady = (async () => {
+        if (!opts.controlReplacements) return;
+        const found = await opts.controlReplacements;
+        if (finished) return;
+        const added = channel.add(found);
+        owedPromotions += Math.max(
+          0,
+          CONTROL_RELAY_COUNT - controlRelays.length - added.length,
+        );
+        if (added.length > 0) {
+          availDirty = true;
+          control.notify();
+        }
+        promote();
+      })();
+
       // The spares land with the ring. A signaling relay demoted before then
       // is replaced the moment they arrive; one demoted after is replaced on
       // the spot.
@@ -593,7 +622,13 @@ export async function sendFileLive(
       } finally {
         stop();
         clearInterval(watchdog);
-        await Promise.allSettled([reserveReady, uploadStart, workers, loop]);
+        await Promise.allSettled([
+          replacementsReady,
+          reserveReady,
+          uploadStart,
+          workers,
+          loop,
+        ]);
         if (!succeeded) {
           // Best effort: let the receiver stop waiting right away.
           await Promise.race([
