@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input';
 import { useT } from '@/i18n/locale-context';
 import {
   CONFIRMATION_CODE_LENGTH,
+  formatConfirmationCode,
+  isCrockfordBase32,
   normalizeCrockfordBase32,
 } from '@/lib/crypto';
 
@@ -30,9 +32,11 @@ export function ConfirmationCodeInput({
   const [error, setError] = useState<string | null>(null);
 
   // Normalizing on entry means the hyphen the receiver sees, lowercase typing,
-  // and the classic O/0 and I/1 mix-ups all land on the same value.
+  // and the classic O/0 and I/1 mix-ups all land on the same value; a space
+  // or any other character is no part of a code.
   const normalized = normalizeCrockfordBase32(value);
-  const isComplete = normalized.length === CONFIRMATION_CODE_LENGTH;
+  const isCode = isCrockfordBase32(normalized);
+  const isComplete = isCode && normalized.length === CONFIRMATION_CODE_LENGTH;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,12 +79,17 @@ export function ConfirmationCodeInput({
           setValue(e.target.value);
           setError(null);
         }}
-        placeholder={'•'.repeat(CONFIRMATION_CODE_LENGTH)}
+        // The field keeps what was typed, hyphen and lowercase included, and
+        // only shows it in capitals: rewriting the value as it is typed would
+        // move the caret. What is checked is the normalized form.
+        placeholder={formatConfirmationCode(
+          '•'.repeat(CONFIRMATION_CODE_LENGTH),
+        )}
         aria-label={t({
           en: 'Confirmation code',
           es: 'Código de confirmación',
         })}
-        className={`font-mono text-xl text-center tracking-[0.2em] ${
+        className={`font-mono text-xl text-center uppercase tracking-[0.2em] ${
           error ? 'border-destructive' : isComplete ? 'border-green-500' : ''
         }`}
         autoComplete="off"
@@ -93,6 +102,14 @@ export function ConfirmationCodeInput({
         <span className="text-xs text-destructive flex items-start gap-1.5">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-px" />
           {error}
+        </span>
+      ) : !isCode ? (
+        <span className="text-xs text-destructive flex items-start gap-1.5">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-px" />
+          {t({
+            en: 'A code has only letters and digits, with an optional hyphen.',
+            es: 'Un código solo tiene letras y números, con un guion opcional.',
+          })}
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">

@@ -40,17 +40,17 @@ export function encodeCrockfordBase32(bytes: Uint8Array): string {
 /**
  * Normalize a hand-typed Crockford Base32 string for comparison.
  *
- * Uppercases, drops the separators people insert while transcribing (spaces
- * and hyphens), folds the ambiguous letters onto their digits (I/L -> 1,
- * O -> 0), and discards anything still outside the alphabet. Two codes are
- * equal when their normalized forms are.
+ * Uppercases, drops the hyphen a code is shown with
+ * (`formatConfirmationCode`), and folds the ambiguous letters onto their
+ * digits (I/L -> 1, O -> 0). Anything else outside the alphabet — a space
+ * included — is kept, so the result is no code (`isCrockfordBase32`) and
+ * matches none. Two codes are equal when their normalized forms are.
  */
 export function normalizeCrockfordBase32(input: string): string {
   let out = '';
 
   for (const char of input.toUpperCase()) {
-    if (char === ' ' || char === '-' || char === '\t' || char === '\n')
-      continue;
+    if (char === '-') continue;
     if (char === 'I' || char === 'L') {
       out += '1';
       continue;
@@ -59,8 +59,23 @@ export function normalizeCrockfordBase32(input: string): string {
       out += '0';
       continue;
     }
-    if (CROCKFORD_ALPHABET.includes(char)) out += char;
+    out += char;
   }
 
   return out;
+}
+
+/** Whether `text` is made of the alphabet's characters alone. */
+export function isCrockfordBase32(text: string): boolean {
+  return [...text].every((char) => CROCKFORD_ALPHABET.includes(char));
+}
+
+/**
+ * A code as both hosts show it, in two halves for reading aloud: `ABCD-EFGH`.
+ * The hyphen is only for the eye; every place a code is typed back drops it
+ * (`normalizeCrockfordBase32`), so it is accepted with or without one.
+ */
+export function formatConfirmationCode(code: string): string {
+  const half = Math.ceil(code.length / 2);
+  return `${code.slice(0, half)}-${code.slice(half)}`;
 }

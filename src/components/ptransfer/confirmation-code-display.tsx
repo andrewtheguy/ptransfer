@@ -2,6 +2,7 @@ import { Check, Copy, KeyRound } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useT } from '@/i18n/locale-context';
+import { formatConfirmationCode } from '@/lib/crypto';
 
 interface ConfirmationCodeDisplayProps {
   code: string;
@@ -33,7 +34,7 @@ export function ConfirmationCodeDisplay({
   };
 
   // Split for legibility only — the sender's input accepts it either way.
-  const grouped = `${code.slice(0, 4)}-${code.slice(4)}`;
+  const grouped = formatConfirmationCode(code);
 
   return (
     <div className="rounded-lg border bg-muted/40 p-4 flex flex-col gap-3">
