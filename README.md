@@ -346,6 +346,10 @@ through `useT()` from `src/i18n/locale-context.ts`. Adding a locale to
   standard output keep their English labels in every language.
 - What travels to the peer, such as the reason a sender stopped, stays in
   English: the other side's language is not known.
+- A status or error message is put into words when it happens. Switching
+  language during a transfer changes the page at once, and every message after
+  the switch comes in the new language, but the one already on screen stays in
+  the old language until the next one replaces it.
 
 ## Documentation
 
