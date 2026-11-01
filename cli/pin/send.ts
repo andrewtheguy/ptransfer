@@ -338,6 +338,8 @@ export async function sendByPin(options: PinSendOptions): Promise<number> {
               throw new Error(t(CODE_MISMATCH));
             }
           },
+          // Shown as it is read out, in capitals; case is no part of a code.
+          { uppercase: true },
         ),
         expired,
       ]);

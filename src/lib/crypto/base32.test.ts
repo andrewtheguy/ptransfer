@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { encodeCrockfordBase32, normalizeCrockfordBase32 } from './base32';
+import {
+  encodeCrockfordBase32,
+  formatConfirmationCode,
+  isCrockfordBase32,
+  normalizeCrockfordBase32,
+} from './base32';
 import { CONFIRMATION_CODE_BYTES, CONFIRMATION_CODE_LENGTH } from './constants';
 
 describe('Crockford Base32', () => {
@@ -36,14 +41,19 @@ describe('Crockford Base32', () => {
     expect(normalizeCrockfordBase32('IiLlOo')).toBe('111100');
   });
 
-  test('normalization uppercases and drops transcription separators', () => {
+  test('normalization uppercases and drops the hyphen a code is shown with', () => {
     expect(normalizeCrockfordBase32('a4bc-d9zt')).toBe('A4BCD9ZT');
-    expect(normalizeCrockfordBase32(' A4BC D9ZT \n')).toBe('A4BCD9ZT');
+    expect(formatConfirmationCode('A4BCD9ZT')).toBe('A4BC-D9ZT');
   });
 
-  test('normalization discards characters outside the alphabet', () => {
-    expect(normalizeCrockfordBase32('A4?B*C%9')).toBe('A4BC9');
-    expect(normalizeCrockfordBase32('U')).toBe('');
+  test('normalization keeps a space or a stray character, so it is no code', () => {
+    expect(normalizeCrockfordBase32('A4BC D9ZT')).toBe('A4BC D9ZT');
+    expect(normalizeCrockfordBase32('A4?B*C%9')).toBe('A4?B*C%9');
+    expect(isCrockfordBase32(normalizeCrockfordBase32('A4BC D9ZT'))).toBe(
+      false,
+    );
+    expect(isCrockfordBase32(normalizeCrockfordBase32('U'))).toBe(false);
+    expect(isCrockfordBase32(normalizeCrockfordBase32('a4bc-d9zt'))).toBe(true);
   });
 
   test('an encoded value survives a round trip through normalization', () => {

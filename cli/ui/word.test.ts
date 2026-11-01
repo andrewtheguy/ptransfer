@@ -84,6 +84,21 @@ describe('readWord at a terminal', () => {
     expect(output.join('')).toBe('PIN: W7X\b \bKQ\n');
   });
 
+  it('echoes and takes capitals when asked to', async () => {
+    const { input } = terminal();
+    const output: string[] = [];
+    const pending = readWord(
+      'Code: ',
+      (text) => text,
+      input,
+      { write: (t) => output.push(t) },
+      { uppercase: true },
+    );
+    input.push('w7k-q\r');
+    expect(await pending).toBe('W7K-Q');
+    expect(output.join('')).toBe('Code: W7K-Q\n');
+  });
+
   it('says why an answer was refused and asks for another', async () => {
     const { input } = terminal();
     const output: string[] = [];

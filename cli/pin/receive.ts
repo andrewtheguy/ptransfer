@@ -13,6 +13,7 @@ import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import { generateMutualAnswerBinary } from '@/lib/code-signaling';
 import {
   derivePakeSecret,
+  formatConfirmationCode,
   getPinLocator,
   wipeBufferSource,
 } from '@/lib/crypto';
@@ -226,7 +227,11 @@ export async function receiveByPin(
       say(line);
     }
     say('');
-    presenter.hand(confirmationCode, 'confirmation code');
+    // Grouped as the tab shows it; the sender's side accepts it either way.
+    presenter.hand(
+      formatConfirmationCode(confirmationCode),
+      'confirmation code',
+    );
     say('');
 
     // The sender publishes nothing past its confirm until its operator types

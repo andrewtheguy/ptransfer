@@ -21,6 +21,8 @@ export interface Prompt {
   message: string;
   /** Why the last answer was refused, to show above the field. */
   error: string | null;
+  /** Whether the field shows and takes what is typed in capitals. */
+  uppercase?: boolean;
   /** Which time of asking this is, counting from one. A field empties when it changes. */
   attempt: number;
   /** Take an answer. A refused one leaves the prompt up with a new `error`. */

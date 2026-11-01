@@ -172,7 +172,7 @@ export function createTuiPresenter(
         ask(null);
       });
     },
-    readWord(message, accept) {
+    readWord(message, accept, options) {
       return new Promise((resolve, reject) => {
         let attempt = 0;
         const ask = (error: string | null) => {
@@ -181,6 +181,7 @@ export function createTuiPresenter(
             kind: 'word',
             message,
             error,
+            uppercase: options?.uppercase,
             attempt,
             submit: (text) => void take(text),
           });
