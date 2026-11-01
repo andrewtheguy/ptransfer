@@ -29,6 +29,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rm,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,6 +37,8 @@ import { basename, dirname, join } from 'node:path';
 import { unzipSync } from 'fflate';
 import {
   assertSameBytes,
+  passedLine,
+  retryOnce,
   terminate,
   WEB_ROOT,
   withTimeout,
@@ -193,6 +196,8 @@ async function transfer(
     receiverArgs?: string[];
   } = {},
 ): Promise<string> {
+  // Emptied first: a retried scenario must not meet what its first try left.
+  await rm(inbox, { recursive: true, force: true });
   await mkdir(inbox);
   const sender = runCli('sender', [
     'send',
@@ -304,19 +309,33 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
+const retried: string[] = [];
+/** One scenario, retried once; a retried pass is named at the end. */
+async function run(name: string, scenario: () => Promise<void>): Promise<void> {
+  if ((await retryOnce(name, scenario, cleanup)) === 'passed on retry') {
+    retried.push(name);
+  }
+}
+
 try {
-  if (SCENARIOS.has('direct')) await oneFile('direct', 3_000_000);
-  if (SCENARIOS.has('folder')) await folder();
+  if (SCENARIOS.has('direct')) {
+    await run('direct', () => oneFile('direct', 3_000_000));
+  }
+  if (SCENARIOS.has('folder')) await run('folder', folder);
   if (SCENARIOS.has('relay')) {
-    await oneFile('relay', 600_000, { receiverArgs: ['--simulate-no-direct'] });
+    await run('relay', () =>
+      oneFile('relay', 600_000, { receiverArgs: ['--simulate-no-direct'] }),
+    );
   }
   if (SCENARIOS.has('anonymous')) {
-    await oneFile('anonymous', 600_000, {
-      senderArgs: ['--anonymous', '--bridge', BRIDGE],
-      receiverArgs: ['--simulate-no-direct', '--bridge', BRIDGE],
-    });
+    await run('anonymous', () =>
+      oneFile('anonymous', 600_000, {
+        senderArgs: ['--anonymous', '--bridge', BRIDGE],
+        receiverArgs: ['--simulate-no-direct', '--bridge', BRIDGE],
+      }),
+    );
   }
-  console.log(`\nAll PIN Exchange CLI transfers passed in ${elapsed()}.`);
+  console.log(`\n${passedLine('PIN Exchange CLI transfers', elapsed(), retried)}`);
 } catch (error) {
   console.error(`\n[FAIL] ${error instanceof Error ? error.message : error}`);
   process.exitCode = 1;

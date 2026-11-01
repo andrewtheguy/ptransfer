@@ -91,4 +91,13 @@ if (-not $Live) {
 Invoke-Step 'live: Code Exchange' { & bun run test:live:code:cli }
 Invoke-Step 'live: PIN Exchange' { & bun run test:live:pin:cli }
 Invoke-Step 'live: Tor' { & bun run test:live:tor:cli }
-Invoke-Step 'live: tor-test' { & bun run cli tor-test }
+# Retried once, as the test scripts above retry each scenario: the Tor network
+# fails now and then on its own, and AGENTS.md says how to read a failure.
+Invoke-Step 'live: tor-test' {
+    & bun run cli tor-test
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Host '   [RETRY] tor-test failed; trying once more in 10s'
+    Start-Sleep -Seconds 10
+    & bun run cli tor-test
+    if ($LASTEXITCODE -eq 0) { Write-Host '   [PASS ON RETRY] tor-test: likely the network (see AGENTS.md)' }
+}

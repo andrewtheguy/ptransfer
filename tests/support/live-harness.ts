@@ -96,6 +96,63 @@ export function sleep(milliseconds: number): Promise<void> {
   );
 }
 
+/** How long a failed live scenario waits before its one retry. */
+const RETRY_PAUSE_MS = 10_000;
+
+const messageOf = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+/**
+ * Runs one live scenario, and once more if it fails.
+ *
+ * These scenarios go through public Nostr relays, STUN and the Tor network,
+ * which fail now and then for reasons no change here caused; telling such a
+ * failure from a real one used to mean a slow rerun, and often the same run
+ * on `main`. A scenario that fails once and then passes is reported as
+ * `[PASS ON RETRY]`, with the first error, and does not fail the run; one
+ * that fails both times fails it with both errors. AGENTS.md says what to do
+ * with each.
+ *
+ * `reset` runs between the two tries: it stops whatever the failed one left
+ * running, so the retry starts clean.
+ */
+export async function retryOnce(
+  name: string,
+  scenario: () => Promise<void>,
+  reset: () => Promise<void>,
+): Promise<'passed' | 'passed on retry'> {
+  let first: unknown;
+  try {
+    await scenario();
+    return 'passed';
+  } catch (error) {
+    first = error;
+  }
+  console.log(
+    `\n[RETRY] ${name} failed: ${messageOf(first)}\n        trying once more in ${RETRY_PAUSE_MS / 1000}s`,
+  );
+  await reset();
+  await sleep(RETRY_PAUSE_MS);
+  try {
+    await scenario();
+  } catch (second) {
+    throw new Error(
+      `${name} failed twice: ${messageOf(second)} (the first try: ${messageOf(first)})`,
+    );
+  }
+  console.log(
+    `[PASS ON RETRY] ${name}: the first try failed with: ${messageOf(first)}`,
+  );
+  return 'passed on retry';
+}
+
+/** The closing line of a live run that passed, naming any retried scenario. */
+export function passedLine(what: string, elapsed: string, retried: string[]): string {
+  return retried.length === 0
+    ? `All ${what} passed in ${elapsed}.`
+    : `All ${what} passed in ${elapsed}; ${retried.join(', ')} only on retry, likely the network (see AGENTS.md).`;
+}
+
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,

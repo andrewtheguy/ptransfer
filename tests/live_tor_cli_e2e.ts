@@ -22,12 +22,21 @@
 //                                   (default 480000)
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { unzipSync } from 'fflate';
 import {
   assertSameBytes,
+  passedLine,
+  retryOnce,
   terminate,
   WEB_ROOT,
   withTimeout,
@@ -143,6 +152,8 @@ async function transfer(
   inbox: string,
   { viaOut = false } = {},
 ): Promise<string> {
+  // Emptied first: a retried scenario must not meet what its first try left.
+  await rm(inbox, { recursive: true, force: true });
   await mkdir(inbox);
   const sender = runCli('sender', ['send', '--tor', ...paths, ...BRIDGE_ARGS]);
   const { address, password } = await withTimeout(
@@ -245,10 +256,18 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
+const retried: string[] = [];
+/** One scenario, retried once; a retried pass is named at the end. */
+async function run(name: string, scenario: () => Promise<void>): Promise<void> {
+  if ((await retryOnce(name, scenario, cleanup)) === 'passed on retry') {
+    retried.push(name);
+  }
+}
+
 try {
-  await cliToCli();
-  await cliToCliFolder();
-  console.log(`\nAll Tor CLI transfers passed in ${elapsed()}.`);
+  await run('file', cliToCli);
+  await run('folder', cliToCliFolder);
+  console.log(`\n${passedLine('Tor CLI transfers', elapsed(), retried)}`);
 } catch (error) {
   console.error(`\n[FAIL] ${error instanceof Error ? error.message : error}`);
   process.exitCode = 1;
