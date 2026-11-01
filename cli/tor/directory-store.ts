@@ -58,8 +58,12 @@ export function openDirectoryStore(
       const verdict = judgeDescription(described);
       if (!verdict.usable) {
         onSkip?.(
-          verdict.reason ??
-            t({ en: 'it is not usable', es: 'no se puede usar' }),
+          t(
+            verdict.reason ?? {
+              en: 'it is not usable',
+              es: 'no se puede usar',
+            },
+          ),
         );
         return undefined;
       }

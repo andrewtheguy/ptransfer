@@ -1,4 +1,4 @@
-import { t } from '@/lib/i18n';
+import type { Localized } from '@/lib/i18n';
 import type { DirectoryDescription } from './webtor-api';
 
 /**
@@ -18,8 +18,12 @@ const MIN_REMAINING_MS = 10 * 60 * 1000;
 
 export interface SeedVerdict {
   usable: boolean;
-  /** Why not, phrased to follow "Ignoring the cached directory:". */
-  reason?: string;
+  /**
+   * Why not, phrased to follow "Ignoring the cached directory:", in every
+   * language: a developer log takes the English, and the CLI's status line
+   * the person's own.
+   */
+  reason?: Localized;
 }
 
 /**
@@ -45,10 +49,10 @@ export function judgeDescription(
   if (!described) {
     return {
       usable: false,
-      reason: t({
+      reason: {
         en: 'it carries no readable consensus',
         es: 'no contiene ningún consenso legible',
-      }),
+      },
     };
   }
   const validAfter = described.validAfter.getTime();
@@ -56,32 +60,32 @@ export function judgeDescription(
   if (now < validAfter) {
     return {
       usable: false,
-      reason: t({
+      reason: {
         en: 'its consensus is not valid yet',
         es: 'su consenso aún no es válido',
-      }),
+      },
     };
   }
   if (now + MIN_REMAINING_MS > validUntil) {
     return {
       usable: false,
-      reason: t({
+      reason: {
         en: `its consensus expires at ${described.validUntil.toISOString()}`,
         es: `su consenso caduca el ${described.validUntil.toISOString()}`,
-      }),
+      },
     };
   }
   if (described.timePeriod !== described.timePeriodAt(now)) {
     return {
       usable: false,
-      reason: t({
+      reason: {
         en:
           'its consensus is from a previous onion-service time period, which ' +
           'would place every descriptor on the wrong HSDirs',
         es:
           'su consenso es de un periodo de servicio onion anterior, lo que ' +
           'colocaría cada descriptor en los HSDirs equivocados',
-      }),
+      },
     };
   }
   return { usable: true };

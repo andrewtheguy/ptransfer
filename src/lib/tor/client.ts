@@ -156,7 +156,7 @@ async function logDirectory(cache: string): Promise<void> {
   const verdict = judgeDescription(directory);
   if (!verdict.usable) {
     console.warn(
-      `[tor] This directory is not current: ${verdict.reason}. That spends ` +
+      `[tor] This directory is not current: ${verdict.reason?.en}. That spends ` +
         'the one period of slack either side, so a peer whose own directory ' +
         'has moved on further will not be reachable.',
     );

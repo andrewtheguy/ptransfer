@@ -227,7 +227,10 @@ export function SendMode({
       {opened && opened.skipped.length > 0 && (
         <Note>
           {t({
-            en: `Leaving out ${opened.skipped.length} symbolic link or special file, which the ZIP does not carry`,
+            en:
+              opened.skipped.length === 1
+                ? 'Leaving out 1 symbolic link or special file, which the ZIP does not carry'
+                : `Leaving out ${opened.skipped.length} symbolic links or special files, which the ZIP does not carry`,
             es:
               opened.skipped.length === 1
                 ? 'Se omite 1 enlace simbólico o archivo especial, que el ZIP no incluye'
