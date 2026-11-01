@@ -89,8 +89,13 @@ blocks the code — the 16-relay storage ring is never built before it. Whatever
 left over (relays that passed after the gap filled, candidates never reached) is handed
 to the background ring preparation so it does not discover or probe twice. Passing
 defaults are proven for control-sized messages; only their discovered replacements are
-also proven at full chunk size. An offer that resolves fewer than `MIN_CONTROL_RELAYS` (2)
-names no relays at all — and then there is no relay fallback. See the offer-relays section in
+also proven at full chunk size. While that backfill runs and the defaults that passed reach
+`MIN_CONTROL_RELAYS` (2) on their own, the Code Exchange sender may have the code shown
+without it: the offer then names those defaults alone and the backfill runs on behind the
+code. The replacements it proves are kept for the control set and the rest goes to the ring
+preparation as usual; the fallback adds the replacements and fills any place they leave
+empty from the reserve (see *Replacing a signaling relay*). An offer that resolves fewer than
+`MIN_CONTROL_RELAYS` names no relays at all — and then there is no relay fallback. See the offer-relays section in
 [ARCHITECTURE.md](ARCHITECTURE.md#offer-relays-srclibcode-signalingts).
 
 What the offer names is where the control channel *starts*, not where it is stuck: a
@@ -310,7 +315,10 @@ mid-transfer as well, and it is asymmetric — the sender owns the set:
    and the offer's control set by construction. Reserve relays are left disconnected
    until promoted.
 2. When a control relay is demoted, the sender promotes the fastest spare left and
-   marks the announcement dirty. There is no message type for the swap: the new set
+   marks the announcement dirty. An offer that went out before its backfill finished
+   (see *Control relays*) gets the replacements that backfill proved once the fallback
+   opens, and any place they leave empty below `CONTROL_RELAY_COUNT` is filled from the
+   reserve the same way, as soon as spares arrive. There is no message type for the swap: the new set
    rides the `ctl` field of the next `avail`, over the signaling relays that still
    work.
 3. The receiver adds every `ctl` entry it does not already hold — normalized, deduped,

@@ -97,6 +97,11 @@ export interface SendReport {
   useWebRTC?: boolean;
   /** Relay fallback: running totals for the relay transfer. */
   stats?: NostrFileTransferStats;
+  /**
+   * The code is waiting on replacements for defunct default relays, and the
+   * person may have it shown without them (`SenderFallback.deferBackfill`).
+   */
+  canDeferBackfill?: boolean;
 }
 
 /** Which data-path fallback an offer asks for. */
@@ -132,6 +137,12 @@ export type OfferFallback =
       controlRelays: string[];
       /** The storage ring, prepared in the background from here on. */
       storage: PreparedStorageRelays;
+      /**
+       * Null unless the offer went out before its defunct defaults were
+       * replaced: then the replacements found behind the code, which the
+       * fallback adds to the control set.
+       */
+      replacements: Promise<string[]> | null;
     }
   | { kind: 'anonymous'; relays: string[] }
   | { kind: 'none' };
@@ -157,6 +168,17 @@ export interface SenderFallback {
   resolvePhase(): RelayResolvePhase | null;
   /** Follow relay resolution until the returned function is called. */
   followResolve(listener: (phase: RelayResolvePhase) => void): () => void;
+  /**
+   * Whether the offer is waiting on a backfill it can go out without: the
+   * defaults that passed reach the floor, and the rest are being looked for.
+   */
+  canDeferBackfill(): boolean;
+  /**
+   * Settle the offer's relays now, on the defaults that passed, and leave
+   * the backfill to run on behind the code. Does nothing unless
+   * `canDeferBackfill()`.
+   */
+  deferBackfill(): void;
   /** Follow storage-ring preparation until the returned function is called. */
   followStorage(listener: (progress: UploadProgress) => void): () => void;
   /** End the sweep and close the pool. The transport stays the caller's. */
@@ -174,6 +196,11 @@ export function startSenderFallback(opts: {
   let pool: TransferPool | null = null;
   let phase: RelayResolvePhase | null = null;
   let resolveListener: ((phase: RelayResolvePhase) => void) | null = null;
+  let deferrable = false;
+  let deferNow!: () => void;
+  const backfillDeferred = new Promise<void>((resolve) => {
+    deferNow = resolve;
+  });
   let storageListener: ((progress: UploadProgress) => void) | null = null;
   // Ends the storage preparation and the sweep behind it with the pool, so a
   // teardown never waits out a probe and never records itself as failures.
@@ -211,13 +238,18 @@ export function startSenderFallback(opts: {
     // Robustness matches the storage transfer: the defaults are
     // control-probed, and a defunct default is replaced by a
     // full-size-proven discovered relay, not a weaker control-sized
-    // discovery. A failure or a set below the floor is not an error: the
-    // offer simply names no relays, and a failed direct connection then has
-    // no fallback.
+    // discovery. The person may have the code shown before that backfill
+    // finishes; the fallback then adds what it found behind the code. A
+    // failure or a set below the floor is not an error: the offer simply
+    // names no relays, and a failed direct connection then has no fallback.
     const relayPool = createTransferPool();
     pool = relayPool;
     const storage = opts.host.relayStorage();
+    // A deferred backfill keeps reporting after the offer's relays settled;
+    // by then its progress is no longer the offer's.
+    let resolving = true;
     const setPhase = (next: RelayResolvePhase) => {
+      if (!resolving) return;
       phase = next;
       resolveListener?.(next);
     };
@@ -226,19 +258,29 @@ export function startSenderFallback(opts: {
       let selection: Awaited<ReturnType<typeof resolveTransferRelays>>;
       try {
         selection = await resolveTransferRelays(relayPool, storage, {
-          isCancelled: opts.isCancelled,
+          // A deferred backfill can outlive the transfer's teardown, which
+          // must not be recorded as relay failures.
+          isCancelled: () => sweepAbort.signal.aborted || opts.isCancelled(),
           stats: createTransferStats('sender'),
           onControlProgress: () => setPhase('probing_defaults'),
           onUploadProgress: (p) =>
             setPhase(
               p.phase === 'discovering' ? 'discovering' : 'probing_discovered',
             ),
+          onBackfill: (canDefer) => {
+            deferrable = canDefer;
+          },
+          backfillDeferred,
         });
       } catch {
+        resolving = false;
+        deferrable = false;
         phase = null;
         close();
         return { kind: 'none' };
       }
+      resolving = false;
+      deferrable = false;
       phase = null;
       // The control relays are settled; the storage ring is prepared in the
       // background on the same pool and relay cache, since the offer does not
@@ -251,6 +293,7 @@ export function startSenderFallback(opts: {
       return {
         kind: 'relay',
         controlRelays: selection.controlRelays,
+        replacements: selection.replacements,
         storage: prepareStorageRelays(relayPool, {
           controlRelays: selection.controlRelays,
           storage,
@@ -278,6 +321,10 @@ export function startSenderFallback(opts: {
       return () => {
         if (resolveListener === listener) resolveListener = null;
       };
+    },
+    canDeferBackfill: () => deferrable,
+    deferBackfill() {
+      if (deferrable) deferNow();
     },
     followStorage(listener) {
       storageListener = listener;
@@ -405,11 +452,13 @@ export async function createSenderOffer(opts: {
 
     // The relay probe usually finished under ICE gathering. A backfill from
     // discovery can outlast it, and since the offer has to name its relays,
-    // that wait is reported rather than hidden.
+    // that wait is reported rather than hidden — with the offer to go out
+    // without the backfill when the defaults that passed are enough.
     const showPhase = (phase: RelayResolvePhase) =>
       report({
         status: 'generating_offer',
         message: t(RELAY_PHASE_MESSAGES[phase]),
+        canDeferBackfill: fallback.canDeferBackfill(),
       });
     const unfollow = fallback.followResolve(showPhase);
     const pending = fallback.resolvePhase();
@@ -945,6 +994,9 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
             pool,
             session,
             controlRelays,
+            ...(named.replacements
+              ? { controlReplacements: named.replacements }
+              : {}),
             storageRelays: named.storage,
             isCancelled,
             onProgress: (p) => {

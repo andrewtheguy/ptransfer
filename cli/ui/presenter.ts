@@ -62,7 +62,8 @@ export interface Presenter {
   ): Promise<T>;
   /**
    * Offer something the person may do while the transfer runs — minting a
-   * fresh PIN is the only one there is — until the returned function
+   * fresh PIN, or having a code shown without waiting on relay replacements
+   * — until the returned function
    * withdraws it. `key` is what the screen binds it to; the line interface
    * has nothing to bind, since standard input is where a piped answer comes
    * from, and ignores it.

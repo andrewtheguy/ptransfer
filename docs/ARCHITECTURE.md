@@ -713,6 +713,19 @@ matches.
   preparation neither discovers nor probes them again. This is the one case
   where storage discovery precedes the QR; it is uncommon (the defaults usually
   pass) and is the price of a robust control channel.
+- **Deferring the backfill.** Because the backfill is the one wait before the
+  QR that can run long, the Code Exchange sender may cut it short while it runs
+  ("Show the code now" on the page, `s` in the terminal UI; the line interface
+  has no key for it and waits). It is offered only while the defaults that
+  passed reach `MIN_CONTROL_RELAYS` on their own. The offer then names those
+  defaults alone, and the backfill runs on behind the QR. The replacements it
+  proves are kept out of the storage ring (`replacements`) and the rest is
+  handed to the ring preparation as usual (`discovered`, as a promise). If the
+  relay fallback runs, it adds those replacements to the control set and fills
+  any place they leave empty below `CONTROL_RELAY_COUNT` from the ring's
+  reserve, announced like any promotion (see *Replacing a signaling relay* in
+  [NOSTR_FILE_RELAY.md](NOSTR_FILE_RELAY.md)). PIN Exchange never defers: its
+  offer is built behind the confirmation code, where the wait is not seen.
 - **Storage preparation (`prepareStorageRelays`, `src/lib/nostr-file/upload.ts`).**
   The storage ring itself is prepared in the **background**, since the QR does
   not depend on it. When the defaults all passed, this discovers, full-size-probes,

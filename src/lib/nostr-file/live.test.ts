@@ -4,6 +4,7 @@ import { generateEphemeralKeys, uint8ArrayToBase64 } from '../nostr/events';
 import { chunkAad, encodeChunkContent, sha256 } from './codec';
 import {
   CONTROL_DEMOTE_MIN_PUBLISHES,
+  CONTROL_RELAY_COUNT,
   LIVE_BATCH_CHUNKS,
   NOSTR_FILE_CHUNK_SIZE,
 } from './constants';
@@ -669,6 +670,78 @@ describe.sequential('live single-copy relay transfer', () => {
       await sendDone.catch(() => {});
     }
   }, 30000);
+
+  it('adds the replacements a deferred offer went without, fills the rest from the reserve, and announces them', async () => {
+    // The offer went out on two signaling relays before the replacements for
+    // the rest were found. The backfill behind the code proved two of them;
+    // the places they leave empty are filled from the spares the storage ring
+    // passed over, with no demotion to prompt it, and the spare not needed
+    // stays in reserve.
+    const controlRelays = ['wss://c1.example', 'wss://c2.example'];
+    const replacements = ['wss://c-found-0.example', 'wss://c-found-1.example'];
+    const missing =
+      CONTROL_RELAY_COUNT - controlRelays.length - replacements.length;
+    const spares = Array.from(
+      { length: missing + 1 },
+      (_, i) => `wss://c-spare-${i}.example`,
+    );
+    const pool = createMockPool();
+    const data = randomBytes(2 * NOSTR_FILE_CHUNK_SIZE);
+    const session = newSession();
+    const since = nowSec();
+    let cancelled = false;
+    const sendDone = sendFileLive(data, META, {
+      pool,
+      session: session.sender,
+      controlRelays,
+      controlReplacements: Promise.resolve(replacements),
+      storageRelays: ringWithReserve(pool, RELAYS, spares, controlRelays),
+      isCancelled: () => cancelled,
+      onProgress: noProgress,
+    });
+    sendDone.catch(() => {});
+
+    const controlKey = await deriveControlKey(
+      session.receiver.keyBytes,
+      session.receiver.transferId,
+    );
+    const avails: AvailMessage[] = [];
+    const { secretKey } = generateEphemeralKeys();
+    const channel = openControlChannel(pool, controlRelays, {
+      transferId: session.receiver.transferId,
+      key: controlKey,
+      role: 'receiver',
+      secretKey,
+      since: since - 600,
+      expiresAt: since + 3600,
+      onMessage: (raw) => {
+        const msg = parseSenderMessage(raw, 2);
+        if (msg?.t === 'avail') avails.push(msg);
+      },
+    });
+    try {
+      await channel.send({ t: 'hello' });
+      const deadline = Date.now() + 10000;
+      while (!avails.some((a) => a.ctl.length === CONTROL_RELAY_COUNT)) {
+        if (Date.now() > deadline) {
+          throw new Error('the deferred set was never filled out');
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const latest = avails.at(-1) as AvailMessage;
+      expect(latest.ctl).toEqual([
+        ...controlRelays,
+        ...replacements,
+        ...spares.slice(0, missing),
+      ]);
+      // The last spare is held back for a demotion and carries nothing.
+      expect((pool.store.get(spares[missing]) ?? []).length).toBe(0);
+    } finally {
+      cancelled = true;
+      channel.close();
+      await sendDone.catch(() => {});
+    }
+  }, 20000);
 
   it('takes on a signaling relay the sender announces and acknowledges there', async () => {
     // Scripted sender: announce a control set with a relay the offer never

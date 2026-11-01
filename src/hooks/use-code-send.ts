@@ -65,6 +65,11 @@ interface CodeTransferStateBase {
   connectionFailed?: boolean;
   /** Relay fallback: running totals for the relay transfer. */
   stats?: NostrFileTransferStats;
+  /**
+   * The code is waiting on replacements for defunct default relays and can
+   * be shown without them (`deferBackfill`).
+   */
+  canDeferBackfill?: boolean;
 }
 
 // Error state has required message
@@ -97,6 +102,11 @@ export interface UseCodeSendReturn {
   state: CodeTransferState;
   send: (content: TransferSource, options: CodeSendOptions) => Promise<void>;
   submitAnswer: (answerData: Uint8Array) => void;
+  /**
+   * Show the code now rather than wait for replacements for defunct default
+   * relays; a relay fallback fills them in later.
+   */
+  deferBackfill: () => void;
   cancel: () => void;
 }
 
@@ -358,9 +368,13 @@ export function useCodeSend(): UseCodeSendReturn {
     [clearExpirationTimeout, teardownFallback, closeConnection],
   );
 
+  const deferBackfill = useCallback(() => {
+    fallbackRef.current?.deferBackfill();
+  }, []);
+
   // Memoize return object to prevent unnecessary re-renders in consumers
   return useMemo(
-    () => ({ state, send, submitAnswer, cancel }),
-    [state, send, submitAnswer, cancel],
+    () => ({ state, send, submitAnswer, deferBackfill, cancel }),
+    [state, send, submitAnswer, deferBackfill, cancel],
   );
 }

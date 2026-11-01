@@ -71,6 +71,10 @@ export function shownLabel(label: string | null): {
 /** What an offered action is called in the key hints, by its label. */
 const ACTIONS = new Map<string, Localized>([
   ['a fresh PIN', { en: 'a fresh PIN', es: 'un PIN nuevo' }],
+  [
+    'show the code now',
+    { en: 'show the code now', es: 'mostrar el código ya' },
+  ],
 ]);
 
 export interface TuiPresenterOptions {

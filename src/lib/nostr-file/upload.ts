@@ -351,9 +351,23 @@ export interface TransferRelaySelection {
   /**
    * What the backfill's discovery pass left over — non-null only when
    * signaling had to backfill from discovery. The background ring
-   * preparation continues from it instead of discovering again.
+   * preparation continues from it instead of discovering again. A promise
+   * when the backfill was deferred: it then runs on behind the code, and
+   * everything it proves, the replacements it was looking for included, is
+   * handed on once it finishes (null if it failed).
    */
-  discovered: DiscoveredStorageRelays | null;
+  discovered:
+    | DiscoveredStorageRelays
+    | Promise<DiscoveredStorageRelays | null>
+    | null;
+  /**
+   * Null unless the person had the code shown before the backfill finished.
+   * The control set is then the defaults that passed, short of
+   * CONTROL_RELAY_COUNT, and this settles with the replacements the backfill
+   * went on to prove — kept out of the storage ring, for the relay fallback
+   * to add to the control set. Never rejects; a failed backfill proves none.
+   */
+  replacements: Promise<string[]> | null;
 }
 
 /**
@@ -367,6 +381,14 @@ export interface TransferRelaySelection {
  * built here: the caller prepares it in the background from what the probe
  * left over (`discovered`), since the code does not depend on it.
  * The control set and the ring stay disjoint.
+ *
+ * The backfill is the one wait here that can run long, so the person may cut
+ * it short (`backfillDeferred`) — but only while the defaults that passed
+ * reach MIN_CONTROL_RELAYS, since without the backfill there would otherwise
+ * be no fallback. The offer then names those defaults alone, and the backfill
+ * runs on behind the code: the replacements it proves are handed back
+ * (`replacements`) for the relay fallback to add, and the rest goes to the
+ * storage ring as it would have.
  *
  * Throws NOT_ENOUGH_RELAYS_MESSAGE when fewer than MIN_CONTROL_RELAYS are
  * usable; the caller then falls back to a relay-free Code Exchange offer.
@@ -384,6 +406,13 @@ export async function resolveTransferRelays(
     isCancelled: () => boolean;
     onControlProgress: (checked: number, healthy: number) => void;
     onUploadProgress: (p: UploadProgress) => void;
+    /**
+     * Called as the backfill starts, saying whether `backfillDeferred` would
+     * be honoured: whether the defaults that passed reach the floor alone.
+     */
+    onBackfill?: (deferrable: boolean) => void;
+    /** Settles when the person would rather have the code than wait. */
+    backfillDeferred?: Promise<void>;
     stats: NostrFileTransferStats;
   },
 ): Promise<TransferRelaySelection> {
@@ -427,22 +456,71 @@ export async function resolveTransferRelays(
   let discovered: DiscoveredStorageRelays | null = null;
   const missing = CONTROL_RELAY_COUNT - healthyDefaults.length;
   if (missing > 0) {
+    const deferrable = healthyDefaults.length >= MIN_CONTROL_RELAYS;
+    opts.onBackfill?.(deferrable);
     opts.onUploadProgress({ phase: 'discovering', stats });
-    const candidates = await discoverStorageCandidates(
-      pool,
-      storage,
-      healthyDefaults.map((relay) => relay.url),
-      seeds,
-      stats,
-    );
-    throwIfCancelled();
-    const probed = await probeStorageCandidates(pool, storage, candidates, {
-      targetCount: missing,
-      isCancelled: opts.isCancelled,
-      onProgress: opts.onUploadProgress,
-      stats,
-    });
-    throwIfCancelled();
+    const backfillTask = (async () => {
+      const candidates = await discoverStorageCandidates(
+        pool,
+        storage,
+        healthyDefaults.map((relay) => relay.url),
+        seeds,
+        stats,
+      );
+      throwIfCancelled();
+      const result = await probeStorageCandidates(pool, storage, candidates, {
+        targetCount: missing,
+        isCancelled: opts.isCancelled,
+        onProgress: opts.onUploadProgress,
+        stats,
+      });
+      throwIfCancelled();
+      return result;
+    })();
+    let probed: Awaited<typeof backfillTask>;
+    if (deferrable && opts.backfillDeferred) {
+      const deferred = opts.backfillDeferred;
+      const first = await Promise.race([
+        (async () => ({ probed: await backfillTask }))(),
+        (async () => {
+          await deferred;
+          return null;
+        })(),
+      ]);
+      if (first === null) {
+        // The code goes out on the defaults alone. What the backfill goes on
+        // to prove is not lost: the replacements it was looking for are kept
+        // for the control set, should the fallback run, and the rest is
+        // handed to the storage ring, exactly as when it finishes in time.
+        const finished = (async () => {
+          try {
+            const rest = await backfillTask;
+            const taken = rest.healthy.slice(0, missing);
+            const takenUrls = new Set(taken.map((relay) => relay.url));
+            return {
+              replacements: taken.map((relay) => relay.url),
+              discovered: {
+                proven: rest.passed.filter(
+                  (relay) => !takenUrls.has(relay.url),
+                ),
+                unprobed: rest.unprobedCandidates,
+              },
+            };
+          } catch {
+            return null;
+          }
+        })();
+        return {
+          controlRelays: seedControlStats(healthyDefaults),
+          stats,
+          discovered: (async () => (await finished)?.discovered ?? null)(),
+          replacements: (async () => (await finished)?.replacements ?? [])(),
+        };
+      }
+      probed = first.probed;
+    } else {
+      probed = await backfillTask;
+    }
     backfill = probed.healthy.slice(0, missing);
     const taken = new Set(backfill.map((relay) => relay.url));
     discovered = {
@@ -456,7 +534,12 @@ export async function resolveTransferRelays(
     throw notEnoughRelays();
   }
 
-  return { controlRelays: seedControlStats(control), stats, discovered };
+  return {
+    controlRelays: seedControlStats(control),
+    stats,
+    discovered,
+    replacements: null,
+  };
 }
 
 export interface PreparedStorageRelays {
@@ -510,8 +593,11 @@ export function prepareStorageRelays(
     controlRelays: string[];
     /** Continue this tally instead of starting a fresh one. */
     stats?: NostrFileTransferStats;
-    /** What `resolveTransferRelays`'s backfill discovery left over, if any. */
-    discovered?: DiscoveredStorageRelays | null;
+    /**
+     * What `resolveTransferRelays`'s backfill discovery left over, if any —
+     * awaited first when that backfill was deferred and is still running.
+     */
+    discovered?: TransferRelaySelection['discovered'];
     /**
      * Signaling seed pool: probed for the control channel, queried for
      * discovery, and barred from the storage ring. Defaults to
@@ -545,11 +631,12 @@ export function prepareStorageRelays(
     }).catch(() => {});
   };
   const selection = (async () => {
+    const discovered = await opts.discovered;
     const upload = await resolveUploadRelays(pool, storage, {
       relayOverride: opts.relayOverride,
       excludeRelays: opts.controlRelays,
       seeds: opts.seeds,
-      discovered: opts.discovered,
+      discovered,
       isCancelled,
       onProgress: opts.onProgress ?? (() => {}),
       stats,
