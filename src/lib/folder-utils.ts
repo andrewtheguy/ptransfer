@@ -1,4 +1,5 @@
 import { type FlateError, Zip, ZipPassThrough } from 'fflate';
+import { type Localized, t } from '@/lib/i18n';
 import { isCompressedFormat } from './compressed-formats';
 import { deflateUpperBound, type TransferSource } from './transfer-source';
 
@@ -153,18 +154,26 @@ export function zipWireUpperBound(entries: readonly ZipEntry[]): number {
  * Unix file name and is kept, but a Windows unpacker reads it as a separator,
  * so the path must not leave the folder under that reading either.
  */
-function unsafeEntryPath(path: string): string | null {
-  if (path.startsWith('/')) return 'it is absolute';
+function unsafeEntryPath(path: string): Localized | null {
+  if (path.startsWith('/')) {
+    return { en: 'it is absolute', es: 'es una ruta absoluta' };
+  }
   const parts = path.split('/');
   if (parts.some((part) => part === '' || part === '.' || part === '..')) {
-    return 'it has an empty, . or .. part';
+    return {
+      en: 'it has an empty, . or .. part',
+      es: 'tiene una parte vacía, . o ..',
+    };
   }
   if (
     path.startsWith('\\') ||
     /^[A-Za-z]:/.test(path) ||
     path.split(/[/\\]/).includes('..')
   ) {
-    return 'Windows would unpack it outside the folder';
+    return {
+      en: 'Windows would unpack it outside the folder',
+      es: 'Windows lo extraería fuera de la carpeta',
+    };
   }
   return null;
 }
@@ -190,15 +199,30 @@ function checkEntryPaths(entries: readonly ZipEntry[]): void {
   const seen = new Map<string, string>();
   for (const { path } of entries) {
     const problem = unsafeEntryPath(path);
-    if (problem) throw new Error(`Cannot put ${path} in a ZIP: ${problem}`);
+    if (problem) {
+      throw new Error(
+        t({
+          en: `Cannot put ${path} in a ZIP: ${problem.en}`,
+          es: `No se puede incluir ${path} en un ZIP: ${problem.es}`,
+        }),
+      );
+    }
     const unpacked = windowsUnpackedPath(path);
     const clash = seen.get(unpacked);
     if (clash === path) {
-      throw new Error(`Two files would both be ${path} in the ZIP`);
+      throw new Error(
+        t({
+          en: `Two files would both be ${path} in the ZIP`,
+          es: `Dos archivos serían ${path} en el ZIP`,
+        }),
+      );
     }
     if (clash !== undefined) {
       throw new Error(
-        `${clash} and ${path} would be one file when the ZIP is unpacked on Windows`,
+        t({
+          en: `${clash} and ${path} would be one file when the ZIP is unpacked on Windows`,
+          es: `${clash} y ${path} serían un mismo archivo al extraer el ZIP en Windows`,
+        }),
       );
     }
     seen.set(unpacked, path);

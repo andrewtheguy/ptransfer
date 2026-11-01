@@ -20,6 +20,7 @@ import { wipeBufferSource } from '@/lib/crypto/memory';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { type Localized, t } from '@/lib/i18n';
 import { offerLanes } from '@/lib/lanes';
 import type { FileMetadata, TransferMetadata } from '@/lib/nostr';
 import {
@@ -108,10 +109,19 @@ export type RelayResolvePhase =
   | 'probing_discovered';
 
 /** Shown only when relay resolution outlasts WebRTC offer creation. */
-const RELAY_PHASE_MESSAGES: Record<RelayResolvePhase, string> = {
-  probing_defaults: 'Checking relays for the fallback...',
-  discovering: 'Looking for more storage relays to back them up...',
-  probing_discovered: 'Testing the storage relays we found...',
+const RELAY_PHASE_MESSAGES: Record<RelayResolvePhase, Localized> = {
+  probing_defaults: {
+    en: 'Checking relays for the fallback...',
+    es: 'Comprobando los relays para el respaldo...',
+  },
+  discovering: {
+    en: 'Looking for more storage relays to back them up...',
+    es: 'Buscando más relays de almacenamiento como refuerzo...',
+  },
+  probing_discovered: {
+    en: 'Testing the storage relays we found...',
+    es: 'Probando los relays de almacenamiento encontrados...',
+  },
 };
 
 /** The fallback an offer ended up naming. */
@@ -179,7 +189,12 @@ export function startSenderFallback(opts: {
   let settled: Promise<OfferFallback>;
   if (opts.kind === 'anonymous') {
     if (!transport) {
-      throw new Error('The anonymous fallback needs a Tor client');
+      throw new Error(
+        t({
+          en: 'The anonymous fallback needs a Tor client',
+          es: 'La alternativa anónima necesita un cliente de Tor',
+        }),
+      );
     }
     // Its control relays are a constant both sides hold, so there is nothing
     // to prove or discover; what it needs instead is the Tor client, whose
@@ -310,13 +325,22 @@ export async function createSenderOffer(opts: {
 }): Promise<SenderOffer | null> {
   const { metadata, fallback, isCancelled, report } = opts;
 
-  report({ status: 'generating_offer', message: 'Generating keys...' });
+  report({
+    status: 'generating_offer',
+    message: t({ en: 'Generating keys...', es: 'Generando claves...' }),
+  });
   const createdAt = Date.now();
   const ecdhKeyPair = await generateECDHKeyPair();
   const salt = generateSalt();
   if (isCancelled()) return null;
 
-  report({ status: 'generating_offer', message: 'Creating P2P offer...' });
+  report({
+    status: 'generating_offer',
+    message: t({
+      en: 'Creating P2P offer...',
+      es: 'Creando la oferta P2P...',
+    }),
+  });
   const iceCandidates: string[] = [];
   let offerSDP: RTCSessionDescriptionInit | null = null;
   let announceChannel!: (channel: DuplexChannel) => void;
@@ -349,7 +373,10 @@ export async function createSenderOffer(opts: {
 
     report({
       status: 'generating_offer',
-      message: 'Gathering network info...',
+      message: t({
+        en: 'Gathering network info...',
+        es: 'Recopilando información de red...',
+      }),
     });
     const iceGatheringComplete = await rtc.waitForIceGatheringComplete(
       ICE_GATHER_TIMEOUT_MS,
@@ -362,8 +389,14 @@ export async function createSenderOffer(opts: {
     report({
       status: 'generating_offer',
       message: iceGatheringComplete
-        ? 'Preparing exchange code...'
-        : 'Network probe timed out. Preparing exchange code with available routes...',
+        ? t({
+            en: 'Preparing exchange code...',
+            es: 'Preparando el código de intercambio...',
+          })
+        : t({
+            en: 'Network probe timed out. Preparing exchange code with available routes...',
+            es: 'Se agotó el tiempo del sondeo de red. Preparando el código de intercambio con las rutas disponibles...',
+          }),
     });
     if (isCancelled()) {
       rtc.close();
@@ -376,7 +409,7 @@ export async function createSenderOffer(opts: {
     const showPhase = (phase: RelayResolvePhase) =>
       report({
         status: 'generating_offer',
-        message: RELAY_PHASE_MESSAGES[phase],
+        message: t(RELAY_PHASE_MESSAGES[phase]),
       });
     const unfollow = fallback.followResolve(showPhase);
     const pending = fallback.resolvePhase();
@@ -393,7 +426,12 @@ export async function createSenderOffer(opts: {
     }
 
     if (!offerSDP) {
-      throw new Error('Failed to create offer: no SDP was produced');
+      throw new Error(
+        t({
+          en: 'Failed to create offer: no SDP was produced',
+          es: 'No se pudo crear la oferta: no se generó ningún SDP',
+        }),
+      );
     }
     const offerBinary = generateMutualOfferBinary(offerSDP, iceCandidates, {
       createdAt,
@@ -431,8 +469,22 @@ export async function createSenderOffer(opts: {
  */
 export function readAnswer(answerBinary: Uint8Array): SignalingPayload {
   const parsed = parseMutualPayload(answerBinary);
-  if (!parsed) throw new Error('Invalid response format');
-  if (parsed.type !== 'answer') throw new Error('Expected answer, got offer');
+  if (!parsed) {
+    throw new Error(
+      t({
+        en: 'Invalid response format',
+        es: 'Formato de respuesta no válido',
+      }),
+    );
+  }
+  if (parsed.type !== 'answer') {
+    throw new Error(
+      t({
+        en: 'Expected answer, got offer',
+        es: 'Se esperaba una respuesta y llegó una oferta',
+      }),
+    );
+  }
   return parsed;
 }
 
@@ -489,10 +541,18 @@ const CODE_CONNECTION_TIMEOUT_MS = 120000;
 // direct connection that is going to work opens in a few seconds; if none has
 // after this window, relay it rather than ride out the full backstop.
 const RELAY_FALLBACK_ATTEMPT_TIMEOUT_MS = 20000;
-const RELAY_FALLBACK_MESSAGE =
-  'No direct connection — relaying the file through Nostr instead';
-const TOR_FALLBACK_MESSAGE =
-  'No direct connection — relaying the file through Tor instead';
+const RELAY_FALLBACK_MESSAGE: Localized = {
+  en: 'No direct connection — relaying the file through Nostr instead',
+  es: 'No hay conexión directa — el archivo se retransmite por Nostr',
+};
+const TOR_FALLBACK_MESSAGE: Localized = {
+  en: 'No direct connection — relaying the file through Tor instead',
+  es: 'No hay conexión directa — el archivo se retransmite por Tor',
+};
+const SESSION_EXPIRED: Localized = {
+  en: 'Session expired. Please start a new transfer.',
+  es: 'La sesión caducó. Inicia una nueva transferencia.',
+};
 
 export interface CompleteSendOptions {
   offer: SenderOffer;
@@ -523,12 +583,15 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
 
   // A response is judged by the session it answers.
   if (Date.now() - offer.createdAt > TRANSFER_EXPIRATION_MS) {
-    throw new Error('Session expired. Please start a new transfer.');
+    throw new Error(t(SESSION_EXPIRED));
   }
 
   report({
     status: 'connecting',
-    message: 'Establishing secure connection...',
+    message: t({
+      en: 'Establishing secure connection...',
+      es: 'Estableciendo una conexión segura...',
+    }),
   });
 
   // Non-extractable, and it outlives the content key: the fallback derives
@@ -608,8 +671,13 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     }
     if (content.estimatedSize > SLOW_TRANSPORT_MAX_BYTES) {
       wipeBufferSource(relaySession.keyBytes);
+      const limit = formatFileSize(SLOW_TRANSPORT_MAX_BYTES);
+      const via = named.kind === 'anonymous' ? 'Tor' : 'Nostr';
       throw new P2PConnectionError(
-        `${error.message}. The file is over ${formatFileSize(SLOW_TRANSPORT_MAX_BYTES)}, so it cannot be relayed through ${named.kind === 'anonymous' ? 'Tor' : 'Nostr'} either.`,
+        t({
+          en: `${error.message}. The file is over ${limit}, so it cannot be relayed through ${via} either.`,
+          es: `${error.message}. El archivo supera ${limit}, así que tampoco se puede retransmitir por ${via}.`,
+        }),
       );
     }
     rtc.close();
@@ -639,12 +707,12 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
 
   // Enforce TTL again right before data transfer begins
   if (Date.now() - offer.createdAt > TRANSFER_EXPIRATION_MS) {
-    throw new Error('Session expired. Please start a new transfer.');
+    throw new Error(t(SESSION_EXPIRED));
   }
 
   const transferring = (current: number, total: number): SendReport => ({
     status: 'transferring',
-    message: 'Sending via P2P...',
+    message: t({ en: 'Sending via P2P...', es: 'Enviando por P2P...' }),
     progress: { current, total },
     contentType: 'file',
     fileMetadata,
@@ -670,7 +738,7 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     if (isCancelled()) return;
     report({
       status: 'complete',
-      message: 'File sent via P2P!',
+      message: t({ en: 'File sent via P2P!', es: '¡Archivo enviado por P2P!' }),
       contentType: 'file',
       useWebRTC: true,
     });
@@ -708,10 +776,16 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     const torStatus = (message: string) =>
       report({
         status: 'connecting',
-        message: `${TOR_FALLBACK_MESSAGE}. ${message}`,
+        message: `${t(TOR_FALLBACK_MESSAGE)}. ${message}`,
         ...relayState,
       });
-    torStatus(opts.torProgress?.latest() || 'Starting the Tor client...');
+    torStatus(
+      opts.torProgress?.latest() ||
+        t({
+          en: 'Starting the Tor client...',
+          es: 'Iniciando el cliente de Tor...',
+        }),
+    );
     // The bootstrap has been running behind the exchange; this is only the
     // wait for whatever is left of it, and its own progress is the
     // transfer's now that there is nothing else on screen — a cold start is
@@ -760,7 +834,7 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
           if (isCancelled()) return;
           report({
             status: 'waiting_for_receiver',
-            message: `${TOR_FALLBACK_MESSAGE}. ${message}`,
+            message: `${t(TOR_FALLBACK_MESSAGE)}. ${message}`,
             ...relayState,
           });
         },
@@ -783,7 +857,10 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     if (isCancelled()) return;
     report({
       status: 'complete',
-      message: 'File sent through Tor!',
+      message: t({
+        en: 'File sent through Tor!',
+        es: '¡Archivo enviado a través de Tor!',
+      }),
       contentType: 'file',
       fileMetadata,
     });
@@ -812,10 +889,17 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
       if (isCancelled()) return;
       report({
         status: 'discovering_relays',
-        message:
+        message: `${t(RELAY_FALLBACK_MESSAGE)}. ${
           p.phase === 'discovering'
-            ? `${RELAY_FALLBACK_MESSAGE}. Finding storage relays...`
-            : `${RELAY_FALLBACK_MESSAGE}. Testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
+            ? t({
+                en: 'Finding storage relays...',
+                es: 'Buscando relays de almacenamiento...',
+              })
+            : t({
+                en: `Testing storage relays... ${p.relaysHealthy ?? 0} working of ${p.relaysChecked ?? 0} checked`,
+                es: `Probando relays de almacenamiento... ${p.relaysHealthy ?? 0} funcionan de ${p.relaysChecked ?? 0} comprobados`,
+              })
+        }`,
         ...relayState,
         stats: p.stats,
       });
@@ -823,7 +907,10 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
     try {
       report({
         status: 'preparing',
-        message: `${RELAY_FALLBACK_MESSAGE}. Reading file...`,
+        message: `${t(RELAY_FALLBACK_MESSAGE)}. ${t({
+          en: 'Reading file...',
+          es: 'Leyendo el archivo...',
+        })}`,
         ...relayState,
       });
       // `session.keyBytes` belong to sendFileLive once it runs; until then
@@ -839,7 +926,9 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
       if (data.length === 0 || isCancelled()) {
         wipeBufferSource(session.keyBytes);
         if (isCancelled()) return;
-        throw new Error('File is empty');
+        throw new Error(
+          t({ en: 'File is empty', es: 'El archivo está vacío' }),
+        );
       }
       const relayFileSize = data.length;
       let lastStats: NostrFileTransferStats | undefined;
@@ -865,7 +954,10 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
                 case 'hashing':
                   report({
                     status: 'preparing',
-                    message: `${RELAY_FALLBACK_MESSAGE}. Encrypting file...`,
+                    message: `${t(RELAY_FALLBACK_MESSAGE)}. ${t({
+                      en: 'Encrypting file...',
+                      es: 'Cifrando el archivo...',
+                    })}`,
                     ...relayState,
                     stats: p.stats,
                   });
@@ -878,14 +970,28 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
                   if (!p.receiverConnected) {
                     message =
                       chunksDone === chunksTotal
-                        ? 'All pieces uploaded to relays. Waiting for the receiver...'
-                        : `Uploading pieces to relays (${chunksDone}/${chunksTotal})... waiting for the receiver.`;
+                        ? t({
+                            en: 'All pieces uploaded to relays. Waiting for the receiver...',
+                            es: 'Todas las partes se subieron a los relays. Esperando al receptor...',
+                          })
+                        : t({
+                            en: `Uploading pieces to relays (${chunksDone}/${chunksTotal})... waiting for the receiver.`,
+                            es: `Subiendo partes a los relays (${chunksDone}/${chunksTotal})... esperando al receptor.`,
+                          });
                   } else if (have >= chunksTotal) {
-                    message = 'Receiver has every piece — verifying...';
+                    message = t({
+                      en: 'Receiver has every piece — verifying...',
+                      es: 'El receptor tiene todas las partes — verificando...',
+                    });
                   } else {
-                    message = `Relaying through Nostr — receiver has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
-                      p.resent ? `, re-sent ${p.resent}` : ''
-                    }).`;
+                    message = t({
+                      en: `Relaying through Nostr — receiver has ${have}/${chunksTotal} pieces (uploaded ${chunksDone}/${chunksTotal}${
+                        p.resent ? `, re-sent ${p.resent}` : ''
+                      }).`,
+                      es: `Retransmitiendo por Nostr — el receptor tiene ${have}/${chunksTotal} partes (subidas ${chunksDone}/${chunksTotal}${
+                        p.resent ? `, reenviadas ${p.resent}` : ''
+                      }).`,
+                    });
                   }
                   report({
                     status: 'uploading',
@@ -913,7 +1019,10 @@ export async function completeSend(opts: CompleteSendOptions): Promise<void> {
       if (isCancelled()) return;
       report({
         status: 'complete',
-        message: 'File sent through Nostr relays!',
+        message: t({
+          en: 'File sent through Nostr relays!',
+          es: '¡Archivo enviado a través de los relays de Nostr!',
+        }),
         contentType: 'file',
         fileMetadata,
         stats: lastStats,
@@ -940,7 +1049,11 @@ async function waitForDataChannel(
   let onStateChange: (() => void) | undefined;
   const dead = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new P2PConnectionError('Connection timeout'));
+      reject(
+        new P2PConnectionError(
+          t({ en: 'Connection timeout', es: 'Tiempo de conexión agotado' }),
+        ),
+      );
     }, timeoutMs);
     if (receiverGaveUp) {
       void (async () => {
@@ -953,7 +1066,10 @@ async function waitForDataChannel(
         }
         reject(
           new P2PConnectionError(
-            'The receiver reports no direct connection is possible',
+            t({
+              en: 'The receiver reports no direct connection is possible',
+              es: 'El receptor indica que no es posible una conexión directa',
+            }),
           ),
         );
       })();
@@ -963,7 +1079,11 @@ async function waitForDataChannel(
         pc.connectionState === 'failed' ||
         pc.connectionState === 'disconnected'
       ) {
-        reject(new P2PConnectionError('Connection failed'));
+        reject(
+          new P2PConnectionError(
+            t({ en: 'Connection failed', es: 'La conexión falló' }),
+          ),
+        );
       }
     };
     pc.addEventListener('connectionstatechange', onStateChange);

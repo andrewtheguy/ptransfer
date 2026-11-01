@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { routeDiagnostics } from '../diagnostics';
@@ -19,7 +20,10 @@ import { App } from './app';
 export async function runTui(): Promise<number> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new UsageError(
-      'The terminal UI needs a terminal. Use ptransfer send or ptransfer receive from a script or a pipe.',
+      t({
+        en: 'The terminal UI needs a terminal. Use ptransfer send or ptransfer receive from a script or a pipe.',
+        es: 'La interfaz de terminal necesita una terminal. Usa ptransfer send o ptransfer receive desde un script o una tubería.',
+      }),
     );
   }
   routeDiagnostics(false);

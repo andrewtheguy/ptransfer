@@ -1,6 +1,6 @@
 import { ArrowLeft, Send } from 'lucide-react';
 import { useEffect } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -10,20 +10,22 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { useSend } from '@/contexts/send-context';
+import { useLocaleNavigate, useT } from '@/i18n/locale-context';
 
 export function SendTransferLayout() {
-  const navigate = useNavigate();
+  const t = useT();
+  const navigate = useLocaleNavigate();
   const { config, clearConfig } = useSend();
 
   // Redirect to the send tool if no config (user navigated directly here)
   useEffect(() => {
     if (!config) {
-      void navigate('/send', { replace: true });
+      navigate('/send', { replace: true });
     }
   }, [config, navigate]);
 
   const handleBack = () => {
-    void navigate('/send');
+    navigate('/send');
     clearConfig();
   };
 
@@ -41,17 +43,23 @@ export function SendTransferLayout() {
               size="sm"
               onClick={handleBack}
               className="h-8 w-8 p-0"
-              aria-label="Go back to send"
+              aria-label={t({
+                en: 'Go back to send',
+                es: 'Volver a enviar',
+              })}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>
               <CardTitle className="text-2xl flex items-center gap-2">
                 <Send className="h-6 w-6" />
-                Secure Send
+                {t({ en: 'Secure Send', es: 'Envío seguro' })}
               </CardTitle>
               <CardDescription>
-                Transferring {config.selectedFiles.length} file(s)
+                {t({
+                  en: `Transferring ${config.selectedFiles.length} file(s)`,
+                  es: `Transfiriendo ${config.selectedFiles.length} archivo(s)`,
+                })}
               </CardDescription>
             </div>
           </div>

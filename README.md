@@ -19,6 +19,10 @@ pTransfer is a web application for sending encrypted files and folders with PIN-
 - **End-to-end encryption**: All transfers use AES-256-GCM encryption
 - **No accounts required**: Ephemeral keypairs generated per transfer
 - **PWA Support**: Install as a Progressive Web App for offline access
+- **English and Spanish**: The site is in English at `/` and in Spanish under
+  `/es/` (`/es/send`, `/es/about`, …), each page with its own URL for search
+  engines; the CLI speaks Spanish when the environment's locale does — see
+  [Language](#language)
 
 ## Command line
 
@@ -281,6 +285,13 @@ Use `bun install --frozen-lockfile && bun run build` as the build command and
 
 The app uses `BrowserRouter` only. Configure hosting to rewrite unknown paths to `index.html`.
 
+The build also writes one HTML file per indexed page and language — `about.html`,
+`es/index.html`, `es/about.html`, … — each with its own `lang`, title,
+description, canonical link and `hreflang` alternates, plus `sitemap.xml`.
+Serve them at their clean paths (`/about`, `/es/`, `/es/about`), which
+Cloudflare Pages does by default. The site's origin for those absolute links is
+`SITE_ORIGIN` in `src/i18n/pages.ts`.
+
 ### Deployment Path Requirement (Multi-QR Code Exchange)
 
 Multi-QR URLs are generated from `window.location.origin` and then append `/r#...`.
@@ -309,6 +320,26 @@ One input accepts all three modes; the page works out which one the sender used 
 - **PIN Exchange**: the rotating PIN from the sender's screen — typed, pasted, or scanned from the PIN QR. Signaling then runs over Nostr, and a confirmation code appears for the receiver to read back.
 - **Tor Onion Service**: the `.onion` address from the sender's screen, pasted or scanned. Its checksum is verified locally, and a password field then appears for the one-time password the sender gave you separately — nothing is bootstrapped until both check out.
 - **Code Exchange**: the sender's signaling payload, scanned from their QR codes or pasted as copied text. The response code that appears goes back to the sender the same way, carrying a tag derived from the shared key, the exact code it answers, and the response's own contents — the sender checks it automatically and refuses a response belonging to another transfer or altered on the way back, with nothing for either person to read out or type. If direct WebRTC later fails, files up to 100 MiB can also use the selected automatic fallback: public Nostr storage relays ordinarily, or Tor when the sender enabled the experimental anonymous option.
+
+## Language
+
+Every string a person reads is written where it is used, once per language,
+as `t({ en: '…', es: '…' })` from `src/lib/i18n.ts` — in React components
+through `useT()` from `src/i18n/locale-context.ts`. Adding a locale to
+`LOCALES` makes the type checker list every string that still needs it.
+
+- **Web**: the URL picks the language. A path under `/es/` is Spanish, any
+  other English; the pages are declared once and matched on the path without
+  its prefix, so switching language from the navigation bar keeps a transfer
+  in progress. In-app links go through `LocaleLink` and `useLocaleNavigate`
+  to stay in the language; links handed to the other side (a PIN link, an
+  onion link, multi-QR links) carry no prefix.
+- **CLI**: the language comes from `LC_ALL`, `LC_MESSAGES` or `LANG`, the
+  first one set (`LANG=es_ES.UTF-8 ptransfer`), and on Windows, which sets
+  none, from the user's locale. The `label: value` lines a script reads from
+  standard output keep their English labels in every language.
+- What travels to the peer, such as the reason a sender stopped, stays in
+  English: the other side's language is not known.
 
 ## Documentation
 

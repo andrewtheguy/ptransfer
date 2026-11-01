@@ -9,7 +9,6 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AnonymousReceiveForm } from '@/components/ptransfer/anonymous-receive-form';
 import { AnswerReturn } from '@/components/ptransfer/answer-return';
 import { TransferStatus } from '@/components/ptransfer/transfer-status';
@@ -17,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { useChunkCollector } from '@/hooks/use-chunk-collector';
 import { useCodeReceive } from '@/hooks/use-code-receive';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import { useLocaleNavigate, useT } from '@/i18n/locale-context';
 import { extractChunkParam } from '@/lib/chunk-utils';
 import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
 import { downloadFile } from '@/lib/download-file';
@@ -32,7 +32,8 @@ import { isMobileDevice } from '@/lib/utils';
 type PageStep = 'collecting' | 'bridge' | 'transferring';
 
 export function ReceiveChunkedPage() {
-  const navigate = useNavigate();
+  const t = useT();
+  const navigate = useLocaleNavigate();
   const [step, setStep] = useState<PageStep>('collecting');
   const [scanError, setScanError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -116,10 +117,9 @@ export function ReceiveChunkedPage() {
     [addChunk],
   );
 
+  // The scanner hook reports only the camera failing to start.
   const handleScanError = useCallback((err: string) => {
-    if (err.includes('denied') || err.includes('unavailable')) {
-      setScanError(err);
-    }
+    setScanError(err);
   }, []);
 
   const handleCameraReady = useCallback(() => {
@@ -156,12 +156,12 @@ export function ReceiveChunkedPage() {
     // Harmless before the hook owns anything: cancel() on an idle flow only
     // puts it back where it already is.
     cancel();
-    void navigate('/receive');
+    navigate('/receive');
   }, [cancel, navigate]);
 
   const handleReset = useCallback(() => {
     reset();
-    void navigate('/receive');
+    navigate('/receive');
   }, [reset, navigate]);
 
   // --- Collecting chunks ---
@@ -174,13 +174,17 @@ export function ReceiveChunkedPage() {
     return (
       <div className="flex w-full justify-center">
         <div className="w-full max-w-md space-y-4 pt-4">
-          <h2 className="text-lg font-semibold text-center">Receiving File</h2>
+          <h2 className="text-lg font-semibold text-center">
+            {t({ en: 'Receiving File', es: 'Recibiendo archivo' })}
+          </h2>
 
           {total !== null ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground text-center">
-                Collected {collected} of {total} QR code{total !== 1 ? 's' : ''}{' '}
-                ({collectedPercent}%)
+                {t({
+                  en: `Collected ${collected} of ${total} QR code${total !== 1 ? 's' : ''} (${collectedPercent}%)`,
+                  es: `Leídos ${collected} de ${total} ${total !== 1 ? 'códigos QR' : 'código QR'} (${collectedPercent}%)`,
+                })}
               </p>
               {total > 1 && (
                 <>
@@ -195,7 +199,10 @@ export function ReceiveChunkedPage() {
                               ? 'bg-cyan-600 text-white'
                               : 'border border-muted-foreground/30 text-muted-foreground'
                           }`}
-                          title={`QR #${i + 1}: ${received ? 'Received' : 'Missing'}`}
+                          title={t({
+                            en: `QR #${i + 1}: ${received ? 'Received' : 'Missing'}`,
+                            es: `QR n.º ${i + 1}: ${received ? 'recibido' : 'pendiente'}`,
+                          })}
                         >
                           {i + 1}
                         </div>
@@ -203,22 +210,32 @@ export function ReceiveChunkedPage() {
                     })}
                   </div>
                   <p className="text-xs text-muted-foreground text-center">
-                    QR codes can be scanned in any order, but all QR codes must
-                    be scanned.
+                    {t({
+                      en: 'QR codes can be scanned in any order, but all QR codes must be scanned.',
+                      es: 'Los códigos QR se pueden escanear en cualquier orden, pero hay que escanearlos todos.',
+                    })}
                   </p>
                 </>
               )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground text-center">
-              Reading first QR code...
+              {t({
+                en: 'Reading first QR code...',
+                es: 'Leyendo el primer código QR...',
+              })}
             </p>
           )}
 
           {chunkState.error && (
             <div className="text-sm text-destructive text-center space-y-1">
               <p>{chunkState.error}</p>
-              <p>Please rescan the sender QR codes.</p>
+              <p>
+                {t({
+                  en: 'Please rescan the sender QR codes.',
+                  es: 'Vuelve a escanear los códigos QR del emisor.',
+                })}
+              </p>
             </div>
           )}
 
@@ -226,7 +243,10 @@ export function ReceiveChunkedPage() {
           {needsMoreChunks && (
             <div className="space-y-3">
               <p className="text-sm text-center font-medium">
-                Scan the remaining QR codes from the sender
+                {t({
+                  en: 'Scan the remaining QR codes from the sender',
+                  es: 'Escanea los códigos QR restantes del emisor',
+                })}
               </p>
 
               <div className="relative bg-black rounded-lg overflow-hidden aspect-square max-w-[300px] mx-auto">
@@ -235,7 +255,10 @@ export function ReceiveChunkedPage() {
                     <div className="text-center">
                       <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
                       <p className="text-sm text-muted-foreground mt-2">
-                        Starting camera...
+                        {t({
+                          en: 'Starting camera...',
+                          es: 'Iniciando la cámara...',
+                        })}
                       </p>
                     </div>
                   </div>
@@ -269,10 +292,12 @@ export function ReceiveChunkedPage() {
                 )}
               </div>
 
-              {scanError?.includes('denied') && (
+              {scanError && (
                 <p className="text-xs text-muted-foreground text-center">
-                  Please allow camera access in your browser settings and reload
-                  the page.
+                  {t({
+                    en: 'Please allow camera access in your browser settings and reload the page.',
+                    es: 'Permite el acceso a la cámara en la configuración del navegador y recarga la página.',
+                  })}
                 </p>
               )}
 
@@ -286,13 +311,16 @@ export function ReceiveChunkedPage() {
                     className="text-xs"
                   >
                     <RefreshCw className="h-3 w-3 mr-1" />
-                    Switch Camera
+                    {t({ en: 'Switch Camera', es: 'Cambiar de cámara' })}
                   </Button>
                 </div>
               )}
 
               <p className="text-xs text-muted-foreground text-center">
-                Point your camera at each sender QR code
+                {t({
+                  en: 'Point your camera at each sender QR code',
+                  es: 'Apunta la cámara a cada código QR del emisor',
+                })}
               </p>
             </div>
           )}
@@ -301,7 +329,10 @@ export function ReceiveChunkedPage() {
             <div className="flex items-center justify-center gap-2 py-4">
               <Loader2 className="h-5 w-5 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">
-                All chunks received, starting transfer...
+                {t({
+                  en: 'All chunks received, starting transfer...',
+                  es: 'Todos los fragmentos recibidos, iniciando la transferencia...',
+                })}
               </p>
             </div>
           )}
@@ -315,7 +346,9 @@ export function ReceiveChunkedPage() {
     return (
       <div className="flex w-full justify-center">
         <div className="w-full max-w-md space-y-4 pt-4">
-          <h2 className="text-lg font-semibold text-center">Receiving File</h2>
+          <h2 className="text-lg font-semibold text-center">
+            {t({ en: 'Receiving File', es: 'Recibiendo archivo' })}
+          </h2>
           <AnonymousReceiveForm
             mode="code"
             onSubmit={handleBridge}
@@ -339,7 +372,9 @@ export function ReceiveChunkedPage() {
   return (
     <div className="flex w-full justify-center">
       <div className="w-full max-w-md space-y-4 pt-4">
-        <h2 className="text-lg font-semibold text-center">Receiving File</h2>
+        <h2 className="text-lg font-semibold text-center">
+          {t({ en: 'Receiving File', es: 'Recibiendo archivo' })}
+        </h2>
 
         {/* Transfer status (connecting, receiving progress, etc.) */}
         {receiveState.status !== 'waiting_for_offer' && (
@@ -355,7 +390,9 @@ export function ReceiveChunkedPage() {
             onSimulateNoDirectChange={setSimulateNoDirect}
             directRouteDead={receiveState.directRouteDead}
             fallbackName={
-              receiveState.anonymousFallback ? 'Tor' : 'the Nostr relays'
+              receiveState.anonymousFallback
+                ? 'Tor'
+                : t({ en: 'the Nostr relays', es: 'los relays de Nostr' })
             }
             torStatus={receiveState.torStatus}
           />
@@ -380,7 +417,7 @@ export function ReceiveChunkedPage() {
                 className="w-full max-w-[200px] bg-cyan-600 hover:bg-cyan-700 dark:bg-cyan-600 dark:hover:bg-cyan-700"
               >
                 <Download className="mr-2 h-4 w-4" />
-                Download File
+                {t({ en: 'Download File', es: 'Descargar archivo' })}
               </Button>
             </div>
           </div>
@@ -396,7 +433,7 @@ export function ReceiveChunkedPage() {
                 className="flex-1"
               >
                 <X className="mr-2 h-4 w-4" />
-                Cancel
+                {t({ en: 'Cancel', es: 'Cancelar' })}
               </Button>
             )}
 
@@ -404,7 +441,7 @@ export function ReceiveChunkedPage() {
             receiveState.status === 'error') && (
             <Button variant="outline" onClick={handleReset} className="flex-1">
               <RotateCcw className="mr-2 h-4 w-4" />
-              Receive Another
+              {t({ en: 'Receive Another', es: 'Recibir otro' })}
             </Button>
           )}
         </div>

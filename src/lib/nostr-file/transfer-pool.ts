@@ -1,5 +1,6 @@
 import { verifyEvent } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
+import { t } from '../i18n';
 import { normalizeRelayUrl } from '../nostr/relays';
 
 /**
@@ -50,7 +51,14 @@ export function createTransferPool(
   // the one signature the browser's WebSocket and Bun's have in common.
   class TrackedWebSocket extends Base {
     constructor(url: string | URL) {
-      if (destroyed) throw new Error('Transfer pool destroyed');
+      if (destroyed) {
+        throw new Error(
+          t({
+            en: 'Transfer pool destroyed',
+            es: 'Grupo de transferencia destruido',
+          }),
+        );
+      }
       super(url);
       sockets.add(this);
       this.addEventListener('close', () => sockets.delete(this));

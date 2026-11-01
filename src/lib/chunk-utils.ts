@@ -7,6 +7,8 @@
  *   chunk 1..N-1: [1 byte: chunk_index][1 byte: total_chunks][N bytes: data]
  */
 
+import { t } from '@/lib/i18n';
+
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -71,13 +73,21 @@ export function chunkPayload(
   maxDataBytes = 400,
 ): Uint8Array[] {
   if (binary.length === 0) {
-    throw new Error('Payload cannot be empty');
+    throw new Error(
+      t({
+        en: 'Payload cannot be empty',
+        es: 'El contenido no puede estar vacío',
+      }),
+    );
   }
 
   const totalChunks = Math.max(1, Math.ceil(binary.length / maxDataBytes));
   if (totalChunks > 255) {
     throw new Error(
-      `Payload too large: would need ${totalChunks} chunks (max 255)`,
+      t({
+        en: `Payload too large: would need ${totalChunks} chunks (max 255)`,
+        es: `Contenido demasiado grande: necesitaría ${totalChunks} fragmentos (máximo 255)`,
+      }),
     );
   }
 

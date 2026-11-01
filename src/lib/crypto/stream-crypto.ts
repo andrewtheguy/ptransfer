@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { AES_NONCE_LENGTH, AES_TAG_LENGTH } from './constants';
 
 /**
@@ -85,7 +86,10 @@ export function parseChunkMessage(data: ArrayBuffer | Uint8Array): {
 
   if (bytes.length < OVERHEAD_PER_CHUNK) {
     throw new Error(
-      `Message too short: ${bytes.length} bytes, need at least ${OVERHEAD_PER_CHUNK}`,
+      t({
+        en: `Message too short: ${bytes.length} bytes, need at least ${OVERHEAD_PER_CHUNK}`,
+        es: `Mensaje demasiado corto: ${bytes.length} bytes, se necesitan al menos ${OVERHEAD_PER_CHUNK}`,
+      }),
     );
   }
 
@@ -111,7 +115,12 @@ export async function decryptChunk(
   chunkIndex: number,
 ): Promise<Uint8Array> {
   if (encryptedData.length < AES_NONCE_LENGTH + AES_TAG_LENGTH) {
-    throw new Error(`Encrypted data too short: ${encryptedData.length} bytes`);
+    throw new Error(
+      t({
+        en: `Encrypted data too short: ${encryptedData.length} bytes`,
+        es: `Datos cifrados demasiado cortos: ${encryptedData.length} bytes`,
+      }),
+    );
   }
 
   const chunkIndexBytes = encodeChunkIndex(chunkIndex);

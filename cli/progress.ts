@@ -1,4 +1,5 @@
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 
 /**
  * A transfer's progress on standard error, without a terminal UI: one line
@@ -26,7 +27,12 @@ export function createProgressLine(
     update(current, total) {
       const fraction = total > 0 ? Math.min(current / total, 1) : 0;
       const percent = Math.floor(fraction * 100);
-      const text = `${label} ${percent}% (${formatFileSize(current)} of ${formatFileSize(total)})`;
+      const done = formatFileSize(current);
+      const all = formatFileSize(total);
+      const text = t({
+        en: `${label} ${percent}% (${done} of ${all})`,
+        es: `${label} ${percent}% (${done} de ${all})`,
+      });
       if (tty) {
         output.write(`\r${text}\x1b[K`);
         pending = true;

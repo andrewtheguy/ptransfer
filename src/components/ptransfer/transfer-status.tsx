@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
+import { useT } from '@/i18n/locale-context';
 import { OFFLINE_QR_TRANSFER_URL } from '@/lib/constants';
 import { formatFileSize } from '@/lib/file-utils';
 import type { TransferState } from '@/lib/nostr';
@@ -25,6 +26,7 @@ export function TransferStatus({
   state,
   betweenProgressAndChunks,
 }: TransferStatusProps) {
+  const t = useT();
   const [showDebug, setShowDebug] = useState(false);
 
   if (state.status === 'idle') return null;
@@ -89,18 +91,41 @@ export function TransferStatus({
           <ExternalLink className="h-4 w-4" />
           <AlertDescription>
             <span>
-              A direct peer-to-peer connection couldn't be established. If both
-              devices are side by side, you can transfer the file offline with
-              animated QR codes using{' '}
-              <a
-                href={OFFLINE_QR_TRANSFER_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium underline underline-offset-2"
-              >
-                Secure QR Transfer
-              </a>
-              .
+              {t({
+                en: (
+                  <>
+                    A direct peer-to-peer connection couldn't be established. If
+                    both devices are side by side, you can transfer the file
+                    offline with animated QR codes using{' '}
+                    <a
+                      href={OFFLINE_QR_TRANSFER_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium underline underline-offset-2"
+                    >
+                      Secure QR Transfer
+                    </a>
+                    .
+                  </>
+                ),
+                es: (
+                  <>
+                    No se pudo establecer una conexión directa entre pares. Si
+                    los dos dispositivos están uno al lado del otro, puedes
+                    transferir el archivo sin conexión con códigos QR animados
+                    usando{' '}
+                    <a
+                      href={OFFLINE_QR_TRANSFER_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium underline underline-offset-2"
+                    >
+                      Secure QR Transfer
+                    </a>
+                    .
+                  </>
+                ),
+              })}
             </span>
           </AlertDescription>
         </Alert>
@@ -118,12 +143,17 @@ export function TransferStatus({
             ) : (
               <ChevronRight className="h-3 w-3" />
             )}
-            <span>Debug info</span>
+            <span>
+              {t({ en: 'Debug info', es: 'Información de depuración' })}
+            </span>
           </button>
           {showDebug && (
             <div className="pl-4 space-y-1">
               <p className="font-medium text-muted-foreground">
-                Connected Relays: {relays.length}
+                {t({
+                  en: `Connected Relays: ${relays.length}`,
+                  es: `Relays conectados: ${relays.length}`,
+                })}
                 {state.totalRelays !== undefined && ` / ${state.totalRelays}`}
               </p>
               <ul className="space-y-0.5 pl-3">
@@ -168,6 +198,7 @@ export function TransferStatus({
  * 1-second tick re-renders only this row.
  */
 function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
+  const t = useT();
   const [remaining, setRemaining] = useState(() =>
     Math.max(0, expiresAt - Math.floor(Date.now() / 1000)),
   );
@@ -189,13 +220,19 @@ function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
     <p className="text-xs text-muted-foreground">
       {remaining > 0 ? (
         <>
-          Relay copies expire in{' '}
+          {t({
+            en: 'Relay copies expire in',
+            es: 'Las copias en los relays caducan en',
+          })}{' '}
           <span className="font-medium tabular-nums">
             {minutes}:{String(seconds).padStart(2, '0')}
           </span>
         </>
       ) : (
-        'Relay copies have expired'
+        t({
+          en: 'Relay copies have expired',
+          es: 'Las copias en los relays han caducado',
+        })
       )}
     </p>
   );

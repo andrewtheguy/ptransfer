@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import {
   ANONYMOUS_SIGNALING_RELAYS,
   createNostrClient,
@@ -48,8 +49,14 @@ export async function openPinSignaling(
   const { anonymous, transport, isCancelled, report } = options;
   report(
     anonymous
-      ? 'Starting the Tor client for anonymous signaling...'
-      : 'Connecting to relays...',
+      ? t({
+          en: 'Starting the Tor client for anonymous signaling...',
+          es: 'Iniciando el cliente de Tor para la señalización anónima...',
+        })
+      : t({
+          en: 'Connecting to relays...',
+          es: 'Conectando con los relays...',
+        }),
   );
   const client = createNostrClient(
     [...pinSignalingRelays(anonymous)],
@@ -63,7 +70,12 @@ export async function openPinSignaling(
         client.close();
         return null;
       }
-      report('Tor is up. Opening onion relay connections...');
+      report(
+        t({
+          en: 'Tor is up. Opening onion relay connections...',
+          es: 'Tor está listo. Abriendo conexiones con los relays onion...',
+        }),
+      );
     }
     await client.waitForConnection();
     if (isCancelled()) {

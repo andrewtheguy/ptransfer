@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { t } from '@/lib/i18n';
 import { judgeDescription } from '@/lib/tor/directory-policy';
 import type { DirectoryDescription } from '@/lib/tor/webtor-api';
 import { defaultCacheDir } from '../cache-dir';
@@ -56,7 +57,10 @@ export function openDirectoryStore(
       }
       const verdict = judgeDescription(described);
       if (!verdict.usable) {
-        onSkip?.(verdict.reason ?? 'it is not usable');
+        onSkip?.(
+          verdict.reason ??
+            t({ en: 'it is not usable', es: 'no se puede usar' }),
+        );
         return undefined;
       }
       return seed;

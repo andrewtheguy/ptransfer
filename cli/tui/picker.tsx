@@ -1,4 +1,5 @@
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import { useKeyboard } from '@opentui/react';
 import { homedir } from 'node:os';
 import { sep } from 'node:path';
@@ -216,7 +217,10 @@ export function Picker({
   });
 
   const home = homedir();
-  const heading = directory === DRIVES ? 'Drives' : shortenPath(directory, home);
+  const heading =
+    directory === DRIVES
+      ? t({ en: 'Drives', es: 'Unidades' })
+      : shortenPath(directory, home);
   const window = Array.from({ length: WINDOW }, (_, row) => offset + row).filter(
     (index) => index < total,
   );
@@ -227,28 +231,28 @@ export function Picker({
       hints={
         mode === 'paths'
           ? [
-              '↑↓ move',
-              '→ open',
-              '← up',
-              'space mark',
-              'h hidden',
-              'tab send marked',
-              'esc back',
+              t({ en: '↑↓ move', es: '↑↓ mover' }),
+              t({ en: '→ open', es: '→ abrir' }),
+              t({ en: '← up', es: '← subir' }),
+              t({ en: 'space mark', es: 'space marcar' }),
+              t({ en: 'h hidden', es: 'h ocultos' }),
+              t({ en: 'tab send marked', es: 'tab enviar marcados' }),
+              t({ en: 'esc back', es: 'esc atrás' }),
             ]
           : [
-              '↑↓ move',
-              '→ open / enter',
-              '← up',
-              'h hidden',
-              'tab save here',
-              'esc back',
+              t({ en: '↑↓ move', es: '↑↓ mover' }),
+              t({ en: '→ open / enter', es: '→ abrir / entrar' }),
+              t({ en: '← up', es: '← subir' }),
+              t({ en: 'h hidden', es: 'h ocultos' }),
+              t({ en: 'tab save here', es: 'tab guardar aquí' }),
+              t({ en: 'esc back', es: 'esc atrás' }),
             ]
       }
     >
       <text fg={theme.heading}>{heading}</text>
       <Gap />
       {entries === null ? (
-        <Note>Reading...</Note>
+        <Note>{t({ en: 'Reading...', es: 'Leyendo...' })}</Note>
       ) : (
         <box style={{ flexDirection: 'column' }}>
           {window.map((index) => {
@@ -274,7 +278,14 @@ export function Picker({
               </text>
             );
           })}
-          {total === 0 && <Note>This folder is empty.</Note>}
+          {total === 0 && (
+            <Note>
+              {t({
+                en: 'This folder is empty.',
+                es: 'Esta carpeta está vacía.',
+              })}
+            </Note>
+          )}
         </box>
       )}
       <Gap />
@@ -282,18 +293,33 @@ export function Picker({
       {directory === DRIVES ? (
         <text fg={theme.muted}>
           {mode === 'folder'
-            ? 'Open a drive, then tab saves into the folder you are in.'
-            : 'Open a drive to mark what is in it.'}
+            ? t({
+                en: 'Open a drive, then tab saves into the folder you are in.',
+                es: 'Abre una unidad; luego tab guarda en la carpeta en la que estés.',
+              })
+            : t({
+                en: 'Open a drive to mark what is in it.',
+                es: 'Abre una unidad para marcar lo que contiene.',
+              })}
         </text>
       ) : mode === 'folder' ? (
         <text fg={theme.good}>
-          {`Saving into ${heading} · tab to save here`}
+          {t({
+            en: `Saving into ${heading} · tab to save here`,
+            es: `Se guardará en ${heading} · tab para guardar aquí`,
+          })}
         </text>
       ) : (
         <text fg={marked.size > 0 ? theme.good : theme.muted}>
           {marked.size === 0
-            ? 'Nothing marked yet — space marks the file or folder under the cursor.'
-            : `${marked.size} marked · tab to send`}
+            ? t({
+                en: 'Nothing marked yet — space marks the file or folder under the cursor.',
+                es: 'Aún no hay nada marcado: space marca el archivo o la carpeta bajo el cursor.',
+              })
+            : t({
+                en: `${marked.size} marked · tab to send`,
+                es: `${marked.size} ${marked.size === 1 ? 'marcado' : 'marcados'} · tab para enviar`,
+              })}
         </text>
       )}
     </Screen>

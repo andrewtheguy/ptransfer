@@ -1,4 +1,5 @@
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import {
   DEFAULT_TOR_BRIDGE,
   TOR_BRIDGE_LABELS,
@@ -46,8 +47,14 @@ function hasAnonymousOption(mode: SendMode): boolean {
 /** What the option is called on the row it belongs to, as the tab calls it. */
 function anonymousLabel(mode: SendMode): string {
   return mode === 'code'
-    ? 'Anonymous signaling and relay (experimental)'
-    : 'Anonymous signaling (experimental)';
+    ? t({
+        en: 'Anonymous signaling and relay (experimental)',
+        es: 'Señalización y relay anónimos (experimental)',
+      })
+    : t({
+        en: 'Anonymous signaling (experimental)',
+        es: 'Señalización anónima (experimental)',
+      });
 }
 
 /**
@@ -56,8 +63,14 @@ function anonymousLabel(mode: SendMode): string {
  */
 function anonymousHint(mode: SendMode): string {
   return mode === 'code'
-    ? 'No direct route? Relay the file over Tor instead. Slow; up to 100 MiB.'
-    : 'Signaling over Tor, so relays never see an IP. Slow to start; longer PIN.';
+    ? t({
+        en: 'No direct route? Relay the file over Tor instead. Slow; up to 100 MiB.',
+        es: '¿Sin ruta directa? El archivo pasa por Tor. Lento; hasta 100 MiB.',
+      })
+    : t({
+        en: 'Signaling over Tor, so relays never see an IP. Slow to start; longer PIN.',
+        es: 'Señalización por Tor: los relays nunca ven una IP. Tarda en arrancar; PIN más largo.',
+      });
 }
 
 export interface SendChoice {
@@ -67,23 +80,34 @@ export interface SendChoice {
   bridge: TorBridge;
 }
 
-const OPTIONS: SelectOption[] = [
-  {
-    name: 'PIN Exchange',
-    description: 'Read out a short PIN, then compare a confirmation code',
-    value: 'pin',
-  },
-  {
-    name: 'Code Exchange',
-    description: 'Carry a code, then a direct connection or a relay fallback',
-    value: 'code',
-  },
-  {
-    name: 'Tor Onion Service',
-    description: 'Publish an onion service and carry its address and password',
-    value: 'tor',
-  },
-];
+function modeOptions(): SelectOption[] {
+  return [
+    {
+      name: t({ en: 'PIN Exchange', es: 'Intercambio por PIN' }),
+      description: t({
+        en: 'Read out a short PIN, then compare a confirmation code',
+        es: 'Dicta un PIN corto y luego compara un código de confirmación',
+      }),
+      value: 'pin',
+    },
+    {
+      name: t({ en: 'Code Exchange', es: 'Intercambio por código' }),
+      description: t({
+        en: 'Carry a code, then a direct connection or a relay fallback',
+        es: 'Pasa un código; luego conexión directa o respaldo por relays',
+      }),
+      value: 'code',
+    },
+    {
+      name: t({ en: 'Tor Onion Service', es: 'Servicio onion de Tor' }),
+      description: t({
+        en: 'Publish an onion service and carry its address and password',
+        es: 'Publica un servicio onion y pasa su dirección y contraseña',
+      }),
+      value: 'tor',
+    },
+  ];
+}
 
 export function SendMode({
   paths,
@@ -174,23 +198,41 @@ export function SendMode({
 
   return (
     <Screen
-      title="Send"
-      hints={['↑↓ choose', 'enter start', 'esc back']}
+      title={t({ en: 'Send', es: 'Enviar' })}
+      hints={[
+        t({ en: '↑↓ choose', es: '↑↓ elegir' }),
+        t({ en: 'enter start', es: 'enter iniciar' }),
+        t({ en: 'esc back', es: 'esc atrás' }),
+      ]}
     >
       {failure ? (
         <Problem>{failure}</Problem>
       ) : !opened ? (
-        <Note>Reading what was marked...</Note>
+        <Note>
+          {t({
+            en: 'Reading what was marked...',
+            es: 'Leyendo lo marcado...',
+          })}
+        </Note>
       ) : (
         <text fg={theme.good}>
           {opened.source.archive
-            ? `${opened.fileCount} files · ${formatFileSize(opened.source.estimatedSize)} as ${opened.source.name}`
+            ? t({
+                en: `${opened.fileCount} files · ${formatFileSize(opened.source.estimatedSize)} as ${opened.source.name}`,
+                es: `${opened.fileCount} ${opened.fileCount === 1 ? 'archivo' : 'archivos'} · ${formatFileSize(opened.source.estimatedSize)} como ${opened.source.name}`,
+              })
             : `${opened.source.name} · ${formatFileSize(opened.source.estimatedSize)}`}
         </text>
       )}
       {opened && opened.skipped.length > 0 && (
         <Note>
-          {`Leaving out ${opened.skipped.length} symbolic link or special file, which the ZIP does not carry`}
+          {t({
+            en: `Leaving out ${opened.skipped.length} symbolic link or special file, which the ZIP does not carry`,
+            es:
+              opened.skipped.length === 1
+                ? 'Se omite 1 enlace simbólico o archivo especial, que el ZIP no incluye'
+                : `Se omiten ${opened.skipped.length} enlaces simbólicos o archivos especiales, que el ZIP no incluye`,
+          })}
         </Note>
       )}
       <Gap />
@@ -199,7 +241,7 @@ export function SendMode({
           focused
           // The tab's own default.
           selectedIndex={0}
-          options={OPTIONS}
+          options={modeOptions()}
           showDescription
           onChange={(_, option) => {
             if (isSendMode(option?.value)) {
@@ -217,14 +259,21 @@ export function SendMode({
       {hasAnonymousOption(mode) && (
         <>
           <text fg={anonymous ? theme.good : theme.heading}>
-            {`[${anonymous ? 'x' : ' '}] ${anonymousLabel(mode)}   a to turn ${anonymous ? 'off' : 'on'}`}
+            {`[${anonymous ? 'x' : ' '}] ${anonymousLabel(mode)}   ${
+              anonymous
+                ? t({ en: 'a to turn off', es: 'a para desactivar' })
+                : t({ en: 'a to turn on', es: 'a para activar' })
+            }`}
           </text>
           <Note>{anonymousHint(mode)}</Note>
         </>
       )}
       {usesTor && (
         <text fg={theme.heading}>
-          {`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}   b to change`}
+          {t({
+            en: `Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}   b to change`,
+            es: `Puente de Tor: ${TOR_BRIDGE_LABELS[bridge]}   b para cambiar`,
+          })}
         </text>
       )}
       {caution && <Note>{caution}</Note>}

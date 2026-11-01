@@ -116,6 +116,25 @@ because public keys can always be exported.
 
 Use async await instead of promises unless promises is meant for a specific reason
 
+## Language
+
+- The web app and the CLI speak English and Spanish. Every string a person
+  reads — visible text, `aria-label`, `placeholder`, statuses, errors a person
+  sees, `--help` — is written as `t({ en: '…', es: '…' })` with both
+  languages, never English alone: React components in `src/` call `useT()`
+  from `src/i18n/locale-context.ts`; everything else (`src/lib`, hooks,
+  `cli/`, including the TUI) imports `t` from `src/lib/i18n.ts`. Never call
+  `t()` at module top level; keep a `Localized` record there and call `t()`
+  where it is used.
+- What goes on the wire to the peer, identifiers compared in code, developer
+  logs and `--verbose` diagnostics, and the labels of the CLI's standard-output
+  `label: value` lines stay English.
+- Spanish pages live under `/es/`. In-app links use `LocaleLink`,
+  `LocaleNavLink` and `useLocaleNavigate` from `src/i18n/`; a link built for
+  the other side carries no prefix. A new indexed page goes in
+  `INDEXED_PAGES` in `src/i18n/pages.ts`, which the build turns into its HTML
+  files and the sitemap.
+
 ## Documentation
 
 - No change logs on documentations since git already tracks all changes.

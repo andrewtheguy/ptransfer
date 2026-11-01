@@ -1,8 +1,17 @@
 import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import type { Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { configDefaults, defineConfig } from 'vitest/config';
+import {
+  type HeadContent,
+  headFor,
+  INDEXED_PAGES,
+  pageFileName,
+  SITE_ORIGIN,
+} from './src/i18n/pages';
+import { LOCALES, localizePath } from './src/lib/i18n';
 
 const INTEGRATION_TESTS = 'src/lib/nostr-file/live.test.ts';
 
@@ -16,6 +25,107 @@ function getGitCommitHash(): string {
   // fall back to a placeholder to avoid confusion about which commit is running.
   const cfSha = process.env.CF_PAGES_COMMIT_SHA;
   return cfSha ? cfSha.slice(0, 7) : 'local';
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function replaceOnce(html: string, search: RegExp, replacement: string) {
+  if (!search.test(html)) {
+    throw new Error(`index.html no longer has ${search}`);
+  }
+  return html.replace(search, replacement);
+}
+
+function withHead(template: string, head: HeadContent): string {
+  const links = [
+    ...(head.canonical
+      ? [`<link rel="canonical" href="${escapeHtml(head.canonical)}" />`]
+      : []),
+    ...head.alternates.map(
+      ({ hreflang, href }) =>
+        `<link rel="alternate" hreflang="${hreflang}" href="${escapeHtml(href)}" />`,
+    ),
+  ];
+  let html = replaceOnce(
+    template,
+    /<html lang="[^"]*">/,
+    `<html lang="${head.lang}">`,
+  );
+  html = replaceOnce(
+    html,
+    /<meta name="description" content="[^"]*" \/>/,
+    `<meta name="description" content="${escapeHtml(head.description)}" />`,
+  );
+  return replaceOnce(
+    html,
+    /<title>[^<]*<\/title>/,
+    [`<title>${escapeHtml(head.title)}</title>`, ...links].join('\n  '),
+  );
+}
+
+/**
+ * One HTML file per indexed page and locale, each with its own language,
+ * title, description, canonical link and alternates in its head, and a
+ * sitemap listing them — what a search engine reads before running the app.
+ * `es/about.html` is served at `/es/about`; any other path gets the host's
+ * fallback, `index.html`, and the app sets its head once it runs.
+ */
+function localizedPages(): Plugin {
+  return {
+    name: 'ptransfer:localized-pages',
+    apply: 'build',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      const index = bundle['index.html'];
+      if (index?.type !== 'asset') {
+        throw new Error('the build emitted no index.html');
+      }
+      const template = String(index.source);
+      for (const path of Object.keys(INDEXED_PAGES)) {
+        for (const locale of LOCALES) {
+          const html = withHead(template, headFor(path, locale));
+          const fileName = pageFileName(path, locale);
+          if (fileName === 'index.html') {
+            index.source = html;
+          } else {
+            this.emitFile({ type: 'asset', fileName, source: html });
+          }
+        }
+      }
+
+      const urls = Object.keys(INDEXED_PAGES).flatMap((path) =>
+        LOCALES.map((locale) => {
+          const alternates = headFor(path, locale).alternates.map(
+            ({ hreflang, href }) =>
+              `    <xhtml:link rel="alternate" hreflang="${hreflang}" href="${escapeHtml(href)}" />`,
+          );
+          return [
+            '  <url>',
+            `    <loc>${escapeHtml(`${SITE_ORIGIN}${localizePath(path, locale)}`)}</loc>`,
+            ...alternates,
+            '  </url>',
+          ].join('\n');
+        }),
+      );
+      this.emitFile({
+        type: 'asset',
+        fileName: 'sitemap.xml',
+        source: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">',
+          ...urls,
+          '</urlset>',
+          '',
+        ].join('\n'),
+      });
+    },
+  };
 }
 
 // https://vite.dev/config/
@@ -57,6 +167,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     react(),
+    localizedPages(),
     VitePWA({
       registerType: 'prompt',
       devOptions: {

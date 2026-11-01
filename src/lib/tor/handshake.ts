@@ -14,6 +14,7 @@ import {
   torPakeIdentities,
   wipeBufferSource,
 } from '@/lib/crypto';
+import { t } from '@/lib/i18n';
 import type { TransferMetadata } from '@/lib/nostr/types';
 import type { WireEncoding } from '@/lib/transfer-source';
 import type { TorFramedStream } from './framing';
@@ -128,7 +129,14 @@ export async function runTorServiceHandshake(
   metadata: TorTransferMetadata,
 ): Promise<ServiceHandshake> {
   const hello = await receiveFrame(framed);
-  if (hello.type !== 'hello') throw new Error('Expected a hello frame');
+  if (hello.type !== 'hello') {
+    throw new Error(
+      t({
+        en: 'Expected a hello frame',
+        es: 'Se esperaba una trama hello',
+      }),
+    );
+  }
   checkVersion(hello.version);
   const peerMessage = decodePakeMessage(hello.pakeMessage);
 
@@ -160,17 +168,37 @@ export async function runTorServiceHandshake(
   // Opening the claim is the whole authentication: only a peer that ran this
   // SPAKE2 session against the same password holds the key that sealed it.
   const claimFrame = await receiveFrame(framed);
-  if (claimFrame.type !== 'claim') throw new Error('Expected a claim frame');
+  if (claimFrame.type !== 'claim') {
+    throw new Error(
+      t({
+        en: 'Expected a claim frame',
+        es: 'Se esperaba una trama claim',
+      }),
+    );
+  }
   const claim = await openSealed<ClaimBody>(
     keys.claimKey,
     claimFrame.sealed,
-    'The receiver could not be authenticated: wrong password, or a different onion service',
+    t({
+      en: 'The receiver could not be authenticated: wrong password, or a different onion service',
+      es: 'No se pudo autenticar al receptor: contraseña incorrecta o un servicio onion distinto',
+    }),
   );
   if (claim.type !== CLAIM_TYPE || claim.version !== TOR_HANDSHAKE_VERSION) {
-    throw new Error('The receiver sent an unexpected claim body');
+    throw new Error(
+      t({
+        en: 'The receiver sent an unexpected claim body',
+        es: 'El receptor envió un cuerpo de claim inesperado',
+      }),
+    );
   }
   if (claim.onion !== onion) {
-    throw new Error('The receiver authenticated against a different address');
+    throw new Error(
+      t({
+        en: 'The receiver authenticated against a different address',
+        es: 'El receptor se autenticó contra una dirección distinta',
+      }),
+    );
   }
 
   await sendFrame(framed, {
@@ -186,7 +214,12 @@ export async function runTorServiceHandshake(
   const answer = await receiveFrame(framed);
   if (answer.type === 'ready') return { outcome: 'ready', keys };
   if (answer.type === 'cancel') return { outcome: 'cancelled' };
-  throw new Error('Expected the receiver to answer ready or cancel');
+  throw new Error(
+    t({
+      en: 'Expected the receiver to answer ready or cancel',
+      es: 'Se esperaba que el receptor respondiera ready o cancel',
+    }),
+  );
 }
 
 /**
@@ -209,12 +242,24 @@ export async function runTorClientHandshake(
     });
 
     const offer = await receiveFrame(framed);
-    if (offer.type !== 'offer') throw new Error('Expected an offer frame');
+    if (offer.type !== 'offer') {
+      throw new Error(
+        t({
+          en: 'Expected an offer frame',
+          es: 'Se esperaba una trama offer',
+        }),
+      );
+    }
     checkVersion(offer.version);
     const peerMessage = decodePakeMessage(offer.pakeMessage);
     const salt = base64ToUint8Array(offer.salt);
     if (salt.length !== SALT_LENGTH) {
-      throw new Error(`The sender sent a ${salt.length}-byte salt`);
+      throw new Error(
+        t({
+          en: `The sender sent a ${salt.length}-byte salt`,
+          es: `El emisor envió una sal de ${salt.length} bytes`,
+        }),
+      );
     }
 
     const root = await finishPake(
@@ -248,25 +293,46 @@ export async function runTorClientHandshake(
     confirmFrame = await receiveFrame(framed);
   } catch {
     throw new Error(
-      'The sender stopped answering after the claim; check the password',
+      t({
+        en: 'The sender stopped answering after the claim; check the password',
+        es: 'El emisor dejó de responder tras el claim; comprueba la contraseña',
+      }),
     );
   }
   if (confirmFrame.type !== 'confirm') {
-    throw new Error('Expected a confirm frame');
+    throw new Error(
+      t({
+        en: 'Expected a confirm frame',
+        es: 'Se esperaba una trama confirm',
+      }),
+    );
   }
   const confirm = await openSealed<ConfirmBody>(
     keys.confirmKey,
     confirmFrame.sealed,
-    'The sender could not be authenticated: check the password',
+    t({
+      en: 'The sender could not be authenticated: check the password',
+      es: 'No se pudo autenticar al emisor: comprueba la contraseña',
+    }),
   );
   if (
     confirm.type !== CONFIRM_TYPE ||
     confirm.version !== TOR_HANDSHAKE_VERSION
   ) {
-    throw new Error('The sender sent an unexpected confirm body');
+    throw new Error(
+      t({
+        en: 'The sender sent an unexpected confirm body',
+        es: 'El emisor envió un cuerpo de confirm inesperado',
+      }),
+    );
   }
   if (confirm.onion !== onion) {
-    throw new Error('The sender authenticated against a different address');
+    throw new Error(
+      t({
+        en: 'The sender authenticated against a different address',
+        es: 'El emisor se autenticó contra una dirección distinta',
+      }),
+    );
   }
 
   return { keys, metadata: parseMetadata(confirm.metadata) };
@@ -285,7 +351,10 @@ export function sendCancel(framed: TorFramedStream): Promise<void> {
 function checkVersion(version: number): void {
   if (version !== TOR_HANDSHAKE_VERSION) {
     throw new Error(
-      `The peer speaks Tor transfer version ${version}, this build speaks ${TOR_HANDSHAKE_VERSION}`,
+      t({
+        en: `The peer speaks Tor transfer version ${version}, this build speaks ${TOR_HANDSHAKE_VERSION}`,
+        es: `El otro extremo usa la versión ${version} de la transferencia por Tor y esta compilación usa la ${TOR_HANDSHAKE_VERSION}`,
+      }),
     );
   }
 }
@@ -295,12 +364,20 @@ function decodePakeMessage(encoded: string): Uint8Array {
   try {
     message = base64ToUint8Array(encoded);
   } catch {
-    throw new Error('The peer sent a malformed PAKE element');
+    throw new Error(
+      t({
+        en: 'The peer sent a malformed PAKE element',
+        es: 'El otro extremo envió un elemento PAKE mal formado',
+      }),
+    );
   }
   // Screen the element before the scalar multiplication in finishPake.
   if (!isValidPakeMessage(message)) {
     throw new Error(
-      `The peer sent a ${PAKE_MESSAGE_LENGTH}-byte PAKE element that is not a curve point`,
+      t({
+        en: `The peer sent a ${PAKE_MESSAGE_LENGTH}-byte PAKE element that is not a curve point`,
+        es: `El otro extremo envió un elemento PAKE de ${PAKE_MESSAGE_LENGTH} bytes que no es un punto de la curva`,
+      }),
     );
   }
   return message;
@@ -313,29 +390,57 @@ function decodePakeMessage(encoded: string): Uint8Array {
  */
 function parseMetadata(metadata: TorTransferMetadata): TorTransferMetadata {
   if (!metadata || typeof metadata !== 'object') {
-    throw new Error('The sender sent no transfer metadata');
+    throw new Error(
+      t({
+        en: 'The sender sent no transfer metadata',
+        es: 'El emisor no envió los metadatos de la transferencia',
+      }),
+    );
   }
   if (metadata.contentType !== 'file') {
-    throw new Error('The sender describes unsupported content');
+    throw new Error(
+      t({
+        en: 'The sender describes unsupported content',
+        es: 'El emisor describe un contenido no compatible',
+      }),
+    );
   }
   if (typeof metadata.fileName !== 'string' || metadata.fileName.length === 0) {
-    throw new Error('The sender sent no file name');
+    throw new Error(
+      t({
+        en: 'The sender sent no file name',
+        es: 'El emisor no envió el nombre del archivo',
+      }),
+    );
   }
   if (
     typeof metadata.fileSize !== 'number' ||
     !Number.isSafeInteger(metadata.fileSize) ||
     metadata.fileSize < 0
   ) {
-    throw new Error('The sender sent an invalid file size');
+    throw new Error(
+      t({
+        en: 'The sender sent an invalid file size',
+        es: 'El emisor envió un tamaño de archivo no válido',
+      }),
+    );
   }
   const encodings: WireEncoding[] = ['deflate-raw', 'identity'];
   if (!encodings.includes(metadata.contentEncoding)) {
     throw new Error(
-      `The sender sent an unsupported content encoding: ${String(metadata.contentEncoding)}`,
+      t({
+        en: `The sender sent an unsupported content encoding: ${String(metadata.contentEncoding)}`,
+        es: `El emisor envió una codificación de contenido no compatible: ${String(metadata.contentEncoding)}`,
+      }),
     );
   }
   if (typeof metadata.mimeType !== 'string') {
-    throw new Error('The sender sent an invalid MIME type');
+    throw new Error(
+      t({
+        en: 'The sender sent an invalid MIME type',
+        es: 'El emisor envió un tipo MIME no válido',
+      }),
+    );
   }
   return metadata;
 }
@@ -368,14 +473,24 @@ async function receiveFrame(framed: TorFramedStream): Promise<Frame> {
   try {
     frame = JSON.parse(text);
   } catch {
-    throw new Error('The peer sent an unrecognized handshake frame');
+    throw new Error(
+      t({
+        en: 'The peer sent an unrecognized handshake frame',
+        es: 'El otro extremo envió una trama de negociación no reconocida',
+      }),
+    );
   }
   if (
     !frame ||
     typeof frame !== 'object' ||
     typeof (frame as { type?: unknown }).type !== 'string'
   ) {
-    throw new Error('The peer sent an unrecognized handshake frame');
+    throw new Error(
+      t({
+        en: 'The peer sent an unrecognized handshake frame',
+        es: 'El otro extremo envió una trama de negociación no reconocida',
+      }),
+    );
   }
   return frame as Frame;
 }

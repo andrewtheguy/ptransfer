@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import type { DirectoryDescription } from './webtor-api';
 
 /**
@@ -42,25 +43,45 @@ export function judgeDescription(
   now: number = Date.now(),
 ): SeedVerdict {
   if (!described) {
-    return { usable: false, reason: 'it carries no readable consensus' };
+    return {
+      usable: false,
+      reason: t({
+        en: 'it carries no readable consensus',
+        es: 'no contiene ningún consenso legible',
+      }),
+    };
   }
   const validAfter = described.validAfter.getTime();
   const validUntil = described.validUntil.getTime();
   if (now < validAfter) {
-    return { usable: false, reason: 'its consensus is not valid yet' };
+    return {
+      usable: false,
+      reason: t({
+        en: 'its consensus is not valid yet',
+        es: 'su consenso aún no es válido',
+      }),
+    };
   }
   if (now + MIN_REMAINING_MS > validUntil) {
     return {
       usable: false,
-      reason: `its consensus expires at ${described.validUntil.toISOString()}`,
+      reason: t({
+        en: `its consensus expires at ${described.validUntil.toISOString()}`,
+        es: `su consenso caduca el ${described.validUntil.toISOString()}`,
+      }),
     };
   }
   if (described.timePeriod !== described.timePeriodAt(now)) {
     return {
       usable: false,
-      reason:
-        'its consensus is from a previous onion-service time period, which ' +
-        'would place every descriptor on the wrong HSDirs',
+      reason: t({
+        en:
+          'its consensus is from a previous onion-service time period, which ' +
+          'would place every descriptor on the wrong HSDirs',
+        es:
+          'su consenso es de un periodo de servicio onion anterior, lo que ' +
+          'colocaría cada descriptor en los HSDirs equivocados',
+      }),
     };
   }
   return { usable: true };

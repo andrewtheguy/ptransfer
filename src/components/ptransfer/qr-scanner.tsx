@@ -2,6 +2,7 @@ import { AlertCircle, Camera, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import { useT } from '@/i18n/locale-context';
 import {
   computeCrc32,
   isValidPayloadChecksum,
@@ -28,12 +29,18 @@ export type ScanResult =
 interface QRScannerProps {
   onScan: (result: ScanResult) => void;
   mode: ScannerMode;
+  /**
+   * Called only when the camera cannot be started. A code that will not scan
+   * is shown in the scanner itself, as a passing failure.
+   */
   onError?: (error: string) => void;
   disabled?: boolean;
 }
 
 export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
+  const [cameraFailed, setCameraFailed] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
     isMobileDevice() ? 'environment' : 'user',
@@ -78,11 +85,10 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
   const handleInvalidPayload = useCallback(
     (msg: string) => {
       setError(msg);
-      onError?.(msg);
       clearChunkRefs();
       clearChunkProgressState();
     },
-    [clearChunkRefs, onError, clearChunkProgressState],
+    [clearChunkRefs, clearChunkProgressState],
   );
 
   // Clear chunk state on unmount
@@ -99,12 +105,21 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
 
   const handleScan = useCallback(
     (binaryData: Uint8Array) => {
+      const invalidPayload = t({
+        en: 'Invalid QR payload. Please start scanning again.',
+        es: 'Contenido QR no válido. Vuelve a empezar a escanear.',
+      });
       if (mode === 'receive') {
         const text = new TextDecoder().decode(binaryData);
         const input = classifyReceiveText(text);
         if (!input) {
           console.debug('QRScanner: unrecognized QR text', text);
-          showWarning('Unrecognized QR code, keep scanning...');
+          showWarning(
+            t({
+              en: 'Unrecognized QR code, keep scanning...',
+              es: 'Código QR no reconocido, sigue escaneando...',
+            }),
+          );
           return;
         }
 
@@ -134,8 +149,12 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
         const chunk = parseChunk(input.param);
         if (!chunk) {
           console.debug('QRScanner: failed to parse chunk param', input.param);
-          setError('Could not parse QR code data');
-          onError?.('Could not parse QR code data');
+          setError(
+            t({
+              en: 'Could not parse QR code data',
+              es: 'No se pudieron leer los datos del código QR',
+            }),
+          );
           return;
         }
 
@@ -150,22 +169,19 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
 
         if (chunk.index === 0) {
           if (typeof chunk.checksum !== 'number') {
-            const msg = 'Invalid QR payload. Please start scanning again.';
-            handleInvalidPayload(msg);
+            handleInvalidPayload(invalidPayload);
             return;
           }
           if (
             checksumRef.current !== null &&
             checksumRef.current !== chunk.checksum
           ) {
-            const msg = 'Invalid QR payload. Please start scanning again.';
-            handleInvalidPayload(msg);
+            handleInvalidPayload(invalidPayload);
             return;
           }
           checksumRef.current = chunk.checksum;
         } else if (chunk.checksum !== undefined) {
-          const msg = 'Invalid QR payload. Please start scanning again.';
-          handleInvalidPayload(msg);
+          handleInvalidPayload(invalidPayload);
           return;
         }
 
@@ -184,16 +200,12 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
           clearChunkProgressState();
           if (assembled === null) {
             console.error('QRScanner: reassembly failed');
-            const msg = 'Invalid QR payload. Please start scanning again.';
-            setError(msg);
-            onError?.(msg);
+            setError(invalidPayload);
             return;
           }
           if (expectedChecksum === null) {
             console.error('QRScanner: missing checksum');
-            const msg = 'Invalid QR payload. Please start scanning again.';
-            setError(msg);
-            onError?.(msg);
+            setError(invalidPayload);
             return;
           }
           if (!isValidPayloadChecksum(assembled, expectedChecksum)) {
@@ -202,9 +214,7 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
               expectedChecksum,
               actualChecksum,
             });
-            const msg = 'Invalid QR payload. Please start scanning again.';
-            setError(msg);
-            onError?.(msg);
+            setError(invalidPayload);
             return;
           }
           onScan({ kind: 'payload', data: assembled });
@@ -212,8 +222,12 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
       } else {
         // Binary PT01 payload from QRDisplay
         if (!isValidBinaryPayload(binaryData)) {
-          setError('Invalid or unsupported QR payload format');
-          onError?.('Invalid or unsupported QR payload format');
+          setError(
+            t({
+              en: 'Invalid or unsupported QR payload format',
+              es: 'Formato de contenido QR no válido o no compatible',
+            }),
+          );
           return;
         }
 
@@ -223,18 +237,19 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
     },
     [
       onScan,
-      onError,
       mode,
       clearChunkRefs,
       clearChunkProgressState,
       showWarning,
       handleInvalidPayload,
+      t,
     ],
   );
 
   const handleError = useCallback(
     (err: string) => {
       setError(err);
+      setCameraFailed(true);
       onError?.(err);
     },
     [onError],
@@ -242,6 +257,7 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
 
   const handleCameraReady = useCallback(() => {
     setCameraReady(true);
+    setCameraFailed(false);
     setError(null);
   }, []);
 
@@ -269,8 +285,10 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
       {needsMoreChunks && (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground text-center">
-            Collected {collectedCount} of {totalChunks} QR codes (
-            {Math.round((collectedCount / totalChunks) * 100)}%)
+            {t({
+              en: `Collected ${collectedCount} of ${totalChunks} QR codes (${Math.round((collectedCount / totalChunks) * 100)}%)`,
+              es: `Leídos ${collectedCount} de ${totalChunks} códigos QR (${Math.round((collectedCount / totalChunks) * 100)}%)`,
+            })}
           </p>
           <div className="flex flex-wrap justify-center gap-1.5">
             {Array.from({ length: totalChunks ?? 0 }, (_, i) => i).map((i) => {
@@ -283,7 +301,10 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
                       ? 'bg-cyan-600 text-white'
                       : 'border border-muted-foreground/30 text-muted-foreground'
                   }`}
-                  title={`QR #${i + 1}: ${received ? 'Received' : 'Missing'}`}
+                  title={t({
+                    en: `QR #${i + 1}: ${received ? 'Received' : 'Missing'}`,
+                    es: `QR n.º ${i + 1}: ${received ? 'recibido' : 'pendiente'}`,
+                  })}
                 >
                   {i + 1}
                 </div>
@@ -291,8 +312,10 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
             })}
           </div>
           <p className="text-xs text-muted-foreground text-center">
-            QR codes can be scanned in any order, but all QR codes must be
-            scanned.
+            {t({
+              en: 'QR codes can be scanned in any order, but all QR codes must be scanned.',
+              es: 'Los códigos QR se pueden escanear en cualquier orden, pero hay que escanearlos todos.',
+            })}
           </p>
         </div>
       )}
@@ -303,7 +326,7 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
             <div className="text-center">
               <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
               <p className="text-sm text-muted-foreground mt-2">
-                Starting camera...
+                {t({ en: 'Starting camera...', es: 'Iniciando la cámara...' })}
               </p>
             </div>
           </div>
@@ -346,10 +369,12 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
         )}
       </div>
 
-      {error?.includes('denied') && (
+      {cameraFailed && error && (
         <p className="text-xs text-muted-foreground text-center">
-          Please allow camera access in your browser settings and reload the
-          page.
+          {t({
+            en: 'Please allow camera access in your browser settings and reload the page.',
+            es: 'Permite el acceso a la cámara en la configuración del navegador y recarga la página.',
+          })}
         </p>
       )}
 
@@ -363,15 +388,31 @@ export function QRScanner({ onScan, mode, onError, disabled }: QRScannerProps) {
             className="text-xs"
           >
             <RefreshCw className="h-3 w-3 mr-1" />
-            Switch Camera
+            {t({ en: 'Switch Camera', es: 'Cambiar de cámara' })}
           </Button>
         </div>
       )}
 
       <p className="text-xs text-muted-foreground text-center">
-        Point your camera at the{' '}
-        {mode === 'answer' ? "receiver's response" : "sender's"} QR code
-        {needsMoreChunks ? 's' : ''}
+        {mode === 'answer'
+          ? needsMoreChunks
+            ? t({
+                en: "Point your camera at the receiver's response QR codes",
+                es: 'Apunta la cámara a los códigos QR de la respuesta del receptor',
+              })
+            : t({
+                en: "Point your camera at the receiver's response QR code",
+                es: 'Apunta la cámara al código QR de la respuesta del receptor',
+              })
+          : needsMoreChunks
+            ? t({
+                en: "Point your camera at the sender's QR codes",
+                es: 'Apunta la cámara a los códigos QR del emisor',
+              })
+            : t({
+                en: "Point your camera at the sender's QR code",
+                es: 'Apunta la cámara al código QR del emisor',
+              })}
       </p>
     </div>
   );

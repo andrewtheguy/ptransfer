@@ -1,6 +1,7 @@
 import { deflateSync, inflateSync } from 'fflate';
 import { type Event, finalizeEvent } from 'nostr-tools';
 import { decrypt, encrypt } from '../crypto/aes-gcm';
+import { type Localized, t } from '../i18n';
 import { base64ToUint8Array, uint8ArrayToBase64 } from '../nostr/events';
 import { normalizeRelayUrl } from '../nostr/relays';
 import {
@@ -82,7 +83,12 @@ export const POSITION_ALPHABET =
 
 export function encodePosition(pos: number): string {
   if (pos < 0 || pos >= POSITION_ALPHABET.length) {
-    throw new Error(`Ring position out of range: ${pos}`);
+    throw new Error(
+      t({
+        en: `Ring position out of range: ${pos}`,
+        es: `Posición del anillo fuera de rango: ${pos}`,
+      }),
+    );
   }
   return POSITION_ALPHABET[pos];
 }
@@ -215,7 +221,12 @@ export async function decodeControlMessage(
     out: new Uint8Array(CONTROL_MESSAGE_MAX_BYTES + 1),
   });
   if (plaintext.length > CONTROL_MESSAGE_MAX_BYTES) {
-    throw new Error('Control message too large');
+    throw new Error(
+      t({
+        en: 'Control message too large',
+        es: 'Mensaje de control demasiado grande',
+      }),
+    );
   }
   return JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
 }
@@ -411,9 +422,14 @@ export interface ControlDemotionPolicy {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const CHANNEL_CLOSED_MESSAGE = 'Control channel closed';
-const DELIVERY_FAILED_MESSAGE =
-  'Lost contact with the Nostr relays — the control message could not be delivered';
+const CHANNEL_CLOSED_MESSAGE: Localized = {
+  en: 'Control channel closed',
+  es: 'Canal de control cerrado',
+};
+const DELIVERY_FAILED_MESSAGE: Localized = {
+  en: 'Lost contact with the Nostr relays — the control message could not be delivered',
+  es: 'Se perdió el contacto con los relays de Nostr: no se pudo entregar el mensaje de control',
+};
 
 /**
  * The channel's live relay set.
@@ -538,9 +554,9 @@ async function publishToAny(
   // A channel closed before the first attempt says so, rather than blaming
   // relays it never tried; an empty ring has to settle too, or the caller
   // waits forever on a loop that never runs.
-  if (isClosed()) throw new Error(CHANNEL_CLOSED_MESSAGE);
+  if (isClosed()) throw new Error(t(CHANNEL_CLOSED_MESSAGE));
   const relays = set.snapshot();
-  if (relays.length === 0) throw new Error(DELIVERY_FAILED_MESSAGE);
+  if (relays.length === 0) throw new Error(t(DELIVERY_FAILED_MESSAGE));
   await new Promise<void>((resolve, reject) => {
     let failures = 0;
     for (const relay of relays) {
@@ -564,7 +580,7 @@ async function publishToAny(
         if (failures === relays.length) {
           reject(
             new Error(
-              isClosed() ? CHANNEL_CLOSED_MESSAGE : DELIVERY_FAILED_MESSAGE,
+              t(isClosed() ? CHANNEL_CLOSED_MESSAGE : DELIVERY_FAILED_MESSAGE),
             ),
           );
         }
@@ -657,7 +673,7 @@ export function openControlChannel(
 
   return {
     async send(message) {
-      if (closed) throw new Error(CHANNEL_CLOSED_MESSAGE);
+      if (closed) throw new Error(t(CHANNEL_CLOSED_MESSAGE));
       n++;
       const content = await encodeControlMessage(key, transferId, role, {
         ...message,

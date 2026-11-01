@@ -3,6 +3,7 @@ import {
   parseClipboardPayload,
   parseMutualPayload,
 } from '@/lib/code-signaling';
+import { type Localized, t } from '@/lib/i18n';
 import { InterruptedError } from '../interrupt';
 import type { SecretInput, SecretOutput } from '../secret';
 
@@ -23,8 +24,10 @@ import type { SecretInput, SecretOutput } from '../secret';
  */
 
 /** Why a code was refused, for the person or script that gave it. */
-const INCOMPLETE =
-  'That is not a complete pTransfer code, or it is more than an hour old. Check it was copied whole.';
+const INCOMPLETE: Localized = {
+  en: 'That is not a complete pTransfer code, or it is more than an hour old. Check it was copied whole.',
+  es: 'Eso no es un código de pTransfer completo, o tiene más de una hora. Comprueba que se copió entero.',
+};
 
 /** The container `text` holds, once it holds a whole one. */
 export function decodeCode(text: string): Uint8Array | null {
@@ -63,7 +66,12 @@ async function readFromPipe<T>(
     if (container) return await accept(container);
   }
   throw new Error(
-    text.trim() === '' ? 'No code was given on standard input' : INCOMPLETE,
+    text.trim() === ''
+      ? t({
+          en: 'No code was given on standard input',
+          es: 'No se recibió ningún código por la entrada estándar',
+        })
+      : t(INCOMPLETE),
   );
 }
 
@@ -134,7 +142,7 @@ function readAtTerminal<T>(
             fail(new InterruptedError());
             return;
           case '\u0004': // Ctrl-D
-            fail(new Error('Cancelled'));
+            fail(new Error(t({ en: 'Cancelled', es: 'Cancelado' })));
             return;
           case '\r':
           case '\n':
@@ -148,7 +156,7 @@ function readAtTerminal<T>(
                 void take(container);
               } else {
                 stopListening();
-                refuse(INCOMPLETE);
+                refuse(t(INCOMPLETE));
               }
               return;
             }

@@ -1,5 +1,6 @@
 import { Check, Copy } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useT } from '@/i18n/locale-context';
 import { cn } from '@/lib/utils';
 
 /*
@@ -92,6 +93,7 @@ export function CopyCommand({
   prompt = '$',
   className,
 }: CopyCommandProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -125,7 +127,11 @@ export function CopyCommand({
       <button
         type="button"
         onClick={() => void copy()}
-        aria-label={copied ? 'Copied' : 'Copy command'}
+        aria-label={
+          copied
+            ? t({ en: 'Copied', es: 'Copiado' })
+            : t({ en: 'Copy command', es: 'Copiar comando' })
+        }
         className="flex shrink-0 items-center gap-1.5 border-l border-zinc-800 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         {copied ? (
@@ -133,7 +139,11 @@ export function CopyCommand({
         ) : (
           <Copy className="h-4 w-4" />
         )}
-        <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
+        <span className="hidden sm:inline">
+          {copied
+            ? t({ en: 'Copied', es: 'Copiado' })
+            : t({ en: 'Copy', es: 'Copiar' })}
+        </span>
       </button>
     </div>
   );

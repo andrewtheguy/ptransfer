@@ -2,6 +2,8 @@ import { AlertCircle, Check, Copy, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useT } from '@/i18n/locale-context';
+import { LocaleLink } from '@/i18n/locale-link';
 import { PIN_ROTATION_MS, PIN_WAIT_TIMEOUT_MS } from '@/lib/crypto';
 import { generateTextQRCode } from '@/lib/qr-utils';
 import { buildPinUrl } from '@/lib/receive-link';
@@ -21,6 +23,7 @@ interface PinDisplayProps {
 }
 
 export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
@@ -175,12 +178,21 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
     <div className="flex flex-col gap-4 p-6 rounded-lg bg-muted/50 border">
       <div className="space-y-1">
         <h3 className="text-sm font-medium">
-          Share this PIN with the receiver
+          {t({
+            en: 'Share this PIN with the receiver',
+            es: 'Comparte este PIN con el receptor',
+          })}
         </h3>
         <p className="text-xs text-muted-foreground">
           {qrFailed
-            ? 'Read them the PIN, or copy it and send it over.'
-            : 'Have them scan the code, or read them the PIN.'}
+            ? t({
+                en: 'Read them the PIN, or copy it and send it over.',
+                es: 'Díctale el PIN, o cópialo y envíaselo.',
+              })
+            : t({
+                en: 'Have them scan the code, or read them the PIN.',
+                es: 'Pídele que escanee el código, o díctale el PIN.',
+              })}
         </p>
       </div>
 
@@ -195,7 +207,10 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
               {qrUrl ? (
                 <img
                   src={qrUrl}
-                  alt="QR code linking to the receive page with this PIN"
+                  alt={t({
+                    en: 'QR code linking to the receive page with this PIN',
+                    es: 'Código QR que enlaza a la página de recepción con este PIN',
+                  })}
                   className="block w-full h-auto"
                 />
               ) : (
@@ -229,7 +244,20 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
             <RefreshCw
               className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`}
             />
-            New PIN in <span className="font-mono">{rotationCountdown}</span>
+            {t({
+              en: (
+                <>
+                  New PIN in{' '}
+                  <span className="font-mono">{rotationCountdown}</span>
+                </>
+              ),
+              es: (
+                <>
+                  Nuevo PIN en{' '}
+                  <span className="font-mono">{rotationCountdown}</span>
+                </>
+              ),
+            })}
           </span>
         </div>
       </div>
@@ -240,17 +268,17 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
           {copied ? (
             <>
               <Check className="h-4 w-4 mr-2" />
-              Copied!
+              {t({ en: 'Copied!', es: '¡Copiado!' })}
             </>
           ) : error ? (
             <>
               <AlertCircle className="h-4 w-4 mr-2" />
-              Failed to copy
+              {t({ en: 'Failed to copy', es: 'No se pudo copiar' })}
             </>
           ) : (
             <>
               <Copy className="h-4 w-4 mr-2" />
-              Copy PIN
+              {t({ en: 'Copy PIN', es: 'Copiar PIN' })}
             </>
           )}
         </Button>
@@ -264,54 +292,94 @@ export function PinDisplay({ pin, onExpire, onRefresh }: PinDisplayProps) {
               disabled={refreshing}
             >
               <RefreshCw className={refreshing ? 'animate-spin' : ''} />
-              {refreshing ? 'Generating new PIN...' : 'Generate a new PIN'}
+              {refreshing
+                ? t({
+                    en: 'Generating new PIN...',
+                    es: 'Generando un nuevo PIN...',
+                  })
+                : t({ en: 'Generate a new PIN', es: 'Generar un nuevo PIN' })}
             </Button>
             <p className="text-xs text-muted-foreground text-center">
-              Replaces this PIN immediately, invalidates previously shown PINs,
-              and restarts the 2-minute countdown.
+              {t({
+                en: 'Replaces this PIN immediately, invalidates previously shown PINs, and restarts the 2-minute countdown.',
+                es: 'Reemplaza este PIN de inmediato, invalida los PIN mostrados antes y reinicia la cuenta atrás de 2 minutos.',
+              })}
             </p>
           </div>
         )}
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
-        Case sensitive. Share it over a channel you trust.
+        {t({
+          en: 'Case sensitive. Share it over a channel you trust.',
+          es: 'Distingue mayúsculas y minúsculas. Compártelo por un canal de confianza.',
+        })}
       </p>
 
       {/* The PIN is protocol, not a page feature: any host running it can
           claim the PIN, so say so rather than let this screen imply a browser
           is required. */}
       <p className="text-xs text-muted-foreground text-center">
-        The receiver can use this site or{' '}
         {/* A new tab: following it here would end the wait for a receiver. */}
-        <a
-          href="/cli"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium underline underline-offset-2 hover:text-foreground"
-        >
-          the command line
-        </a>{' '}
-        —{' '}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">
-          ptransfer receive --pin
-        </code>{' '}
-        takes the same PIN.
+        {t({
+          en: (
+            <>
+              The receiver can use this site or{' '}
+              <LocaleLink
+                to="/cli"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                the command line
+              </LocaleLink>{' '}
+              —{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer receive --pin
+              </code>{' '}
+              takes the same PIN.
+            </>
+          ),
+          es: (
+            <>
+              El receptor puede usar este sitio o{' '}
+              <LocaleLink
+                to="/cli"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                la línea de comandos
+              </LocaleLink>
+              :{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ptransfer receive --pin
+              </code>{' '}
+              acepta el mismo PIN.
+            </>
+          ),
+        })}
       </p>
 
       {/* Quiet resource backstop, not a security deadline: rotation already
           caps each code's life, so there is no urgency to surface here. */}
       <p className="text-xs text-muted-foreground/70 text-center">
-        Waiting stops automatically in{' '}
         {timeRemaining >= 60
-          ? `about ${Math.ceil(timeRemaining / 60)} min`
-          : 'less than a minute'}{' '}
-        if no one connects.
+          ? t({
+              en: `Waiting stops automatically in about ${Math.ceil(timeRemaining / 60)} min if no one connects.`,
+              es: `La espera se detiene automáticamente en unos ${Math.ceil(timeRemaining / 60)} min si nadie se conecta.`,
+            })
+          : t({
+              en: 'Waiting stops automatically in less than a minute if no one connects.',
+              es: 'La espera se detiene automáticamente en menos de un minuto si nadie se conecta.',
+            })}
       </p>
 
       <p className="text-xs text-muted-foreground">
-        After the receiver enters this PIN they will see a confirmation code.
-        Ask them for it — nothing is sent until you enter it here.
+        {t({
+          en: 'After the receiver enters this PIN they will see a confirmation code. Ask them for it — nothing is sent until you enter it here.',
+          es: 'Cuando el receptor introduzca este PIN, verá un código de confirmación. Pídeselo: no se envía nada hasta que lo introduzcas aquí.',
+        })}
       </p>
     </div>
   );

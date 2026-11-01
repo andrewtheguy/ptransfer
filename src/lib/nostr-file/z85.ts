@@ -2,6 +2,8 @@
 // ~1.25x expansion vs base64's ~1.33x, and the alphabet contains no
 // characters JSON needs to escape.
 
+import { t } from '../i18n';
+
 const Z85_ALPHABET =
   '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#';
 
@@ -43,7 +45,9 @@ export function encodeZ85(data: Uint8Array): string {
 export function decodeZ85(text: string): Uint8Array {
   const remainder = text.length % 5;
   if (remainder === 1) {
-    throw new Error('Invalid Z85 length');
+    throw new Error(
+      t({ en: 'Invalid Z85 length', es: 'Longitud Z85 no válida' }),
+    );
   }
   const outLength =
     Math.floor(text.length / 5) * 4 + (remainder ? remainder - 1 : 0);
@@ -60,13 +64,20 @@ export function decodeZ85(text: string): Uint8Array {
         const code = text.charCodeAt(i + j);
         digit = code < 128 ? Z85_DECODE_TABLE[code] : -1;
         if (digit < 0) {
-          throw new Error('Invalid Z85 character');
+          throw new Error(
+            t({ en: 'Invalid Z85 character', es: 'Carácter Z85 no válido' }),
+          );
         }
       }
       value = value * 85 + digit;
     }
     if (value > 0xffffffff) {
-      throw new Error('Invalid Z85 group (overflow)');
+      throw new Error(
+        t({
+          en: 'Invalid Z85 group (overflow)',
+          es: 'Grupo Z85 no válido (desbordamiento)',
+        }),
+      );
     }
     const byteCount = groupLen === 5 ? 4 : groupLen - 1;
     for (let j = 0; j < byteCount; j++) {

@@ -1,5 +1,6 @@
 import initFastQrWasm, { generate_qr_svg } from '@andrewtheguy/fast-qr-wasm';
 import fastQrWasmUrl from '@andrewtheguy/fast-qr-wasm/fast_qr_wasm_bg.wasm?url';
+import { t } from '@/lib/i18n';
 
 export type FastQrErrorCorrectionLevel = 'L' | 'M' | 'Q' | 'H';
 
@@ -28,7 +29,12 @@ function normalizeMargin(margin?: number): number {
     !Number.isInteger(normalizedMargin) ||
     normalizedMargin < 0
   ) {
-    throw new TypeError('Invalid margin: expected a finite integer >= 0');
+    throw new TypeError(
+      t({
+        en: 'Invalid margin: expected a finite integer >= 0',
+        es: 'Margen no válido: se esperaba un entero finito >= 0',
+      }),
+    );
   }
   return normalizedMargin;
 }
@@ -40,7 +46,12 @@ function normalizeOptionalDimension(
   if (value === undefined) return undefined;
   const n = Number(value);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
-    throw new TypeError(`Invalid ${name}: expected a finite integer > 0`);
+    throw new TypeError(
+      t({
+        en: `Invalid ${name}: expected a finite integer > 0`,
+        es: `${name} no válido: se esperaba un entero finito > 0`,
+      }),
+    );
   }
   return n;
 }

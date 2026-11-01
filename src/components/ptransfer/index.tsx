@@ -1,5 +1,4 @@
 import { Download } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import {
   Card,
   CardContent,
@@ -7,6 +6,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { useT } from '@/i18n/locale-context';
+import { LocaleLink } from '@/i18n/locale-link';
 import { ReceiveTab } from './receive-tab';
 import { SendTab } from './send-tab';
 
@@ -17,14 +18,15 @@ type PTransferProps = {
 };
 
 export function PTransfer({ view = 'send' }: PTransferProps) {
+  const t = useT();
   const getTitle = () => {
     switch (view) {
       case 'send':
-        return 'Secure Send';
+        return t({ en: 'Secure Send', es: 'Envío seguro' });
       case 'receive':
-        return 'Secure Receive';
+        return t({ en: 'Secure Receive', es: 'Recepción segura' });
       default:
-        return 'Secure Send';
+        return t({ en: 'Secure Send', es: 'Envío seguro' });
     }
   };
 
@@ -56,19 +58,27 @@ export function PTransfer({ view = 'send' }: PTransferProps) {
           {view === 'send' && (
             <span className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
               <span>
-                Share files or folders securely with end-to-end encryption.
+                {t({
+                  en: 'Share files or folders securely with end-to-end encryption.',
+                  es: 'Comparte archivos o carpetas de forma segura con cifrado de extremo a extremo.',
+                })}
               </span>
-              <Link
+              <LocaleLink
                 to="/receive"
                 className="inline-flex items-center gap-1 text-primary hover:underline whitespace-nowrap"
               >
                 <Download className="h-3 w-3" />
-                <span>Receive files instead</span>
-              </Link>
+                <span>
+                  {t({ en: 'Receive files instead', es: 'Recibir archivos' })}
+                </span>
+              </LocaleLink>
             </span>
           )}
           {view === 'receive' &&
-            'Receive files or folders securely with end-to-end encryption.'}
+            t({
+              en: 'Receive files or folders securely with end-to-end encryption.',
+              es: 'Recibe archivos o carpetas de forma segura con cifrado de extremo a extremo.',
+            })}
         </CardDescription>
       </CardHeader>
       <CardContent>

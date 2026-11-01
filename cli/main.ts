@@ -1,9 +1,11 @@
+import { type Localized, setLocale, t } from '@/lib/i18n';
 import { PROTOCOL_VERSION } from '@/lib/protocol-version';
 import { receive } from './commands/receive';
 import { send } from './commands/send';
 import { torTest } from './commands/tor-test';
 import { routeDiagnostics } from './diagnostics';
 import { INTERRUPTED_STATUS, InterruptedError } from './interrupt';
+import { detectLocale, systemLocale } from './locale';
 import { UsageError } from './usage';
 import { CLI_VERSION } from './version';
 
@@ -23,7 +25,8 @@ import { CLI_VERSION } from './version';
  *   bun run cli <command> [options]
  */
 
-const USAGE = `usage: ptransfer [command] [options]
+const USAGE: Localized = {
+  en: `usage: ptransfer [command] [options]
 
 With no command, at a terminal, ptransfer opens its terminal UI: pick what to
 send and how to carry it, or paste what a sender gave you.
@@ -38,7 +41,25 @@ A command is the line interface: results on standard output, everything else
 on standard error, which is what a script and a pipe want. Run one with --help
 for its options, or ptransfer --version for the release and the protocol
 version; a peer needs the same protocol version.
-`;
+`,
+  es: `uso: ptransfer [comando] [opciones]
+
+Sin comando, en una terminal, ptransfer abre su interfaz de terminal: elige qué
+enviar y cómo llevarlo, o pega lo que te dio un emisor.
+
+comandos:
+  send       envía archivos y carpetas por Intercambio por PIN, Intercambio
+             por código o un servicio onion de Tor
+  receive    recibe lo que un emisor está enviando
+  tor-test   inicia Tor, publica un servicio onion y vuelve a conectarse a él
+
+Un comando es la interfaz de líneas: los resultados van a la salida estándar y
+todo lo demás a la salida de error estándar, que es lo que necesitan un script
+y una tubería. Ejecuta uno con --help para ver sus opciones, o
+ptransfer --version para ver la versión publicada y la del protocolo; el otro
+extremo necesita la misma versión del protocolo.
+`,
+};
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   send,
@@ -57,7 +78,7 @@ async function main(argv: string[]): Promise<number> {
     return await runTui();
   }
   if (command === 'help' || command === '--help' || command === '-h') {
-    process.stdout.write(USAGE);
+    process.stdout.write(t(USAGE));
     return 0;
   }
   if (command === '--version') {
@@ -68,11 +89,19 @@ async function main(argv: string[]): Promise<number> {
   }
   const run = COMMANDS[command];
   if (!run) {
-    process.stderr.write(`Unknown command: ${command}\n\n${USAGE}`);
+    process.stderr.write(
+      t({
+        en: `Unknown command: ${command}\n\n${USAGE.en}`,
+        es: `Comando desconocido: ${command}\n\n${USAGE.es}`,
+      }),
+    );
     return 2;
   }
   return await run(rest);
 }
+
+// Before anything prints: every message is said in this language.
+setLocale(detectLocale(process.env, systemLocale()));
 
 try {
   process.exit(await main(process.argv.slice(2)));

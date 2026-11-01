@@ -6,7 +6,6 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AnswerInput } from '@/components/ptransfer/answer-input';
 import { ConfirmationCodeInput } from '@/components/ptransfer/confirmation-code-input';
 import { MultiQRDisplay } from '@/components/ptransfer/multi-qr-display';
@@ -19,11 +18,13 @@ import { useSend } from '@/contexts/send-context';
 import { type UseCodeSendReturn, useCodeSend } from '@/hooks/use-code-send';
 import { type UsePinSendReturn, usePinSend } from '@/hooks/use-pin-send';
 import { type UseTorSendReturn, useTorSend } from '@/hooks/use-tor-send';
+import { useLocaleNavigate, useT } from '@/i18n/locale-context';
 import {
   archiveTimestamp,
   createZipTransferSource,
   getArchiveBaseName,
 } from '@/lib/folder-utils';
+import type { Localized } from '@/lib/i18n';
 import { testRelayAvailability } from '@/lib/nostr';
 import { pickedZipEntries } from '@/lib/picked-files';
 import { DEFAULT_TOR_BRIDGE } from '@/lib/tor/bridge';
@@ -47,14 +48,17 @@ type ActiveHook =
   | { type: 'tor'; hook: UseTorSendReturn };
 
 export function SendTransferPage() {
-  const navigate = useNavigate();
+  const t = useT();
+  const navigate = useLocaleNavigate();
   const { config, setConfig, clearConfig } = useSend();
 
   const [step, setStep] = useState<TransferStep>('checking');
   const [transferSource, setTransferSource] = useState<TransferSource | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
+  // A message from the transfer itself arrives already in the page's
+  // language; one this page writes is kept as a record until it is shown.
+  const [error, setError] = useState<string | Localized | null>(null);
 
   // Hooks for transfer
   const pinHook = usePinSend();
@@ -100,7 +104,7 @@ export function SendTransferPage() {
   // Redirect if no config
   useEffect(() => {
     if (!config) {
-      void navigate('/', { replace: true });
+      navigate('/', { replace: true });
     }
   }, [config, navigate]);
 
@@ -137,7 +141,10 @@ export function SendTransferPage() {
 
         if (files.length === 0) {
           if (cancelled) return;
-          setError('No files selected');
+          setError({
+            en: 'No files selected',
+            es: 'No hay archivos seleccionados',
+          });
           setStep('error');
           return;
         }
@@ -160,7 +167,12 @@ export function SendTransferPage() {
       } catch (err) {
         if (cancelled) return;
         setError(
-          err instanceof Error ? err.message : 'Failed to prepare files',
+          err instanceof Error
+            ? err.message
+            : {
+                en: 'Failed to prepare files',
+                es: 'No se pudieron preparar los archivos',
+              },
         );
         setStep('error');
       }
@@ -214,7 +226,7 @@ export function SendTransferPage() {
   const handleCancel = useCallback(() => {
     cancel();
     clearConfig();
-    void navigate('/send');
+    navigate('/send');
   }, [cancel, clearConfig, navigate]);
 
   const handleSwitchToCode = useCallback(() => {
@@ -264,7 +276,7 @@ export function SendTransferPage() {
   const handleSendAnother = useCallback(() => {
     cancel();
     clearConfig();
-    void navigate('/send');
+    navigate('/send');
   }, [cancel, clearConfig, navigate]);
 
   if (!config) {
@@ -278,7 +290,12 @@ export function SendTransferPage() {
       {step === 'checking' && (
         <div className="flex flex-col items-center gap-4 py-8">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Checking connection...</p>
+          <p className="text-muted-foreground">
+            {t({
+              en: 'Checking connection...',
+              es: 'Comprobando la conexión...',
+            })}
+          </p>
         </div>
       )}
 
@@ -289,21 +306,29 @@ export function SendTransferPage() {
             <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div className="space-y-1">
               <p className="font-medium text-amber-800 dark:text-amber-200">
-                Unable to connect to relay servers
+                {t({
+                  en: 'Unable to connect to relay servers',
+                  es: 'No se pudo conectar con los servidores relay',
+                })}
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-300">
-                PIN Exchange is temporarily unavailable. Switch to Code Exchange
-                or retry the connection.
+                {t({
+                  en: 'PIN Exchange is temporarily unavailable. Switch to Code Exchange or retry the connection.',
+                  es: 'El Intercambio por PIN no está disponible por ahora. Cambia al Intercambio por código o reintenta la conexión.',
+                })}
               </p>
             </div>
           </div>
           <div className="flex gap-2">
             <Button onClick={handleSwitchToCode} className="flex-1" size="sm">
               <ArrowLeftRight className="mr-2 h-4 w-4" />
-              Switch to Code Exchange
+              {t({
+                en: 'Switch to Code Exchange',
+                es: 'Cambiar a Intercambio por código',
+              })}
             </Button>
             <Button onClick={handleRetry} variant="outline" size="sm">
-              Retry
+              {t({ en: 'Retry', es: 'Reintentar' })}
             </Button>
           </div>
         </div>
@@ -322,42 +347,86 @@ export function SendTransferPage() {
                 <div className="rounded-lg bg-muted/50 border p-4 space-y-3">
                   <div className="space-y-2">
                     <p className="font-medium">
-                      Send your connection data to the receiver
+                      {t({
+                        en: 'Send your connection data to the receiver',
+                        es: 'Envía tus datos de conexión al receptor',
+                      })}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      The data below sets up the connection. Get it to your
-                      recipient either way — a QR code and copy/paste work
-                      equally well:
+                      {t({
+                        en: 'The data below sets up the connection. Get it to your recipient either way — a QR code and copy/paste work equally well:',
+                        es: 'Los datos de abajo establecen la conexión. Hazlos llegar al receptor de cualquiera de las dos formas; el código QR y copiar y pegar funcionan igual de bien:',
+                      })}
                     </p>
                     <ul className="text-sm text-muted-foreground space-y-2">
                       <li>
-                        <span className="font-medium text-foreground">
-                          QR code:
-                        </span>{' '}
-                        the receiver scans <strong>any</strong> code below with
-                        their camera to get started, then the app guides them
-                        through the rest. Codes can be scanned in any order, but
-                        all of them must be scanned.
+                        {t({
+                          en: (
+                            <>
+                              <span className="font-medium text-foreground">
+                                QR code:
+                              </span>{' '}
+                              the receiver scans <strong>any</strong> code below
+                              with their camera to get started, then the app
+                              guides them through the rest. Codes can be scanned
+                              in any order, but all of them must be scanned.
+                            </>
+                          ),
+                          es: (
+                            <>
+                              <span className="font-medium text-foreground">
+                                Código QR:
+                              </span>{' '}
+                              el receptor escanea <strong>cualquiera</strong> de
+                              los códigos de abajo con su cámara para empezar, y
+                              la aplicación lo guía en el resto. Los códigos se
+                              pueden escanear en cualquier orden, pero hay que
+                              escanearlos todos.
+                            </>
+                          ),
+                        })}
                       </li>
                       <li>
-                        <span className="font-medium text-foreground">
-                          Copy &amp; paste:
-                        </span>{' '}
-                        tap <strong>Copy Data</strong> below the codes, then
-                        send the copied text to the receiver over any trusted
-                        channel (an end-to-end encrypted chat, AirDrop, etc.)
-                        for them to paste on their device. If the button
-                        doesn&apos;t work, use{' '}
-                        <strong>Show text to copy manually</strong> to select
-                        and copy the data yourself.
+                        {t({
+                          en: (
+                            <>
+                              <span className="font-medium text-foreground">
+                                Copy &amp; paste:
+                              </span>{' '}
+                              tap <strong>Copy Data</strong> below the codes,
+                              then send the copied text to the receiver over any
+                              trusted channel (an end-to-end encrypted chat,
+                              AirDrop, etc.) for them to paste on their device.
+                              If the button doesn&apos;t work, use{' '}
+                              <strong>Show text to copy manually</strong> to
+                              select and copy the data yourself.
+                            </>
+                          ),
+                          es: (
+                            <>
+                              <span className="font-medium text-foreground">
+                                Copiar y pegar:
+                              </span>{' '}
+                              toca <strong>Copiar datos</strong> debajo de los
+                              códigos y después envía el texto copiado al
+                              receptor por cualquier canal de confianza (un chat
+                              cifrado de extremo a extremo, AirDrop, etc.) para
+                              que lo pegue en su dispositivo. Si el botón no
+                              funciona, usa{' '}
+                              <strong>
+                                Mostrar el texto para copiarlo a mano
+                              </strong>{' '}
+                              para seleccionar y copiar los datos tú mismo.
+                            </>
+                          ),
+                        })}
                       </li>
                     </ul>
                     <p className="text-sm text-muted-foreground">
-                      Either way, the receiver then sends their response back
-                      the same way — scan or paste it below to connect. If a
-                      direct connection cannot be made, an eligible encrypted
-                      file up to 100 MiB can use the automatic Nostr relay
-                      fallback.
+                      {t({
+                        en: 'Either way, the receiver then sends their response back the same way — scan or paste it below to connect. If a direct connection cannot be made, an eligible encrypted file up to 100 MiB can use the automatic Nostr relay fallback.',
+                        es: 'En ambos casos, el receptor te devuelve su respuesta de la misma forma: escanéala o pégala abajo para conectar. Si no se puede establecer una conexión directa, un archivo cifrado apto de hasta 100 MiB puede usar el respaldo automático por relays de Nostr.',
+                      })}
                     </p>
                   </div>
                 </div>
@@ -368,7 +437,10 @@ export function SendTransferPage() {
                 {/* Input for receiver's response */}
                 <div className="pt-2 border-t">
                   <p className="text-sm font-medium mb-3">
-                    Scan or paste receiver's response
+                    {t({
+                      en: "Scan or paste receiver's response",
+                      es: 'Escanear o pegar la respuesta del receptor',
+                    })}
                   </p>
                   <AnswerInput onSubmit={submitAnswer} />
                 </div>
@@ -417,7 +489,7 @@ export function SendTransferPage() {
           )}
 
           <Button onClick={handleCancel} variant="outline" className="w-full">
-            Cancel
+            {t({ en: 'Cancel', es: 'Cancelar' })}
           </Button>
         </>
       )}
@@ -430,9 +502,17 @@ export function SendTransferPage() {
               <CheckCircle2 className="h-8 w-8 text-green-600" />
             </div>
             <div className="text-center">
-              <p className="font-medium text-lg">Transfer Complete!</p>
+              <p className="font-medium text-lg">
+                {t({
+                  en: 'Transfer Complete!',
+                  es: '¡Transferencia completada!',
+                })}
+              </p>
               <p className="text-muted-foreground text-sm">
-                Your files have been sent successfully.
+                {t({
+                  en: 'Your files have been sent successfully.',
+                  es: 'Tus archivos se han enviado correctamente.',
+                })}
               </p>
             </div>
           </div>
@@ -441,7 +521,7 @@ export function SendTransferPage() {
           )}
           <Button onClick={handleSendAnother} className="w-full">
             <RotateCcw className="mr-2 h-4 w-4" />
-            Send Another
+            {t({ en: 'Send Another', es: 'Enviar otro' })}
           </Button>
         </div>
       )}
@@ -452,8 +532,12 @@ export function SendTransferPage() {
           <div className="flex items-start gap-3 rounded-lg bg-destructive/10 border border-destructive/30 p-4">
             <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium text-destructive">Transfer Failed</p>
-              <p className="text-sm text-muted-foreground">{error}</p>
+              <p className="font-medium text-destructive">
+                {t({ en: 'Transfer Failed', es: 'La transferencia falló' })}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {typeof error === 'string' || error === null ? error : t(error)}
+              </p>
             </div>
           </div>
           {'stats' in state && state.stats && (
@@ -461,10 +545,10 @@ export function SendTransferPage() {
           )}
           <div className="flex gap-2">
             <Button onClick={handleRetry} className="flex-1">
-              Retry
+              {t({ en: 'Retry', es: 'Reintentar' })}
             </Button>
             <Button onClick={handleSendAnother} variant="outline">
-              Start Over
+              {t({ en: 'Start Over', es: 'Empezar de nuevo' })}
             </Button>
           </div>
         </div>

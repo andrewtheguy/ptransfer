@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import type { FastQrMode } from '@/lib/wasm/fastQrWasm';
 import QRWorker from '@/workers/qrGenerator.worker?worker';
 
@@ -43,7 +44,12 @@ function registerPendingRequest(
       return;
     }
     request.reject(
-      new Error(`QR generation timed out after ${REQUEST_TIMEOUT_MS}ms`),
+      new Error(
+        t({
+          en: `QR generation timed out after ${REQUEST_TIMEOUT_MS}ms`,
+          es: `Se agotó el tiempo para generar el código QR (${REQUEST_TIMEOUT_MS} ms)`,
+        }),
+      ),
     );
   }, REQUEST_TIMEOUT_MS);
   pending.set(id, { resolve, reject, timeoutId });
@@ -76,18 +82,31 @@ worker.onmessage = (e: MessageEvent) => {
     const errorMessage =
       typeof data.error === 'string' && data.error.length > 0
         ? data.error
-        : 'QR generation failed';
+        : t({
+            en: 'QR generation failed',
+            es: 'No se pudo generar el código QR',
+          });
     request.reject(new Error(errorMessage));
   }
 };
 
 worker.onerror = (event: ErrorEvent) => {
   const suffix = event.message ? `: ${event.message}` : '';
-  rejectAllPendingRequests(`QR worker error${suffix}`);
+  rejectAllPendingRequests(
+    t({
+      en: `QR worker error${suffix}`,
+      es: `Error del worker de códigos QR${suffix}`,
+    }),
+  );
 };
 
 worker.onmessageerror = () => {
-  rejectAllPendingRequests('QR worker message error');
+  rejectAllPendingRequests(
+    t({
+      en: 'QR worker message error',
+      es: 'Error de mensaje del worker de códigos QR',
+    }),
+  );
 };
 
 interface QRCodeOptions {
@@ -121,7 +140,12 @@ function postGenerateRequest(
       request.reject(
         error instanceof Error
           ? error
-          : new Error('Failed to post QR generation request'),
+          : new Error(
+              t({
+                en: 'Failed to post QR generation request',
+                es: 'No se pudo enviar la solicitud para generar el código QR',
+              }),
+            ),
       );
     }
   });

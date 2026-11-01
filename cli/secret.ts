@@ -6,6 +6,7 @@
  * with echo off; from a pipe or a file it is the first line.
  */
 
+import { t } from '@/lib/i18n';
 import { InterruptedError } from './interrupt';
 
 export interface SecretInput extends NodeJS.ReadableStream {
@@ -71,7 +72,14 @@ async function readFirstLine(input: SecretInput): Promise<string> {
     }
   }
   const line = text.replace(/\r$/, '');
-  if (line === '') throw new Error('No password was given on standard input');
+  if (line === '') {
+    throw new Error(
+      t({
+        en: 'No password was given on standard input',
+        es: 'No se recibió ninguna contraseña por la entrada estándar',
+      }),
+    );
+  }
   return line;
 }
 
@@ -106,7 +114,9 @@ function readAtTerminal(
             finish(() => reject(new InterruptedError()));
             return;
           case '\u0004': // Ctrl-D
-            finish(() => reject(new Error('Cancelled')));
+            finish(() =>
+              reject(new Error(t({ en: 'Cancelled', es: 'Cancelado' }))),
+            );
             return;
           case '\u007f': // Backspace
           case '\b':

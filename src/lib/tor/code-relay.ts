@@ -2,6 +2,7 @@ import type { AppendSink } from '@/lib/append-sink';
 import { uint8ArrayToBase64 } from '@/lib/base64';
 import { wipeBufferSource } from '@/lib/crypto/memory';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import type { TransferMetadata, TransferState } from '@/lib/nostr';
 import { generateEphemeralKeys } from '@/lib/nostr/events';
 import {
@@ -184,7 +185,12 @@ export async function serveOverAnonymousRelay(
 ): Promise<void> {
   const { client, isCancelled, onStatus, onProgress } = options;
 
-  onStatus('Publishing a Tor onion service for the file...');
+  onStatus(
+    t({
+      en: 'Publishing a Tor onion service for the file...',
+      es: 'Publicando un servicio onion de Tor para el archivo...',
+    }),
+  );
   const service: OnionService = await client.publishOnionService();
   let channel: ControlChannel | null = null;
   try {
@@ -193,7 +199,12 @@ export async function serveOverAnonymousRelay(
     const onion = `${service.onionAddress}:${TOR_DEFAULT_PORT}`;
     if (isCancelled()) throw new Error('Cancelled');
 
-    onStatus('Telling the receiver where to find it...');
+    onStatus(
+      t({
+        en: 'Telling the receiver where to find it...',
+        es: 'Indicando al receptor dónde encontrarlo...',
+      }),
+    );
     channel = (await openSessionChannel(options, 'sender', () => {})).channel;
     await channel.send({
       t: ANNOUNCE_TYPE,
@@ -301,7 +312,12 @@ export async function receiveOverAnonymousRelay(
     resolveAddress = resolve;
   });
 
-  onStatus('No direct connection — asking the sender to relay through Tor...');
+  onStatus(
+    t({
+      en: 'No direct connection — asking the sender to relay through Tor...',
+      es: 'Sin conexión directa: pidiendo al emisor que lo retransmita por Tor...',
+    }),
+  );
   const { channel, publicKey } = await openSessionChannel(
     options,
     'receiver',
@@ -317,24 +333,42 @@ export async function receiveOverAnonymousRelay(
     // The same `hello` the clearnet fallback sends, read by the same watch on
     // the sender: it is what ends the direct attempt over there.
     await channel.send({ t: 'hello' });
-    onStatus('Waiting for the sender to publish its onion service...');
+    onStatus(
+      t({
+        en: 'Waiting for the sender to publish its onion service...',
+        es: 'Esperando a que el emisor publique su servicio onion...',
+      }),
+    );
 
     const address = await untilDeadline(
       announced,
       options.expiresAt * 1000 - Date.now(),
-      'The sender never published an onion service. Start a new transfer.',
+      t({
+        en: 'The sender never published an onion service. Start a new transfer.',
+        es: 'El emisor nunca publicó un servicio onion. Inicia una nueva transferencia.',
+      }),
       isCancelled,
     );
     if (isCancelled()) throw new Error('Cancelled');
     options.onAnnounced?.();
 
-    onStatus(`Building a circuit to ${address.host}...`);
+    onStatus(
+      t({
+        en: `Building a circuit to ${address.host}...`,
+        es: `Construyendo un circuito hacia ${address.host}...`,
+      }),
+    );
     framed = new TorFramedStream(
       await client.connectStream(address.host, address.port),
     );
     if (isCancelled()) throw new Error('Cancelled');
 
-    onStatus('Authenticating with the sender...');
+    onStatus(
+      t({
+        en: 'Authenticating with the sender...',
+        es: 'Autenticando con el emisor...',
+      }),
+    );
     const { keys, metadata } = await runTorClientHandshake(
       framed,
       options.password,
@@ -344,17 +378,34 @@ export async function receiveOverAnonymousRelay(
     // is not worth a transfer, and the ceiling is the receiver's rule too.
     const mismatch = firstMismatch(options.expected, metadata);
     if (mismatch) {
+      const mismatchEs: Record<string, string> = {
+        name: 'nombre',
+        size: 'tamaño',
+        type: 'tipo',
+        'content type': 'tipo de contenido',
+      };
       throw new Error(
-        `The sender is offering a file with a different ${mismatch} than the code said. Start a new transfer.`,
+        t({
+          en: `The sender is offering a file with a different ${mismatch} than the code said. Start a new transfer.`,
+          es: `El emisor ofrece un archivo con un ${mismatchEs[mismatch] ?? mismatch} distinto del que indicaba el código. Inicia una nueva transferencia.`,
+        }),
       );
     }
     if (metadata.fileSize > TOR_MAX_TRANSFER_BYTES) {
       throw new Error(
-        `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport.`,
+        t({
+          en: `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport.`,
+          es: `El emisor ofrece ${formatFileSize(metadata.fileSize)}, por encima del límite de ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} del transporte por Tor.`,
+        }),
       );
     }
 
-    onStatus('Receiving the file over Tor...');
+    onStatus(
+      t({
+        en: 'Receiving the file over Tor...',
+        es: 'Recibiendo el archivo por Tor...',
+      }),
+    );
     // Somewhere to put the file before the sender is told to start: a sink
     // that cannot be made then fails the transfer before a byte is sent.
     const sink = await options.createSink(metadata);

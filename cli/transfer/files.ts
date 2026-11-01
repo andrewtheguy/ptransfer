@@ -11,6 +11,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AppendSink } from '@/lib/append-sink';
 import { SourceError } from '@/lib/errors';
+import { t } from '@/lib/i18n';
 import { deflateUpperBound, type TransferSource } from '@/lib/transfer-source';
 
 /**
@@ -25,9 +26,18 @@ export async function openFileSource(path: string): Promise<TransferSource> {
   try {
     info = await stat(path);
   } catch {
-    throw new Error(`No such file: ${path}`);
+    throw new Error(
+      t({ en: `No such file: ${path}`, es: `No existe el archivo: ${path}` }),
+    );
   }
-  if (!info.isFile()) throw new Error(`Not a regular file: ${path}`);
+  if (!info.isFile()) {
+    throw new Error(
+      t({
+        en: `Not a regular file: ${path}`,
+        es: `No es un archivo normal: ${path}`,
+      }),
+    );
+  }
 
   return {
     name: basename(path),
@@ -60,12 +70,15 @@ export function chosenFileStream(
 ): ReadableStream<Uint8Array> {
   const changed = () =>
     new SourceError(
-      `${path} changed after it was chosen; send it again`,
+      t({
+        en: `${path} changed after it was chosen; send it again`,
+        es: `${path} cambió después de elegirlo; vuelve a enviarlo`,
+      }),
       "A file being sent changed on the sender's side",
     );
   const unreadable = () =>
     new SourceError(
-      `Cannot read ${path}`,
+      t({ en: `Cannot read ${path}`, es: `No se puede leer ${path}` }),
       'The sender could not read a file being sent',
     );
   let handle: FileHandle | null = null;
@@ -150,7 +163,10 @@ export async function openNoFollow(path: string): Promise<FileHandle> {
       opened.dev !== named.dev ||
       opened.ino !== named.ino
     ) {
-      throw Object.assign(new Error(`${path} is a link`), { code: 'ELOOP' });
+      throw Object.assign(
+        new Error(t({ en: `${path} is a link`, es: `${path} es un enlace` })),
+        { code: 'ELOOP' },
+      );
     }
     return handle;
   } catch (error) {
@@ -297,9 +313,18 @@ export async function destinationFolder(path: string): Promise<string> {
   try {
     info = await stat(absolute);
   } catch {
-    throw new Error(`No such folder: ${path}`);
+    throw new Error(
+      t({
+        en: `No such folder: ${path}`,
+        es: `No existe la carpeta: ${path}`,
+      }),
+    );
   }
-  if (!info.isDirectory()) throw new Error(`Not a folder: ${path}`);
+  if (!info.isDirectory()) {
+    throw new Error(
+      t({ en: `Not a folder: ${path}`, es: `No es una carpeta: ${path}` }),
+    );
+  }
   const probe = join(
     absolute,
     `.ptransfer-${crypto.randomUUID().slice(0, 8)}.probe`,
@@ -307,7 +332,12 @@ export async function destinationFolder(path: string): Promise<string> {
   try {
     await (await open(probe, 'wx')).close();
   } catch {
-    throw new Error(`Cannot save files in ${path}`);
+    throw new Error(
+      t({
+        en: `Cannot save files in ${path}`,
+        es: `No se pueden guardar archivos en ${path}`,
+      }),
+    );
   }
   // The folder has answered the question; a probe that will not go away —
   // on Windows, a scanner holding the new file open — is not a reason to
@@ -354,13 +384,13 @@ export async function createFileSink(destination: string): Promise<AppendSink> {
       // on, and the sink must not depend on the caller's buffer staying put.
       const data = bytes.slice();
       return enqueue(async () => {
-        if (!handle) throw new Error('The destination file was discarded');
+        if (!handle) throw discardedError();
         await handle.write(data);
       });
     },
     finish() {
       return enqueue(async () => {
-        if (!handle) throw new Error('The destination file was discarded');
+        if (!handle) throw discardedError();
         await handle.close();
         handle = null;
         // The part file sits beside the destination, so the move is a
@@ -387,11 +417,20 @@ export async function createFileSink(destination: string): Promise<AppendSink> {
   };
 }
 
+function discardedError(): Error {
+  return new Error(
+    t({
+      en: 'The destination file was discarded',
+      es: 'El archivo de destino se descartó',
+    }),
+  );
+}
+
 async function refuseExisting(path: string): Promise<void> {
   try {
     await stat(path);
   } catch {
     return;
   }
-  throw new Error(`${path} already exists`);
+  throw new Error(t({ en: `${path} already exists`, es: `${path} ya existe` }));
 }

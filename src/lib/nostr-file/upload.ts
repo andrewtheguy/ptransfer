@@ -1,4 +1,5 @@
 import type { Event } from 'nostr-tools';
+import { t } from '../i18n';
 import { DEFAULT_RELAYS, normalizeRelayUrl } from '../nostr/relays';
 import {
   CONTROL_PROBE_BYTES,
@@ -32,7 +33,7 @@ import {
 
 export class NostrFileCancelledError extends Error {
   constructor() {
-    super('Transfer cancelled');
+    super(t({ en: 'Transfer cancelled', es: 'Transferencia cancelada' }));
     this.name = 'NostrFileCancelledError';
   }
 }
@@ -91,6 +92,15 @@ export async function publishWithRetry(
 
 export const NOT_ENOUGH_RELAYS_MESSAGE =
   'Not enough working Nostr storage relays found to relay the file. Try again on a network that allows a direct connection.';
+
+function notEnoughRelays(): Error {
+  return new Error(
+    t({
+      en: NOT_ENOUGH_RELAYS_MESSAGE,
+      es: 'No se encontraron suficientes relays de almacenamiento de Nostr que funcionen para retransmitir el archivo. Inténtalo de nuevo en una red que permita una conexión directa.',
+    }),
+  );
+}
 
 export interface UploadRelaySelection {
   storageRelays: string[];
@@ -274,7 +284,7 @@ export async function resolveUploadRelays(
       ),
     ].filter((url) => !isExcluded(url));
     if (usable.length < MIN_UPLOAD_RELAYS) {
-      throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+      throw notEnoughRelays();
     }
     // A caller-picked ring has no discovery behind it, so there is nothing
     // left over to hold in reserve.
@@ -313,7 +323,7 @@ export async function resolveUploadRelays(
   );
   const unprobedCandidates = probed.unprobedCandidates;
   if (healthy.length < MIN_UPLOAD_RELAYS) {
-    throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+    throw notEnoughRelays();
   }
   const relays = await selectUploadRelays(healthy, UPLOAD_RELAY_COUNT, storage);
   const ringSet = new Set(relays);
@@ -443,7 +453,7 @@ export async function resolveTransferRelays(
 
   const control = [...healthyDefaults, ...backfill];
   if (control.length < MIN_CONTROL_RELAYS) {
-    throw new Error(NOT_ENOUGH_RELAYS_MESSAGE);
+    throw notEnoughRelays();
   }
 
   return { controlRelays: seedControlStats(control), stats, discovered };

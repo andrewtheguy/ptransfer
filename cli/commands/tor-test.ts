@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { type Localized, t } from '@/lib/i18n';
 import type { OnionService, OnionStream } from '@/lib/tor/webtor-api';
 import { routeDiagnostics } from '../diagnostics';
 import {
@@ -26,7 +27,8 @@ import { UsageError } from '../usage';
  * that says whether it does.
  */
 
-const USAGE = `usage: ptransfer tor-test [options]
+const USAGE: Localized = {
+  en: `usage: ptransfer tor-test [options]
 
 Bootstrap Tor, fetch a page from an onion service, publish an onion service
 of this process's own, and connect back to it.
@@ -35,10 +37,24 @@ options:
   --url <http://...onion/...>
                            the onion URL to fetch (default: the Tor Project's
                            site); --url none skips the fetch
-${TOR_OPTIONS_USAGE}
+${TOR_OPTIONS_USAGE.en}
   --intro-points <n>       introduction points for the service (default 1)
   -h, --help
-`;
+`,
+  es: `uso: ptransfer tor-test [opciones]
+
+Inicia Tor, descarga una página de un servicio onion, publica un servicio onion
+propio de este proceso y vuelve a conectarse a él.
+
+opciones:
+  --url <http://...onion/...>
+                           la URL onion que descargar (por defecto: el sitio
+                           del Tor Project); --url none omite la descarga
+${TOR_OPTIONS_USAGE.es}
+  --intro-points <n>       puntos de introducción del servicio (por defecto 1)
+  -h, --help
+`,
+};
 
 const PORT = 9735;
 /**
@@ -103,7 +119,7 @@ export async function torTest(argv: string[]): Promise<number> {
     },
   });
   if (values.help) {
-    process.stdout.write(USAGE);
+    process.stdout.write(t(USAGE));
     return 0;
   }
   const torOptions = torOptionsFrom(values);
@@ -111,12 +127,20 @@ export async function torTest(argv: string[]): Promise<number> {
   const url = values.url === 'none' ? undefined : values.url;
   if (url && !/^http:\/\/[a-z2-7]{56}\.onion(?::\d+)?(?:\/|$)/i.test(url)) {
     throw new UsageError(
-      '--url must be http://<v3 address>.onion/... (no TLS: the address is the key)',
+      t({
+        en: '--url must be http://<v3 address>.onion/... (no TLS: the address is the key)',
+        es: '--url debe ser http://<v3 address>.onion/... (sin TLS: la dirección es la clave)',
+      }),
     );
   }
   const introPoints = Number(values['intro-points']);
   if (!Number.isInteger(introPoints) || introPoints < 1 || introPoints > 6) {
-    throw new UsageError('--intro-points must be a whole number from 1 to 6');
+    throw new UsageError(
+      t({
+        en: '--intro-points must be a whole number from 1 to 6',
+        es: '--intro-points debe ser un número entero de 1 a 6',
+      }),
+    );
   }
 
   const say = (line: string) => process.stderr.write(`${line}\n`);
@@ -134,27 +158,59 @@ export async function torTest(argv: string[]): Promise<number> {
   try {
     if (url) {
       const response = await client.fetch(url);
-      clock.lap('fetch an onion page');
-      const type = response.headers.get('content-type') ?? 'unknown type';
+      clock.lap(
+        t({ en: 'fetch an onion page', es: 'descargar una página onion' }),
+      );
+      const type =
+        response.headers.get('content-type') ??
+        t({ en: 'unknown type', es: 'tipo desconocido' });
+      const length = response.bytes().length;
       say(
-        `GET ${url} -> HTTP ${response.status}, ${response.bytes().length} bytes of ${type}`,
+        t({
+          en: `GET ${url} -> HTTP ${response.status}, ${length} bytes of ${type}`,
+          es: `GET ${url} -> HTTP ${response.status}, ${length} bytes de ${type}`,
+        }),
       );
       if (!response.ok) {
-        throw new Error(`${url} answered HTTP ${response.status}`);
+        throw new Error(
+          t({
+            en: `${url} answered HTTP ${response.status}`,
+            es: `${url} respondió HTTP ${response.status}`,
+          }),
+        );
       }
     }
 
     service = await client.publishOnionService({ introPoints });
-    clock.lap('publish the onion service');
-    say(`Published ${service.onionAddress}`);
+    clock.lap(
+      t({ en: 'publish the onion service', es: 'publicar el servicio onion' }),
+    );
+    say(
+      t({
+        en: `Published ${service.onionAddress}`,
+        es: `Publicado ${service.onionAddress}`,
+      }),
+    );
 
     const served = (async () => {
       const stream = await service.accept();
-      if (!stream) throw new Error('The service closed before a client came');
+      if (!stream) {
+        throw new Error(
+          t({
+            en: 'The service closed before a client came',
+            es: 'El servicio se cerró antes de que llegara un cliente',
+          }),
+        );
+      }
       try {
         const text = await readExactly(stream, Buffer.byteLength(PROBE));
         if (text !== PROBE) {
-          throw new Error(`The service received ${JSON.stringify(text)}`);
+          throw new Error(
+            t({
+              en: `The service received ${JSON.stringify(text)}`,
+              es: `El servicio recibió ${JSON.stringify(text)}`,
+            }),
+          );
         }
         await stream.send(`echo: ${text}`);
       } finally {
@@ -168,19 +224,26 @@ export async function torTest(argv: string[]): Promise<number> {
     served.catch(() => undefined);
 
     const stream = await client.connectStream(service.onionAddress, PORT);
-    clock.lap('connect back to it');
+    clock.lap(t({ en: 'connect back to it', es: 'volver a conectarse a él' }));
     try {
       await stream.send(PROBE);
       const expected = `echo: ${PROBE}`;
       const echoed = await readExactly(stream, Buffer.byteLength(expected));
       if (echoed !== expected) {
-        throw new Error(`The client received ${JSON.stringify(echoed)}`);
+        throw new Error(
+          t({
+            en: `The client received ${JSON.stringify(echoed)}`,
+            es: `El cliente recibió ${JSON.stringify(echoed)}`,
+          }),
+        );
       }
     } finally {
       await stream.close().catch(() => undefined);
     }
     await served;
-    clock.lap('round-trip a message');
+    clock.lap(
+      t({ en: 'round-trip a message', es: 'enviar y recibir un mensaje' }),
+    );
   } finally {
     await service?.close().catch(() => undefined);
     await client.close().catch(() => undefined);

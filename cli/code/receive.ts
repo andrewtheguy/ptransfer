@@ -20,6 +20,7 @@ import {
 } from '@/lib/code-signaling';
 import { P2PConnectionError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { createTransferPool } from '@/lib/nostr-file/transfer-pool';
 import type { WebRTCConnection } from '@/lib/webrtc';
@@ -75,7 +76,10 @@ export async function receiveByCode(
   const say = (line: string) => presenter.say(line);
 
   const offer: AcceptedOffer = await presenter.readCode(
-    "Paste the sender's code: ",
+    t({
+      en: "Paste the sender's code: ",
+      es: 'Pega el código del emisor: ',
+    }),
     async (container) => acceptOffer(await readOffer(container)),
   );
   const { fileName, fileSize } = offer.metadata;
@@ -84,8 +88,14 @@ export async function receiveByCode(
   if (options.simulateNoDirect && !relays) {
     throw new Error(
       offer.fallbackRelays
-        ? 'The file is too large for the fallback, so there is no route but the direct one to simulate the loss of'
-        : 'The code names no fallback, so there is no route but the direct one to simulate the loss of',
+        ? t({
+            en: 'The file is too large for the fallback, so there is no route but the direct one to simulate the loss of',
+            es: 'El archivo es demasiado grande para el respaldo, así que no hay más ruta que la directa cuya pérdida simular',
+          })
+        : t({
+            en: 'The code names no fallback, so there is no route but the direct one to simulate the loss of',
+            es: 'El código no indica ningún respaldo, así que no hay más ruta que la directa cuya pérdida simular',
+          }),
     );
   }
 
@@ -126,7 +136,12 @@ export async function receiveByCode(
   };
 
   try {
-    say(`The sender is offering ${fileName} (${formatFileSize(fileSize)})`);
+    say(
+      t({
+        en: `The sender is offering ${fileName} (${formatFileSize(fileSize)})`,
+        es: `El emisor ofrece ${fileName} (${formatFileSize(fileSize)})`,
+      }),
+    );
 
     // Started the moment the code is taken in rather than once the direct
     // route is known to be dead: a bootstrap is the slow part, and by then
@@ -135,7 +150,10 @@ export async function receiveByCode(
     const torProgress = createTorProgress();
     if (offer.fallback === 'anonymous') {
       say(
-        'The sender chose the anonymous fallback: starting Tor behind the exchange',
+        t({
+          en: 'The sender chose the anonymous fallback: starting Tor behind the exchange',
+          es: 'El emisor eligió el respaldo anónimo: iniciando Tor en segundo plano durante el intercambio',
+        }),
       );
       transport = new AnonymousSignalingTransport({
         bootstrap: () =>
@@ -181,7 +199,12 @@ export async function receiveByCode(
     }
 
     say('');
-    say('Give the sender this response:');
+    say(
+      t({
+        en: 'Give the sender this response:',
+        es: 'Dale al emisor esta respuesta:',
+      }),
+    );
     say('');
     presenter.hand(generateMutualClipboardData(answerBinary));
     say('');
@@ -192,8 +215,14 @@ export async function receiveByCode(
     const hold = (torStatus: string) => {
       show(
         options.simulateNoDirect
-          ? 'Simulating no direct connection — waiting for the sender to take in the response'
-          : `${fallbackMessage(offer)}. Waiting for the sender to take in the response`,
+          ? t({
+              en: 'Simulating no direct connection — waiting for the sender to take in the response',
+              es: 'Simulando que no hay conexión directa: esperando a que el emisor introduzca la respuesta',
+            })
+          : t({
+              en: `${fallbackMessage(offer)}. Waiting for the sender to take in the response`,
+              es: `${fallbackMessage(offer)}. Esperando a que el emisor introduzca la respuesta`,
+            }),
       );
       if (torStatus && options.verbose) show(`[tor] ${torStatus}`);
     };
@@ -213,7 +242,12 @@ export async function receiveByCode(
 
     let direct = !options.simulateNoDirect;
     if (direct) {
-      show('Waiting for the sender to connect...');
+      show(
+        t({
+          en: 'Waiting for the sender to connect...',
+          es: 'Esperando a que el emisor se conecte...',
+        }),
+      );
       try {
         await attempt.opened;
       } catch (error) {
@@ -230,20 +264,30 @@ export async function receiveByCode(
     }
     let saved: number;
     if (direct) {
-      show('Connected directly; receiving...');
+      show(
+        t({
+          en: 'Connected directly; receiving...',
+          es: 'Conexión directa establecida; recibiendo...',
+        }),
+      );
       const payload = await finishDirectReceive({
         attempt,
         rtcHolder,
         isCancelled,
       });
-      if (!payload) throw new Error('Cancelled');
+      if (!payload) throw new Error(t({ en: 'Cancelled', es: 'Cancelado' }));
       saved = payload.size;
     } else {
       saved = await savedFrom(await viaFallback(), host);
     }
     presenter.done();
     if (isCancelled()) return interrupted ?? 1;
-    say(`Saved ${formatFileSize(saved)} to ${destination}`);
+    say(
+      t({
+        en: `Saved ${formatFileSize(saved)} to ${destination}`,
+        es: `Se guardaron ${formatFileSize(saved)} en ${destination}`,
+      }),
+    );
     presenter.hand(destination);
     return 0;
   } catch (error) {

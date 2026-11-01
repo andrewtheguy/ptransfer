@@ -1,3 +1,5 @@
+import { t } from '@/lib/i18n';
+
 /**
  * A transfer stopped from outside: Ctrl-C at the terminal (SIGINT), `kill`
  * or a service manager (SIGTERM), or the terminal going away (SIGHUP). Each
@@ -80,7 +82,9 @@ export function onInterrupt(
         process.stdout.on('error', () => {});
         process.stderr.on('error', () => {});
       } else {
-        process.stderr.write('\nCancelling...\n');
+        process.stderr.write(
+          t({ en: '\nCancelling...\n', es: '\nCancelando...\n' }),
+        );
       }
       const grace = new Promise<void>((resolve) =>
         setTimeout(resolve, TEARDOWN_GRACE_MS),

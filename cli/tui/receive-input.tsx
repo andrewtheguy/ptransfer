@@ -1,4 +1,5 @@
 import { isAnonymousOffer, parseMutualPayload } from '@/lib/code-signaling';
+import { t, type Localized } from '@/lib/i18n';
 import {
   classifyReceiveText,
   looksLikeOffer,
@@ -38,8 +39,10 @@ import { theme } from './theme';
  * carried by hand between two machines, and the way one fails is almost
  * always that something along the way cut it.
  */
-const INCOMPLETE =
-  'That is the start of a code, but not a whole one — or it is more than an hour old. Copy it again, whole.';
+const INCOMPLETE: Localized = {
+  en: 'That is the start of a code, but not a whole one — or it is more than an hour old. Copy it again, whole.',
+  es: 'Eso es el comienzo de un código, pero no uno completo, o tiene más de una hora. Cópialo de nuevo, entero.',
+};
 
 export type Accepted =
   | { kind: 'pin'; pin: string; anonymous: boolean }
@@ -69,35 +72,69 @@ function needsTor(found: ReceiveInput | null): boolean {
  */
 function torHint(found: ReceiveInput | null): string {
   if (found?.kind === 'pin') {
-    return 'Signaling over Tor, so relays never see an IP. Slow to start.';
+    return t({
+      en: 'Signaling over Tor, so relays never see an IP. Slow to start.',
+      es: 'Señalización por Tor: los relays nunca ven una IP. Tarda en arrancar.',
+    });
   }
   if (found?.kind === 'offer') {
-    return 'No direct route? The file comes over Tor instead. Slow; up to 100 MiB.';
+    return t({
+      en: 'No direct route? The file comes over Tor instead. Slow; up to 100 MiB.',
+      es: '¿Sin ruta directa? El archivo llega por Tor. Lento; hasta 100 MiB.',
+    });
   }
-  return "The file comes over Tor, from the sender's onion service. Slow to start.";
+  return t({
+    en: "The file comes over Tor, from the sender's onion service. Slow to start.",
+    es: 'El archivo llega por Tor, desde el servicio onion del emisor. Tarda en arrancar.',
+  });
 }
 
 function describe(text: string, found: ReceiveInput | null): string | null {
   if (!text.trim()) return null;
   if (found?.kind === 'pin') {
     return found.pinKind === 'anonymous'
-      ? 'A PIN Exchange PIN · anonymous, so its handshake is over Tor'
-      : 'A PIN Exchange PIN';
+      ? t({
+          en: 'A PIN Exchange PIN · anonymous, so its handshake is over Tor',
+          es: 'Un PIN de Intercambio por PIN · anónimo: su negociación va por Tor',
+        })
+      : t({ en: 'A PIN Exchange PIN', es: 'Un PIN de Intercambio por PIN' });
   }
   if (found?.kind === 'offer') {
     return needsTor(found)
-      ? 'A Code Exchange code · anonymous, so its fallback is over Tor'
-      : 'A Code Exchange code';
+      ? t({
+          en: 'A Code Exchange code · anonymous, so its fallback is over Tor',
+          es: 'Un código de Intercambio por código · anónimo: su respaldo va por Tor',
+        })
+      : t({
+          en: 'A Code Exchange code',
+          es: 'Un código de Intercambio por código',
+        });
   }
-  if (found?.kind === 'onion') return `A Tor onion service · ${found.address}`;
+  if (found?.kind === 'onion') {
+    return t({
+      en: `A Tor onion service · ${found.address}`,
+      es: `Un servicio onion de Tor · ${found.address}`,
+    });
+  }
   if (found?.kind === 'offer-chunk') {
-    return 'One QR chunk of a code — a terminal cannot scan the rest';
+    return t({
+      en: 'One QR chunk of a code — a terminal cannot scan the rest',
+      es: 'Un fragmento QR de un código: una terminal no puede escanear el resto',
+    });
   }
-  if (looksLikePin(text)) return 'That looks like a PIN, but it does not check out';
+  if (looksLikePin(text)) {
+    return t({
+      en: 'That looks like a PIN, but it does not check out',
+      es: 'Parece un PIN, pero no es válido',
+    });
+  }
   if (looksLikeOnionAddress(text)) {
-    return 'That looks like an onion address, but it does not check out';
+    return t({
+      en: 'That looks like an onion address, but it does not check out',
+      es: 'Parece una dirección onion, pero no es válida',
+    });
   }
-  if (looksLikeOffer(text)) return INCOMPLETE;
+  if (looksLikeOffer(text)) return t(INCOMPLETE);
   return null;
 }
 
@@ -126,10 +163,16 @@ export function ReceiveInputScreen({
     if (!found) {
       setProblem(
         !raw.trim()
-          ? 'Paste what the sender gave you.'
+          ? t({
+              en: 'Paste what the sender gave you.',
+              es: 'Pega lo que te dio el emisor.',
+            })
           : looksLikeOffer(raw)
-            ? INCOMPLETE
-            : 'That is not a PIN, a code, or an onion address. Check it was copied whole.',
+            ? t(INCOMPLETE)
+            : t({
+                en: 'That is not a PIN, a code, or an onion address. Check it was copied whole.',
+                es: 'Eso no es un PIN, un código ni una dirección onion. Comprueba que se copió entero.',
+              }),
       );
       return;
     }
@@ -144,7 +187,10 @@ export function ReceiveInputScreen({
         return;
       case 'offer-chunk':
         setProblem(
-          'That is one QR chunk of a code. Ask the sender to copy the whole code as text.',
+          t({
+            en: 'That is one QR chunk of a code. Ask the sender to copy the whole code as text.',
+            es: 'Eso es un fragmento QR de un código. Pide al emisor que copie el código entero como texto.',
+          }),
         );
         return;
       case 'offer':
@@ -163,21 +209,39 @@ export function ReceiveInputScreen({
 
   return (
     <Screen
-      title="Receive"
-      hints={['enter continue', 'esc back']}
+      title={t({ en: 'Receive', es: 'Recibir' })}
+      hints={[
+        t({ en: 'enter continue', es: 'enter continuar' }),
+        t({ en: 'esc back', es: 'esc atrás' }),
+      ]}
     >
-      <text fg={theme.heading}>Paste what the sender gave you</text>
-      <Note>A PIN, a Code Exchange code, or a .onion address.</Note>
-      <Note>Where it is saved is the next screen.</Note>
+      <text fg={theme.heading}>
+        {t({
+          en: 'Paste what the sender gave you',
+          es: 'Pega lo que te dio el emisor',
+        })}
+      </text>
+      <Note>
+        {t({
+          en: 'A PIN, a Code Exchange code, or a .onion address.',
+          es: 'Un PIN, un código de Intercambio por código o una dirección .onion.',
+        })}
+      </Note>
+      <Note>
+        {t({
+          en: 'Where it is saved is the next screen.',
+          es: 'Dónde se guarda se elige en la siguiente pantalla.',
+        })}
+      </Note>
       <Gap />
       <box
         style={{ border: true, borderColor: theme.border, height: 3 }}
-        title=" code "
+        title={t({ en: ' code ', es: ' código ' })}
       >
         <input
           focused
           maxLength={FIELD_MAX}
-          placeholder="paste here"
+          placeholder={t({ en: 'paste here', es: 'pega aquí' })}
           onInput={(value) => {
             setText(value);
             setProblem(null);
@@ -198,7 +262,10 @@ export function ReceiveInputScreen({
         <>
           <Note>{torHint(found)}</Note>
           <text fg={theme.heading}>
-            {`Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}   tab to change`}
+            {t({
+              en: `Tor bridge: ${TOR_BRIDGE_LABELS[bridge]}   tab to change`,
+              es: `Puente de Tor: ${TOR_BRIDGE_LABELS[bridge]}   tab para cambiar`,
+            })}
           </text>
         </>
       )}

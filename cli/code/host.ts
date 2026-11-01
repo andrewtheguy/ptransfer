@@ -1,6 +1,7 @@
 import type { AppendSink } from '@/lib/append-sink';
 import type { ExchangeHost } from '@/lib/code-exchange/host';
 import type { FallbackReceipt } from '@/lib/code-exchange/receive';
+import { t } from '@/lib/i18n';
 import { createFileSink } from '../transfer/files';
 import { loadRtcPeerConnection } from '../webrtc';
 import { createRelayStore } from './relay-store';
@@ -37,7 +38,12 @@ export async function createCliHost(options: {
     relayStorage: () => relays,
     async createSink() {
       if (options.destination === null) {
-        throw new Error('A sending side has nowhere to save a file');
+        throw new Error(
+          t({
+            en: 'A sending side has nowhere to save a file',
+            es: 'El lado que envía no tiene dónde guardar un archivo',
+          }),
+        );
       }
       const sink = await createFileSink(options.destination);
       unfinished.add(sink);
@@ -73,7 +79,8 @@ export async function savedFrom(
   receipt: FallbackReceipt | 'switched' | null,
   host: CliExchangeHost,
 ): Promise<number> {
-  if (receipt === null || receipt === 'switched') throw new Error('Cancelled');
+  if (receipt === null || receipt === 'switched')
+    throw new Error(t({ en: 'Cancelled', es: 'Cancelado' }));
   if (receipt.sink) return receipt.content.data.size;
   const { fileName, fileSize, mimeType } = receipt.content;
   const sink = await host.createSink({

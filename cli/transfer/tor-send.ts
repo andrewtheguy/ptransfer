@@ -1,5 +1,6 @@
 import { generatePin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
 import { formatOnionAddress, TOR_DEFAULT_PORT } from '@/lib/tor/onion-address';
 import { serveUntilSent } from '@/lib/tor/serve';
@@ -33,10 +34,20 @@ export interface TorSendOptions {
 /** Why this selection cannot go over Tor, or null when it can. */
 export function torSendRefusal(content: TransferSource): string | null {
   if (content.estimatedSize > TOR_MAX_TRANSFER_BYTES) {
-    return `The Tor transport carries at most ${formatFileSize(TOR_MAX_TRANSFER_BYTES)}; ${content.name} is ${formatFileSize(content.estimatedSize)}`;
+    const max = formatFileSize(TOR_MAX_TRANSFER_BYTES);
+    const size = formatFileSize(content.estimatedSize);
+    return t({
+      en: `The Tor transport carries at most ${max}; ${content.name} is ${size}`,
+      es: `El transporte por Tor lleva como máximo ${max}; ${content.name} ocupa ${size}`,
+    });
   }
   if (content.projectedWireBytes > TOR_MAX_WIRE_BYTES) {
-    return `${content.name} needs up to ${formatFileSize(content.projectedWireBytes)} on the wire, over the ${formatFileSize(TOR_MAX_WIRE_BYTES)} the Tor transport allows`;
+    const wire = formatFileSize(content.projectedWireBytes);
+    const max = formatFileSize(TOR_MAX_WIRE_BYTES);
+    return t({
+      en: `${content.name} needs up to ${wire} on the wire, over the ${max} the Tor transport allows`,
+      es: `${content.name} necesita hasta ${wire} en la red, más de los ${max} que permite el transporte por Tor`,
+    });
   }
   return null;
 }
@@ -44,7 +55,11 @@ export function torSendRefusal(content: TransferSource): string | null {
 /** A word about a transfer big enough to be worth one, or null. */
 export function torSendCaution(content: TransferSource): string | null {
   if (content.estimatedSize <= TOR_SUGGESTED_MAX_BYTES) return null;
-  return `${content.name} is ${formatFileSize(content.estimatedSize)}. Throughput over a circuit is unpredictable, and a transfer that drops starts over.`;
+  const size = formatFileSize(content.estimatedSize);
+  return t({
+    en: `${content.name} is ${size}. Throughput over a circuit is unpredictable, and a transfer that drops starts over.`,
+    es: `${content.name} ocupa ${size}. La velocidad por un circuito es impredecible, y una transferencia que se corta empieza de nuevo.`,
+  });
 }
 
 export async function sendOverTor(options: TorSendOptions): Promise<number> {
@@ -95,7 +110,12 @@ export async function sendOverTor(options: TorSendOptions): Promise<number> {
       verbose,
       say,
     });
-    say('Publishing the onion service...');
+    say(
+      t({
+        en: 'Publishing the onion service...',
+        es: 'Publicando el servicio onion...',
+      }),
+    );
     service = await client.publishOnionService();
 
     // Two strings out of one address: `onion` is what the handshake binds and
@@ -104,7 +124,12 @@ export async function sendOverTor(options: TorSendOptions): Promise<number> {
     const onion = `${service.onionAddress}:${TOR_DEFAULT_PORT}`;
     const password = generatePin();
     say('');
-    say('Give the receiver this address and password:');
+    say(
+      t({
+        en: 'Give the receiver this address and password:',
+        es: 'Dale al receptor esta dirección y esta contraseña:',
+      }),
+    );
     say('');
     presenter.hand(
       formatOnionAddress(service.onionAddress, TOR_DEFAULT_PORT),
@@ -130,7 +155,7 @@ export async function sendOverTor(options: TorSendOptions): Promise<number> {
       setState,
     });
     presenter.done();
-    say(`Sent ${content.name}`);
+    say(t({ en: `Sent ${content.name}`, es: `Enviado ${content.name}` }));
     return 0;
   } catch (error) {
     presenter.done();

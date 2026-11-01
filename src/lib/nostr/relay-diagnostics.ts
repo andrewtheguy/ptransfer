@@ -1,4 +1,5 @@
 import { type Event, finalizeEvent } from 'nostr-tools';
+import { t } from '@/lib/i18n';
 import { wipeBufferSource } from '../crypto/memory';
 import { chunkAad, encodeChunkContent } from '../nostr-file/codec';
 import { CONTROL_PROBE_BYTES } from '../nostr-file/constants';
@@ -119,7 +120,9 @@ async function describeConnectFailure(
   // inferred, so it stands on its own.
   const generic =
     !socketDetail || /^closed \(code |^connection failed$/.test(socketDetail);
-  const prefix = generic ? 'WebSocket refused' : socketDetail;
+  const prefix = generic
+    ? t({ en: 'WebSocket refused', es: 'WebSocket rechazado' })
+    : socketDetail;
   const https = new URL(url);
   https.protocol = 'https:';
   try {
@@ -127,9 +130,15 @@ async function describeConnectFailure(
       headers: { Accept: 'application/nostr+json' },
       signal: AbortSignal.timeout(HTTPS_FALLBACK_TIMEOUT_MS),
     });
-    return `${prefix} · host answers HTTPS ${response.status}`;
+    return t({
+      en: `${prefix} · host answers HTTPS ${response.status}`,
+      es: `${prefix} · el host responde por HTTPS ${response.status}`,
+    });
   } catch {
-    return `${prefix} · host unreachable over HTTPS too (DNS, TLS, or blocked)`;
+    return t({
+      en: `${prefix} · host unreachable over HTTPS too (DNS, TLS, or blocked)`,
+      es: `${prefix} · el host tampoco es accesible por HTTPS (DNS, TLS o bloqueado)`,
+    });
   }
 }
 
@@ -226,25 +235,43 @@ async function runSocketProbe(
   const events = await buildProbeEvents();
   return new Promise((resolve) => {
     const started = Date.now();
-    const connect: RelayProbeStep = { label: 'connect', status: 'skipped' };
+    const connect: RelayProbeStep = {
+      label: t({ en: 'connect', es: 'conectar' }),
+      status: 'skipped',
+    };
     const writeRendezvous: RelayProbeStep = {
-      label: `write kind ${EVENT_KIND_RENDEZVOUS} (rendezvous)`,
+      label: t({
+        en: `write kind ${EVENT_KIND_RENDEZVOUS} (rendezvous)`,
+        es: `escribir kind ${EVENT_KIND_RENDEZVOUS} (rendezvous)`,
+      }),
       status: 'skipped',
     };
     const writeHandshake: RelayProbeStep = {
-      label: `write kind ${EVENT_KIND_DATA_TRANSFER} (handshake)`,
+      label: t({
+        en: `write kind ${EVENT_KIND_DATA_TRANSFER} (handshake)`,
+        es: `escribir kind ${EVENT_KIND_DATA_TRANSFER} (negociación)`,
+      }),
       status: 'skipped',
     };
     const readRendezvous: RelayProbeStep = {
-      label: 'read the rendezvous back',
+      label: t({
+        en: 'read the rendezvous back',
+        es: 'volver a leer el rendezvous',
+      }),
       status: 'skipped',
     };
     const writeControl: RelayProbeStep = {
-      label: `write kind ${events.chunk.kind} (control message)`,
+      label: t({
+        en: `write kind ${events.chunk.kind} (control message)`,
+        es: `escribir kind ${events.chunk.kind} (mensaje de control)`,
+      }),
       status: 'skipped',
     };
     const readControl: RelayProbeStep = {
-      label: 'read the control message back',
+      label: t({
+        en: 'read the control message back',
+        es: 'volver a leer el mensaje de control',
+      }),
       status: 'skipped',
     };
     const pinSteps = [writeRendezvous, writeHandshake, readRendezvous];
@@ -283,8 +310,22 @@ async function runSocketProbe(
       resolve({
         url,
         connect,
-        pinExchange: check('PIN Exchange signaling', pinSteps, pinMs),
-        codeExchange: check('Code Exchange control', codeSteps, codeMs),
+        pinExchange: check(
+          t({
+            en: 'PIN Exchange signaling',
+            es: 'Señalización del Intercambio por PIN',
+          }),
+          pinSteps,
+          pinMs,
+        ),
+        codeExchange: check(
+          t({
+            en: 'Code Exchange control',
+            es: 'Control del Intercambio por código',
+          }),
+          codeSteps,
+          codeMs,
+        ),
       });
     };
     const timer = setTimeout(() => {
@@ -295,7 +336,9 @@ async function runSocketProbe(
         // said to have timed out.
         const attempted = step === connect || opened;
         step.status = attempted ? 'failed' : 'skipped';
-        step.detail = attempted ? 'timed out' : 'not attempted';
+        step.detail = attempted
+          ? t({ en: 'timed out', es: 'tiempo agotado' })
+          : t({ en: 'not attempted', es: 'no se intentó' });
       }
       finish();
     }, timeoutMs);
@@ -304,7 +347,10 @@ async function runSocketProbe(
       socket = new WebSocket(url);
     } catch (error) {
       connect.status = 'failed';
-      connect.detail = error instanceof Error ? error.message : 'refused';
+      connect.detail =
+        error instanceof Error
+          ? error.message
+          : t({ en: 'refused', es: 'rechazado' });
       finish();
       return;
     }
@@ -344,7 +390,9 @@ async function runSocketProbe(
         // socket to run on was not attempted, and saying it "failed" would
         // report six problems where the relay has one.
         step.status = opened ? 'failed' : 'skipped';
-        step.detail = opened ? reason : 'not attempted';
+        step.detail = opened
+          ? reason
+          : t({ en: 'not attempted', es: 'no se intentó' });
       }
       finish();
     };
@@ -376,7 +424,9 @@ async function runSocketProbe(
                 : null;
         if (!write) return;
         write.status = accepted ? 'ok' : 'failed';
-        write.detail = accepted ? undefined : reason || 'rejected';
+        write.detail = accepted
+          ? undefined
+          : reason || t({ en: 'rejected', es: 'rechazado' });
 
         // Only a write that landed can be read back; a refused one leaves the
         // read with nothing to prove.
@@ -394,7 +444,10 @@ async function runSocketProbe(
             ]);
           } else {
             readRendezvous.status = 'skipped';
-            readRendezvous.detail = 'the write was refused';
+            readRendezvous.detail = t({
+              en: 'the write was refused',
+              es: 'se rechazó la escritura',
+            });
           }
         } else if (id === events.chunk.id) {
           if (accepted) {
@@ -410,7 +463,10 @@ async function runSocketProbe(
             ]);
           } else {
             readControl.status = 'skipped';
-            readControl.detail = 'the write was refused';
+            readControl.detail = t({
+              en: 'the write was refused',
+              es: 'se rechazó la escritura',
+            });
           }
         }
         noteIfDone(pinSteps, (ms) => {
@@ -440,7 +496,12 @@ async function runSocketProbe(
           // relay stored and served the payload intact.
           const intact = event.content === events.chunkContent;
           readControl.status = intact ? 'ok' : 'failed';
-          if (!intact) readControl.detail = 'served altered content';
+          if (!intact) {
+            readControl.detail = t({
+              en: 'served altered content',
+              es: 'sirvió contenido alterado',
+            });
+          }
           noteIfDone(codeSteps, (ms) => {
             codeMs = ms;
           });
@@ -457,7 +518,10 @@ async function runSocketProbe(
           read.status = 'failed';
           // The relay acknowledged the write and then did not serve it: the
           // failure a connect-only check can never see.
-          read.detail = 'acknowledged but not served';
+          read.detail = t({
+            en: 'acknowledged but not served',
+            es: 'confirmado pero no servido',
+          });
         }
       } else if (type === 'CLOSED') {
         const [, subscription, reason] = frame as [
@@ -473,7 +537,9 @@ async function runSocketProbe(
               : null;
         if (read?.status === 'skipped') {
           read.status = 'failed';
-          read.detail = reason || 'subscription refused';
+          read.detail =
+            reason ||
+            t({ en: 'subscription refused', es: 'suscripción rechazada' });
         }
       }
 
@@ -549,14 +615,20 @@ function describeRejectedInput(candidate: string): string {
   try {
     host = new URL(candidate).hostname;
   } catch {
-    return 'not a URL';
+    return t({ en: 'not a URL', es: 'no es una URL' });
   }
   if (host.endsWith('.onion')) {
     // Probing it from here would open the clearnet socket the anonymous mode
     // exists to avoid, so refusing it is the feature, not a gap.
-    return 'onion relay — reachable only through Tor, so not checked here';
+    return t({
+      en: 'onion relay — reachable only through Tor, so not checked here',
+      es: 'relay onion: solo accesible a través de Tor, así que aquí no se comprueba',
+    });
   }
-  return 'not a usable wss:// relay URL';
+  return t({
+    en: 'not a usable wss:// relay URL',
+    es: 'no es una URL de relay wss:// utilizable',
+  });
 }
 
 /**

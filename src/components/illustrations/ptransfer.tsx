@@ -4,17 +4,23 @@
  * Colors are driven by theme tokens (fill-primary, fill-secondary, ...) so the
  * artwork tints to the palette and adapts to dark mode automatically. Offline-safe.
  */
+import { useT } from '@/i18n/locale-context';
+
 interface IllustrationProps {
   className?: string;
 }
 
 export function PTransferIllustration({ className }: IllustrationProps) {
+  const t = useT();
   return (
     <svg
       viewBox="0 0 480 340"
       className={className}
       role="img"
-      aria-label="Two devices exchanging an encrypted, locked file directly"
+      aria-label={t({
+        en: 'Two devices exchanging an encrypted, locked file directly',
+        es: 'Dos dispositivos que intercambian directamente un archivo cifrado y protegido',
+      })}
       xmlns="http://www.w3.org/2000/svg"
     >
       {/* Soft background blobs */}

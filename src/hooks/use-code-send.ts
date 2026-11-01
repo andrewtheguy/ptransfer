@@ -17,6 +17,7 @@ import type { SignalingPayload } from '@/lib/code-signaling';
 import { TRANSFER_EXPIRATION_MS } from '@/lib/crypto';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
+import { t } from '@/lib/i18n';
 import { AnonymousSignalingTransport } from '@/lib/nostr/anonymous-transport';
 import type { NostrFileTransferStats } from '@/lib/nostr-file/stats';
 import type { TorBridge } from '@/lib/tor/bridge';
@@ -174,7 +175,9 @@ export function useCodeSend(): UseCodeSendReturn {
       answerResolverRef.current(readAnswer(answerBinary));
     } catch (error) {
       answerRejectRef.current?.(
-        error instanceof Error ? error : new Error('Invalid response'),
+        error instanceof Error
+          ? error
+          : new Error(t({ en: 'Invalid response', es: 'Respuesta no válida' })),
       );
     }
     answerResolverRef.current = null;
@@ -244,10 +247,18 @@ export function useCodeSend(): UseCodeSendReturn {
             cancelledRef.current = true;
             setState({
               status: 'error',
-              message: 'Session expired. Please try again.',
+              message: t({
+                en: 'Session expired. Please try again.',
+                es: 'La sesión ha caducado. Inténtalo de nuevo.',
+              }),
             });
             answerRejectRef.current?.(
-              new Error('Session expired. Please try again.'),
+              new Error(
+                t({
+                  en: 'Session expired. Please try again.',
+                  es: 'La sesión ha caducado. Inténtalo de nuevo.',
+                }),
+              ),
             );
             answerResolverRef.current = null;
             teardownFallback();
@@ -278,7 +289,10 @@ export function useCodeSend(): UseCodeSendReturn {
         // Show offer and wait for answer
         setState({
           status: 'showing_offer',
-          message: 'Show this to receiver, then scan/paste their response',
+          message: t({
+            en: 'Show this to receiver, then scan/paste their response',
+            es: 'Muestra esto al receptor y luego escanea o pega su respuesta',
+          }),
           offerData: offer.offerBinary,
           contentType: 'file',
           fileMetadata: { fileName, fileSize, mimeType },
@@ -316,14 +330,19 @@ export function useCodeSend(): UseCodeSendReturn {
           torProgress: transport ? torProgress : null,
           isCancelled,
           report,
-          answerMismatchMessage:
-            'Response does not match this transfer. Make sure you scanned the response to this code, then try again.',
+          answerMismatchMessage: t({
+            en: 'Response does not match this transfer. Make sure you scanned the response to this code, then try again.',
+            es: 'La respuesta no corresponde a esta transferencia. Asegúrate de haber escaneado la respuesta a este código e inténtalo de nuevo.',
+          }),
         });
       } catch (error) {
         if (!cancelledRef.current) {
           setState({
             status: 'error',
-            message: error instanceof Error ? error.message : 'Failed to send',
+            message:
+              error instanceof Error
+                ? error.message
+                : t({ en: 'Failed to send', es: 'No se pudo enviar' }),
             connectionFailed: error instanceof P2PConnectionError,
           });
         }

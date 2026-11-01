@@ -1,6 +1,7 @@
 import type { AppendSink } from '@/lib/append-sink';
 import { isValidPin } from '@/lib/crypto';
 import { formatFileSize } from '@/lib/file-utils';
+import { t } from '@/lib/i18n';
 import { TorFramedStream } from '@/lib/tor/framing';
 import {
   runTorClientHandshake,
@@ -40,9 +41,16 @@ export async function receiveOverTor(
 ): Promise<number> {
   const { parsed, folder, torOptions, verbose, presenter } = options;
   const say = (line: string) => presenter.say(line);
-  const password = await presenter.readSecret('Password: ');
+  const password = await presenter.readSecret(
+    t({ en: 'Password: ', es: 'Contraseña: ' }),
+  );
   if (!isValidPin(password)) {
-    throw new UsageError('That is not a valid password; check for typos');
+    throw new UsageError(
+      t({
+        en: 'That is not a valid password; check for typos',
+        es: 'Esa no es una contraseña válida; revisa si hay errores de escritura',
+      }),
+    );
   }
 
   // The status of the signal that stopped the command, once one has.
@@ -71,11 +79,16 @@ export async function receiveOverTor(
 
   try {
     client = await bootstrapTor({ ...torOptions, verbose, say });
-    say(`Building a circuit to ${parsed.host}...`);
+    say(
+      t({
+        en: `Building a circuit to ${parsed.host}...`,
+        es: `Construyendo un circuito hasta ${parsed.host}...`,
+      }),
+    );
     const stream = await client.connectStream(parsed.host, parsed.port);
     framed = new TorFramedStream(stream);
 
-    say('Authenticating...');
+    say(t({ en: 'Authenticating...', es: 'Autenticando...' }));
     const { keys, metadata } = await runTorClientHandshake(
       framed,
       password,
@@ -85,8 +98,13 @@ export async function receiveOverTor(
     // nothing on the wire — but a sender offering more than the limit is not
     // worth connecting a transfer for.
     if (metadata.fileSize > TOR_MAX_TRANSFER_BYTES) {
+      const size = formatFileSize(metadata.fileSize);
+      const max = formatFileSize(TOR_MAX_TRANSFER_BYTES);
       throw new Error(
-        `The sender is offering ${formatFileSize(metadata.fileSize)}, over the ${formatFileSize(TOR_MAX_TRANSFER_BYTES)} limit of the Tor transport`,
+        t({
+          en: `The sender is offering ${size}, over the ${max} limit of the Tor transport`,
+          es: `El emisor ofrece ${size}, más del límite de ${max} del transporte por Tor`,
+        }),
       );
     }
 
@@ -99,14 +117,21 @@ export async function receiveOverTor(
       fileSink = await createFileSink(destination);
     } catch (error) {
       await sendCancel(framed);
+      const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}; move it aside and receive again — the sender is still waiting`,
+        t({
+          en: `${reason}; move it aside and receive again — the sender is still waiting`,
+          es: `${reason}; apártalo y vuelve a recibir: el emisor sigue esperando`,
+        }),
       );
     }
     sink = fileSink;
 
     say(
-      `Receiving ${metadata.fileName} (${formatFileSize(metadata.fileSize)})...`,
+      t({
+        en: `Receiving ${metadata.fileName} (${formatFileSize(metadata.fileSize)})...`,
+        es: `Recibiendo ${metadata.fileName} (${formatFileSize(metadata.fileSize)})...`,
+      }),
     );
     await sendReady(framed);
     const payload = await receiveFileOverTor(
@@ -123,7 +148,12 @@ export async function receiveOverTor(
     presenter.done();
     // The file is whole: hanging up is the receiver's only word.
     await framed.close();
-    say(`Saved ${formatFileSize(payload.size)} to ${destination}`);
+    say(
+      t({
+        en: `Saved ${formatFileSize(payload.size)} to ${destination}`,
+        es: `Se guardaron ${formatFileSize(payload.size)} en ${destination}`,
+      }),
+    );
     presenter.hand(destination);
     return 0;
   } catch (error) {

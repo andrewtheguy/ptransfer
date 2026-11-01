@@ -1,4 +1,5 @@
 import { SourceError } from '@/lib/errors';
+import { t } from '@/lib/i18n';
 import type { TransferMetadata, TransferState } from '@/lib/nostr/types';
 import type { TransferSource } from '@/lib/transfer-source';
 import { TorFramedStream } from './framing';
@@ -72,7 +73,10 @@ export async function serveUntilSent(options: ServeOptions): Promise<void> {
 
   setState({
     status: 'waiting_for_receiver',
-    message: 'Waiting for a receiver...',
+    message: t({
+      en: 'Waiting for a receiver...',
+      es: 'Esperando a un receptor...',
+    }),
     contentType: 'file',
     fileMetadata,
   });
@@ -86,17 +90,28 @@ export async function serveUntilSent(options: ServeOptions): Promise<void> {
     const stream = await withTimeout(
       service.accept(),
       Math.max(1, deadline - Date.now()),
-      `No receiver authenticated within ${TOR_WAIT_TIMEOUT_MS / 60000} minutes. Start a new transfer.`,
+      t({
+        en: `No receiver authenticated within ${TOR_WAIT_TIMEOUT_MS / 60000} minutes. Start a new transfer.`,
+        es: `Ningún receptor se autenticó en ${TOR_WAIT_TIMEOUT_MS / 60000} minutos. Inicia una nueva transferencia.`,
+      }),
     );
     if (stream === null) {
       if (isCancelled()) throw new Error('Cancelled');
-      throw new Error('The onion service stopped accepting connections');
+      throw new Error(
+        t({
+          en: 'The onion service stopped accepting connections',
+          es: 'El servicio onion dejó de aceptar conexiones',
+        }),
+      );
     }
 
     const framed = new TorFramedStream(stream);
     setState({
       status: 'connecting',
-      message: 'A receiver connected; authenticating...',
+      message: t({
+        en: 'A receiver connected; authenticating...',
+        es: 'Se conectó un receptor; autenticando...',
+      }),
       contentType: 'file',
       fileMetadata,
     });
@@ -112,12 +127,18 @@ export async function serveUntilSent(options: ServeOptions): Promise<void> {
       console.warn('[tor] A connection failed:', error);
       if (failures >= TOR_MAX_FAILED_HANDSHAKES) {
         throw new Error(
-          `Giving up after ${failures} failed connections. Start a new transfer.`,
+          t({
+            en: `Giving up after ${failures} failed connections. Start a new transfer.`,
+            es: `Se abandona tras ${failures} conexiones fallidas. Inicia una nueva transferencia.`,
+          }),
         );
       }
       setState({
         status: 'waiting_for_receiver',
-        message: `A connection failed (${failures}/${TOR_MAX_FAILED_HANDSHAKES}). Still waiting...`,
+        message: t({
+          en: `A connection failed (${failures}/${TOR_MAX_FAILED_HANDSHAKES}). Still waiting...`,
+          es: `Falló una conexión (${failures}/${TOR_MAX_FAILED_HANDSHAKES}). Seguimos esperando...`,
+        }),
         contentType: 'file',
         fileMetadata,
       });
@@ -133,7 +154,10 @@ export async function serveUntilSent(options: ServeOptions): Promise<void> {
     // from the start.
     setState({
       status: 'waiting_for_receiver',
-      message: 'The receiver cancelled. Still waiting...',
+      message: t({
+        en: 'The receiver cancelled. Still waiting...',
+        es: 'El receptor canceló. Seguimos esperando...',
+      }),
       contentType: 'file',
       fileMetadata,
     });
@@ -163,7 +187,10 @@ async function serveConnection(
 
   setState({
     status: 'transferring',
-    message: 'Receiver authenticated; sending over Tor...',
+    message: t({
+      en: 'Receiver authenticated; sending over Tor...',
+      es: 'Receptor autenticado; enviando por Tor...',
+    }),
     contentType: 'file',
     fileMetadata,
     progress: { current: 0, total: fileMetadata.fileSize },
@@ -173,7 +200,7 @@ async function serveConnection(
     onProgress: (current, total) =>
       setState({
         status: 'transferring',
-        message: 'Sending over Tor...',
+        message: t({ en: 'Sending over Tor...', es: 'Enviando por Tor...' }),
         contentType: 'file',
         fileMetadata,
         progress: { current, total },

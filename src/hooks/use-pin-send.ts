@@ -17,6 +17,7 @@ import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import type { PinKind } from '@/lib/crypto';
 import type { DuplexChannel } from '@/lib/duplex-channel';
 import { P2PConnectionError } from '@/lib/errors';
+import { t } from '@/lib/i18n';
 import type { TransferState } from '@/lib/nostr';
 import {
   type ContentType,
@@ -259,7 +260,10 @@ export function usePinSend(): UsePinSendReturn {
 
         setState({
           status: 'waiting_for_receiver',
-          message: 'Waiting for receiver...',
+          message: t({
+            en: 'Waiting for receiver...',
+            es: 'Esperando al receptor...',
+          }),
           contentType,
           fileMetadata,
           useWebRTC: true,
@@ -329,8 +333,10 @@ export function usePinSend(): UsePinSendReturn {
         setState((prevState) => ({
           ...prevState,
           status: 'awaiting_confirmation_code',
-          message:
-            'Ask your receiver for the confirmation code shown on their screen.',
+          message: t({
+            en: 'Ask your receiver for the confirmation code shown on their screen.',
+            es: 'Pide al receptor el código de confirmación que aparece en su pantalla.',
+          }),
         }));
 
         expectedConfirmationCodeRef.current = expectedCode;
@@ -354,7 +360,10 @@ export function usePinSend(): UsePinSendReturn {
               cleanup();
               reject(
                 new Error(
-                  'Confirmation code was not entered in time. Start a new transfer.',
+                  t({
+                    en: 'Confirmation code was not entered in time. Start a new transfer.',
+                    es: 'El código de confirmación no se introdujo a tiempo. Inicia una nueva transferencia.',
+                  }),
                 ),
               );
             }, CONFIRM_CODE_ENTRY_TIMEOUT_MS);
@@ -389,7 +398,10 @@ export function usePinSend(): UsePinSendReturn {
         offerOnScreen = true;
         setState({
           status: 'connecting',
-          message: 'Preparing the connection...',
+          message: t({
+            en: 'Preparing the connection...',
+            es: 'Preparando la conexión...',
+          }),
           contentType,
           fileMetadata,
         });
@@ -402,7 +414,10 @@ export function usePinSend(): UsePinSendReturn {
 
         setState({
           status: 'connecting',
-          message: 'Sending the connection offer...',
+          message: t({
+            en: 'Sending the connection offer...',
+            es: 'Enviando la oferta de conexión...',
+          }),
           contentType,
           fileMetadata,
         });
@@ -434,8 +449,10 @@ export function usePinSend(): UsePinSendReturn {
           report: (update) => {
             if (!abandoned()) setState(update);
           },
-          answerMismatchMessage:
-            "The receiver's response does not match this transfer. Start a new transfer.",
+          answerMismatchMessage: t({
+            en: "The receiver's response does not match this transfer. Start a new transfer.",
+            es: 'La respuesta del receptor no corresponde a esta transferencia. Inicia una nueva transferencia.',
+          }),
         });
       } catch (error) {
         if (!abandoned()) {
@@ -443,7 +460,10 @@ export function usePinSend(): UsePinSendReturn {
           setState((prevState) => ({
             ...prevState,
             status: 'error',
-            message: error instanceof Error ? error.message : 'Failed to send',
+            message:
+              error instanceof Error
+                ? error.message
+                : t({ en: 'Failed to send', es: 'No se pudo enviar' }),
             connectionFailed: error instanceof P2PConnectionError,
           }));
         }

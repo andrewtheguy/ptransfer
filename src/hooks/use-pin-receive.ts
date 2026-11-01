@@ -12,6 +12,7 @@ import {
 import { createTorProgress } from '@/lib/code-exchange/tor-progress';
 import { wipeBufferSource } from '@/lib/crypto';
 import { P2PConnectionError } from '@/lib/errors';
+import { t } from '@/lib/i18n';
 import {
   awaitCarriedOffer,
   type NostrClient,
@@ -179,7 +180,10 @@ export function usePinReceive(): UsePinReceiveReturn {
         ) {
           setState({
             status: 'error',
-            message: 'PIN unavailable. Please re-enter.',
+            message: t({
+              en: 'PIN unavailable. Please re-enter.',
+              es: 'PIN no disponible. Vuelve a introducirlo.',
+            }),
           });
           receivingRef.current = false;
           return;
@@ -246,7 +250,10 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         setState({
           status: 'showing_confirmation_code',
-          message: 'Read the confirmation code to the sender to start.',
+          message: t({
+            en: 'Read the confirmation code to the sender to start.',
+            es: 'Dicta el código de confirmación al emisor para empezar.',
+          }),
           contentType: 'file',
           fileMetadata: {
             fileName: resolvedFileName,
@@ -269,8 +276,10 @@ export function usePinReceive(): UsePinReceiveReturn {
           signalsKey,
           isCancelled: abandoned,
           timeoutMs: OFFER_WAIT_TIMEOUT_MS,
-          timeoutMessage:
-            'The sender did not enter the confirmation code in time. Start a new transfer.',
+          timeoutMessage: t({
+            en: 'The sender did not enter the confirmation code in time. Start a new transfer.',
+            es: 'El emisor no introdujo el código de confirmación a tiempo. Inicia una nueva transferencia.',
+          }),
         });
         closeCarriage = carriage.close;
         const offerCode = await carriage.offer;
@@ -285,7 +294,10 @@ export function usePinReceive(): UsePinReceiveReturn {
         };
         setState({
           status: 'receiving',
-          message: 'Sender confirmed — connecting...',
+          message: t({
+            en: 'Sender confirmed — connecting...',
+            es: 'El emisor confirmó: conectando...',
+          }),
           contentType: 'file',
           fileMetadata,
           currentRelays: nostr.getRelays(),
@@ -384,7 +396,10 @@ export function usePinReceive(): UsePinReceiveReturn {
 
         setState({
           status: 'receiving',
-          message: 'Receiving via P2P...',
+          message: t({
+            en: 'Receiving via P2P...',
+            es: 'Recibiendo por P2P...',
+          }),
           contentType: 'file',
           fileMetadata,
           useWebRTC: true,
@@ -406,7 +421,10 @@ export function usePinReceive(): UsePinReceiveReturn {
         });
         setState({
           status: 'complete',
-          message: 'File received (P2P)!',
+          message: t({
+            en: 'File received (P2P)!',
+            es: '¡Archivo recibido (P2P)!',
+          }),
           contentType: 'file',
           fileMetadata: {
             fileName: resolvedFileName,
@@ -428,7 +446,9 @@ export function usePinReceive(): UsePinReceiveReturn {
               ...prevState,
               status: 'error',
               message:
-                error instanceof Error ? error.message : 'Failed to receive',
+                error instanceof Error
+                  ? error.message
+                  : t({ en: 'Failed to receive', es: 'No se pudo recibir' }),
               connectionFailed: error instanceof P2PConnectionError,
             }));
           }

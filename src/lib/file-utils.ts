@@ -3,6 +3,8 @@
  * browser tab shows these in its status, the CLI prints them.
  */
 
+import { type Localized, t } from '@/lib/i18n';
+
 /**
  * Format file size in human-readable format
  */
@@ -17,32 +19,38 @@ export function formatFileSize(bytes: number): string {
     sizes.length - 1,
   );
 
-  // Bytes are whole numbers; larger units always show one decimal (e.g. "5.0 MiB")
+  // Bytes are whole numbers; larger units always show one decimal (e.g.
+  // "5.0 MiB"), written with the locale's decimal mark ("5,0 MiB").
   const value = bytes / k ** i;
-  return `${i === 0 ? value : value.toFixed(1)} ${sizes[i]}`;
+  const shown = i === 0 ? String(value) : value.toFixed(1);
+  return `${t({ en: shown, es: shown.replace('.', ',') })} ${sizes[i]}`;
 }
 
 /**
  * Get a user-friendly MIME type description
  */
 export function getMimeTypeDescription(mimeType: string): string {
-  const descriptions: Record<string, string> = {
-    'application/pdf': 'PDF Document',
-    'application/zip': 'ZIP Archive',
-    'application/json': 'JSON File',
-    'text/plain': 'Text File',
-    'text/html': 'HTML File',
-    'text/css': 'CSS File',
-    'text/javascript': 'JavaScript File',
-    'image/jpeg': 'JPEG Image',
-    'image/png': 'PNG Image',
-    'image/gif': 'GIF Image',
-    'image/webp': 'WebP Image',
-    'image/svg+xml': 'SVG Image',
-    'audio/mpeg': 'MP3 Audio',
-    'audio/wav': 'WAV Audio',
-    'video/mp4': 'MP4 Video',
-    'video/webm': 'WebM Video',
+  const descriptions: Record<string, Localized> = {
+    'application/pdf': { en: 'PDF Document', es: 'Documento PDF' },
+    'application/zip': { en: 'ZIP Archive', es: 'Archivo ZIP' },
+    'application/json': { en: 'JSON File', es: 'Archivo JSON' },
+    'text/plain': { en: 'Text File', es: 'Archivo de texto' },
+    'text/html': { en: 'HTML File', es: 'Archivo HTML' },
+    'text/css': { en: 'CSS File', es: 'Archivo CSS' },
+    'text/javascript': { en: 'JavaScript File', es: 'Archivo JavaScript' },
+    'image/jpeg': { en: 'JPEG Image', es: 'Imagen JPEG' },
+    'image/png': { en: 'PNG Image', es: 'Imagen PNG' },
+    'image/gif': { en: 'GIF Image', es: 'Imagen GIF' },
+    'image/webp': { en: 'WebP Image', es: 'Imagen WebP' },
+    'image/svg+xml': { en: 'SVG Image', es: 'Imagen SVG' },
+    'audio/mpeg': { en: 'MP3 Audio', es: 'Audio MP3' },
+    'audio/wav': { en: 'WAV Audio', es: 'Audio WAV' },
+    'video/mp4': { en: 'MP4 Video', es: 'Video MP4' },
+    'video/webm': { en: 'WebM Video', es: 'Video WebM' },
   };
-  return descriptions[mimeType] || mimeType || 'Unknown';
+  const description = Object.hasOwn(descriptions, mimeType)
+    ? descriptions[mimeType]
+    : undefined;
+  if (description) return t(description);
+  return mimeType || t({ en: 'Unknown', es: 'Desconocido' });
 }

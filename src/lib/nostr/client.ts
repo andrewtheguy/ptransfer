@@ -5,6 +5,7 @@ import {
   verifyEvent,
 } from 'nostr-tools';
 import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
+import { t } from '@/lib/i18n';
 import {
   ANONYMOUS_RELAY_CONNECTION_TIMEOUT_MS,
   type AnonymousSignalingTransport,
@@ -143,8 +144,14 @@ export class NostrClient {
     } catch {
       throw new Error(
         this.anonymousTransport
-          ? 'Tor is running, but no Nostr onion relay could be reached through it'
-          : 'Could not connect to any Nostr relay',
+          ? t({
+              en: 'Tor is running, but no Nostr onion relay could be reached through it',
+              es: 'Tor está en marcha, pero no se pudo llegar a ningún relay onion de Nostr a través de él',
+            })
+          : t({
+              en: 'Could not connect to any Nostr relay',
+              es: 'No se pudo conectar con ningún relay de Nostr',
+            }),
       );
     }
   }
@@ -196,7 +203,12 @@ export class NostrClient {
   ): string {
     const subId = crypto.randomUUID();
     if (filters.length === 0) {
-      throw new Error('subscribe requires at least one filter');
+      throw new Error(
+        t({
+          en: 'subscribe requires at least one filter',
+          es: 'subscribe requiere al menos un filtro',
+        }),
+      );
     }
     const filter = filters.length === 1 ? filters[0] : mergeFilters(...filters);
 

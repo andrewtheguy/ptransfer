@@ -1,3 +1,4 @@
+import { t } from '@/lib/i18n';
 import { DEFAULT_RELAYS, normalizeRelayUrl } from './relays';
 
 const RELAY_PROBE_TIMEOUT = 3000;
@@ -70,7 +71,10 @@ export async function testRelayAvailability(
     return {
       available: false,
       connectedRelays: [],
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error:
+        error instanceof Error
+          ? error.message
+          : t({ en: 'Unknown error', es: 'Error desconocido' }),
     };
   }
 }
