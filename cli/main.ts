@@ -43,7 +43,7 @@ for its options, or ptransfer --version for the release and the protocol
 version; a peer needs the same protocol version.
 
 options, with any command or none:
-  --lang <en|es>  the language to speak: English or Spanish. Without it,
+  --lang <en|es>  the display language: English or Spanish. Without it,
                   the one LC_ALL, LC_MESSAGES or LANG names, or on Windows
                   the user's language; English when it is neither
 `,
@@ -65,7 +65,7 @@ ptransfer --version para ver la versión publicada y la del protocolo; el otro
 extremo necesita la misma versión del protocolo.
 
 opciones, con cualquier comando o sin ninguno:
-  --lang <en|es>  el idioma en que hablar: inglés o español. Sin ella, el
+  --lang <en|es>  el idioma de la interfaz: inglés o español. Sin ella, el
                   que indique LC_ALL, LC_MESSAGES o LANG, o en Windows el
                   idioma del usuario; inglés si no es ninguno de los dos
 `,
