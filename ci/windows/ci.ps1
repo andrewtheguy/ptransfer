@@ -12,7 +12,8 @@
 # one, the clipboard — is in phase 5 of docs/ROADMAP.md.
 #
 # PowerShell 7. Installs nothing beyond node_modules: Bun is on the VM's PATH,
-# and devtools points BUN_INSTALL_CACHE_DIR outside the workspace.
+# and devtools points BUN_INSTALL_CACHE_DIR at a per-run dir outside the
+# workspace, restored from its restic build cache keyed on bun.lock.
 #Requires -Version 7
 [CmdletBinding()]
 param([switch] $Live)
